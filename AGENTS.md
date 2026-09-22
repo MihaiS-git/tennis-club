@@ -25,7 +25,7 @@ Read `README.md` before making architectural or domain-level changes.
 
 Use the existing stack unless a change is explicitly justified:
 
-- Next.js App Router
+- Next.js 16 App Router
 - React
 - TypeScript
 - Tailwind CSS
@@ -57,7 +57,11 @@ tennis-club/
 ├── src/
 │   ├── app/
 │   ├── components/
-│   └── lib/
+│   ├── lib/
+│   │   └── supabase/
+│   │       ├── server.ts
+│   │       └── proxy.ts
+│   └── proxy.ts
 ├── public/
 ├── supabase/
 ├── e2e/
@@ -130,6 +134,48 @@ Use:
 - Client Components only for interactive browser behavior.
 
 Supabase access is server-first. Do not query Supabase directly from Client Components unless a concrete browser-specific requirement has been explicitly introduced.
+
+### Next.js Proxy
+
+This project uses Next.js 16. Use the Next.js 16 Proxy convention for request interception and Supabase session refresh.
+
+The application entrypoint is:
+
+```text
+src/proxy.ts
+```
+
+with an exported `proxy` function:
+
+```ts
+export async function proxy(request: NextRequest) {
+  // delegate to the Supabase session-refresh helper
+}
+```
+
+Do **not** create `middleware.ts` or export a `middleware` function for this project. Those names apply to Next.js 15 and earlier. On Next.js 16, a `middleware.ts`-only implementation will not provide the intended application proxy behavior.
+
+Keep the Supabase-specific session-refresh implementation separate, for example:
+
+```text
+src/lib/supabase/proxy.ts
+```
+
+The root proxy should stay thin and delegate to that helper.
+
+The proxy is responsible for authentication session maintenance, such as:
+
+- reading Supabase auth cookies;
+- refreshing/verifying the session when required;
+- propagating updated cookies and response headers.
+
+Do not put application authorization or domain rules in the proxy. In particular, do not put membership, pricing, booking, or role-specific business logic there. Authorization belongs in the application/RLS layers described below.
+
+When implementing Supabase SSR cookie handling, use the current `@supabase/ssr` `getAll()` / `setAll()` cookie API. Do not copy deprecated `get` / `set` / `remove` examples from older Supabase tutorials.
+
+For server-side identity verification, prefer the current Supabase-recommended verified claims flow (for example `auth.getClaims()`) rather than treating an unverified session payload as authoritative.
+
+If the project's Next.js major version changes, re-check the framework's proxy/middleware convention and update this file in the same change.
 
 Do not put substantial business logic directly in:
 
@@ -941,3 +987,13 @@ Provide the exact relevant commands or manual verification steps.
 State any assumptions made during implementation.
 
 When practical, present code changes as unified diffs or identify exact file paths changed.
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->

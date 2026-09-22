@@ -19,7 +19,7 @@ export async function createClient() {
             });
           } catch {
             // Server Components cannot write cookies.
-            // Session refresh will be handled by proxy.ts once auth is added.
+            // Session refresh is handled by proxy.ts.
           }
         },
       },
