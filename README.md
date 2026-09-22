@@ -50,6 +50,7 @@ This is **not a multi-tenant SaaS platform**. One tennis club owns and operates 
 - React
 - TypeScript
 - Zod
+- TanStack Query when interactive client-side server state is introduced
 
 ### Backend services
 
@@ -71,6 +72,10 @@ This is **not a multi-tenant SaaS platform**. One tennis club owns and operates 
 
 Use `supabase-js` as the normal database access layer.
 
+Supabase access is **server-first**. The browser does not access Supabase directly by default. Server Components, Server Actions, Route Handlers, and server-side application services use the user-scoped Supabase server client so RLS remains active.
+
+A browser Supabase client should be introduced only for a concrete browser-specific requirement, such as Supabase Realtime.
+
 No ORM is required initially.
 
 No separate NestJS or Express backend is required initially.
@@ -84,10 +89,12 @@ Browser
    │
    ▼
 Next.js
-├── Server Components
-├── Client Components
-├── Server Actions
-└── Route Handlers
+├── Server Components      ← server-side reads / initial rendering
+├── Server Actions         ← application UI mutations
+├── Route Handlers         ← webhooks and external HTTP boundaries
+└── Client Components
+    └── TanStack Query     ← when interactive client-side server state is needed
+        └── calls the Next.js server boundary, not Supabase directly
    │
    ▼
 TypeScript application/domain logic
@@ -98,7 +105,7 @@ TypeScript application/domain logic
    │             Stripe Webhooks
    │                  │
    ▼                  │
-supabase-js ◄─────────┘
+Supabase server client ◄───┘
    │
    ▼
 PostgREST
@@ -113,7 +120,9 @@ PostgreSQL
 
 The main architectural rule is:
 
-> **TypeScript decides business behavior, PostgreSQL guarantees data integrity, RLS protects data access, and Stripe owns payment processing.**
+> **Next.js is the application boundary, TypeScript decides business behavior, PostgreSQL guarantees data integrity, RLS protects data access, and Stripe owns payment processing.**
+
+Direct browser-to-Supabase access is not part of the initial architecture. It may be added later only for a concrete feature that benefits from it.
 
 ---
 
@@ -200,38 +209,61 @@ Client data is always treated as input to validate, not as trusted business stat
 
 ## Supabase access
 
-There are two server-side Supabase access patterns.
+Supabase access is **server-first**.
 
-### User-scoped client
+The initial application does not create a browser Supabase client. Normal application reads and writes flow through Next.js and server-side application logic.
 
-Uses the authenticated user's Supabase session.
+### User-scoped server client
 
-RLS remains active.
+Use the authenticated user's Supabase session whenever an operation is performed on behalf of a user.
 
-This should be the default.
+RLS remains active. This is the default access mode.
 
 ```text
 Authenticated user
 → Next.js
-→ user-scoped supabase-js client
+→ user-scoped Supabase server client
 → PostgREST
 → PostgreSQL
 → RLS
 ```
 
-### Privileged client
+Current server-only environment variables:
 
-Uses the Supabase service-role credential and bypasses RLS.
+```env
+SUPABASE_URL=
+SUPABASE_PUBLISHABLE_KEY=
+```
+
+These variables are intentionally not prefixed with `NEXT_PUBLIC_` because the browser does not currently need direct Supabase access.
+
+### Browser Supabase client
+
+Do not introduce a browser Supabase client by default.
+
+If a future feature has a concrete browser-side requirement, such as Supabase Realtime, add the browser client intentionally and expose only the browser-safe project URL and publishable key required for that feature.
+
+### Privileged server client
+
+A privileged server client uses a Supabase server-only secret credential and bypasses normal RLS protections.
 
 Use it only for trusted system operations such as:
 
-- Stripe webhooks;
-- controlled system synchronization;
-- exceptional administrative operations that genuinely require elevated access.
+- Stripe webhook processing;
+- controlled server-side synchronization;
+- narrowly scoped system operations that genuinely require elevated access.
 
-The service-role key must never reach the browser or client bundle.
+Introduce `SUPABASE_SECRET_KEY` only when such an operation is implemented.
 
-Running code on the server does **not** automatically justify using the service-role client.
+Never expose the secret key to:
+
+- browser code;
+- Client Components;
+- public environment variables;
+- logs;
+- responses.
+
+Running code on the server does **not** automatically justify using the privileged client.
 
 ---
 
@@ -269,6 +301,22 @@ calculateElo()
 ```
 
 These should remain framework-light and unit-testable where practical.
+
+### TanStack Query
+
+TanStack Query is planned for interactive client-side server state, but it is not required for the Supabase foundation itself.
+
+Use it when client interactions benefit from caching, invalidation, background refetching, or mutation state, for example:
+
+- court availability by location/date;
+- coach availability;
+- booking lists and booking state;
+- partner requests;
+- interactive admin screens.
+
+TanStack Query must call the Next.js server boundary rather than query Supabase directly. Server Components remain the default for initial/simple reads.
+
+When TanStack Query is introduced, update both `README.md` and `AGENTS.md` together with the implementation.
 
 ---
 
@@ -1172,6 +1220,8 @@ Before expanding the platform, prove the following cases locally:
 - Supabase Auth is the authentication provider.
 - PostgreSQL is the primary application database.
 - `supabase-js` is the primary database access mechanism.
+- Supabase access is server-first; no browser Supabase client is used initially.
+- TanStack Query will be introduced when interactive client-side server state justifies it, and it will call the Next.js server boundary rather than Supabase directly.
 - No ORM is required initially.
 - No separate backend framework is required initially.
 - RLS is part of the primary authorization architecture.
@@ -1189,6 +1239,8 @@ Before expanding the platform, prove the following cases locally:
 5. **Stripe webhooks must be idempotent.**
 6. **RLS remains active for normal authenticated user operations.**
 7. **Privileged Supabase access is narrowly scoped.**
-8. **Features are added incrementally from real workflows instead of speculative schema design.**
-9. **The system remains a modular monolith unless scale or complexity creates a concrete reason to change it.**
-10. **Correctness, security, and maintainability take priority over architectural complexity.**
+8. **Supabase access is server-first; direct browser access is introduced only for a concrete requirement.**
+9. **Features are added incrementally from real workflows instead of speculative schema design.**
+10. **The system remains a modular monolith unless scale or complexity creates a concrete reason to change it.**
+11. **README.md and AGENTS.md are updated when architectural or tooling decisions change.**
+12. **Correctness, security, and maintainability take priority over architectural complexity.**

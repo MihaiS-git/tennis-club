@@ -36,6 +36,7 @@ Use the existing stack unless a change is explicitly justified:
 - `supabase-js`
 - Stripe
 - PostgreSQL functions/RPC only where transactional persistence requires them
+- TanStack Query when interactive client-side server state is introduced; do not add it before a concrete workflow needs it
 
 Do not introduce an ORM unless explicitly requested.
 
@@ -123,10 +124,12 @@ Do not move an entire page or large component tree to the client just because on
 
 Use:
 
-- Server Components for data-oriented rendering;
+- Server Components for data-oriented rendering and initial/simple reads;
 - Server Actions for appropriate authenticated mutations originating from the application UI;
-- Route Handlers for HTTP endpoints such as Stripe webhooks or integrations;
+- Route Handlers for HTTP endpoints such as Stripe webhooks, integrations, and client-side query endpoints when needed;
 - Client Components only for interactive browser behavior.
+
+Supabase access is server-first. Do not query Supabase directly from Client Components unless a concrete browser-specific requirement has been explicitly introduced.
 
 Do not put substantial business logic directly in:
 
@@ -140,12 +143,28 @@ These should delegate to application/domain functions.
 
 ## Application layering
 
-Prefer this flow:
+Prefer these flows:
 
 ```text
-UI
+Server-rendered read
 ↓
-Server Action / Route Handler
+Server Component
+↓
+Application/domain logic
+↓
+Supabase server client
+↓
+PostgreSQL + RLS
+```
+
+```text
+Interactive client workflow
+↓
+Client Component
+↓
+TanStack Query, when introduced
+↓
+Next.js server boundary
 ↓
 Application/domain logic
 ↓
@@ -153,6 +172,8 @@ Supabase / Stripe integration
 ↓
 PostgreSQL / Stripe
 ```
+
+TanStack Query must not become a reason to move business logic or normal Supabase data access into the browser.
 
 Examples of domain/application operations include:
 
@@ -220,28 +241,46 @@ Use `supabase-js` as the normal database access layer.
 
 Do not add an ORM.
 
-There are two distinct Supabase access patterns.
+Supabase access is **server-first**. The initial application does not use a browser Supabase client.
 
-### User-scoped client
+### User-scoped server client
 
-Use the authenticated user's session whenever the operation is performed on behalf of a user.
+Use the authenticated user's session whenever an operation is performed on behalf of a user.
 
-RLS must remain active.
-
-This is the default access mode.
+RLS must remain active. This is the default access mode.
 
 ```text
 authenticated user
 → Next.js
-→ user-scoped Supabase client
+→ user-scoped Supabase server client
 → PostgREST
 → PostgreSQL
 → RLS
 ```
 
-### Privileged client
+Use server-only environment variables for the current architecture:
 
-A service-role Supabase client bypasses RLS.
+```env
+SUPABASE_URL=
+SUPABASE_PUBLISHABLE_KEY=
+```
+
+Do not introduce `NEXT_PUBLIC_SUPABASE_*` variables merely because Supabase examples use a browser client.
+
+### Browser Supabase client
+
+Do not create or use a browser Supabase client unless a concrete feature requires direct browser-to-Supabase communication.
+
+A valid future example is Supabase Realtime. If such a feature is introduced:
+
+- keep the scope narrow;
+- expose only browser-safe values;
+- retain RLS as the authorization boundary;
+- document the new browser access path in both `README.md` and `AGENTS.md`.
+
+### Privileged server client
+
+A privileged Supabase server client uses a server-only secret credential and bypasses normal RLS protections.
 
 Use it only when genuinely required, for example:
 
@@ -249,9 +288,11 @@ Use it only when genuinely required, for example:
 - trusted server-side synchronization;
 - narrowly scoped system operations.
 
-Never use the service-role client merely because the code runs on the server.
+Introduce `SUPABASE_SECRET_KEY` only when a privileged workflow actually needs it.
 
-Never expose the service-role key to:
+Never use the privileged client merely because the code runs on the server.
+
+Never expose the secret key to:
 
 - browser code;
 - Client Components;
@@ -586,6 +627,8 @@ Do not expose secrets through:
 - error messages;
 - API responses.
 
+The current project intentionally keeps the Supabase URL and publishable key server-only because there is no browser Supabase client. Do not add `NEXT_PUBLIC_SUPABASE_*` variables without a concrete browser-side requirement.
+
 ---
 
 ## Environment variables
@@ -596,7 +639,18 @@ Keep a committed `.env.example` containing variable names and safe placeholder v
 
 Local secrets belong in `.env.local` or another ignored environment file.
 
-Clearly distinguish browser-safe variables from server-only secrets.
+Clearly distinguish browser-safe variables from server-only values and secrets.
+
+Current Supabase configuration uses:
+
+```env
+SUPABASE_URL=
+SUPABASE_PUBLISHABLE_KEY=
+```
+
+These values are server-only in the current architecture because direct browser-to-Supabase access is not used.
+
+Add `SUPABASE_SECRET_KEY` only when a privileged server workflow is implemented.
 
 Any variable prefixed with:
 
@@ -702,6 +756,8 @@ Before adding a package, check whether:
 - the dependency creates security or maintenance cost.
 
 Do not replace existing libraries merely because another library is preferred personally.
+
+TanStack Query is intentionally planned but not required for the Supabase foundation. Add it when the first interactive client-side server-state workflow benefits from caching, invalidation, background refetching, or mutation state. When it is introduced, update both `README.md` and `AGENTS.md` in the same change.
 
 ---
 
@@ -861,7 +917,8 @@ Before making significant changes:
 6. make the smallest coherent change;
 7. add/update tests where behavior changes;
 8. run relevant validation commands;
-9. summarize what changed and any remaining assumptions.
+9. update `README.md` and/or `AGENTS.md` when architecture, tooling, security boundaries, or development conventions change;
+10. summarize what changed and any remaining assumptions.
 
 Do not infer missing requirements when they materially affect architecture or behavior. Ask for clarification instead.
 
