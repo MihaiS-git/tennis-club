@@ -1,20 +1,12 @@
-import type { AuthErrorCode } from "./messages";
+export type AuthFieldName =
+  | "email"
+  | "password"
+  | "confirmPassword"
+  | "currentPassword";
 
 export type AuthActionState = {
-  attempt: number;
-  error?: AuthErrorCode;
+  fieldErrors?: Partial<Record<AuthFieldName, string>>;
+  formError?: string;
 };
 
-export const initialAuthActionState: AuthActionState = {
-  attempt: 0,
-};
-
-export function createAuthErrorState(
-  previousState: AuthActionState,
-  error: AuthErrorCode,
-): AuthActionState {
-  return {
-    attempt: previousState.attempt + 1,
-    error,
-  };
-}
+export const initialAuthActionState: AuthActionState = {};

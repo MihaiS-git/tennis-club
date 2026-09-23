@@ -54,6 +54,46 @@
   --ui-duration-fast: 150ms;
   --ui-duration-base: 200ms;
   --ui-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+  --shadow-neutral: rgb(40 27 22 / 12%);
+  --toast-surface: var(--surface-elevated);
+  --toast-border: var(--border);
+  --toast-text: var(--foreground);
+  --toast-close-text: var(--muted-foreground);
+  --toast-close-hover-background: var(--surface-muted);
+  --toast-close-hover-text: var(--foreground);
+  --toast-success-background: var(--success-background);
+  --toast-success-border: var(--forest-700);
+  --toast-success-text: var(--success);
+  --toast-info-background: var(--info-background);
+  --toast-info-border: var(--forest-700);
+  --toast-info-text: var(--info);
+  --toast-warning-background: var(--warning-background);
+  --toast-warning-border: var(--border-strong);
+  --toast-warning-text: var(--warning);
+  --toast-error-background: var(--danger-background);
+  --toast-error-border: var(--clay-700);
+  --toast-error-text: var(--danger);
+}
+
+[data-sonner-toaster][data-sonner-theme] {
+  --normal-bg: var(--toast-surface) !important;
+  --normal-border: var(--toast-border) !important;
+  --normal-text: var(--toast-text) !important;
+  --normal-bg-hover: var(--toast-close-hover-background) !important;
+  --normal-border-hover: var(--toast-border) !important;
+  --success-bg: var(--toast-success-background) !important;
+  --success-border: var(--toast-success-border) !important;
+  --success-text: var(--toast-success-text) !important;
+  --info-bg: var(--toast-info-background) !important;
+  --info-border: var(--toast-info-border) !important;
+  --info-text: var(--toast-info-text) !important;
+  --warning-bg: var(--toast-warning-background) !important;
+  --warning-border: var(--toast-warning-border) !important;
+  --warning-text: var(--toast-warning-text) !important;
+  --error-bg: var(--toast-error-background) !important;
+  --error-border: var(--toast-error-border) !important;
+  --error-text: var(--toast-error-text) !important;
 }
 
 @theme inline {

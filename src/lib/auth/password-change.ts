@@ -1,5 +1,4 @@
 type AuthError = { code?: string };
-
 type PasswordVerificationResult = {
   data: { user: { id: string } | null };
   error: AuthError | null;
@@ -36,22 +35,41 @@ export async function changePasswordWithVerification(input: {
   currentPassword: string;
   newPassword: string;
 }): Promise<PasswordChangeResult> {
-  const verification = await input.verificationClient.auth.signInWithPassword({
-    email: input.email,
-    password: input.currentPassword,
-  });
+  let verification: PasswordVerificationResult;
+
+  try {
+    verification = await input.verificationClient.auth.signInWithPassword({
+      email: input.email,
+      password: input.currentPassword,
+    });
+  } catch {
+    return { ok: false, reason: "current-password-incorrect" };
+  }
 
   if (verification.error || verification.data.user?.id !== input.userId) {
     return { ok: false, reason: "current-password-incorrect" };
   }
 
-  await input.verificationClient.auth.signOut({ scope: "local" });
+  try {
+    // This is an isolated, non-persisting session. Clearing it cannot alter the
+    // cookie-backed application session used by authenticatedClient.
+    await input.verificationClient.auth.signOut({ scope: "local" });
+  } catch {
+    // The isolated client has no persistent storage; update authorization still
+    // comes exclusively from the application's existing authenticated session.
+  }
 
-  const { error } = await input.authenticatedClient.auth.updateUser({
-    password: input.newPassword,
-  });
+  try {
+    const { error } = await input.authenticatedClient.auth.updateUser({
+      password: input.newPassword,
+    });
 
-  return error
-    ? { ok: false, reason: "password-update-failed", code: error.code }
-    : { ok: true };
+    if (error) {
+      return { ok: false, reason: "password-update-failed", code: error.code };
+    }
+  } catch {
+    return { ok: false, reason: "password-update-failed" };
+  }
+
+  return { ok: true };
 }

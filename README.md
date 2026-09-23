@@ -238,7 +238,9 @@ APP_URL=
 
 These variables are intentionally not prefixed with `NEXT_PUBLIC_` because the browser does not currently need direct Supabase access.
 
-`APP_URL` is the canonical application origin used only on the server for authentication email redirects. Add `${APP_URL}/auth/confirm` to Supabase Auth's allowed redirect URLs.
+`APP_URL` is the canonical server-side application origin used for authentication email redirects. Signup requires email confirmation and returns through `${APP_URL}/auth/callback`; password recovery returns through `${APP_URL}/auth/callback?next=/reset-password`. Production must set `APP_URL` explicitly.
+
+Local development uses the Supabase stack at `http://127.0.0.1:54321`, the Next.js app at `http://localhost:3000`, and Mailpit at `http://127.0.0.1:54324`. Mailpit is local-only; production email delivery is configured in the hosted Supabase project. See [auth architecture](docs/architecture.md), [security configuration](docs/security.md), and [auth testing](docs/testing.md).
 
 ### Browser Supabase client
 
@@ -1123,7 +1125,9 @@ Verify:
 Critical workflows:
 
 ```text
-signup/login
+signup
+→ email confirmation
+→ sign in
 → book court
 → pay
 → confirmation

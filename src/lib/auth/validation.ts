@@ -1,81 +1,56 @@
 import { z } from "zod";
 
-const emailSchema = z
+const email = z.string().trim().email("Enter a valid email address.");
+const password = z
   .string()
-  .trim()
-  .min(1, "Enter your email address.")
-  .email("Enter a valid email address.")
-  .max(254, "Enter a valid email address.");
+  .min(6, "Password must be at least 6 characters long.");
 
-const signInSchema = z.object({
-  email: emailSchema,
+export const signUpSchema = z
+  .object({
+    email,
+    password,
+    confirmPassword: z.string(),
+  })
+  .refine((value) => value.password === value.confirmPassword, {
+    message: "Passwords do not match.",
+    path: ["confirmPassword"],
+  });
+
+export const signInSchema = z.object({
+  email,
   password: z.string().min(1, "Enter your password."),
 });
 
-const signUpSchema = z
+export const recoverySchema = z.object({ email });
+
+export const newPasswordSchema = z
   .object({
-    email: emailSchema,
-    password: z
-      .string()
-      .min(8, "Use at least 8 characters for your password.")
-      .max(72, "Use no more than 72 characters for your password."),
+    password,
     confirmPassword: z.string(),
   })
-  .refine(({ confirmPassword, password }) => password === confirmPassword, {
-    message: "The passwords do not match.",
+  .refine((value) => value.password === value.confirmPassword, {
+    message: "Passwords do not match.",
     path: ["confirmPassword"],
   });
 
-const changePasswordSchema = z
-  .object({
-    currentPassword: z.string().min(1),
-    password: z.string().min(8).max(72),
-    confirmPassword: z.string(),
-  })
-  .refine(({ confirmPassword, password }) => password === confirmPassword, {
-    path: ["confirmPassword"],
-  })
-  .refine(({ currentPassword, password }) => currentPassword !== password, {
-    path: ["password"],
-  });
+export const changePasswordSchema = newPasswordSchema.safeExtend({
+  currentPassword: z.string().min(1, "Enter your current password."),
+}).refine((value) => value.password !== value.currentPassword, {
+  message: "New password must be different from your current password.",
+  path: ["password"],
+});
 
-function getAuthFormFields(formData: FormData) {
-  return {
-    email: formData.get("email"),
-    password: formData.get("password"),
-  };
-}
+export function fieldValidationErrors(
+  error: z.ZodError,
+): Record<string, string> {
+  const errors: Record<string, string> = {};
 
-export function parsePasswordResetForm(formData: FormData) {
-  return z.object({ email: emailSchema }).safeParse({
-    email: formData.get("email"),
-  });
-}
+  for (const issue of error.issues) {
+    const field = issue.path[0];
+    if (typeof field === "string" && errors[field] === undefined) {
+      errors[field] = issue.message;
+    }
+  }
 
-export function parseNewPasswordForm(formData: FormData) {
-  return signUpSchema
-    .pick({ password: true, confirmPassword: true })
-    .safeParse({
-      password: formData.get("password"),
-      confirmPassword: formData.get("confirmPassword"),
-    });
-}
-
-export function parseChangePasswordForm(formData: FormData) {
-  return changePasswordSchema.safeParse({
-    currentPassword: formData.get("currentPassword"),
-    password: formData.get("password"),
-    confirmPassword: formData.get("confirmPassword"),
-  });
-}
-
-export function parseSignInForm(formData: FormData) {
-  return signInSchema.safeParse(getAuthFormFields(formData));
-}
-
-export function parseSignUpForm(formData: FormData) {
-  return signUpSchema.safeParse({
-    ...getAuthFormFields(formData),
-    confirmPassword: formData.get("confirmPassword"),
-  });
+  return errors;
 }

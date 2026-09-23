@@ -698,7 +698,11 @@ SUPABASE_PUBLISHABLE_KEY=
 
 These values are server-only in the current architecture because direct browser-to-Supabase access is not used.
 
-`APP_URL` is the canonical server-side application origin used for authentication email redirects. Its `/auth/confirm` route must be allowed in Supabase Auth redirect URLs.
+`APP_URL` is the canonical server-side application origin used for authentication email redirects. Production must define it; production code must not silently fall back to localhost.
+
+Signup must require email confirmation. Do not treat a user returned by `auth.signUp()` as authenticated, and do not allow a signup session before confirmation. Signup confirmation uses `/auth/callback`; password recovery uses `/auth/callback?next=/reset-password`.
+
+For local development, the application origin is `http://localhost:3000`, the Supabase API is `http://127.0.0.1:54321`, and Auth emails are captured by Mailpit at `http://127.0.0.1:54324`. Mailpit is not a production email transport. Hosted Supabase projects must enable email confirmation, allow the environment-configured callback URLs, and configure production email delivery in the Supabase Dashboard.
 
 Add `SUPABASE_SECRET_KEY` only when a privileged server workflow is implemented.
 
