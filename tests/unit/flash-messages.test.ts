@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { assert, test } from "vitest";
 
 import {
   readFlashMessages,
@@ -11,11 +10,11 @@ test("query flash values are consumed while unrelated parameters are preserved",
     "next=%2Faccount&filter=upcoming&message=Confirmed&error=Expired",
   );
 
-  assert.deepEqual(readFlashMessages(params), [
+  assert.deepStrictEqual(readFlashMessages(params), [
     { kind: "success", text: "Confirmed" },
     { kind: "error", text: "Expired" },
   ]);
-  assert.equal(
+  assert.strictEqual(
     removeConsumedFlashMessages(params),
     "next=%2Faccount&filter=upcoming",
   );

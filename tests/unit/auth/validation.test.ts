@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { assert, describe, it } from "vitest";
 
 import { signInSchema, signUpSchema } from "../../../src/lib/auth/validation";
 
@@ -10,9 +9,9 @@ describe("authentication form validation", () => {
       password: "strong-password",
     });
 
-    assert.equal(result.success, true);
+    assert.strictEqual(result.success, true);
     if (result.success) {
-      assert.equal(result.data.email, "member@example.com");
+      assert.strictEqual(result.data.email, "member@example.com");
     }
   });
 
@@ -23,9 +22,9 @@ describe("authentication form validation", () => {
       confirmPassword: "different-password",
     });
 
-    assert.equal(result.success, false);
+    assert.strictEqual(result.success, false);
     if (!result.success) {
-      assert.equal(
+      assert.strictEqual(
         result.error.issues.some(
           ({ path }) => path[0] === "confirmPassword",
         ),

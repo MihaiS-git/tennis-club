@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { assert, describe, it } from "vitest";
 
 import { changePasswordWithVerification } from "../../../src/lib/auth/password-change";
 
@@ -11,7 +10,7 @@ describe("changePasswordWithVerification", () => {
         auth: {
           async updateUser({ password }) {
             updates += 1;
-            assert.equal(password, "new-password");
+            assert.strictEqual(password, "new-password");
             return { error: null };
           },
         },
@@ -32,8 +31,8 @@ describe("changePasswordWithVerification", () => {
       newPassword: "new-password",
     });
 
-    assert.deepEqual(result, { ok: true });
-    assert.equal(updates, 1);
+    assert.deepStrictEqual(result, { ok: true });
+    assert.strictEqual(updates, 1);
   });
 
   it("does not update the password when current-password verification fails", async () => {
@@ -63,7 +62,7 @@ describe("changePasswordWithVerification", () => {
       newPassword: "new-password",
     });
 
-    assert.deepEqual(result, { ok: false, reason: "current-password-incorrect" });
-    assert.equal(updates, 0);
+    assert.deepStrictEqual(result, { ok: false, reason: "current-password-incorrect" });
+    assert.strictEqual(updates, 0);
   });
 });

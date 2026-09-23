@@ -1,6 +1,5 @@
-import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import test from "node:test";
+import { assert, test } from "vitest";
 
 import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
@@ -83,7 +82,7 @@ async function confirmSignUp(
   );
 
   const exchange = await client.auth.exchangeCodeForSession(code);
-  assert.equal(exchange.error, null);
+  assert.strictEqual(exchange.error, null);
   assert.ok(exchange.data.session);
 }
 
@@ -99,9 +98,9 @@ test("signup provisions the application profile and default member role", async 
     },
   });
 
-  assert.equal(signUp.error, null);
+  assert.strictEqual(signUp.error, null);
   assert.ok(signUp.data.user);
-  assert.equal(
+  assert.strictEqual(
     signUp.data.session,
     null,
     "Signup must not authenticate before confirmation.",
@@ -114,8 +113,8 @@ test("signup provisions the application profile and default member role", async 
     .select("id, email, status")
     .eq("id", signUp.data.user.id)
     .single();
-  assert.equal(profile.error, null);
-  assert.deepEqual(profile.data, {
+  assert.strictEqual(profile.error, null);
+  assert.deepStrictEqual(profile.data, {
     id: signUp.data.user.id,
     email,
     status: "active",
@@ -125,8 +124,8 @@ test("signup provisions the application profile and default member role", async 
     .from("user_roles")
     .select("role_code")
     .eq("user_id", signUp.data.user.id);
-  assert.equal(roles.error, null);
-  assert.deepEqual(roles.data, [{ role_code: "member" }]);
+  assert.strictEqual(roles.error, null);
+  assert.deepStrictEqual(roles.data, [{ role_code: "member" }]);
 
   await client.auth.signOut({ scope: "local" });
 });
@@ -145,7 +144,7 @@ test("current-password verification protects a real Supabase password change", a
     },
   });
 
-  assert.equal(signUp.error, null);
+  assert.strictEqual(signUp.error, null);
   assert.ok(signUp.data.user);
   if (!signUp.data.session) await confirmSignUp(email, authenticatedClient);
 
@@ -158,7 +157,7 @@ test("current-password verification protects a real Supabase password change", a
     newPassword,
   });
 
-  assert.deepEqual(rejected, {
+  assert.deepStrictEqual(rejected, {
     ok: false,
     reason: "current-password-incorrect",
   });
@@ -168,7 +167,7 @@ test("current-password verification protects a real Supabase password change", a
     email,
     password: oldPassword,
   });
-  assert.equal(
+  assert.strictEqual(
     unchangedSignIn.error,
     null,
     "A rejected change must preserve the old password.",
@@ -183,7 +182,7 @@ test("current-password verification protects a real Supabase password change", a
     currentPassword: oldPassword,
     newPassword,
   });
-  assert.deepEqual(changed, { ok: true });
+  assert.deepStrictEqual(changed, { ok: true });
 
   await authenticatedClient.auth.signOut({ scope: "local" });
 
@@ -202,7 +201,7 @@ test("current-password verification protects a real Supabase password change", a
     email,
     password: newPassword,
   });
-  assert.equal(newPasswordSignIn.error, null, "The new password must sign in.");
-  assert.equal(newPasswordSignIn.data.user?.id, signUp.data.user.id);
+  assert.strictEqual(newPasswordSignIn.error, null, "The new password must sign in.");
+  assert.strictEqual(newPasswordSignIn.data.user?.id, signUp.data.user.id);
   await newPasswordProbe.auth.signOut({ scope: "local" });
 });

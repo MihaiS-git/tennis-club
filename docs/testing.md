@@ -4,11 +4,12 @@ Focused automated coverage includes callback decisions, mandatory-confirmation s
 
 Unit tests live in `tests/unit/`; integration tests that use the local Supabase stack live in `tests/integration/`. Supabase pgTAP/database tests remain in `supabase/tests/database/`.
 
-Run the focused checks with:
+Run the unit, integration, or complete application suite with Vitest. Integration tests require `.env.local` and the running local Supabase stack:
 
 ```bash
-npm test
+npm run test:unit
 npm run test:integration
+npm test
 npx eslint src/app/layout.tsx 'src/app/(auth)/actions.ts' src/components/query-flash-messages.tsx src/lib/auth src/lib/flash-messages.ts tests/unit tests/integration
 ```
 

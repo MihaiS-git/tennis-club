@@ -1,4 +1,4 @@
-import { safeRedirectPath } from "./redirects.ts";
+import { safeRedirectPath } from "./redirects";
 
 export type SupportedOtpType = "email" | "signup" | "recovery";
 export type AuthCallbackOutcome =
@@ -51,4 +51,3 @@ export function decideAuthCallbackOutcome(input: {
   if (input.sessionEstablished) return "authenticated";
   return input.isEmailConfirmation ? "confirmed-sign-in-required" : "invalid";
 }
-
