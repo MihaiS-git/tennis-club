@@ -36,10 +36,7 @@ export async function GET(request: NextRequest) {
   if (!providerVerificationFailed && code) {
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     authOperationSucceeded = !error;
-    // Supabase issues the authorization code only after it has successfully
-    // verified the confirmation link. The exchange can still fail later when
-    // its PKCE verifier is missing, stale, or from another browser.
-    verificationSucceeded = authOperationSucceeded || isEmailConfirmation;
+    verificationSucceeded = authOperationSucceeded;
   } else if (!providerVerificationFailed && tokenHash && type) {
     const { error } = await supabase.auth.verifyOtp({
       token_hash: tokenHash,
@@ -72,4 +69,3 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.redirect(getApplicationUrl(destination));
 }
-

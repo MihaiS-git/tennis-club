@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { assert, test } from "vitest";
 
 import { createClient } from "@supabase/supabase-js";
@@ -35,6 +36,26 @@ function createAuthClient() {
       persistSession: false,
     },
   });
+}
+
+function provisioningCounts(userId: string): number[] {
+  assert.match(userId, /^[0-9a-f-]{36}$/i);
+  const result = execFileSync(
+    "psql",
+    [
+      process.env.LOCAL_SUPABASE_DB_URL ??
+        "postgresql://postgres:postgres@127.0.0.1:54322/postgres",
+      "-At",
+      "-c",
+      `select
+        (select count(*) from auth.users where id = '${userId}'),
+        (select count(*) from public.users where id = '${userId}'),
+        (select count(*) from public.user_roles where user_id = '${userId}' and role_code = 'member'),
+        (select count(*) from public.user_roles where user_id = '${userId}' and role_code <> 'member')`,
+    ],
+    { encoding: "utf8" },
+  );
+  return result.trim().split("|").map(Number);
 }
 
 async function confirmationLinkFor(email: string): Promise<string> {
@@ -105,6 +126,11 @@ test("signup provisions the application profile and default member role", async 
     null,
     "Signup must not authenticate before confirmation.",
   );
+  assert.deepStrictEqual(provisioningCounts(signUp.data.user.id), [1, 1, 1, 0],
+    "A successful signup must already have its matching profile and only the member role.");
+  const pendingSession = await client.auth.getSession();
+  assert.strictEqual(pendingSession.error, null);
+  assert.strictEqual(pendingSession.data.session, null);
 
   await confirmSignUp(email, client);
 
