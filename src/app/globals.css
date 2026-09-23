@@ -1,26 +1,173 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --clay-700: #8f341f;
+  --clay-600: #a94728;
+  --clay-500: #bf5a32;
+  --clay-300: #d89a78;
+  --clay-100: #eed8ca;
+
+  --forest-900: #142a22;
+  --forest-800: #1b352b;
+  --forest-700: #27483a;
+  --forest-100: #dce5df;
+
+  --ivory: #f4ecdf;
+  --sand: #ddcdb9;
+  --chalk: #fffaf1;
+
+  --earth-900: #281b16;
+  --earth-700: #584439;
+
+  --tennis: #d2dc45;
+
+  --background: var(--ivory);
+  --foreground: var(--earth-900);
+  --surface: var(--chalk);
+  --surface-muted: var(--clay-100);
+  --surface-elevated: var(--chalk);
+  --primary: var(--forest-800);
+  --primary-hover: var(--forest-900);
+  --primary-foreground: var(--chalk);
+  --accent: var(--clay-600);
+  --accent-hover: var(--clay-700);
+  --accent-foreground: var(--chalk);
+  --muted: var(--clay-100);
+  --muted-foreground: var(--earth-700);
+  --border: var(--sand);
+  --border-strong: var(--clay-300);
+  --focus-ring: var(--clay-500);
+  --success: var(--forest-700);
+  --success-background: var(--forest-100);
+  --warning: var(--earth-700);
+  --warning-background: var(--sand);
+  --danger: var(--clay-700);
+  --danger-background: var(--clay-100);
+  --info: var(--forest-700);
+  --info-background: var(--forest-100);
+
+  --ui-radius-control: 0.5rem;
+  --ui-radius-card: 0.75rem;
+  --ui-radius-floating: 0.875rem;
+  --ui-shadow-card: 0 1px 2px rgb(27 21 17 / 6%), 0 8px 24px rgb(27 21 17 / 6%);
+  --ui-shadow-floating: 0 10px 30px rgb(27 21 17 / 12%);
+  --ui-duration-fast: 150ms;
+  --ui-duration-base: 200ms;
+  --ui-ease-standard: cubic-bezier(0.2, 0, 0, 1);
 }
 
 @theme inline {
+  --color-clay-700: var(--clay-700);
+  --color-clay-600: var(--clay-600);
+  --color-clay-500: var(--clay-500);
+  --color-clay-300: var(--clay-300);
+  --color-clay-100: var(--clay-100);
+  --color-forest-900: var(--forest-900);
+  --color-forest-800: var(--forest-800);
+  --color-forest-700: var(--forest-700);
+  --color-forest-100: var(--forest-100);
+  --color-ivory: var(--ivory);
+  --color-sand: var(--sand);
+  --color-chalk: var(--chalk);
+  --color-earth-900: var(--earth-900);
+  --color-earth-700: var(--earth-700);
+  --color-tennis: var(--tennis);
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-focus: var(--focus-ring);
+  --color-success: var(--success);
+  --color-success-background: var(--success-background);
+  --color-warning: var(--warning);
+  --color-warning-background: var(--warning-background);
+  --color-danger: var(--danger);
+  --color-danger-background: var(--danger-background);
+  --color-info: var(--info);
+  --color-info-background: var(--info-background);
+
+  --font-sans: var(--font-inter);
+  --font-heading: var(--font-archivo);
+  --radius-control: var(--ui-radius-control);
+  --radius-card: var(--ui-radius-card);
+  --radius-floating: var(--ui-radius-floating);
+  --shadow-card: var(--ui-shadow-card);
+  --shadow-floating: var(--ui-shadow-floating);
+  --duration-fast: var(--ui-duration-fast);
+  --duration-base: var(--ui-duration-base);
+  --ease-standard: var(--ui-ease-standard);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@layer base {
+  html {
+    background: var(--background);
   }
-}
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  body {
+    min-height: 100%;
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-inter), Arial, Helvetica, sans-serif;
+    text-rendering: optimizeLegibility;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-family: var(--font-archivo), Arial, Helvetica, sans-serif;
+    font-weight: 600;
+  }
+
+  a {
+    color: var(--primary);
+    transition-duration: var(--ui-duration-fast);
+    transition-property: color, text-decoration-color;
+    transition-timing-function: var(--ui-ease-standard);
+  }
+
+  a:hover {
+    color: var(--primary-hover);
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+
+  button:not(:disabled) {
+    cursor: pointer;
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--muted-foreground);
+    opacity: 1;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: var(--clay-300);
+    color: var(--forest-900);
+  }
 }

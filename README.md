@@ -233,9 +233,12 @@ Current server-only environment variables:
 ```env
 SUPABASE_URL=
 SUPABASE_PUBLISHABLE_KEY=
+APP_URL=
 ```
 
 These variables are intentionally not prefixed with `NEXT_PUBLIC_` because the browser does not currently need direct Supabase access.
+
+`APP_URL` is the canonical application origin used only on the server for authentication email redirects. Add `${APP_URL}/auth/confirm` to Supabase Auth's allowed redirect URLs.
 
 ### Browser Supabase client
 

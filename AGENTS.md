@@ -78,6 +78,7 @@ Not every directory needs to exist before it is needed.
 
 Do not create speculative folders or abstractions.
 
+Never delete, move, rename, clean, or replace user-provided assets under `public/` unless explicitly instructed.
 ---
 
 ## General implementation rules
@@ -309,6 +310,7 @@ Use server-only environment variables for the current architecture:
 ```env
 SUPABASE_URL=
 SUPABASE_PUBLISHABLE_KEY=
+APP_URL=
 ```
 
 Do not introduce `NEXT_PUBLIC_SUPABASE_*` variables merely because Supabase examples use a browser client.
@@ -695,6 +697,8 @@ SUPABASE_PUBLISHABLE_KEY=
 ```
 
 These values are server-only in the current architecture because direct browser-to-Supabase access is not used.
+
+`APP_URL` is the canonical server-side application origin used for authentication email redirects. Its `/auth/confirm` route must be allowed in Supabase Auth redirect URLs.
 
 Add `SUPABASE_SECRET_KEY` only when a privileged server workflow is implemented.
 

@@ -2,27 +2,27 @@ import Link from "next/link";
 
 export default function Home() {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center bg-zinc-50 font-sans dark:bg-black">
+    <div className="flex flex-1 flex-col items-center justify-center bg-background font-sans text-foreground">
       <main className="flex w-full max-w-3xl flex-1 flex-col items-center justify-center px-6 py-24 text-center">
-        <p className="text-sm font-medium text-emerald-700 dark:text-emerald-400">
+        <p className="text-sm font-medium text-accent">
           Tennis Club
         </p>
-        <h1 className="mt-4 max-w-xl text-4xl font-semibold tracking-tight sm:text-5xl">
+        <h1 className="mt-4 max-w-xl font-heading text-4xl font-semibold tracking-tight text-foreground sm:text-5xl">
           Your club account, ready when you are.
         </h1>
-        <p className="mt-5 max-w-lg text-lg leading-8 text-zinc-600 dark:text-zinc-400">
+        <p className="mt-5 max-w-lg text-lg leading-8 text-muted-foreground">
           Sign in to access your account or create a member account to get
           started.
         </p>
         <div className="mt-8 flex flex-col gap-3 sm:flex-row">
           <Link
-            className="rounded-lg bg-emerald-700 px-5 py-3 text-sm font-semibold text-white transition hover:bg-emerald-800"
+            className="rounded-control bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground transition hover:bg-primary-hover"
             href="/login"
           >
             Sign in
           </Link>
           <Link
-            className="rounded-lg border border-zinc-300 px-5 py-3 text-sm font-semibold transition hover:bg-white dark:border-zinc-700 dark:hover:bg-zinc-900"
+            className="rounded-control border border-border-strong bg-transparent px-5 py-3 text-sm font-semibold text-primary transition hover:bg-surface-muted"
             href="/signup"
           >
             Create account

@@ -2,6 +2,9 @@ export const authMessages = {
   "check-email":
     "Account created. Check your email to confirm it before signing in.",
   "signed-out": "You have been signed out.",
+  "password-reset-sent":
+    "If an account uses that email address, we sent a password reset link.",
+  "password-updated": "Your password has been updated. Sign in to continue.",
 } as const;
 
 export const authErrors = {
@@ -11,6 +14,14 @@ export const authErrors = {
   "invalid-signup":
     "Enter a valid email address and a password of 8 to 72 characters.",
   "password-mismatch": "The passwords do not match.",
+  "invalid-password-reset": "Enter a valid email address.",
+  "new-password-mismatch": "The passwords do not match.",
+  "reset-link-invalid": "That password reset link is invalid or has expired.",
+  "reset-request-failed": "We could not send a password reset link. Please try again.",
+  "password-update-failed": "We could not update your password. Please try again.",
+  "password-change-invalid":
+    "Enter your current password and a different new password of 8 to 72 characters.",
+  "current-password-incorrect": "Your current password is incorrect.",
   "rate-limited": "Too many attempts. Wait a moment and try again.",
   "signin-failed": "We could not sign you in. Please try again.",
   "signout-failed": "We could not sign you out. Please try again.",
