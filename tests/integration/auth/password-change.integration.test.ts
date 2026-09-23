@@ -5,7 +5,7 @@ import test from "node:test";
 import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
 
-import { changePasswordWithVerification } from "./password-change.ts";
+import { changePasswordWithVerification } from "../../../src/lib/auth/password-change.ts";
 
 function requiredEnvironmentVariable(name: "SUPABASE_URL" | "SUPABASE_PUBLISHABLE_KEY"): string {
   const value = process.env[name];

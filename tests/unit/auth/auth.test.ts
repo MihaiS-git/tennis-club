@@ -7,26 +7,26 @@ import {
   decideAuthCallbackOutcome,
   isEmailConfirmationCallback,
   supportedOtpType,
-} from "./callback.ts";
+} from "../../../src/lib/auth/callback.ts";
 import {
   SIGNUP_CONFIRMATION_DESCRIPTION,
   SIGNUP_CONFIRMATION_TITLE,
-} from "./confirmation.ts";
+} from "../../../src/lib/auth/confirmation.ts";
 import {
   RECOVERY_SUCCESS_MESSAGE,
   decideAccountAccess,
   decideSignUpResult,
   safeAuthError,
-} from "./decisions.ts";
-import { changePasswordWithVerification } from "./password-change.ts";
-import { loginPath, safeRedirectPath } from "./redirects.ts";
-import { getApplicationUrl } from "./site-url.ts";
+} from "../../../src/lib/auth/decisions.ts";
+import { changePasswordWithVerification } from "../../../src/lib/auth/password-change.ts";
+import { loginPath, safeRedirectPath } from "../../../src/lib/auth/redirects.ts";
+import { getApplicationUrl } from "../../../src/lib/auth/site-url.ts";
 import {
   changePasswordSchema,
   fieldValidationErrors,
   newPasswordSchema,
   signUpSchema,
-} from "./validation.ts";
+} from "../../../src/lib/auth/validation.ts";
 
 test("signup validates required credentials", () => {
   assert.equal(

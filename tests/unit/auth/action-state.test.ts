@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 import {
   createAuthErrorState,
   initialAuthActionState,
-} from "./action-state";
+} from "../../../src/lib/auth/action-state.ts";
 
 describe("authentication action state", () => {
   it("creates a fresh error state for every failed submission", () => {

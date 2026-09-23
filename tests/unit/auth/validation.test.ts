@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { parseSignInForm, parseSignUpForm } from "./validation";
+import { parseSignInForm, parseSignUpForm } from "../../../src/lib/auth/validation.ts";
 
 function validSignUpForm() {
   const formData = new FormData();

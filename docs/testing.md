@@ -2,12 +2,14 @@
 
 Focused automated coverage includes callback decisions, mandatory-confirmation signup decisions, application-profile/default-role provisioning through authenticated RLS, auth validation/action state, current-password verification, production `APP_URL` safety, and flash-query cleanup.
 
+Unit tests live in `tests/unit/`; integration tests that use the local Supabase stack live in `tests/integration/`. Supabase pgTAP/database tests remain in `supabase/tests/database/`.
+
 Run the focused checks with:
 
 ```bash
-node --test --experimental-strip-types src/lib/auth/auth.test.ts src/lib/flash-messages.test.ts
-node --env-file=.env.local --test --experimental-strip-types src/lib/auth/password-change.integration.test.ts
-npx eslint src/app/layout.tsx 'src/app/(auth)/actions.ts' src/components/query-flash-messages.tsx src/lib/auth src/lib/flash-messages.ts src/lib/flash-messages.test.ts
+npm test
+npm run test:integration
+npx eslint src/app/layout.tsx 'src/app/(auth)/actions.ts' src/components/query-flash-messages.tsx src/lib/auth src/lib/flash-messages.ts tests/unit tests/integration
 ```
 
 Real email-flow validation still requires the local Supabase stack and Next.js application. Use a brand-new unique email, inspect the generated message and URL in Mailpit at `http://127.0.0.1:54324`, and verify both flows:

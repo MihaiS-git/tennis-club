@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { authErrors, getAuthErrorCode, readAuthNotice } from "./messages";
+import { authErrors, getAuthErrorCode, readAuthNotice } from "../../../src/lib/auth/messages.ts";
 
 describe("authentication messages", () => {
   it("maps sign-in credential errors without revealing account existence", () => {
