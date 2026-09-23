@@ -819,6 +819,14 @@ TanStack Query is intentionally planned but not required for the Supabase founda
 
 Behavior changes should be tested.
 
+### Testing Stack
+
+- Vitest → unit and application integration tests.
+- React Testing Library → React component tests.
+- Local Supabase → real integration tests.
+- pgTAP → PostgreSQL, RLS, and database tests.
+- Use normal extensionless TypeScript/Next.js imports; never add `.ts` extensions as a test-runner workaround.
+
 ### Unit tests
 
 Use unit tests for deterministic TypeScript domain logic such as:
