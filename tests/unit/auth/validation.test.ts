@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { signInSchema, signUpSchema } from "../../../src/lib/auth/validation.ts";
+import { signInSchema, signUpSchema } from "../../../src/lib/auth/validation";
 
 describe("authentication form validation", () => {
   it("normalizes a valid sign-in email", () => {

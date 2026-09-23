@@ -7,26 +7,26 @@ import {
   decideAuthCallbackOutcome,
   isEmailConfirmationCallback,
   supportedOtpType,
-} from "../../../src/lib/auth/callback.ts";
+} from "../../../src/lib/auth/callback";
 import {
   SIGNUP_CONFIRMATION_DESCRIPTION,
   SIGNUP_CONFIRMATION_TITLE,
-} from "../../../src/lib/auth/confirmation.ts";
+} from "../../../src/lib/auth/confirmation";
 import {
   RECOVERY_SUCCESS_MESSAGE,
   decideAccountAccess,
   decideSignUpResult,
   safeAuthError,
-} from "../../../src/lib/auth/decisions.ts";
-import { changePasswordWithVerification } from "../../../src/lib/auth/password-change.ts";
-import { loginPath, safeRedirectPath } from "../../../src/lib/auth/redirects.ts";
-import { getApplicationUrl } from "../../../src/lib/auth/site-url.ts";
+} from "../../../src/lib/auth/decisions";
+import { changePasswordWithVerification } from "../../../src/lib/auth/password-change";
+import { loginPath, safeRedirectPath } from "../../../src/lib/auth/redirects";
+import { getApplicationUrl } from "../../../src/lib/auth/site-url";
 import {
   changePasswordSchema,
   fieldValidationErrors,
   newPasswordSchema,
   signUpSchema,
-} from "../../../src/lib/auth/validation.ts";
+} from "../../../src/lib/auth/validation";
 
 test("signup validates required credentials", () => {
   assert.equal(

@@ -4,7 +4,7 @@ import test from "node:test";
 import {
   readFlashMessages,
   removeConsumedFlashMessages,
-} from "../../src/lib/flash-messages.ts";
+} from "../../src/lib/flash-messages";
 
 test("query flash values are consumed while unrelated parameters are preserved", () => {
   const params = new URLSearchParams(

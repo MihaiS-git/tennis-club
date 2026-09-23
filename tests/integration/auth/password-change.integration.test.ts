@@ -5,9 +5,11 @@ import test from "node:test";
 import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
 
-import { changePasswordWithVerification } from "../../../src/lib/auth/password-change.ts";
+import { changePasswordWithVerification } from "../../../src/lib/auth/password-change";
 
-function requiredEnvironmentVariable(name: "SUPABASE_URL" | "SUPABASE_PUBLISHABLE_KEY"): string {
+function requiredEnvironmentVariable(
+  name: "SUPABASE_URL" | "SUPABASE_PUBLISHABLE_KEY",
+): string {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is required.`);
   return value;
@@ -16,10 +18,12 @@ function requiredEnvironmentVariable(name: "SUPABASE_URL" | "SUPABASE_PUBLISHABL
 const supabaseUrl = requiredEnvironmentVariable("SUPABASE_URL");
 const publishableKey = requiredEnvironmentVariable("SUPABASE_PUBLISHABLE_KEY");
 const mailpitMessagesSchema = z.object({
-  messages: z.array(z.object({
-    ID: z.string(),
-    To: z.array(z.object({ Address: z.string() })),
-  })),
+  messages: z.array(
+    z.object({
+      ID: z.string(),
+      To: z.array(z.object({ Address: z.string() })),
+    }),
+  ),
 });
 const mailpitMessageSchema = z.object({ Text: z.string() });
 
@@ -36,7 +40,9 @@ function createAuthClient() {
 
 async function confirmationLinkFor(email: string): Promise<string> {
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    const messagesResponse = await fetch("http://127.0.0.1:54324/api/v1/messages");
+    const messagesResponse = await fetch(
+      "http://127.0.0.1:54324/api/v1/messages",
+    );
     const messages = mailpitMessagesSchema.parse(await messagesResponse.json());
     const message = messages.messages.find((candidate) =>
       candidate.To.some((recipient) => recipient.Address === email),
@@ -57,15 +63,24 @@ async function confirmationLinkFor(email: string): Promise<string> {
   throw new Error(`Confirmation email was not delivered for ${email}.`);
 }
 
-async function confirmSignUp(email: string, client: ReturnType<typeof createAuthClient>) {
+async function confirmSignUp(
+  email: string,
+  client: ReturnType<typeof createAuthClient>,
+) {
   const verificationResponse = await fetch(await confirmationLinkFor(email), {
     redirect: "manual",
   });
   const callbackLocation = verificationResponse.headers.get("location");
-  assert.ok(callbackLocation, "Supabase must redirect a valid confirmation link.");
+  assert.ok(
+    callbackLocation,
+    "Supabase must redirect a valid confirmation link.",
+  );
 
   const code = new URL(callbackLocation).searchParams.get("code");
-  assert.ok(code, "A PKCE confirmation redirect must contain an authorization code.");
+  assert.ok(
+    code,
+    "A PKCE confirmation redirect must contain an authorization code.",
+  );
 
   const exchange = await client.auth.exchangeCodeForSession(code);
   assert.equal(exchange.error, null);
@@ -86,7 +101,11 @@ test("signup provisions the application profile and default member role", async 
 
   assert.equal(signUp.error, null);
   assert.ok(signUp.data.user);
-  assert.equal(signUp.data.session, null, "Signup must not authenticate before confirmation.");
+  assert.equal(
+    signUp.data.session,
+    null,
+    "Signup must not authenticate before confirmation.",
+  );
 
   await confirmSignUp(email, client);
 
@@ -149,7 +168,11 @@ test("current-password verification protects a real Supabase password change", a
     email,
     password: oldPassword,
   });
-  assert.equal(unchangedSignIn.error, null, "A rejected change must preserve the old password.");
+  assert.equal(
+    unchangedSignIn.error,
+    null,
+    "A rejected change must preserve the old password.",
+  );
   await unchangedProbe.auth.signOut({ scope: "local" });
 
   const changed = await changePasswordWithVerification({
@@ -169,7 +192,10 @@ test("current-password verification protects a real Supabase password change", a
     email,
     password: oldPassword,
   });
-  assert.ok(oldPasswordSignIn.error, "The old password must no longer sign in.");
+  assert.ok(
+    oldPasswordSignIn.error,
+    "The old password must no longer sign in.",
+  );
 
   const newPasswordProbe = createAuthClient();
   const newPasswordSignIn = await newPasswordProbe.auth.signInWithPassword({

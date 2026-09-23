@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { changePasswordWithVerification } from "../../../src/lib/auth/password-change.ts";
+import { changePasswordWithVerification } from "../../../src/lib/auth/password-change";
 
 describe("changePasswordWithVerification", () => {
   it("updates the password only after the current password is verified", async () => {
