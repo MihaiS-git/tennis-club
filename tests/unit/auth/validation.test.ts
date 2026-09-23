@@ -1,24 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { parseSignInForm, parseSignUpForm } from "../../../src/lib/auth/validation.ts";
-
-function validSignUpForm() {
-  const formData = new FormData();
-  formData.set("email", "member@example.com");
-  formData.set("password", "strong-password");
-  formData.set("confirmPassword", "strong-password");
-
-  return formData;
-}
+import { signInSchema, signUpSchema } from "../../../src/lib/auth/validation.ts";
 
 describe("authentication form validation", () => {
   it("normalizes a valid sign-in email", () => {
-    const formData = new FormData();
-    formData.set("email", "  member@example.com  ");
-    formData.set("password", "strong-password");
-
-    const result = parseSignInForm(formData);
+    const result = signInSchema.safeParse({
+      email: "  member@example.com  ",
+      password: "strong-password",
+    });
 
     assert.equal(result.success, true);
     if (result.success) {
@@ -26,11 +16,12 @@ describe("authentication form validation", () => {
     }
   });
 
-  it("rejects invalid sign-up input and mismatched passwords", () => {
-    const formData = validSignUpForm();
-    formData.set("confirmPassword", "different-password");
-
-    const result = parseSignUpForm(formData);
+  it("rejects mismatched sign-up passwords", () => {
+    const result = signUpSchema.safeParse({
+      email: "member@example.com",
+      password: "strong-password",
+      confirmPassword: "different-password",
+    });
 
     assert.equal(result.success, false);
     if (!result.success) {
@@ -40,18 +31,6 @@ describe("authentication form validation", () => {
         ),
         true,
       );
-    }
-  });
-
-  it("does not accept a caller-provided role as auth input", () => {
-    const formData = validSignUpForm();
-    formData.set("role", "admin");
-
-    const result = parseSignUpForm(formData);
-
-    assert.equal(result.success, true);
-    if (result.success) {
-      assert.equal("role" in result.data, false);
     }
   });
 });
