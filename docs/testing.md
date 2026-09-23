@@ -16,9 +16,10 @@ npx eslint src/app/layout.tsx 'src/app/(auth)/actions.ts' src/components/query-f
 supabase test db --local supabase/tests/database
 ```
 
-Real email-flow validation still requires the local Supabase stack and Next.js application. Use a brand-new unique email, inspect the generated message and URL in Mailpit at `http://127.0.0.1:54324`, and verify both flows:
+Playwright auth journeys live in `tests/e2e/`. They use the real Next.js application at `http://localhost:3000`, local Supabase at `http://127.0.0.1:54321`, and Mailpit at `http://127.0.0.1:54324`. Have the local Supabase stack, `.env.local`, the Supabase CLI (or `LOCAL_SUPABASE_SERVICE_ROLE_KEY`), and Google Chrome available. Use PostgREST 16.3 or later: the local CLI's 16.2 image has an intermittent `PGRST303` JWT clock bug. If needed, pin `v16.3` in the ignored `supabase/.temp/rest-version` file and restart Supabase with the data-preserving `supabase stop` and `supabase start` commands. Playwright starts the application with `npm run dev` if it is not already running. Run only this suite with:
 
-- signup reaches `/signup/check-email`, has no session before confirmation, cannot access `/account`, then establishes a session through `/auth/callback` only after the confirmation link is followed;
-- recovery email returns through `/auth/callback?next=/reset-password` (email delivery and callback wiring are manual checks; token verification, password update, and new-password sign-in are automated).
+```bash
+npm run test:e2e:auth
+```
 
-Also verify redirect success/error messages appear in the bottom-right Sonner toaster and that only `message`/`error` are removed from the URL.
+The three journeys cover signup through the actual Mailpit confirmation link and `/auth/callback` to `/account`; forgot-password through the actual Mailpit recovery link and `/auth/callback` to reset and subsequent sign-in; and unauthenticated account redirect, login, account access, logout, and renewed redirect. Each journey creates a unique test user. The protected-route login/logout journey passed, and the signup-confirmation journey passed on local PostgREST 16.3 with the account profile and `member` role visible. The recovery journey stopped at a test assertion expecting a flash query parameter that the application had already consumed, so its later steps have not yet been verified by E2E.
