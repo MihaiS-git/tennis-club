@@ -19,8 +19,8 @@ vi.mock("next/navigation", () => ({ redirect }));
 
 import { resetPasswordAction } from "../../../src/app/(auth)/actions";
 
-const supabaseUrl = process.env.SUPABASE_URL;
-const publishableKey = process.env.SUPABASE_PUBLISHABLE_KEY;
+const supabaseUrl = process.env.SUPABASE_URL ?? "";
+const publishableKey = process.env.SUPABASE_PUBLISHABLE_KEY ?? "";
 if (!supabaseUrl || !publishableKey) {
   throw new Error("SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY are required.");
 }
@@ -91,11 +91,14 @@ test("a valid recovery token permits reset and the new password signs in", async
 
   const generated = await admin.auth.admin.generateLink({ type: "recovery", email });
   assert.strictEqual(generated.error, null);
-  assert.ok(generated.data.properties.hashed_token);
+  const properties = generated.data.properties;
+  assert.ok(properties);
+  const { hashed_token: hashedToken } = properties;
+  assert.ok(hashedToken);
 
   const recoveryClient = authClient();
   const verified = await recoveryClient.auth.verifyOtp({
-    token_hash: generated.data.properties.hashed_token,
+    token_hash: hashedToken,
     type: "recovery",
   });
   assert.strictEqual(verified.error, null);

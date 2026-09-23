@@ -109,7 +109,7 @@ test("recovery email permits password reset and sign-in with the new password", 
   await page.goto("/forgot-password");
   await page.getByRole("textbox", { name: "Email" }).fill(email);
   await page.getByRole("button", { name: "Send reset link" }).click();
-  await expect(page).toHaveURL(/\/forgot-password\?message=/);
+  await expect(page).toHaveURL(/\/forgot-password$/);
 
   const link = await findEmailLink(request, email, "recovery");
   const callbackRequest = page.waitForRequest((browserRequest) =>

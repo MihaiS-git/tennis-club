@@ -9,8 +9,8 @@ vi.mock("server-only", () => ({}));
 
 import { readCurrentAccount } from "../../../src/lib/auth/account";
 
-const supabaseUrl = process.env.SUPABASE_URL;
-const publishableKey = process.env.SUPABASE_PUBLISHABLE_KEY;
+const supabaseUrl = process.env.SUPABASE_URL ?? "";
+const publishableKey = process.env.SUPABASE_PUBLISHABLE_KEY ?? "";
 if (!supabaseUrl || !publishableKey) {
   throw new Error("SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY are required.");
 }
@@ -26,14 +26,14 @@ function localServiceRoleKey(): string {
     .SERVICE_ROLE_KEY;
 }
 
-function client(key = publishableKey, schema = "public") {
+function client(key = publishableKey) {
   return createClient(supabaseUrl, key, {
     auth: {
       autoRefreshToken: false,
       detectSessionInUrl: false,
       persistSession: false,
     },
-    db: { schema },
+    db: { schema: "public" },
   });
 }
 
@@ -104,7 +104,14 @@ test("account loading respects member RLS and suspension", async () => {
   assert.strictEqual(roleCheck.error, null);
   assert.strictEqual(roleCheck.data, false);
 
-  const wrongSchemaClient = client(publishableKey, "auth");
+  const publicClient = client();
+  const authSchema = publicClient.schema("auth");
+  const wrongSchemaClient = new Proxy(publicClient, {
+    get(target, property, receiver) {
+      if (property === "from") return authSchema.from.bind(authSchema);
+      return Reflect.get(target, property, receiver);
+    },
+  });
   const wrongSchemaSignIn = await wrongSchemaClient.auth.signInWithPassword({
     email: ownEmail,
     password,
