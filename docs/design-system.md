@@ -63,6 +63,8 @@ Clay is a visible brand accent but should not flood every surface.
 
 Expose semantic tokens through `@theme inline`.
 
+Keep page and layout utilities in JSX, and keep reusable component styling inside the component. Preserve runtime class selection for real state or variants. Reserve `globals.css` for stable application-wide styles and tokens; do not extract static utility strings into class constants or style maps.
+
 Prefer utilities such as:
 
 ```text

@@ -41,9 +41,3 @@ export function FormMessage({
     </p>
   );
 }
-
-export const fieldClassName =
-  "w-full rounded-control border border-border bg-surface px-3 py-2.5 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-focus/20";
-
-export const buttonClassName =
-  "w-full rounded-control bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition hover:bg-primary-hover disabled:cursor-wait disabled:opacity-60";

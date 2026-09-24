@@ -9,11 +9,7 @@ import {
   signUpAction,
 } from "@/app/(auth)/actions";
 import { changePasswordAction } from "@/app/account/actions";
-import {
-  FormMessage,
-  buttonClassName,
-  fieldClassName,
-} from "@/components/auth-form";
+import { FormMessage } from "@/components/auth-form";
 import { useActionErrors } from "@/components/auth-action-errors";
 import { PasswordInput } from "@/components/password-input";
 import { SubmitButton } from "@/components/submit-button";
@@ -47,7 +43,7 @@ export function SignUpForm() {
         <label htmlFor="signup-email" className="block text-sm font-medium text-zinc-800">Email</label>
         <input
           id="signup-email"
-          className={`${fieldClassName} mt-1`}
+          className="w-full rounded-control border border-border bg-surface px-3 py-2.5 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-focus/20 mt-1"
           type="email"
           name="email"
           autoComplete="email"
@@ -98,7 +94,7 @@ export function SignUpForm() {
         />
         <FieldError id="signup-confirm-password-error">{fieldError("confirmPassword")}</FieldError>
       </FormField>
-      <SubmitButton className={buttonClassName} pendingLabel="Creating account…">Sign up</SubmitButton>
+      <SubmitButton pendingLabel="Creating account…">Sign up</SubmitButton>
     </form>
   );
 }
@@ -117,7 +113,7 @@ export function SignInForm({ next }: { next: string }) {
         <label htmlFor="signin-email" className="block text-sm font-medium text-zinc-800">Email</label>
         <input
           id="signin-email"
-          className={`${fieldClassName} mt-1`}
+          className="w-full rounded-control border border-border bg-surface px-3 py-2.5 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-focus/20 mt-1"
           type="email"
           name="email"
           autoComplete="email"
@@ -150,7 +146,7 @@ export function SignInForm({ next }: { next: string }) {
         />
         <FieldError id="signin-password-error">{fieldError("password")}</FieldError>
       </FormField>
-      <SubmitButton className={buttonClassName} pendingLabel="Signing in…">Sign in</SubmitButton>
+      <SubmitButton pendingLabel="Signing in…">Sign in</SubmitButton>
     </form>
   );
 }
@@ -167,7 +163,7 @@ export function ForgotPasswordForm() {
         <label htmlFor="recovery-email" className="block text-sm font-medium text-zinc-800">Email</label>
         <input
           id="recovery-email"
-          className={`${fieldClassName} mt-1`}
+          className="w-full rounded-control border border-border bg-surface px-3 py-2.5 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-focus/20 mt-1"
           type="email"
           name="email"
           autoComplete="email"
@@ -182,7 +178,7 @@ export function ForgotPasswordForm() {
         />
         <FieldError id="recovery-email-error">{fieldError("email")}</FieldError>
       </FormField>
-      <SubmitButton className={buttonClassName} pendingLabel="Sending…">Send reset link</SubmitButton>
+      <SubmitButton pendingLabel="Sending…">Send reset link</SubmitButton>
     </form>
   );
 }
@@ -232,7 +228,7 @@ export function ResetPasswordForm() {
         />
         <FieldError id="reset-confirm-password-error">{fieldError("confirmPassword")}</FieldError>
       </FormField>
-      <SubmitButton className={buttonClassName} pendingLabel="Resetting password…">Reset password</SubmitButton>
+      <SubmitButton pendingLabel="Resetting password…">Reset password</SubmitButton>
     </form>
   );
 }
@@ -301,7 +297,7 @@ export function ChangePasswordForm() {
         />
         <FieldError id="change-confirm-password-error">{fieldError("confirmPassword")}</FieldError>
       </FormField>
-      <SubmitButton className={buttonClassName} pendingLabel="Changing password…">Change password</SubmitButton>
+      <SubmitButton pendingLabel="Changing password…">Change password</SubmitButton>
     </form>
   );
 }

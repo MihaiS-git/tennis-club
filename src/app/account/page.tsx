@@ -8,9 +8,6 @@ import { loginPath } from "@/lib/auth/redirects";
 import { createClient } from "@/lib/supabase/server";
 import { signOutAction } from "./actions";
 
-const secondaryButtonClassName =
-  "rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 disabled:cursor-wait disabled:text-zinc-500";
-
 export default async function AccountPage() {
   const supabase = await createClient();
   const account = await readCurrentAccount(supabase);
@@ -24,7 +21,7 @@ export default async function AccountPage() {
         description="Your authenticated account is missing its required application profile. Please contact club support."
       >
         <form action={signOutAction}>
-          <SubmitButton className={secondaryButtonClassName} pendingLabel="Signing out…">Sign out</SubmitButton>
+          <SubmitButton variant="secondary" pendingLabel="Signing out…">Sign out</SubmitButton>
         </form>
       </AuthShell>
     );
@@ -37,7 +34,7 @@ export default async function AccountPage() {
         description="We couldn't load your account information. Please try again."
       >
         <form action={signOutAction}>
-          <SubmitButton className={secondaryButtonClassName} pendingLabel="Signing out…">Sign out</SubmitButton>
+          <SubmitButton variant="secondary" pendingLabel="Signing out…">Sign out</SubmitButton>
         </form>
       </AuthShell>
     );
@@ -50,7 +47,7 @@ export default async function AccountPage() {
         description="This account is restricted. Contact club support if you believe this is a mistake."
       >
         <form action={signOutAction}>
-          <SubmitButton className={secondaryButtonClassName} pendingLabel="Signing out…">Sign out</SubmitButton>
+          <SubmitButton variant="secondary" pendingLabel="Signing out…">Sign out</SubmitButton>
         </form>
       </AuthShell>
     );
@@ -73,7 +70,7 @@ export default async function AccountPage() {
         <ChangePasswordForm />
       </section>
       <form action={signOutAction} className="mt-6 border-t border-zinc-200 pt-6">
-        <SubmitButton className={secondaryButtonClassName} pendingLabel="Signing out…">Sign out</SubmitButton>
+        <SubmitButton variant="secondary" pendingLabel="Signing out…">Sign out</SubmitButton>
       </form>
     </AuthShell>
   );
