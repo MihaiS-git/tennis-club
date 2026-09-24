@@ -1,5 +1,42 @@
 import Link from "next/link";
 
+const courts = [
+  {
+    name: "Court 1",
+    surface: "Clay",
+    times: ["19:00", "19:30", "20:00", "20:30"],
+  },
+  {
+    name: "Court 2",
+    surface: "Clay",
+    times: ["20:00", "20:30", "21:00"],
+  },
+  {
+    name: "Court 3",
+    surface: "Clay",
+    times: ["21:30", "22:00"],
+  },
+  {
+    name: "Court 4",
+    surface: "Clay",
+    times: [],
+  },
+];
+
+const openMatches = [
+  { format: "Singles", level: "Level 5", time: "19:00", playersNeeded: "1 player needed" },
+  { format: "Doubles", level: "Level 4", time: "20:00", playersNeeded: "2 players needed" },
+  { format: "Singles", level: "Level 5.5", time: "20:30", playersNeeded: "1 player needed" },
+  { format: "Doubles", level: "Level 6", time: "21:00", playersNeeded: "1 player needed" },
+];
+
+const coachingSlots = [
+  { name: "Ana Pop", time: "17:30" },
+  { name: "Victor Ionescu", time: "19:00" },
+  { name: "Ana Pop", time: "20:00" },
+  { name: "Victor Ionescu", time: "21:00" },
+];
+
 export default function Home() {
   return (
     <main className="flex-1">
@@ -86,6 +123,117 @@ export default function Home() {
             >
               Find a court
             </Link>
+          </div>
+        </div>
+      </section>
+
+      <section aria-labelledby="today-title" className="bg-background px-6 py-16 md:px-8 md:py-20 lg:py-24">
+        <div className="mx-auto max-w-7xl">
+          <div className="mb-9 md:mb-12">
+            <h2 id="today-title" className="font-heading text-[clamp(32px,4vw,52px)] font-semibold leading-tight tracking-[-0.035em] text-foreground">
+              Today at the club
+            </h2>
+            <p className="mt-3 font-sans text-base leading-7 text-muted-foreground md:text-lg">
+              See what’s happening on court today.
+            </p>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)] lg:items-start lg:gap-5">
+            <article aria-labelledby="courts-title" className="rounded-card border border-border bg-surface p-6 md:p-8 lg:p-9">
+              <div className="flex items-start justify-between gap-4 border-b border-border pb-6">
+                <div>
+                  <p className="mb-3 font-sans text-xs font-semibold uppercase tracking-[0.16em] text-accent">On court</p>
+                  <h3 id="courts-title" className="font-heading text-2xl font-semibold tracking-[-0.025em] text-primary md:text-[30px]">
+                    Court availability
+                  </h3>
+                </div>
+                <span className="hidden font-sans text-sm text-muted-foreground sm:block">Today</span>
+              </div>
+
+              {courts.length > 0 ? (
+                <div>
+                  {courts.map((court) => (
+                    <div key={court.name} className="grid gap-3 border-b border-border py-5 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center md:py-6">
+                      <div className="flex items-baseline gap-3">
+                        <Link href="/book" className="font-heading text-lg font-semibold text-foreground transition-colors hover:text-accent hover:underline hover:decoration-accent focus-visible:rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">{court.name}</Link>
+                        <span className="font-sans text-sm text-muted-foreground">{court.surface}</span>
+                      </div>
+                      {court.times.length > 0 ? (
+                        <div className="flex flex-wrap gap-2">
+                          {court.times.map((time) => (
+                            <Link key={time} href="/book" aria-label={`Book ${court.name} at ${time}`} className="inline-flex min-h-10 min-w-[72px] items-center justify-center rounded-control border border-border-strong bg-background px-3 font-sans text-sm font-semibold tabular-nums text-primary transition-colors hover:border-primary hover:bg-forest-100 hover:text-primary-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">
+                              {time}
+                            </Link>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="font-sans text-sm text-muted-foreground">No suitable availability today</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="py-8 font-sans text-sm leading-6">
+                  <p className="font-semibold text-foreground">No court availability today.</p>
+                  <p className="mt-1 text-muted-foreground">Check another time or date.</p>
+                </div>
+              )}
+
+              <Link href="/book" className="mt-4 inline-flex min-h-11 w-fit items-center font-sans text-sm font-semibold text-primary underline decoration-accent underline-offset-8 transition-colors hover:text-accent hover:decoration-2 focus-visible:rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">
+                View courts <span aria-hidden="true" className="ml-2">→</span>
+              </Link>
+            </article>
+
+            <div className="grid gap-4 md:grid-cols-2 md:items-start lg:grid-cols-1 lg:gap-5">
+              <article aria-labelledby="match-title" className="rounded-card bg-primary p-6 text-primary-foreground md:p-7 lg:p-8">
+                <h3 id="match-title" className="mb-3 font-sans text-xs font-semibold uppercase tracking-[0.16em] text-ivory">Open matches</h3>
+                {openMatches.length > 0 ? (
+                  <div>
+                    {openMatches.slice(0, 4).map((match) => (
+                      <Link key={`${match.format}-${match.level}-${match.time}`} href="/matches" className="block border-t border-ivory/20 py-3 transition-colors first:border-t-0 hover:bg-forest-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tennis">
+                        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                          <p className="font-heading text-base font-semibold text-chalk">
+                            {match.format} <span className="font-sans text-sm font-normal text-ivory">· {match.level}</span>
+                          </p>
+                          <span className="font-sans text-sm tabular-nums text-ivory">{match.time}</span>
+                        </div>
+                        <p className="mt-1 font-sans text-xs font-semibold text-tennis">{match.playersNeeded}</p>
+                      </Link>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="py-5 font-sans text-sm leading-6">
+                    <p className="font-semibold text-chalk">No open matches today.</p>
+                    <p className="mt-1 text-ivory">Be the first to start one.</p>
+                  </div>
+                )}
+                <Link href="/matches" className="mt-2 inline-flex min-h-11 w-fit items-center font-sans text-sm font-semibold text-chalk underline decoration-clay-300 underline-offset-8 transition-colors hover:text-tennis hover:decoration-tennis hover:decoration-2 focus-visible:rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tennis">
+                  View matches <span aria-hidden="true" className="ml-2">→</span>
+                </Link>
+              </article>
+
+              <article aria-labelledby="coaching-title" className="rounded-card border border-border bg-surface p-6 md:p-7 lg:p-8">
+                <h3 id="coaching-title" className="mb-5 font-heading text-xl font-semibold tracking-[-0.02em] text-primary">Coaching today</h3>
+                {coachingSlots.length > 0 ? (
+                  <div>
+                    {coachingSlots.slice(0, 4).map((slot) => (
+                      <Link key={`${slot.name}-${slot.time}`} href="/coaching" className="group flex items-center justify-between gap-4 border-t border-border py-3 font-sans text-sm transition-colors first:border-t-0 first:pt-0 hover:bg-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">
+                        <span className="font-medium text-foreground transition-colors group-hover:text-accent">{slot.name}</span>
+                        <span className="shrink-0 tabular-nums text-muted-foreground">{slot.time}</span>
+                      </Link>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="py-5 font-sans text-sm leading-6">
+                    <p className="font-semibold text-foreground">No coaching slots today.</p>
+                    <p className="mt-1 text-muted-foreground">Check upcoming availability.</p>
+                  </div>
+                )}
+                <Link href="/coaching" className="mt-2 inline-flex min-h-11 w-fit items-center font-sans text-sm font-semibold text-primary underline decoration-accent underline-offset-8 transition-colors hover:text-accent hover:decoration-2 focus-visible:rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">
+                  View coaches <span aria-hidden="true" className="ml-2">→</span>
+                </Link>
+              </article>
+            </div>
           </div>
         </div>
       </section>
