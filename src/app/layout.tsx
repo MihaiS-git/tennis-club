@@ -3,6 +3,8 @@ import { Archivo, Inter } from "next/font/google";
 import { Suspense } from "react";
 import { Toaster } from "sonner";
 
+import { DesktopNavbar } from "@/components/desktop-navbar";
+import { MobileNavbar } from "@/components/mobile-navbar";
 import { QueryFlashMessages } from "@/components/query-flash-messages";
 
 import "./globals.css";
@@ -30,8 +32,12 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       lang="en"
       className={`${inter.variable} ${archivo.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">
+      <body className="flex min-h-full flex-col">
+        <MobileNavbar />
+        <DesktopNavbar />
+
         {children}
+
         <Toaster
           position="bottom-right"
           closeButton
@@ -51,6 +57,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             },
           }}
         />
+
         <Suspense fallback={null}>
           <QueryFlashMessages />
         </Suspense>
