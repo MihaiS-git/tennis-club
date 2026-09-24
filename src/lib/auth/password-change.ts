@@ -1,4 +1,4 @@
-type AuthError = { code?: string };
+type AuthError = { code?: string; reasons?: string[] };
 type PasswordVerificationResult = {
   data: { user: { id: string } | null };
   error: AuthError | null;
@@ -25,7 +25,7 @@ export type PasswordUpdateClient = {
 export type PasswordChangeResult =
   | { ok: true }
   | { ok: false; reason: "current-password-incorrect" }
-  | { ok: false; reason: "password-update-failed"; code?: string };
+  | { ok: false; reason: "password-update-failed"; code?: string; reasons?: string[] };
 
 export async function changePasswordWithVerification(input: {
   authenticatedClient: PasswordUpdateClient;
@@ -65,7 +65,7 @@ export async function changePasswordWithVerification(input: {
     });
 
     if (error) {
-      return { ok: false, reason: "password-update-failed", code: error.code };
+      return { ok: false, reason: "password-update-failed", code: error.code, reasons: error.reasons };
     }
   } catch {
     return { ok: false, reason: "password-update-failed" };

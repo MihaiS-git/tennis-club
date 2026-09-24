@@ -1,26 +1,49 @@
+import { EMAIL_CONFIRMED_MESSAGE } from "@/lib/auth/callback";
+import { RECOVERY_SUCCESS_MESSAGE, safeAuthError } from "@/lib/auth/decisions";
+
 export type FlashMessage = {
   kind: "error" | "success";
   text: string;
 };
 
-type SearchParams = Pick<URLSearchParams, "get" | "toString">;
+type SearchParams = Pick<URLSearchParams, "toString">;
+
+const notices = {
+  "recovery-link-sent": { kind: "success", text: RECOVERY_SUCCESS_MESSAGE },
+  "recovery-request-failed": {
+    kind: "error",
+    text: "We couldn't send password reset instructions right now. Please try again.",
+  },
+  "password-reset-success": {
+    kind: "success",
+    text: "Your password has been reset. Sign in with your new password.",
+  },
+  "password-changed": { kind: "success", text: "Your password has been changed." },
+  "email-confirmed": { kind: "success", text: EMAIL_CONFIRMED_MESSAGE },
+  "invalid-auth-link": { kind: "error", text: safeAuthError("callback") },
+  "invalid-reset-link": {
+    kind: "error",
+    text: "This password reset link is invalid or has expired.",
+  },
+  "signout-failed": { kind: "error", text: "We couldn't sign you out. Please try again." },
+} as const satisfies Record<string, FlashMessage>;
+
+function readNotice(searchParams: SearchParams): FlashMessage | undefined {
+  const codes = new URLSearchParams(searchParams.toString()).getAll("notice");
+  if (codes.length !== 1 || !Object.hasOwn(notices, codes[0])) return undefined;
+
+  return notices[codes[0] as keyof typeof notices];
+}
 
 export function readFlashMessages(searchParams: SearchParams): FlashMessage[] {
-  const messages: FlashMessage[] = [];
-  const message = searchParams.get("message");
-  const error = searchParams.get("error");
-
-  if (message) messages.push({ kind: "success", text: message });
-  if (error) messages.push({ kind: "error", text: error });
-
-  return messages;
+  const notice = readNotice(searchParams);
+  return notice ? [notice] : [];
 }
 
 export function removeConsumedFlashMessages(searchParams: SearchParams): string {
   const remaining = new URLSearchParams(searchParams.toString());
 
-  if (searchParams.get("message")) remaining.delete("message");
-  if (searchParams.get("error")) remaining.delete("error");
+  if (readNotice(searchParams)) remaining.delete("notice");
 
   return remaining.toString();
 }

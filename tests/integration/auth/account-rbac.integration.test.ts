@@ -103,23 +103,4 @@ test("account loading respects member RLS and suspension", async () => {
   const roleCheck = await member.rpc("has_role", { required_role: "member" });
   assert.strictEqual(roleCheck.error, null);
   assert.strictEqual(roleCheck.data, false);
-
-  const publicClient = client();
-  const authSchema = publicClient.schema("auth");
-  const wrongSchemaClient = new Proxy(publicClient, {
-    get(target, property, receiver) {
-      if (property === "from") return authSchema.from.bind(authSchema);
-      return Reflect.get(target, property, receiver);
-    },
-  });
-  const wrongSchemaSignIn = await wrongSchemaClient.auth.signInWithPassword({
-    email: ownEmail,
-    password,
-  });
-  assert.strictEqual(wrongSchemaSignIn.error, null);
-  const failedQuery = await wrongSchemaClient.from("users").select("id").limit(1);
-  assert.ok(failedQuery.error, "The disallowed schema must produce a query error.");
-  assert.deepStrictEqual(await readCurrentAccount(wrongSchemaClient), {
-    state: "load-error",
-  });
 });

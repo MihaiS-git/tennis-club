@@ -23,19 +23,15 @@ export function AuthShell({
 
 export function FormMessage({
   children,
-  success = false,
 }: {
   children?: string;
-  success?: boolean;
 }) {
   if (!children) return null;
 
   return (
     <p
-      role={success ? "status" : "alert"}
-      className={`mb-4 rounded-lg px-3 py-2 text-sm ${
-        success ? "bg-success-background text-success" : "bg-danger-background text-danger"
-      }`}
+      role="alert"
+      className="mb-4 rounded-lg bg-danger-background px-3 py-2 text-sm text-danger"
     >
       {children}
     </p>

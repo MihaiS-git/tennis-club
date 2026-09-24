@@ -4,16 +4,11 @@ import { redirect } from "next/navigation";
 
 import type { AuthActionState } from "@/lib/auth/action-state";
 import { readCurrentAccount } from "@/lib/auth/account";
-import { safeAuthError } from "@/lib/auth/decisions";
+import { safeAuthError, weakPasswordMessage } from "@/lib/auth/decisions";
 import { changePasswordWithVerification } from "@/lib/auth/password-change";
 import { createPasswordVerificationClient } from "@/lib/auth/password-verifier.server";
 import { changePasswordSchema, fieldValidationErrors } from "@/lib/auth/validation";
 import { createClient } from "@/lib/supabase/server";
-
-function redirectWith(key: "error" | "message", message: string): never {
-  const query = new URLSearchParams({ [key]: message });
-  redirect(`/account?${query.toString()}`);
-}
 
 export async function changePasswordAction(
   _previousState: AuthActionState,
@@ -56,15 +51,17 @@ export async function changePasswordAction(
   }
 
   if (!result.ok) {
+    const passwordError = weakPasswordMessage(result, parsed.data.password);
+    if (passwordError) return { fieldErrors: { password: passwordError } };
     return { formError: safeAuthError("password", result.code) };
   }
 
-  redirectWith("message", "Your password has been changed.");
+  redirect("/account?notice=password-changed");
 }
 
 export async function signOutAction() {
   const supabase = await createClient();
-  await supabase.auth.signOut({ scope: "local" });
+  const { error } = await supabase.auth.signOut({ scope: "local" });
+  if (error) redirect("/account?notice=signout-failed");
   redirect("/login");
 }
-

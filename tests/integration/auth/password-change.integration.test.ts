@@ -188,8 +188,8 @@ test("current-password verification protects a real Supabase password change", a
     reason: "current-password-incorrect",
   });
 
-  const unchangedProbe = createAuthClient();
-  const unchangedSignIn = await unchangedProbe.auth.signInWithPassword({
+  const signInProbe = createAuthClient();
+  const unchangedSignIn = await signInProbe.auth.signInWithPassword({
     email,
     password: oldPassword,
   });
@@ -198,7 +198,7 @@ test("current-password verification protects a real Supabase password change", a
     null,
     "A rejected change must preserve the old password.",
   );
-  await unchangedProbe.auth.signOut({ scope: "local" });
+  await signInProbe.auth.signOut({ scope: "local" });
 
   const changed = await changePasswordWithVerification({
     authenticatedClient,
@@ -212,8 +212,7 @@ test("current-password verification protects a real Supabase password change", a
 
   await authenticatedClient.auth.signOut({ scope: "local" });
 
-  const oldPasswordProbe = createAuthClient();
-  const oldPasswordSignIn = await oldPasswordProbe.auth.signInWithPassword({
+  const oldPasswordSignIn = await signInProbe.auth.signInWithPassword({
     email,
     password: oldPassword,
   });
@@ -222,12 +221,11 @@ test("current-password verification protects a real Supabase password change", a
     "The old password must no longer sign in.",
   );
 
-  const newPasswordProbe = createAuthClient();
-  const newPasswordSignIn = await newPasswordProbe.auth.signInWithPassword({
+  const newPasswordSignIn = await signInProbe.auth.signInWithPassword({
     email,
     password: newPassword,
   });
   assert.strictEqual(newPasswordSignIn.error, null, "The new password must sign in.");
   assert.strictEqual(newPasswordSignIn.data.user?.id, signUp.data.user.id);
-  await newPasswordProbe.auth.signOut({ scope: "local" });
+  await signInProbe.auth.signOut({ scope: "local" });
 });

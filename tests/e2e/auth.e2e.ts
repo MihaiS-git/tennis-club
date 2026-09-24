@@ -80,14 +80,14 @@ test("signup requires email confirmation before the member account is accessible
 
   await page.goto("/signup");
   await page.getByRole("textbox", { name: "Email" }).fill(email);
-  await page.getByLabel("Password", { exact: true }).fill(password);
-  await page.getByLabel("Confirm password").fill(password);
+  await page.getByLabel("New password", { exact: true }).fill(password);
+  await page.getByLabel("Confirm new password", { exact: true }).fill(password);
   await page.getByRole("button", { name: "Sign up" }).click();
   await expect(page).toHaveURL(/\/signup\/check-email$/);
   await expect(page.getByRole("heading", { name: "Check your email" })).toBeVisible();
 
   await page.goto("/account");
-  await expect(page).toHaveURL(/\/login\?next=%2Faccount$/);
+  await expect(page).toHaveURL(/\/login$/);
 
   const link = await findEmailLink(request, email, "signup");
   const callbackRequest = page.waitForRequest((browserRequest) =>
@@ -127,8 +127,7 @@ test("recovery email permits password reset and sign-in with the new password", 
   await page.getByRole("textbox", { name: "Email" }).fill(email);
   await page.getByLabel("Password", { exact: true }).fill(newPassword);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page).toHaveURL(/\/account$/);
-  await expect(page.getByRole("heading", { name: "Your account" })).toBeVisible();
+  await expect(page).toHaveURL(/\/$/);
 });
 
 test("protected account route requires login and logout removes the session", async ({ page }) => {
@@ -137,16 +136,18 @@ test("protected account route requires login and logout removes the session", as
   await createConfirmedUser(email, password);
 
   await page.goto("/account");
-  await expect(page).toHaveURL(/\/login\?next=%2Faccount$/);
+  await expect(page).toHaveURL(/\/login$/);
 
   await page.getByRole("textbox", { name: "Email" }).fill(email);
   await page.getByLabel("Password", { exact: true }).fill(password);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page).toHaveURL(/\/account$/);
+  await expect(page).toHaveURL(/\/$/);
+
+  await page.goto("/account");
   await expect(page.getByRole("heading", { name: "Your account" })).toBeVisible();
 
   await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page).toHaveURL(/\/login$/);
   await page.goto("/account");
-  await expect(page).toHaveURL(/\/login\?next=%2Faccount$/);
+  await expect(page).toHaveURL(/\/login$/);
 });

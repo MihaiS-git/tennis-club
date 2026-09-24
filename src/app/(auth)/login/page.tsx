@@ -1,27 +1,18 @@
 import Link from "next/link";
 
-import { SignInForm } from "@/components/auth-action-forms";
+import { SignInForm } from "@/components/auth/sign-in-form";
 import { AuthShell } from "@/components/auth-form";
-import { safeRedirectPath } from "@/lib/auth/redirects";
 
-export default async function LoginPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ next?: string }>;
-}) {
-  const params = await searchParams;
-  const next = safeRedirectPath(params.next);
-
+export default function LoginPage() {
   return (
     <AuthShell title="Sign in">
-      <SignInForm next={next} />
+      <SignInForm />
       <div className="mt-4 text-right">
-        <Link className="text-sm text-zinc-700 underline" href="/forgot-password">Forgot password?</Link>
+        <Link className="text-sm text-muted-foreground underline" href="/forgot-password">Forgot password?</Link>
       </div>
-      <p className="mt-5 text-center text-sm text-zinc-600">
-        Need an account? <Link className="font-medium text-zinc-950 underline" href="/signup">Sign up</Link>
+      <p className="mt-5 text-center text-sm text-muted-foreground">
+        Need an account? <Link className="font-medium text-foreground underline" href="/signup">Sign up</Link>
       </p>
     </AuthShell>
   );
 }
-

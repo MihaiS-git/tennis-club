@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { AuthActionState, AuthFieldName } from "@/lib/auth/action-state";
 
@@ -11,8 +11,16 @@ type ClearedErrors = {
 };
 
 export function useActionErrors(state: AuthActionState) {
+  const formRef = useRef<HTMLFormElement>(null);
   const [clearedErrors, setClearedErrors] = useState<ClearedErrors | null>(null);
   const isCurrentState = clearedErrors?.state === state;
+
+  useEffect(() => {
+    if (!Object.values(state.fieldErrors ?? {}).some(Boolean)) return;
+    const form = formRef.current;
+    if (!form || (document.activeElement !== document.body && !form.contains(document.activeElement))) return;
+    form.querySelector<HTMLInputElement>('[aria-invalid="true"]')?.focus();
+  }, [state]);
 
   function clearErrors(fields: AuthFieldName[]) {
     setClearedErrors((current) => {
@@ -31,9 +39,9 @@ export function useActionErrors(state: AuthActionState) {
   }
 
   return {
+    formRef,
     clearErrors,
     fieldError,
     formError: isCurrentState && clearedErrors.form ? undefined : state.formError,
   };
 }
-

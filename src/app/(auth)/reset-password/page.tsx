@@ -1,15 +1,14 @@
 import { redirect } from "next/navigation";
 
-import { ResetPasswordForm } from "@/components/auth-action-forms";
+import { ResetPasswordForm } from "@/components/auth/reset-password-form";
 import { AuthShell } from "@/components/auth-form";
+import { hasRecoverySession } from "@/lib/auth/recovery-session";
 import { createClient } from "@/lib/supabase/server";
 
 export default async function ResetPasswordPage() {
   const supabase = await createClient();
-  const { data, error } = await supabase.auth.getUser();
-
-  if (error || !data.user) {
-    redirect("/login?error=This+password+reset+link+is+invalid+or+has+expired.");
+  if (!(await hasRecoverySession(supabase))) {
+    redirect("/login?notice=invalid-reset-link");
   }
 
   return (
@@ -18,4 +17,3 @@ export default async function ResetPasswordPage() {
     </AuthShell>
   );
 }
-

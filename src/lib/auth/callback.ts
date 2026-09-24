@@ -1,5 +1,3 @@
-import { safeRedirectPath } from "./redirects";
-
 export type SupportedOtpType = "email" | "signup" | "recovery";
 export type AuthCallbackOutcome =
   | "authenticated"
@@ -17,29 +15,12 @@ export function supportedOtpType(value: string | null): SupportedOtpType | null 
   return null;
 }
 
-export function authCallbackDestination(
-  value: string | null,
-  type: SupportedOtpType | null,
-): string {
-  if (value === "/reset-password" || type === "recovery") {
-    return "/reset-password";
-  }
-
-  return safeRedirectPath(value);
-}
-
 export function isEmailConfirmationCallback(input: {
   flow: string | null;
   type: SupportedOtpType | null;
-  next: string | null;
-  hasCode: boolean;
 }): boolean {
   if (input.flow === "email-confirmation") return true;
-  if (input.type === "email" || input.type === "signup") return true;
-
-  // Confirmation links created before the explicit flow marker was added used
-  // this exact callback shape. Recovery links use /reset-password instead.
-  return input.hasCode && input.next === "/account";
+  return input.type === "email" || input.type === "signup";
 }
 
 export function decideAuthCallbackOutcome(input: {

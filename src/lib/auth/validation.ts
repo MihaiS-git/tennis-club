@@ -1,20 +1,10 @@
 import { z } from "zod";
 
 const email = z.string().trim().email("Enter a valid email address.");
-const password = z
-  .string()
-  .min(6, "Password must be at least 6 characters long.");
-
-export const signUpSchema = z
-  .object({
-    email,
-    password,
-    confirmPassword: z.string(),
-  })
-  .refine((value) => value.password === value.confirmPassword, {
-    message: "Passwords do not match.",
-    path: ["confirmPassword"],
-  });
+const newPassword = z.string()
+  .refine((value) => [...value].length >= 15, "Use at least 15 characters.")
+  .refine((value) => new TextEncoder().encode(value).length <= 72, "This password is too long. Use a shorter passphrase.")
+  .refine((value) => !/[\p{Cc}]/u.test(value), "Do not use control characters in your password.");
 
 export const signInSchema = z.object({
   email,
@@ -25,13 +15,15 @@ export const recoverySchema = z.object({ email });
 
 export const newPasswordSchema = z
   .object({
-    password,
+    password: newPassword,
     confirmPassword: z.string(),
   })
   .refine((value) => value.password === value.confirmPassword, {
     message: "Passwords do not match.",
     path: ["confirmPassword"],
   });
+
+export const signUpSchema = newPasswordSchema.safeExtend({ email });
 
 export const changePasswordSchema = newPasswordSchema.safeExtend({
   currentPassword: z.string().min(1, "Enter your current password."),

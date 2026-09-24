@@ -12,15 +12,14 @@ export default function SignUpCheckEmailPage() {
       title={SIGNUP_CONFIRMATION_TITLE}
       description={SIGNUP_CONFIRMATION_DESCRIPTION}
     >
-      <p className="text-sm text-zinc-600">
+      <p className="text-sm text-muted-foreground">
         After confirming your email, the confirmation link will return you to your account.
       </p>
       <p className="mt-5 text-center text-sm">
-        <Link className="text-zinc-700 underline" href="/login">
+        <Link className="text-muted-foreground underline" href="/login">
           Return to sign in
         </Link>
       </p>
     </AuthShell>
   );
 }
-

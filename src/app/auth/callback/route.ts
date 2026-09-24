@@ -1,13 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import {
-  EMAIL_CONFIRMED_MESSAGE,
-  authCallbackDestination,
   decideAuthCallbackOutcome,
   isEmailConfirmationCallback,
   supportedOtpType,
 } from "@/lib/auth/callback";
-import { safeAuthError } from "@/lib/auth/decisions";
 import { getApplicationUrl } from "@/lib/auth/site-url";
 import { createClient } from "@/lib/supabase/server";
 
@@ -17,12 +14,10 @@ export async function GET(request: NextRequest) {
   const tokenHash = url.searchParams.get("token_hash");
   const type = supportedOtpType(url.searchParams.get("type"));
   const next = url.searchParams.get("next");
-  const destination = authCallbackDestination(next, type);
+  const destination = next === "/reset-password" ? "/reset-password" : "/account";
   const isEmailConfirmation = isEmailConfirmationCallback({
     flow: url.searchParams.get("flow"),
     type,
-    next,
-    hasCode: Boolean(code),
   });
   const providerVerificationFailed = Boolean(
     url.searchParams.get("error") || url.searchParams.get("error_code"),
@@ -59,12 +54,10 @@ export async function GET(request: NextRequest) {
 
   if (outcome !== "authenticated") {
     await supabase.auth.signOut({ scope: "local" });
-    const query = new URLSearchParams(
-      outcome === "confirmed-sign-in-required"
-        ? { message: EMAIL_CONFIRMED_MESSAGE }
-        : { error: safeAuthError("callback") },
-    );
-    return NextResponse.redirect(getApplicationUrl(`/login?${query.toString()}`));
+    const notice = outcome === "confirmed-sign-in-required"
+      ? "email-confirmed"
+      : "invalid-auth-link";
+    return NextResponse.redirect(getApplicationUrl(`/login?notice=${notice}`));
   }
 
   return NextResponse.redirect(getApplicationUrl(destination));
