@@ -1,6 +1,7 @@
 import { beforeEach, expect, it, vi } from "vitest";
 
 import type { CurrentAccount } from "../../../src/lib/auth/account";
+import { logger } from "../../../src/lib/logger";
 
 const { readCurrentAccount, signInWithPassword, updateUser, redirect } = vi.hoisted(() => ({
   readCurrentAccount: vi.fn(),
@@ -84,7 +85,7 @@ it.each([
   [["characters"], "The authentication provider rejected this password's requirements. Please contact support."],
   [[], "The authentication provider rejected this password's requirements. Please contact support."],
 ])("maps Supabase weak-password reasons %j on change", async (reasons, message) => {
-  const report = vi.spyOn(console, "error").mockImplementation(() => {});
+  const report = vi.spyOn(logger, "warn").mockImplementation(() => {});
   readCurrentAccount.mockResolvedValue({
     state: "active", userId: "member-1", email: "member@example.com", roles: ["member"],
   } satisfies CurrentAccount);
@@ -96,8 +97,8 @@ it.each([
   });
   if (reasons.includes("characters")) {
     expect(report).toHaveBeenCalledWith(
+      { event: "auth.password_policy_conflict", reason: "characters" },
       expect.stringContaining("Supabase hosted password configuration conflicts"),
-      { reasons },
     );
   } else {
     expect(report).not.toHaveBeenCalled();

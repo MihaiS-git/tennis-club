@@ -17,6 +17,7 @@ vi.mock("../../../src/lib/supabase/server", () => ({
 
 import ResetPasswordPage from "../../../src/app/(auth)/reset-password/page";
 import { resetPasswordAction } from "../../../src/app/(auth)/actions";
+import { logger } from "../../../src/lib/logger";
 
 function passwordForm(): FormData {
   const form = new FormData();
@@ -64,7 +65,7 @@ it.each([
   [["characters"], "The authentication provider rejected this password's requirements. Please contact support."],
   [[], "The authentication provider rejected this password's requirements. Please contact support."],
 ])("maps Supabase weak-password reasons %j on reset", async (reasons, message) => {
-  const report = vi.spyOn(console, "error").mockImplementation(() => {});
+  const report = vi.spyOn(logger, "warn").mockImplementation(() => {});
   updateUser.mockResolvedValue({ error: { code: "weak_password", reasons } });
 
   expect(await resetPasswordAction({}, passwordForm())).toEqual({
@@ -72,8 +73,8 @@ it.each([
   });
   if (reasons.includes("characters")) {
     expect(report).toHaveBeenCalledWith(
+      { event: "auth.password_policy_conflict", reason: "characters" },
       expect.stringContaining("Supabase hosted password configuration conflicts"),
-      { reasons },
     );
   } else {
     expect(report).not.toHaveBeenCalled();

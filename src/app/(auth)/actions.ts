@@ -18,6 +18,7 @@ import {
   signUpSchema,
 } from "@/lib/auth/validation";
 import { createClient } from "@/lib/supabase/server";
+import { logger } from "@/lib/logger";
 
 function value(formData: FormData, key: string): string {
   const field = formData.get(key);
@@ -60,6 +61,17 @@ export async function signUpAction(
   if (data.session) await supabase.auth.signOut({ scope: "local" });
   if (decision === "check-email") redirect("/signup/check-email");
 
+  if (
+    error?.code === "weak_password" &&
+    "reasons" in error &&
+    Array.isArray(error.reasons) &&
+    error.reasons.includes("characters")
+  ) {
+    logger.warn(
+      { event: "auth.password_policy_conflict", reason: "characters" },
+      "Supabase hosted password configuration conflicts with the application's no-composition-rule policy.",
+    );
+  }
   const passwordError = weakPasswordMessage(error, parsed.data.password);
   if (passwordError) return { fieldErrors: { password: passwordError } };
 
@@ -136,6 +148,17 @@ export async function resetPasswordAction(
 
   const { error } = await supabase.auth.updateUser({ password: parsed.data.password });
   if (error) {
+    if (
+      error.code === "weak_password" &&
+      "reasons" in error &&
+      Array.isArray(error.reasons) &&
+      error.reasons.includes("characters")
+    ) {
+      logger.warn(
+        { event: "auth.password_policy_conflict", reason: "characters" },
+        "Supabase hosted password configuration conflicts with the application's no-composition-rule policy.",
+      );
+    }
     const passwordError = weakPasswordMessage(error, parsed.data.password);
     if (passwordError) return { fieldErrors: { password: passwordError } };
     return { formError: safeAuthError("password", error.code) };

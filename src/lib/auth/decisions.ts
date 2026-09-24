@@ -15,13 +15,6 @@ export function weakPasswordMessage(
   if (error?.code !== "weak_password") return null;
 
   const reasons = error.reasons ?? [];
-  if (reasons.includes("characters")) {
-    console.error(
-      "Supabase hosted password configuration conflicts with the application's no-composition-rule policy.",
-      { reasons },
-    );
-  }
-
   if (reasons.includes("pwned")) return WEAK_NEW_PASSWORD_ERROR;
 
   if (reasons.includes("length")) {

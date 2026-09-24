@@ -14,6 +14,7 @@ vi.mock("../../../src/lib/supabase/server", () => ({
 }));
 
 import { signUpAction } from "../../../src/app/(auth)/actions";
+import { logger } from "../../../src/lib/logger";
 
 describe("signup action role boundary", () => {
   beforeEach(() => {
@@ -84,7 +85,7 @@ describe("signup action role boundary", () => {
     [["characters", "pwned"], "This password is too common or has appeared in a data breach. Choose another."],
     [[], "The authentication provider rejected this password's requirements. Please contact support."],
   ])("maps Supabase weak-password reasons %j on the password field", async (reasons, message) => {
-    const report = vi.spyOn(console, "error").mockImplementation(() => {});
+    const report = vi.spyOn(logger, "warn").mockImplementation(() => {});
     signUp.mockResolvedValue({
       data: { user: null, session: null },
       error: { code: "weak_password", reasons },
@@ -99,8 +100,8 @@ describe("signup action role boundary", () => {
     });
     if (reasons.includes("characters")) {
       expect(report).toHaveBeenCalledWith(
+        { event: "auth.password_policy_conflict", reason: "characters" },
         expect.stringContaining("Supabase hosted password configuration conflicts"),
-        { reasons },
       );
     } else {
       expect(report).not.toHaveBeenCalled();

@@ -181,6 +181,8 @@ Log enough context for diagnosis without logging:
 - payment-sensitive data;
 - unnecessary personal information.
 
+Server logs should contain selected safe fields only. Never log passwords, FormData, Supabase sessions, tokens, cookies, Authorization headers, or complete user/auth objects. The Pino logger redacts common sensitive property names as a secondary safeguard; redaction does not make logging those objects safe.
+
 ## Audit trail
 
 Sensitive administrative or financial operations should be auditable.

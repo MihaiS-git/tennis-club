@@ -3,6 +3,7 @@ import "server-only";
 import { z } from "zod";
 
 import { decideAccountAccess } from "@/lib/auth/decisions";
+import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
 
 const roleSchema = z.enum(["admin", "coach", "member"]);
@@ -39,10 +40,11 @@ export async function readCurrentAccount(
   ]);
 
   if (profileResult.error || rolesResult.error) {
-    console.error("Failed to load the authenticated application account", {
+    logger.error({
+      event: "auth.account_load_failed",
       profileCode: profileResult.error?.code,
       rolesCode: rolesResult.error?.code,
-    });
+    }, "Failed to load the authenticated application account");
     return { state: "load-error" };
   }
 

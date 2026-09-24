@@ -80,6 +80,12 @@ Do not use the legacy `middleware.ts` convention for this Next.js 16 project.
 
 The proxy is for session maintenance, not domain authorization or business rules.
 
+## Server logging
+
+`src/lib/logger.ts` exports the shared Pino server logger. It writes structured JSON logs at the level set by `LOG_LEVEL` (default `info`); unit tests default to `silent` unless `LOG_LEVEL` is set. Production application code uses this logger instead of `console.*`. Client Components must not import it.
+
+Log only selected, safe context. Never intentionally log passwords, FormData, Supabase sessions, auth tokens, cookies, Authorization headers, or complete user/auth objects. Pino redaction is a secondary safeguard. `pino-pretty` is optional development presentation tooling and is not imported by the application or required in production. Logging is separate from future exception monitoring and tracing such as Sentry or OpenTelemetry.
+
 ## Supabase access
 
 Supabase access is server-first.

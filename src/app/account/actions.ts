@@ -9,6 +9,7 @@ import { changePasswordWithVerification } from "@/lib/auth/password-change";
 import { createPasswordVerificationClient } from "@/lib/auth/password-verifier.server";
 import { changePasswordSchema, fieldValidationErrors } from "@/lib/auth/validation";
 import { createClient } from "@/lib/supabase/server";
+import { logger } from "@/lib/logger";
 
 export async function changePasswordAction(
   _previousState: AuthActionState,
@@ -51,6 +52,12 @@ export async function changePasswordAction(
   }
 
   if (!result.ok) {
+    if (result.code === "weak_password" && result.reasons?.includes("characters")) {
+      logger.warn(
+        { event: "auth.password_policy_conflict", reason: "characters" },
+        "Supabase hosted password configuration conflicts with the application's no-composition-rule policy.",
+      );
+    }
     const passwordError = weakPasswordMessage(result, parsed.data.password);
     if (passwordError) return { fieldErrors: { password: passwordError } };
     return { formError: safeAuthError("password", result.code) };
