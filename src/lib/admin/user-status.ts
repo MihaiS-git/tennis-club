@@ -7,7 +7,7 @@ import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
 
 const adminUserStatusSchema = z.object({
-  userId: z.string().uuid(),
+  userId: z.uuid(),
   status: z.enum(["active", "suspended"]),
 });
 

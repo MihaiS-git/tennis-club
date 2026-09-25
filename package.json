@@ -14,7 +14,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node --env-file=.env.local ./node_modules/vitest/vitest.mjs run tests",
     "test:unit": "vitest run tests/unit",
-    "test:integration": "node --env-file=.env.local ./node_modules/vitest/vitest.mjs run tests/integration",
+    "test:integration": "node --env-file=.env.local ./node_modules/vitest/vitest.mjs run tests/integration --no-file-parallelism",
     "test:e2e:auth": "node --env-file=.env.local ./node_modules/@playwright/test/cli.js test"
   },
   "dependencies": {
