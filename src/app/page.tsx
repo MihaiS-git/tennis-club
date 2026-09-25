@@ -260,16 +260,19 @@ export default function Home() {
 
           <div className="px-3 md:px-0">
             {/* Native image delivery is intentional for this below-the-fold club photograph. */}
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/images/tennis-club-aerial.avif"
-              alt="Aerial view of a clay-court tennis club with clubhouse and surrounding greenery"
-              loading="lazy"
-              decoding="async"
-              width="1536"
-              height="1024"
-              className="mt-10 aspect-3/2 w-full max-w-[960px] object-cover xl:mt-0 xl:max-w-none"
-            />
+            <picture>
+              <source type="image/avif" srcSet="/images/tennis-club-aerial.avif" />
+              <source type="image/webp" srcSet="/images/tennis-club-aerial.webp" />
+              <img
+                src="/images/tennis-club-aerial.webp"
+                alt="Aerial view of a clay-court tennis club with clubhouse and surrounding greenery"
+                loading="lazy"
+                decoding="async"
+                width="1536"
+                height="1024"
+                className="mt-10 aspect-3/2 w-full max-w-[960px] object-cover xl:mt-0 xl:max-w-none"
+              />
+            </picture>
           </div>
         </div>
       </section>
@@ -311,16 +314,19 @@ export default function Home() {
           </div>
 
           {/* Native image delivery is intentional for this below-the-fold facilities photograph. */}
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/images/tennis-courts-facilities.avif"
-            alt="Clay tennis court with clubhouse, lighting and player facilities at TennisClub"
-            loading="lazy"
-            decoding="async"
-            width="1672"
-            height="941"
-            className="mt-12 block h-auto w-full md:mt-16 lg:mt-20"
-          />
+          <picture className="mt-12 block md:mt-16 lg:mt-20">
+            <source type="image/avif" srcSet="/images/tennis-courts-facilities.avif" />
+            <source type="image/webp" srcSet="/images/tennis-courts-facilities.webp" />
+            <img
+              src="/images/tennis-courts-facilities.webp"
+              alt="Clay tennis court with clubhouse, lighting and player facilities at TennisClub"
+              loading="lazy"
+              decoding="async"
+              width="1672"
+              height="941"
+              className="block h-auto w-full"
+            />
+          </picture>
         </div>
       </section>
     </main>
