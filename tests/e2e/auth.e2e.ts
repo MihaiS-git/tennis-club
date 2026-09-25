@@ -146,7 +146,10 @@ test("protected account route requires login and logout removes the session", as
   await page.goto("/account");
   await expect(page.getByRole("heading", { name: "Your account" })).toBeVisible();
 
-  await page.getByRole("button", { name: "Sign out" }).click();
+  await page
+    .getByRole("main")
+    .getByRole("button", { name: "Sign out" })
+    .click();
   await expect(page).toHaveURL(/\/login$/);
   await page.goto("/account");
   await expect(page).toHaveURL(/\/login$/);
