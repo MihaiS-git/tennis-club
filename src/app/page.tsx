@@ -237,6 +237,42 @@ export default function Home() {
           </div>
         </div>
       </section>
+
+      <section aria-labelledby="club-intro-title" className="bg-forest-900 px-0 py-16 text-chalk md:px-8 md:py-20 xl:py-28">
+        <div className="mx-auto max-w-7xl xl:grid xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] xl:items-center xl:gap-16">
+          <div className="max-w-2xl px-6 md:px-0 xl:max-w-none">
+            <h2 id="club-intro-title" className="max-w-[13ch] font-heading text-[clamp(36px,4vw,56px)] font-semibold leading-[1.08] tracking-[-0.035em]">
+              A tennis club built around playing.
+            </h2>
+            <p className="mt-6 font-sans text-base leading-7 text-ivory md:text-lg md:leading-8">
+              TennisClub brings together clay tennis courts, coaching, open matches and a community of players in Cluj-Napoca. Whether you play regularly or are looking for somewhere new to get on court, the club is designed to make tennis easy to join and part of your week.
+            </p>
+            <ul className="mt-8 grid grid-cols-2 gap-x-8 font-sans text-sm font-medium text-ivory md:max-w-lg md:text-base">
+              <li className="border-t border-ivory/30 py-3">Courts</li>
+              <li className="border-t border-ivory/30 py-3">Coaching</li>
+              <li className="border-t border-ivory/30 py-3">Open matches</li>
+              <li className="border-t border-ivory/30 py-3">Community</li>
+            </ul>
+            <Link href="/club" className="mt-6 inline-flex min-h-11 items-center font-sans text-base font-semibold text-chalk underline decoration-clay-300 underline-offset-8 transition-colors hover:text-clay-300 hover:decoration-2 focus-visible:rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-clay-300">
+              Discover the club <span aria-hidden="true" className="ml-2">→</span>
+            </Link>
+          </div>
+
+          <div className="px-3 md:px-0">
+            {/* Native image delivery is intentional for this below-the-fold club photograph. */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/images/tennis-club-aerial.avif"
+              alt="Aerial view of a clay-court tennis club with clubhouse and surrounding greenery"
+              loading="lazy"
+              decoding="async"
+              width="1536"
+              height="1024"
+              className="mt-10 aspect-3/2 w-full max-w-[960px] object-cover xl:mt-0 xl:max-w-none"
+            />
+          </div>
+        </div>
+      </section>
     </main>
   );
 }
