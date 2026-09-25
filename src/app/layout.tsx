@@ -6,6 +6,7 @@ import { Toaster } from "sonner";
 import { DesktopNavbar } from "@/components/desktop-navbar";
 import { MobileNavbar } from "@/components/mobile-navbar";
 import { QueryFlashMessages } from "@/components/query-flash-messages";
+import { SiteFooter } from "@/components/site-footer";
 
 import "./globals.css";
 
@@ -37,6 +38,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <DesktopNavbar />
 
         {children}
+        <SiteFooter />
 
         <Toaster
           position="bottom-right"
