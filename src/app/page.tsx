@@ -259,7 +259,6 @@ export default function Home() {
           </div>
 
           <div className="px-3 md:px-0">
-            {/* Native image delivery is intentional for this below-the-fold club photograph. */}
             <picture>
               <source type="image/avif" srcSet="/images/tennis-club-aerial.avif" />
               <source type="image/webp" srcSet="/images/tennis-club-aerial.webp" />
@@ -313,7 +312,6 @@ export default function Home() {
             </Link>
           </div>
 
-          {/* Native image delivery is intentional for this below-the-fold facilities photograph. */}
           <picture className="mt-12 block md:mt-16 lg:mt-20">
             <source type="image/avif" srcSet="/images/tennis-courts-facilities.avif" />
             <source type="image/webp" srcSet="/images/tennis-courts-facilities.webp" />
@@ -324,6 +322,42 @@ export default function Home() {
               decoding="async"
               width="1672"
               height="941"
+              className="block h-auto w-full"
+            />
+          </picture>
+        </div>
+      </section>
+
+      <section aria-labelledby="coaching-section-title" className="bg-forest-900 px-6 py-16 md:px-8 md:py-20 xl:py-28">
+        <div className="mx-auto max-w-7xl lg:grid lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:items-center lg:gap-x-12 xl:gap-x-20">
+          <div className="lg:col-start-2 lg:row-start-1">
+            <h2 id="coaching-section-title" className="max-w-[13ch] font-heading text-[clamp(36px,4vw,56px)] font-semibold leading-[1.08] tracking-[-0.035em] text-chalk">
+              Coaching for every stage of your game.
+            </h2>
+            <p className="mt-6 max-w-xl font-sans text-base leading-7 text-ivory md:text-lg md:leading-8">
+              Train with experienced coaches for individual sessions, structured practice and ongoing development. Coaching is available for players who are just starting out as well as those looking to improve specific parts of their game.
+            </p>
+            <ul className="mt-10 grid gap-x-8 font-sans text-base font-medium text-ivory md:grid-cols-2">
+              <li className="border-t border-ivory/30 py-4">Individual coaching</li>
+              <li className="border-t border-ivory/30 py-4">Junior coaching</li>
+              <li className="border-t border-ivory/30 py-4">Group sessions</li>
+              <li className="border-t border-ivory/30 py-4">Performance training</li>
+            </ul>
+            <Link href="/coaching" className="mt-6 inline-flex min-h-11 w-fit items-center font-sans text-base font-semibold text-chalk underline decoration-clay-300 underline-offset-8 transition-colors hover:text-clay-300 hover:decoration-2 focus-visible:rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-clay-300">
+              Meet the coaches <span aria-hidden="true" className="ml-2">→</span>
+            </Link>
+          </div>
+
+          <picture className="mt-12 block md:mt-16 lg:col-start-1 lg:row-start-1 lg:mt-0">
+            <source type="image/avif" srcSet="/images/tennis-coaching-session.avif" />
+            <source type="image/webp" srcSet="/images/tennis-coaching-session.webp" />
+            <img
+              src="/images/tennis-coaching-session.webp"
+              alt="A coach guides a player during a practice session on a clay tennis court"
+              loading="lazy"
+              decoding="async"
+              width="1536"
+              height="1024"
               className="block h-auto w-full"
             />
           </picture>
