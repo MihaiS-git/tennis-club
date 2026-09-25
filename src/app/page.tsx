@@ -273,6 +273,56 @@ export default function Home() {
           </div>
         </div>
       </section>
+
+      <section aria-labelledby="facilities-title" className="bg-chalk px-6 py-16 md:px-8 md:py-20 xl:py-28">
+        <div className="mx-auto max-w-7xl">
+          <div className="lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:gap-x-16">
+            <div>
+              <h2 id="facilities-title" className="max-w-[13ch] font-heading text-[clamp(36px,4vw,56px)] font-semibold leading-[1.08] tracking-[-0.035em] text-foreground">
+                Clay courts and everything you need to play.
+              </h2>
+              <p className="mt-6 max-w-xl font-sans text-base leading-7 text-muted-foreground md:text-lg md:leading-8">
+                TennisClub combines eight clay courts with practical player facilities for training, matches and time at the club. The courts and shared spaces are designed for everyday play, coaching and club activity in Cluj-Napoca.
+              </p>
+            </div>
+
+            <div className="mt-10 grid gap-x-8 gap-y-8 md:grid-cols-2 md:gap-y-10 lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:mt-0">
+              <div className="border-t border-border pt-4">
+                <h3 className="font-heading text-xl font-semibold leading-snug tracking-[-0.02em] text-primary">8 clay courts</h3>
+                <p className="mt-3 font-sans text-sm leading-6 text-muted-foreground md:text-base md:leading-7">Outdoor clay courts for training, casual play and competitive matches.</p>
+              </div>
+              <div className="border-t border-border pt-4">
+                <h3 className="font-heading text-xl font-semibold leading-snug tracking-[-0.02em] text-primary">Changing rooms &amp; showers</h3>
+                <p className="mt-3 font-sans text-sm leading-6 text-muted-foreground md:text-base md:leading-7">Comfortable facilities for players before and after time on court.</p>
+              </div>
+              <div className="border-t border-border pt-4">
+                <h3 className="font-heading text-xl font-semibold leading-snug tracking-[-0.02em] text-primary">Clubhouse &amp; terrace</h3>
+                <p className="mt-3 font-sans text-sm leading-6 text-muted-foreground md:text-base md:leading-7">A social space to meet, relax and spend time around the club.</p>
+              </div>
+              <div className="border-t border-border pt-4">
+                <h3 className="font-heading text-xl font-semibold leading-snug tracking-[-0.02em] text-primary">Court lighting</h3>
+                <p className="mt-3 font-sans text-sm leading-6 text-muted-foreground md:text-base md:leading-7">Lighting that supports play into the evening.</p>
+              </div>
+            </div>
+
+            <Link href="/courts" className="mt-8 inline-flex min-h-11 w-fit items-center font-sans text-base font-semibold text-primary underline decoration-clay-300 underline-offset-8 transition-colors hover:text-accent hover:decoration-2 focus-visible:rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus lg:col-start-1 lg:row-start-2 lg:mt-6 lg:self-start">
+              Explore the courts <span aria-hidden="true" className="ml-2">→</span>
+            </Link>
+          </div>
+
+          {/* Native image delivery is intentional for this below-the-fold facilities photograph. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/images/tennis-courts-facilities.avif"
+            alt="Clay tennis court with clubhouse, lighting and player facilities at TennisClub"
+            loading="lazy"
+            decoding="async"
+            width="1672"
+            height="941"
+            className="mt-12 block h-auto w-full md:mt-16 lg:mt-20"
+          />
+        </div>
+      </section>
     </main>
   );
 }
