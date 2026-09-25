@@ -6,7 +6,7 @@ import { requireActiveAdmin } from "@/lib/admin/authorization";
 import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
 
-const adminUserStatusSchema = z.object({
+export const adminUserStatusSchema = z.object({
   userId: z.uuid(),
   status: z.enum(["active", "suspended"]),
 });
