@@ -7,7 +7,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import { signOutAction } from "@/app/account/actions";
 
-export function MobileNavbarMenu({ isAuthenticated }: { isAuthenticated: boolean }) {
+export function MobileNavbarMenu({ isAuthenticated, isAdmin }: { isAuthenticated: boolean; isAdmin: boolean }) {
   const [isOpen, setIsOpen] = useState(false);
   const menuId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -149,6 +149,11 @@ export function MobileNavbarMenu({ isAuthenticated }: { isAuthenticated: boolean
           <Link onClick={closeMenu} href="/club" className="flex min-h-12 items-center text-sm font-medium text-foreground hover:text-accent">
             Club
           </Link>
+          {isAdmin && (
+            <Link onClick={closeMenu} href="/admin/users" className="flex min-h-12 items-center text-sm font-medium text-foreground hover:text-accent">
+              Users
+            </Link>
+          )}
 
           <div className="mt-2 border-t border-border pt-2">
             {isAuthenticated ? (

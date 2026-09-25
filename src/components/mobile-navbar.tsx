@@ -6,5 +6,10 @@ export async function MobileNavbar() {
   const supabase = await createClient();
   const account = await readCurrentAccount(supabase);
 
-  return <MobileNavbarMenu isAuthenticated={account.state !== "unauthenticated"} />;
+  return (
+    <MobileNavbarMenu
+      isAuthenticated={account.state !== "unauthenticated"}
+      isAdmin={account.state === "active" && account.roles.includes("admin")}
+    />
+  );
 }

@@ -9,6 +9,7 @@ export async function DesktopNavbar() {
   const supabase = await createClient();
   const account = await readCurrentAccount(supabase);
   const isAuthenticated = account.state !== "unauthenticated";
+  const isAdmin = account.state === "active" && account.roles.includes("admin");
 
   return (
     <header className="hidden w-full border-b border-border bg-surface lg:block">
@@ -38,6 +39,11 @@ export async function DesktopNavbar() {
           <Link className="text-sm font-medium text-foreground hover:text-accent" href="/club">
             Club
           </Link>
+          {isAdmin && (
+            <Link className="text-sm font-medium text-foreground hover:text-accent" href="/admin/users">
+              Users
+            </Link>
+          )}
         </nav>
 
         <div className="flex items-center justify-end gap-2 xl:gap-4">

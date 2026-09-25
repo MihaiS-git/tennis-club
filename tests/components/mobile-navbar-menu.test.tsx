@@ -3,14 +3,21 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 
+import type { CurrentAccount } from "../../src/lib/auth/account";
+
+const { readCurrentAccount } = vi.hoisted(() => ({ readCurrentAccount: vi.fn() }));
+
 vi.mock("../../src/app/account/actions", () => ({ signOutAction: vi.fn() }));
+vi.mock("../../src/lib/auth/account", () => ({ readCurrentAccount }));
+vi.mock("../../src/lib/supabase/server", () => ({ createClient: async () => ({}) }));
 
 import { MobileNavbarMenu } from "../../src/components/mobile-navbar-menu";
+import { MobileNavbar } from "../../src/components/mobile-navbar";
 
 afterEach(cleanup);
 
 it("shows signed-out links and closes on link selection or Escape", () => {
-  render(<MobileNavbarMenu isAuthenticated={false} />);
+  render(<MobileNavbarMenu isAuthenticated={false} isAdmin={false} />);
 
   const trigger = screen.getByRole("button", { name: "Open menu" });
   expect(trigger.getAttribute("aria-expanded")).toBe("false");
@@ -42,7 +49,7 @@ it("shows signed-out links and closes on link selection or Escape", () => {
 });
 
 it("shows Matches, Account, and direct Sign out for authenticated users", () => {
-  render(<MobileNavbarMenu isAuthenticated />);
+  render(<MobileNavbarMenu isAuthenticated isAdmin={false} />);
   fireEvent.click(screen.getByRole("button", { name: "Open menu" }));
 
   const drawer = screen.getByRole("dialog", { name: "Mobile navigation menu" });
@@ -55,7 +62,7 @@ it("shows Matches, Account, and direct Sign out for authenticated users", () => 
 });
 
 it("closes on backdrop or drawer close button and restores focus", () => {
-  render(<MobileNavbarMenu isAuthenticated={false} />);
+  render(<MobileNavbarMenu isAuthenticated={false} isAdmin={false} />);
   const trigger = screen.getByRole("button", { name: "Open menu" });
 
   fireEvent.click(trigger);
@@ -70,7 +77,7 @@ it("closes on backdrop or drawer close button and restores focus", () => {
 });
 
 it("keeps keyboard focus inside the open drawer", () => {
-  render(<MobileNavbarMenu isAuthenticated={false} />);
+  render(<MobileNavbarMenu isAuthenticated={false} isAdmin={false} />);
   fireEvent.click(screen.getByRole("button", { name: "Open menu" }));
 
   const drawer = screen.getByRole("dialog", { name: "Mobile navigation menu" });
@@ -82,4 +89,31 @@ it("keeps keyboard focus inside the open drawer", () => {
 
   fireEvent.keyDown(lastLink, { key: "Tab" });
   expect(document.activeElement).toBe(closeButton);
+});
+
+it.each([
+  ["active admin", { state: "active", userId: "admin-1", email: "admin@example.com", roles: ["admin", "member"] }, true],
+  ["active member", { state: "active", userId: "member-1", email: "member@example.com", roles: ["member"] }, false],
+  ["active coach", { state: "active", userId: "coach-1", email: "coach@example.com", roles: ["coach"] }, false],
+  ["suspended admin", { state: "suspended", userId: "admin-1", email: "admin@example.com", roles: ["admin"] }, false],
+  ["unauthenticated", { state: "unauthenticated" }, false],
+  ["missing profile", { state: "missing-profile" }, false],
+  ["load error", { state: "load-error" }, false],
+] satisfies ReadonlyArray<readonly [string, CurrentAccount, boolean]>)("shows Users only for %s in the mobile navbar", async (_description, account, showsUsers) => {
+  readCurrentAccount.mockResolvedValue(account);
+  render(await MobileNavbar());
+  fireEvent.click(screen.getByRole("button", { name: "Open menu" }));
+
+  const navigation = within(screen.getByRole("dialog", { name: "Mobile navigation menu" }))
+    .getByRole("navigation", { name: "Mobile navigation" });
+  const links = within(navigation).getAllByRole("link");
+  const usersLink = within(navigation).queryByRole("link", { name: "Users" });
+  if (showsUsers) {
+    expect(links.map((link) => link.textContent)).toEqual([
+      "Courts", "Coaching", "Matches", "Rankings", "Club", "Users", "Account",
+    ]);
+    expect(usersLink?.getAttribute("href")).toBe("/admin/users");
+  } else {
+    expect(usersLink).toBeNull();
+  }
 });
