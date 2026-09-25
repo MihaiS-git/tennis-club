@@ -363,6 +363,41 @@ export default function Home() {
           </picture>
         </div>
       </section>
+
+      <section aria-labelledby="matches-community-title" className="bg-background px-6 py-16 md:px-8 md:py-20 xl:py-28">
+        <div className="mx-auto max-w-7xl lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:items-center lg:gap-x-12 xl:gap-x-20">
+          <div>
+            <h2 id="matches-community-title" className="max-w-[13ch] font-heading text-[clamp(36px,4vw,56px)] font-semibold leading-[1.08] tracking-[-0.035em] text-foreground">
+              Find the right people to play with.
+            </h2>
+            <p className="mt-6 max-w-xl font-sans text-base leading-7 text-muted-foreground md:text-lg md:leading-8">
+              Join open matches, find players at a similar level, or organize your own game. TennisClub makes it easier to spend less time searching for partners and more time on court.
+            </p>
+            <ul className="mt-10 font-sans text-base font-medium text-primary">
+              <li className="border-t border-border py-4">Open matches</li>
+              <li className="border-t border-border py-4">Players at a similar level</li>
+              <li className="border-t border-border py-4">Singles &amp; doubles</li>
+            </ul>
+            <Link href="/matches" className="mt-6 inline-flex min-h-11 w-fit items-center font-sans text-base font-semibold text-primary underline decoration-clay-300 underline-offset-8 transition-colors hover:text-accent hover:decoration-2 focus-visible:rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">
+              Explore matches <span aria-hidden="true" className="ml-2">→</span>
+            </Link>
+          </div>
+
+          <picture className="-mx-3 mt-12 block w-[calc(100%+1.5rem)] md:mx-0 md:mt-16 md:w-auto lg:mt-0">
+            <source type="image/avif" srcSet="/images/tennis-matches-community.avif" />
+            <source type="image/webp" srcSet="/images/tennis-matches-community.webp" />
+            <img
+              src="/images/tennis-matches-community.webp"
+              alt="Four tennis players talking together beside a clay court"
+              loading="lazy"
+              decoding="async"
+              width="1536"
+              height="1024"
+              className="block h-auto w-full"
+            />
+          </picture>
+        </div>
+      </section>
     </main>
   );
 }
