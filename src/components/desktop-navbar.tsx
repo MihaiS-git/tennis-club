@@ -15,7 +15,7 @@ export async function DesktopNavbar() {
       <div className="mx-auto grid h-18 max-w-7xl grid-cols-[1fr_auto_1fr] items-center gap-3 px-6 xl:gap-8 xl:px-8">
         <Link
           href="/"
-          className="w-fit font-heading text-lg font-semibold tracking-tight text-primary hover:text-primary-hover xl:text-xl"
+          className="w-fit font-heading text-lg font-semibold tracking-tight text-primary hover:text-accent xl:text-xl"
         >
           Tennis Club
         </Link>
@@ -57,7 +57,7 @@ export async function DesktopNavbar() {
               <Link
                 href="/account"
                 aria-label="Your account"
-                className="inline-flex size-10 items-center justify-center rounded-control border border-border-strong text-primary hover:bg-surface-muted"
+                className="inline-flex size-10 items-center justify-center rounded-control border border-border-strong text-primary hover:bg-surface-muted hover:text-accent"
               >
                 <UserRound aria-hidden="true" className="size-5" strokeWidth={1.8} />
               </Link>

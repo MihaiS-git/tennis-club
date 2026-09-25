@@ -69,7 +69,7 @@ export function MobileNavbarMenu({ isAuthenticated }: { isAuthenticated: boolean
       <div className="flex h-16 items-center justify-between gap-2 px-4">
         <Link
           href="/"
-          className="font-heading text-base font-semibold tracking-tight text-primary hover:text-primary-hover sm:text-lg"
+          className="font-heading text-base font-semibold tracking-tight text-primary hover:text-accent sm:text-lg"
         >
           Tennis Club
         </Link>
@@ -114,7 +114,7 @@ export function MobileNavbarMenu({ isAuthenticated }: { isAuthenticated: boolean
         aria-hidden={!isOpen}
         inert={!isOpen}
         onKeyDown={keepFocusInDrawer}
-        className={`fixed inset-y-0 left-0 z-50 flex h-dvh w-[90vw] max-w-[360px] flex-col border-r border-border bg-surface transition-transform duration-200 ease-out motion-reduce:transition-none ${isOpen ? "translate-x-0" : "-translate-x-full"}`}
+        className={`fixed inset-y-0 left-0 z-50 flex h-dvh w-[90vw] max-w-[360px] flex-col border-r border-border bg-surface transition-transform duration-[var(--ui-duration-base)] ease-standard motion-reduce:transition-none ${isOpen ? "translate-x-0" : "-translate-x-full"}`}
       >
         <div className="flex h-16 shrink-0 items-center justify-between border-b border-border px-4">
           <span className="font-heading text-base font-semibold tracking-tight text-primary sm:text-lg">

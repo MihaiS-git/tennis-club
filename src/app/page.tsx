@@ -1,4 +1,5 @@
 import Link from "next/link";
+import styles from "./page.module.css";
 
 const courts = [
   {
@@ -38,6 +39,13 @@ const coachingSlots = [
 ];
 
 export default function Home() {
+  const place = "Parcul Central Simion Bărnuțiu, Cluj-Napoca, Romania";
+  const mapsKey = process.env.GOOGLE_MAPS_EMBED_API_KEY;
+  const mapUrl = mapsKey
+    ? `https://www.google.com/maps/embed/v1/place?${new URLSearchParams({ key: mapsKey, q: place })}`
+    : null;
+  const directionsUrl = `https://www.google.com/maps/dir/?${new URLSearchParams({ api: "1", destination: place })}`;
+
   return (
     <main className="flex-1">
       <section
@@ -65,7 +73,7 @@ export default function Home() {
         />
 
         <div className="relative mx-auto max-w-7xl lg:h-full">
-          <div className="px-6 pb-7 pt-7 md:flex md:h-[clamp(500px,54vw,560px)] md:w-[45%] md:flex-col md:justify-start md:px-8 md:py-20 lg:h-auto lg:w-auto lg:max-w-[470px] lg:px-6 lg:pt-[clamp(88px,9vw,140px)] lg:text-chalk xl:px-8">
+          <div className={`${styles.heroEntrance} px-6 pb-7 pt-7 md:flex md:h-[clamp(500px,54vw,560px)] md:w-[45%] md:flex-col md:justify-start md:px-8 md:py-20 lg:h-auto lg:w-auto lg:max-w-[470px] lg:px-6 lg:pt-[clamp(88px,9vw,140px)] lg:text-chalk xl:px-8`}>
             <h1
               id="hero-title"
               className="max-w-[10ch] font-heading text-[42px] font-semibold leading-[1.02] tracking-[-0.045em] text-foreground md:text-[clamp(44px,5.8vw,60px)] lg:max-w-[9ch] lg:text-[clamp(52px,5vw,72px)] lg:leading-[0.99] lg:text-chalk"
@@ -78,22 +86,22 @@ export default function Home() {
             <div className="mt-6 flex flex-col gap-2.5 md:mt-8 md:flex-row md:items-center md:gap-2 lg:mt-6 lg:gap-3 xl:mt-8">
               <Link
                 href="/book"
-                className="inline-flex min-h-12 w-full items-center justify-center rounded-control bg-primary px-5 font-sans text-sm font-semibold text-primary-foreground transition hover:bg-primary-hover md:w-auto lg:px-6"
+                className="inline-flex min-h-12 w-full items-center justify-center rounded-control bg-primary px-5 font-sans text-sm font-semibold text-primary-foreground transition hover:bg-primary-hover md:w-auto lg:bg-chalk lg:px-6 lg:text-primary lg:hover:bg-surface-muted"
               >
                 Book a court
               </Link>
               <Link
                 href="/matches"
-                className="inline-flex min-h-12 w-full items-center justify-center rounded-control border border-border-strong bg-surface px-5 font-sans text-sm font-semibold text-primary transition hover:bg-surface-muted md:w-auto lg:border-ivory/80 lg:bg-forest-900/20 lg:px-6 lg:text-chalk lg:hover:bg-forest-900/40 lg:hover:text-chalk"
+                className="inline-flex min-h-12 w-full items-center justify-center rounded-control border border-border-strong bg-surface px-5 font-sans text-sm font-semibold text-primary transition hover:bg-surface-muted hover:text-accent md:w-auto lg:border-ivory/80 lg:bg-forest-900/20 lg:px-6 lg:text-chalk lg:hover:border-accent-on-dark lg:hover:bg-forest-900/40 lg:hover:text-chalk"
               >
                 Find a match
               </Link>
             </div>
             <Link
               href="/coaching"
-              className="mt-3 inline-flex min-h-11 w-fit items-center font-sans text-sm font-medium text-primary underline decoration-primary/60 underline-offset-4 hover:text-primary-hover md:mt-5 lg:mt-4 lg:min-h-10 lg:text-ivory lg:decoration-ivory/60 lg:hover:text-chalk xl:mt-5"
+              className={`${styles.editorialLink} mt-2 inline-flex min-h-11 w-fit items-center font-sans text-sm font-semibold text-primary hover:text-accent md:mt-4 lg:mt-3 lg:min-h-10 lg:text-chalk lg:hover:text-chalk xl:mt-4`}
             >
-              Book coaching →
+              <span className={`${styles.editorialLabel} underline decoration-accent underline-offset-4 lg:decoration-accent-on-dark`}>Book coaching</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-1`}>→</span>
             </Link>
           </div>
 
@@ -155,13 +163,13 @@ export default function Home() {
                   {courts.map((court) => (
                     <div key={court.name} className="grid gap-3 border-b border-border py-5 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center md:py-6">
                       <div className="flex items-baseline gap-3">
-                        <Link href="/book" className="font-heading text-lg font-semibold text-foreground transition-colors hover:text-accent hover:underline hover:decoration-accent focus-visible:rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">{court.name}</Link>
+                        <Link href="/book" className="font-heading text-lg font-semibold text-primary transition-colors hover:text-accent hover:underline hover:decoration-accent focus-visible:rounded-control">{court.name}</Link>
                         <span className="font-sans text-sm text-muted-foreground">{court.surface}</span>
                       </div>
                       {court.times.length > 0 ? (
                         <div className="flex flex-wrap gap-2">
                           {court.times.map((time) => (
-                            <Link key={time} href="/book" aria-label={`Book ${court.name} at ${time}`} className="inline-flex min-h-10 min-w-[72px] items-center justify-center rounded-control border border-border-strong bg-background px-3 font-sans text-sm font-semibold tabular-nums text-primary transition-colors hover:border-primary hover:bg-forest-100 hover:text-primary-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">
+                            <Link key={time} href="/book" aria-label={`Book ${court.name} at ${time}`} className="inline-flex min-h-10 min-w-[72px] items-center justify-center rounded-control border border-border-strong bg-background px-3 font-sans text-sm font-semibold tabular-nums text-primary transition-colors hover:border-accent hover:bg-surface-muted hover:text-accent">
                               {time}
                             </Link>
                           ))}
@@ -179,8 +187,8 @@ export default function Home() {
                 </div>
               )}
 
-              <Link href="/book" className="mt-4 inline-flex min-h-11 w-fit items-center font-sans text-sm font-semibold text-primary underline decoration-accent underline-offset-8 transition-colors hover:text-accent hover:decoration-2 focus-visible:rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">
-                View courts <span aria-hidden="true" className="ml-2">→</span>
+              <Link href="/book" className={`${styles.editorialLink} mt-4 inline-flex min-h-11 w-fit items-center font-sans text-sm font-semibold text-primary transition-colors hover:text-accent focus-visible:rounded-control`}>
+                <span className={`${styles.editorialLabel} underline decoration-accent underline-offset-8`}>View courts</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
               </Link>
             </article>
 
@@ -190,7 +198,7 @@ export default function Home() {
                 {openMatches.length > 0 ? (
                   <div>
                     {openMatches.slice(0, 4).map((match) => (
-                      <Link key={`${match.format}-${match.level}-${match.time}`} href="/matches" className="block border-t border-ivory/20 py-3 transition-colors first:border-t-0 hover:bg-forest-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tennis">
+                      <Link key={`${match.format}-${match.level}-${match.time}`} href="/matches" className="block border-t border-ivory/20 py-3 transition-colors first:border-t-0 hover:bg-forest-700">
                         <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
                           <p className="font-heading text-base font-semibold text-chalk">
                             {match.format} <span className="font-sans text-sm font-normal text-ivory">· {match.level}</span>
@@ -207,8 +215,8 @@ export default function Home() {
                     <p className="mt-1 text-ivory">Be the first to start one.</p>
                   </div>
                 )}
-                <Link href="/matches" className="mt-2 inline-flex min-h-11 w-fit items-center font-sans text-sm font-semibold text-chalk underline decoration-clay-300 underline-offset-8 transition-colors hover:text-tennis hover:decoration-tennis hover:decoration-2 focus-visible:rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tennis">
-                  View matches <span aria-hidden="true" className="ml-2">→</span>
+                <Link href="/matches" className={`${styles.editorialLink} mt-2 inline-flex min-h-11 w-fit items-center font-sans text-sm font-semibold text-chalk transition-colors hover:text-chalk focus-visible:rounded-control`}>
+                  <span className={`${styles.editorialLabel} underline decoration-accent-on-dark underline-offset-8`}>View matches</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
                 </Link>
               </article>
 
@@ -217,8 +225,8 @@ export default function Home() {
                 {coachingSlots.length > 0 ? (
                   <div>
                     {coachingSlots.slice(0, 4).map((slot) => (
-                      <Link key={`${slot.name}-${slot.time}`} href="/coaching" className="group flex items-center justify-between gap-4 border-t border-border py-3 font-sans text-sm transition-colors first:border-t-0 first:pt-0 hover:bg-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">
-                        <span className="font-medium text-foreground transition-colors group-hover:text-accent">{slot.name}</span>
+                      <Link key={`${slot.name}-${slot.time}`} href="/coaching" className="group flex items-center justify-between gap-4 border-t border-border py-3 font-sans text-sm transition-colors first:border-t-0 first:pt-0 hover:bg-background">
+                        <span className="font-medium text-primary transition-colors group-hover:text-accent">{slot.name}</span>
                         <span className="shrink-0 tabular-nums text-muted-foreground">{slot.time}</span>
                       </Link>
                     ))}
@@ -229,8 +237,8 @@ export default function Home() {
                     <p className="mt-1 text-muted-foreground">Check upcoming availability.</p>
                   </div>
                 )}
-                <Link href="/coaching" className="mt-2 inline-flex min-h-11 w-fit items-center font-sans text-sm font-semibold text-primary underline decoration-accent underline-offset-8 transition-colors hover:text-accent hover:decoration-2 focus-visible:rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">
-                  View coaches <span aria-hidden="true" className="ml-2">→</span>
+                <Link href="/coaching" className={`${styles.editorialLink} mt-2 inline-flex min-h-11 w-fit items-center font-sans text-sm font-semibold text-primary transition-colors hover:text-accent focus-visible:rounded-control`}>
+                  <span className={`${styles.editorialLabel} underline decoration-accent underline-offset-8`}>View coaches</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
                 </Link>
               </article>
             </div>
@@ -239,8 +247,8 @@ export default function Home() {
       </section>
 
       <section aria-labelledby="club-intro-title" className="bg-forest-900 px-0 py-16 text-chalk md:px-8 md:py-20 xl:py-28">
-        <div className="mx-auto max-w-7xl xl:grid xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] xl:items-center xl:gap-16">
-          <div className="max-w-2xl px-6 md:px-0 xl:max-w-none">
+        <div className="mx-auto max-w-7xl lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:items-center lg:gap-16">
+          <div className="max-w-2xl px-6 md:px-0 lg:max-w-none">
             <h2 id="club-intro-title" className="max-w-[13ch] font-heading text-[clamp(36px,4vw,56px)] font-semibold leading-[1.08] tracking-[-0.035em]">
               A tennis club built around playing.
             </h2>
@@ -253,8 +261,8 @@ export default function Home() {
               <li className="border-t border-ivory/30 py-3">Open matches</li>
               <li className="border-t border-ivory/30 py-3">Community</li>
             </ul>
-            <Link href="/club" className="mt-6 inline-flex min-h-11 items-center font-sans text-base font-semibold text-chalk underline decoration-clay-300 underline-offset-8 transition-colors hover:text-clay-300 hover:decoration-2 focus-visible:rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-clay-300">
-              Discover the club <span aria-hidden="true" className="ml-2">→</span>
+            <Link href="/club" className={`${styles.editorialLink} mt-6 inline-flex min-h-11 items-center font-sans text-base font-semibold text-chalk transition-colors hover:text-chalk focus-visible:rounded-control`}>
+              <span className={`${styles.editorialLabel} underline decoration-accent-on-dark underline-offset-8`}>Discover the club</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
             </Link>
           </div>
 
@@ -269,7 +277,7 @@ export default function Home() {
                 decoding="async"
                 width="1536"
                 height="1024"
-                className="mt-10 aspect-3/2 w-full max-w-[960px] object-cover xl:mt-0 xl:max-w-none"
+                className="mt-10 aspect-3/2 w-full max-w-[960px] object-cover lg:mt-0 lg:max-w-none"
               />
             </picture>
           </div>
@@ -307,8 +315,8 @@ export default function Home() {
               </div>
             </div>
 
-            <Link href="/courts" className="mt-8 inline-flex min-h-11 w-fit items-center font-sans text-base font-semibold text-primary underline decoration-clay-300 underline-offset-8 transition-colors hover:text-accent hover:decoration-2 focus-visible:rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus lg:col-start-1 lg:row-start-2 lg:mt-6 lg:self-start">
-              Explore the courts <span aria-hidden="true" className="ml-2">→</span>
+            <Link href="/courts" className={`${styles.editorialLink} mt-8 inline-flex min-h-11 w-fit items-center font-sans text-base font-semibold text-primary transition-colors hover:text-accent focus-visible:rounded-control lg:col-start-1 lg:row-start-2 lg:mt-6 lg:self-start`}>
+              <span className={`${styles.editorialLabel} underline decoration-accent underline-offset-8`}>Explore the courts</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
             </Link>
           </div>
 
@@ -343,12 +351,12 @@ export default function Home() {
               <li className="border-t border-ivory/30 py-4">Group sessions</li>
               <li className="border-t border-ivory/30 py-4">Performance training</li>
             </ul>
-            <Link href="/coaching" className="mt-6 inline-flex min-h-11 w-fit items-center font-sans text-base font-semibold text-chalk underline decoration-clay-300 underline-offset-8 transition-colors hover:text-clay-300 hover:decoration-2 focus-visible:rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-clay-300">
-              Meet the coaches <span aria-hidden="true" className="ml-2">→</span>
+            <Link href="/coaching" className={`${styles.editorialLink} mt-6 inline-flex min-h-11 w-fit items-center font-sans text-base font-semibold text-chalk transition-colors hover:text-chalk focus-visible:rounded-control`}>
+              <span className={`${styles.editorialLabel} underline decoration-accent-on-dark underline-offset-8`}>Meet the coaches</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
             </Link>
           </div>
 
-          <picture className="mt-12 block md:mt-16 lg:col-start-1 lg:row-start-1 lg:mt-0">
+          <picture className="-mx-3 mt-12 block w-[calc(100%+1.5rem)] md:mx-0 md:mt-16 md:w-auto lg:col-start-1 lg:row-start-1 lg:mt-0">
             <source type="image/avif" srcSet="/images/tennis-coaching-session.avif" />
             <source type="image/webp" srcSet="/images/tennis-coaching-session.webp" />
             <img
@@ -378,8 +386,8 @@ export default function Home() {
               <li className="border-t border-border py-4">Players at a similar level</li>
               <li className="border-t border-border py-4">Singles &amp; doubles</li>
             </ul>
-            <Link href="/matches" className="mt-6 inline-flex min-h-11 w-fit items-center font-sans text-base font-semibold text-primary underline decoration-clay-300 underline-offset-8 transition-colors hover:text-accent hover:decoration-2 focus-visible:rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">
-              Explore matches <span aria-hidden="true" className="ml-2">→</span>
+            <Link href="/matches" className={`${styles.editorialLink} mt-6 inline-flex min-h-11 w-fit items-center font-sans text-base font-semibold text-primary transition-colors hover:text-accent focus-visible:rounded-control`}>
+              <span className={`${styles.editorialLabel} underline decoration-accent underline-offset-8`}>Explore matches</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
             </Link>
           </div>
 
@@ -396,6 +404,51 @@ export default function Home() {
               className="block h-auto w-full"
             />
           </picture>
+        </div>
+      </section>
+
+      <section aria-labelledby="visit-club-title" className="bg-forest-900 px-6 py-16 md:px-8 md:py-20 xl:py-28">
+        <div className="mx-auto max-w-7xl lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:items-stretch lg:gap-x-12 xl:gap-x-20">
+          <div>
+            <h2 id="visit-club-title" className="max-w-[14ch] font-heading text-[clamp(40px,4.4vw,64px)] font-semibold leading-[1.04] tracking-[-0.04em] text-chalk">
+              Play in the heart of Cluj-Napoca.
+            </h2>
+            <p className="mt-6 max-w-xl font-sans text-base leading-7 text-ivory md:text-lg md:leading-8">
+              Central Club is set in Parcul Central Simion Bărnuțiu, with clay courts, coaching and club activity in one of Cluj-Napoca’s most accessible central locations.
+            </p>
+            <div className="mt-12 border-t border-ivory/30 pb-6 pt-5">
+              <h3 className="font-sans text-xs font-semibold uppercase tracking-[0.16em] text-ivory">Location</h3>
+              <address className="mt-3 font-heading text-xl font-medium leading-7 text-chalk not-italic">
+                Parcul Central Simion Bărnuțiu<br />
+                Cluj-Napoca
+              </address>
+            </div>
+            <div className="border-t border-ivory/30 pb-5 pt-5 font-heading text-lg font-medium leading-7 text-chalk">
+              <h3 className="mb-3 font-sans text-xs font-semibold uppercase tracking-[0.16em] text-ivory">Hours</h3>
+              <p>Mon–Fri · 07:00–24:00</p>
+              <p>Sat–Sun · 07:00–24:00</p>
+            </div>
+            <a href={directionsUrl} target="_blank" rel="noopener noreferrer" className={`${styles.editorialLink} mt-6 inline-flex min-h-11 w-fit items-center font-sans text-base font-semibold text-chalk transition-colors hover:text-chalk focus-visible:rounded-control`}>
+              <span className={`${styles.editorialLabel} underline decoration-accent-on-dark underline-offset-8`}>Get directions</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
+            </a>
+          </div>
+
+          <div className="-mx-3 mt-12 aspect-[4/3] w-[calc(100%+1.5rem)] md:mx-0 md:mt-16 md:aspect-[3/2] md:w-full lg:-mr-4 lg:ml-0 lg:mt-0 lg:aspect-auto lg:w-[calc(100%+1rem)] xl:-mr-12 xl:w-[calc(100%+3rem)]">
+            {mapUrl ? (
+              <iframe
+                src={mapUrl}
+                title="Map showing Central Club in Parcul Central Simion Bărnuțiu, Cluj-Napoca"
+                loading="lazy"
+                referrerPolicy="no-referrer-when-downgrade"
+                allowFullScreen
+                className="block h-full w-full border-0"
+              />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center border border-ivory/30 font-sans text-base text-ivory">
+                Map unavailable.
+              </div>
+            )}
+          </div>
         </div>
       </section>
     </main>

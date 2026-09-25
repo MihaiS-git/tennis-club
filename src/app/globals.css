@@ -27,10 +27,11 @@
   --surface-muted: var(--clay-100);
   --surface-elevated: var(--chalk);
   --primary: var(--forest-800);
-  --primary-hover: var(--forest-900);
+  --primary-hover: var(--forest-700);
   --primary-foreground: var(--chalk);
   --accent: var(--clay-600);
   --accent-hover: var(--clay-700);
+  --accent-on-dark: var(--clay-500);
   --accent-foreground: var(--chalk);
   --muted: var(--clay-100);
   --muted-foreground: var(--earth-700);
@@ -123,6 +124,7 @@
   --color-primary-foreground: var(--primary-foreground);
   --color-accent: var(--accent);
   --color-accent-hover: var(--accent-hover);
+  --color-accent-on-dark: var(--accent-on-dark);
   --color-accent-foreground: var(--accent-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
@@ -148,6 +150,8 @@
   --duration-fast: var(--ui-duration-fast);
   --duration-base: var(--ui-duration-base);
   --ease-standard: var(--ui-ease-standard);
+  --default-transition-duration: var(--ui-duration-fast);
+  --default-transition-timing-function: var(--ui-ease-standard);
 }
 
 @layer base {
@@ -173,15 +177,11 @@
     font-weight: 600;
   }
 
-  a {
-    color: var(--primary);
+  a,
+  button {
     transition-duration: var(--ui-duration-fast);
-    transition-property: color, text-decoration-color;
+    transition-property: color, text-decoration-color, border-color, background-color;
     transition-timing-function: var(--ui-ease-standard);
-  }
-
-  a:hover {
-    color: var(--primary-hover);
   }
 
   button,
@@ -209,5 +209,16 @@
   ::selection {
     background: var(--clay-300);
     color: var(--forest-900);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
   }
 }
