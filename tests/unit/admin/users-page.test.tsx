@@ -39,20 +39,24 @@ it("renders an active member and the UTC joined date in the table and mobile lis
   await renderPage([member]);
 
   const table = screen.getByRole("table");
-  for (const heading of ["Email", "Status", "Roles", "Joined"]) {
+  for (const heading of ["Email", "Status", "Roles", "Joined", "Actions"]) {
     expect(within(table).getByRole("columnheader", { name: heading }).getAttribute("scope")).toBe("col");
   }
   const row = within(table).getAllByRole("row")[1];
-  expect(within(row).getByText("member@example.com")).toBeTruthy();
-  expect(within(row).getByText("Active")).toBeTruthy();
-  expect(within(row).getByText("Member")).toBeTruthy();
-  expect(within(row).getByText("26 Sep 2026")).toBeTruthy();
+  const cells = within(row).getAllByRole("cell");
+  expect(within(cells[0]).getByText("member@example.com")).toBeTruthy();
+  expect(within(cells[1]).getByText("Active")).toBeTruthy();
+  expect(within(cells[2]).getByText("Member")).toBeTruthy();
+  expect(within(cells[3]).getByText("26 Sep 2026")).toBeTruthy();
+  expect(within(row).getByRole("button", { name: "Manage" })).toBeTruthy();
 
   const card = screen.getByRole("article");
-  expect(within(card).getByText("member@example.com")).toBeTruthy();
-  expect(within(card).getByText("Active")).toBeTruthy();
-  expect(within(card).getByText("Member")).toBeTruthy();
-  expect(within(card).getByText("26 Sep 2026")).toBeTruthy();
+  expect(within(card.querySelector("p") as HTMLElement).getByText("member@example.com")).toBeTruthy();
+  const details = card.querySelector("dl") as HTMLElement;
+  expect(within(details).getByText("Active")).toBeTruthy();
+  expect(within(details).getByText("Member")).toBeTruthy();
+  expect(within(details).getByText("26 Sep 2026")).toBeTruthy();
+  expect(within(card).getByRole("button", { name: "Manage" })).toBeTruthy();
   expect(document.body.textContent).not.toContain(member.id);
 });
 
@@ -60,7 +64,7 @@ it("renders every role in the returned order", async () => {
   await renderPage([{ ...member, roles: ["admin", "coach", "member"] }]);
 
   const row = within(screen.getByRole("table")).getAllByRole("row")[1];
-  expect(within(row).getAllByText(/^(Admin|Coach|Member)$/).map((node) => node.textContent)).toEqual([
+  expect(within(within(row).getAllByRole("cell")[2]).getAllByText(/^(Admin|Coach|Member)$/).map((node) => node.textContent)).toEqual([
     "Admin", "Coach", "Member",
   ]);
 });
@@ -73,10 +77,11 @@ it("renders suspended users and multiple rows", async () => {
 
   const rows = within(screen.getByRole("table")).getAllByRole("row");
   expect(rows).toHaveLength(3);
-  expect(within(rows[1]).getByText("member@example.com")).toBeTruthy();
-  expect(within(rows[2]).getByText("coach@example.com")).toBeTruthy();
-  expect(within(rows[2]).getByText("Suspended")).toBeTruthy();
-  expect(within(screen.getAllByRole("article")[1]).getByText("Suspended")).toBeTruthy();
+  expect(within(within(rows[1]).getAllByRole("cell")[0]).getByText("member@example.com")).toBeTruthy();
+  expect(within(within(rows[2]).getAllByRole("cell")[0]).getByText("coach@example.com")).toBeTruthy();
+  expect(within(within(rows[2]).getAllByRole("cell")[1]).getByText("Suspended")).toBeTruthy();
+  expect(within(screen.getAllByRole("article")[1].querySelector("dl") as HTMLElement).getByText("Suspended")).toBeTruthy();
+  expect(screen.getAllByRole("button", { name: "Manage" })).toHaveLength(4);
 });
 
 it("renders a simple empty state", async () => {
@@ -84,4 +89,5 @@ it("renders a simple empty state", async () => {
 
   expect(screen.getByText("No users found.")).toBeTruthy();
   expect(screen.queryByRole("table")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Manage" })).toBeNull();
 });

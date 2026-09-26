@@ -1,5 +1,7 @@
 import { listAdminUsers, type AdminUserListItem } from "@/lib/admin/users";
 
+import { UserManagementDialog } from "./user-management-dialog";
+
 const joinedDateFormatter = new Intl.DateTimeFormat("en-GB", {
   day: "2-digit",
   month: "short",
@@ -74,6 +76,9 @@ export default async function AdminUsersPage() {
                     <dt className="text-xs text-muted-foreground">Joined</dt>
                     <dd className="text-foreground">{formatJoinedDate(user.created_at)}</dd>
                   </dl>
+                  <div className="mt-5 border-t border-border pt-4">
+                    <UserManagementDialog user={user} />
+                  </div>
                 </article>
               ))}
             </div>
@@ -82,10 +87,11 @@ export default async function AdminUsersPage() {
               <table className="w-full table-fixed text-left font-sans text-sm">
                 <thead className="border-b border-border text-xs font-semibold text-muted-foreground">
                   <tr>
-                    <th scope="col" className="w-1/3 px-4 py-4 lg:px-5">Email</th>
-                    <th scope="col" className="w-1/6 px-4 py-4 lg:px-5">Status</th>
+                    <th scope="col" className="w-[30%] px-4 py-4 lg:px-5">Email</th>
+                    <th scope="col" className="w-[15%] px-4 py-4 lg:px-5">Status</th>
                     <th scope="col" className="px-4 py-4 lg:px-5">Roles</th>
-                    <th scope="col" className="w-1/5 px-4 py-4 lg:px-5">Joined</th>
+                    <th scope="col" className="w-[17%] px-4 py-4 lg:px-5">Joined</th>
+                    <th scope="col" className="w-[13%] px-4 py-4 lg:px-5">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
@@ -97,6 +103,7 @@ export default async function AdminUsersPage() {
                       <td className="px-4 py-5 text-muted-foreground lg:px-5">
                         {formatJoinedDate(user.created_at)}
                       </td>
+                      <td className="px-4 py-5 lg:px-5"><UserManagementDialog user={user} /></td>
                     </tr>
                   ))}
                 </tbody>

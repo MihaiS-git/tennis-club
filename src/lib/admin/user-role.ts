@@ -8,7 +8,7 @@ import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
 
 export const adminUserRoleSchema = z.object({
-  userId: z.string().uuid(),
+  userId: z.uuid(),
   role: z.enum(["admin", "coach", "member"] satisfies UserRole[]),
   operation: z.enum(["assign", "revoke"]),
 });
