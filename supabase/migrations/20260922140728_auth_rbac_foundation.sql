@@ -76,7 +76,7 @@ create table public.roles (
 
 -- Lookup codes exist only for referential integrity.
 insert into public.roles (code)
-values ('admin'), ('coach'), ('member');
+values ('admin'), ('coach');
 
 
 -- ============================================================
@@ -186,18 +186,7 @@ begin
     new.email
   );
 
-  -- Every normal registered account begins with the member role.
-  insert into public.user_roles (
-    user_id,
-    role_code,
-    assigned_by
-  )
-  values (
-    new.id,
-    'member',
-    null
-  );
-
+  -- Ordinary accounts need no elevated role assignments.
   return new;
 end;
 $$;
@@ -394,14 +383,12 @@ with check (
 
 
 -- Administrators can revoke additional roles, except their own admin assignment.
--- The member base role is mandatory.
 create policy user_roles_delete
 on public.user_roles
 for delete
 to authenticated
 using (
   public.has_role('admin')
-  and role_code <> 'member'
   and not (role_code = 'admin' and user_id = (select auth.uid()))
 );
 
@@ -444,3 +431,15 @@ to authenticated;
 grant select, insert, delete
 on table public.user_roles
 to authenticated;
+
+-- Ascending roles: none (0), coach (1), admin (2), coach + admin (3).
+-- Read-only projection for globally sorting users by additive role combination.
+-- Both users and role lookups retain the caller's existing RLS policies.
+create view public.user_role_sort_keys with (security_invoker = true) as
+select u.id, u.email, u.status, u.created_at, u.updated_at,
+  (select coalesce(sum(case ur.role_code when 'admin' then 2 when 'coach' then 1 else 0 end), 0)::integer
+   from public.user_roles ur where ur.user_id = u.id) as role_sort_key
+from public.users u;
+
+revoke all on public.user_role_sort_keys from anon, authenticated;
+grant select on public.user_role_sort_keys to authenticated;

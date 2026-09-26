@@ -8,12 +8,14 @@
   "packageManager": "npm@12.0.2",
   "scripts": {
     "dev": "next dev",
+    "seed:users": "node --env-file=.env.local scripts/seed-dev-users.ts",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "node --env-file=.env.local ./node_modules/vitest/vitest.mjs run tests",
+    "test": "npm run test:unit && npm run test:components && npm run test:integration",
     "test:unit": "vitest run tests/unit",
+    "test:components": "vitest run tests/components",
     "test:integration": "node --env-file=.env.local ./node_modules/vitest/vitest.mjs run tests/integration --no-file-parallelism",
     "test:e2e:auth": "node --env-file=.env.local ./node_modules/@playwright/test/cli.js test"
   },

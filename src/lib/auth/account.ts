@@ -6,7 +6,7 @@ import { decideAccountAccess } from "@/lib/auth/decisions";
 import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
 
-const roleSchema = z.enum(["admin", "coach", "member"]);
+const roleSchema = z.enum(["admin", "coach"]);
 
 export type UserRole = z.infer<typeof roleSchema>;
 
@@ -58,8 +58,7 @@ export async function readCurrentAccount(
   if (
     access === "structural-error" ||
     !profileResult.data.email ||
-    !parsedRoles.success ||
-    parsedRoles.data.length === 0
+    !parsedRoles.success
   ) {
     return { state: "load-error" };
   }

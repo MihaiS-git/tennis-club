@@ -36,7 +36,7 @@ it("shows Matches, account, and direct Sign out for authenticated users", async 
     state: "active",
     userId: "member-1",
     email: "member@example.com",
-    roles: ["member"],
+    roles: [],
   } satisfies CurrentAccount);
   render(await DesktopNavbar());
 
@@ -69,7 +69,7 @@ it("shows Users after Club for an active admin", async () => {
     state: "active",
     userId: "admin-1",
     email: "admin@example.com",
-    roles: ["member", "admin"],
+    roles: ["admin"],
   } satisfies CurrentAccount);
   render(await DesktopNavbar());
 

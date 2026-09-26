@@ -52,8 +52,7 @@ function provisioningCounts(userId: string): number[] {
       `select
         (select count(*) from auth.users where id = '${userId}'),
         (select count(*) from public.users where id = '${userId}'),
-        (select count(*) from public.user_roles where user_id = '${userId}' and role_code = 'member'),
-        (select count(*) from public.user_roles where user_id = '${userId}' and role_code <> 'member')`,
+        (select count(*) from public.user_roles where user_id = '${userId}')`,
     ],
     { encoding: "utf8" },
   );
@@ -109,7 +108,7 @@ async function confirmSignUp(
   assert.ok(exchange.data.session);
 }
 
-test("signup provisions the application profile and default member role", async () => {
+test("signup provisions the application profile and zero roles", async () => {
   const service = localFixtureClient();
   const createdIds: string[] = [];
   try {
@@ -132,8 +131,8 @@ test("signup provisions the application profile and default member role", async 
       null,
       "Signup must not authenticate before confirmation.",
     );
-    assert.deepStrictEqual(provisioningCounts(signUp.data.user.id), [1, 1, 1, 0],
-      "A successful signup must already have its matching profile and only the member role.");
+    assert.deepStrictEqual(provisioningCounts(signUp.data.user.id), [1, 1, 0],
+      "A successful signup must already have its matching profile and no role assignments.");
     const pendingSession = await client.auth.getSession();
     assert.strictEqual(pendingSession.error, null);
     assert.strictEqual(pendingSession.data.session, null);
@@ -157,7 +156,7 @@ test("signup provisions the application profile and default member role", async 
       .select("role_code")
       .eq("user_id", signUp.data.user.id);
     assert.strictEqual(roles.error, null);
-    assert.deepStrictEqual(roles.data, [{ role_code: "member" }]);
+    assert.deepStrictEqual(roles.data, []);
 
     await client.auth.signOut({ scope: "local" });
   } finally {

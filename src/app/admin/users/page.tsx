@@ -1,13 +1,17 @@
+import Link from "next/link";
+import { Pagination } from "@/components/pagination";
+import { ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
+import { adminUserFiltersSchema } from "@/lib/admin/users-filters";
 import { requireActiveAdmin } from "@/lib/admin/authorization";
 import { listAdminUsers, type AdminUserListItem } from "@/lib/admin/users";
 
 import { formatUserDate } from "./date-format";
 import { UserManagementDialog } from "./user-management-dialog";
+import { UsersToolbar } from "./users-toolbar";
 
 const roleLabels: Record<AdminUserListItem["roles"][number], string> = {
   admin: "Admin",
   coach: "Coach",
-  member: "Member",
 };
 
 function StatusBadge({ status }: { status: AdminUserListItem["status"] }) {
@@ -23,6 +27,8 @@ function StatusBadge({ status }: { status: AdminUserListItem["status"] }) {
 }
 
 function RoleChips({ roles }: { roles: AdminUserListItem["roles"] }) {
+  if (roles.length === 0) return <span className="text-muted-foreground">—</span>;
+  if (roles.length === 0) return <span className="text-muted-foreground">—</span>;
   return (
     <span className="flex flex-wrap gap-1.5">
       {roles.map((role) => (
@@ -34,9 +40,28 @@ function RoleChips({ roles }: { roles: AdminUserListItem["roles"] }) {
   );
 }
 
-export default async function AdminUsersPage() {
+export default async function AdminUsersPage({ searchParams }: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const actor = await requireActiveAdmin();
-  const users = await listAdminUsers();
+  const params = await searchParams;
+  const filters = adminUserFiltersSchema.parse({ search: params.q, status: params.status, role: params.role, page: params.page, sort: params.sort, dir: params.dir });
+  const { users, page, totalPages } = await listAdminUsers(filters);
+  const hasFilters = Boolean(filters.search || filters.status || filters.role);
+  function filterQuery() {
+    const query = new URLSearchParams();
+    if (filters.search) query.set("q", filters.search);
+    if (filters.status) query.set("status", filters.status);
+    if (filters.role) query.set("role", filters.role);
+    query.set("sort", filters.sort);
+    query.set("dir", filters.dir);
+    return query;
+  }
+  function pageHref(nextPage: number) {
+    const query = filterQuery();
+    query.set("page", String(nextPage));
+    return `/admin/users?${query}`;
+  }
 
   return (
     <main className="flex-1 bg-background">
@@ -46,13 +71,15 @@ export default async function AdminUsersPage() {
             Users
           </h1>
           <p className="mt-3 max-w-2xl text-base text-muted-foreground">
-            Manage club members, coaches and administrators.
+            Manage accounts, coaches and administrators.
           </p>
         </header>
 
+        <UsersToolbar />
+
         {users.length === 0 ? (
           <div className="rounded-card border border-border bg-surface px-6 py-8 text-muted-foreground">
-            No users found.
+            {hasFilters ? "No users match these filters." : "No users found."}
           </div>
         ) : (
           <>
@@ -79,10 +106,26 @@ export default async function AdminUsersPage() {
               <table className="w-full table-fixed text-left font-sans text-sm">
                 <thead className="border-b border-border text-xs font-semibold text-muted-foreground">
                   <tr>
-                    <th scope="col" className="w-[30%] px-4 py-4 lg:px-5">Email</th>
-                    <th scope="col" className="w-[15%] px-4 py-4 lg:px-5">Status</th>
-                    <th scope="col" className="px-4 py-4 lg:px-5">Roles</th>
-                    <th scope="col" className="w-[17%] px-4 py-4 lg:px-5">Joined</th>
+                    {([
+                      ["email", "Email", "w-[30%]"],
+                      ["status", "Status", "w-[15%]"],
+                      ["roles", "Roles", ""],
+                      ["joined", "Joined", "w-[17%]"],
+                    ] as const).map(([column, label, width]) => {
+                      const active = filters.sort === column;
+                      const dir = active ? (filters.dir === "asc" ? "desc" : "asc") : column === "joined" ? "desc" : "asc";
+                      const query = filterQuery();
+                      query.set("sort", column);
+                      query.set("dir", dir);
+                      const Icon = active ? filters.dir === "asc" ? ArrowUp : ArrowDown : ArrowUpDown;
+                      return (
+                        <th key={column} scope="col" aria-sort={active ? filters.dir === "asc" ? "ascending" : "descending" : "none"} className={`${width} px-4 py-4 lg:px-5`}>
+                          <Link href={`/admin/users?${query}`} scroll={false} className="inline-flex items-center gap-1.5 rounded-control hover:text-primary focus-visible:outline-2 focus-visible:outline-primary">
+                            {label}<Icon aria-hidden="true" size={14} />
+                          </Link>
+                        </th>
+                      );
+                    })}
                     <th scope="col" className="w-[13%] px-4 py-4 lg:px-5">Actions</th>
                   </tr>
                 </thead>
@@ -102,6 +145,11 @@ export default async function AdminUsersPage() {
               </table>
             </div>
           </>
+        )}
+        {totalPages > 1 && (
+          <div className="mt-6">
+            <Pagination currentPage={page} totalPages={totalPages} buildHref={pageHref} />
+          </div>
         )}
       </div>
     </main>

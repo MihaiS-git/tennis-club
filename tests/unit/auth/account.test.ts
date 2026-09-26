@@ -42,7 +42,7 @@ describe("account loading", () => {
     const result = await readCurrentAccount(
       accountClient(
         { data: { email: "member@example.com", status: "active" }, error: null },
-        { data: [{ role_code: "member" }], error: null },
+        { data: [], error: null },
       ),
     );
 
@@ -50,7 +50,7 @@ describe("account loading", () => {
       state: "active",
       userId: "member-1",
       email: "member@example.com",
-      roles: ["member"],
+      roles: [],
     });
   });
 
@@ -69,7 +69,7 @@ describe("account loading", () => {
     const result = await readCurrentAccount(
       accountClient(
         { data: null, error: { code: "42501" } },
-        { data: [{ role_code: "member" }], error: null },
+        { data: [], error: null },
       ),
     );
 
@@ -86,4 +86,11 @@ describe("account loading", () => {
 
     expect(result).toStrictEqual({ state: "load-error" });
   });
+});
+
+it("rejects the removed member role at the account boundary", async () => {
+  expect(await readCurrentAccount(accountClient(
+    { data: { email: "user@example.com", status: "active" }, error: null },
+    { data: [{ role_code: "member" }], error: null },
+  ))).toEqual({ state: "load-error" });
 });

@@ -111,7 +111,7 @@ it("rejects an invalid role operation before mutation", async () => {
   expect(revalidatePath).not.toHaveBeenCalled();
 });
 
-it.each(["not-found", "final-active-admin", "self-management", "member-role-required"] as const)(
+it.each(["not-found", "final-active-admin", "self-management"] as const)(
   "preserves the role %s failure without revalidation",
   async (reason) => {
     const result = { ok: false, reason };
@@ -127,5 +127,13 @@ it("propagates unexpected role errors without revalidation", async () => {
   updateAdminUserRole.mockRejectedValue(error);
 
   await expect(updateUserRoleAction(roleInput)).rejects.toBe(error);
+  expect(revalidatePath).not.toHaveBeenCalled();
+});
+
+it("rejects member as an untrusted role without mutation", async () => {
+  // @ts-expect-error Exercise removed role validation at the Server Action boundary.
+  await expect(updateUserRoleAction({ userId, role: "member", operation: "assign" }))
+    .resolves.toEqual({ ok: false, reason: "invalid-input" });
+  expect(updateAdminUserRole).not.toHaveBeenCalled();
   expect(revalidatePath).not.toHaveBeenCalled();
 });

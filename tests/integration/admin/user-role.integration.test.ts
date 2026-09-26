@@ -104,17 +104,6 @@ test("admin role changes are idempotent, authorized, and preserve the final acti
     expect(await hasRole(member.id, "admin")).toBe(0);
 
 
-    for (const userId of [admin.id, member.id]) {
-      expect(await updateAdminUserRole({ userId, role: "member", operation: "revoke" }, adminSession))
-        .toEqual({ ok: false, reason: "member-role-required" });
-      expect(await hasRole(userId, "member")).toBe(1);
-    }
-    // Crafted direct requests must also respect the authenticated RLS boundary.
-    const memberDelete = await adminSession.from("user_roles").delete()
-      .eq("user_id", member.id).eq("role_code", "member").select("role_code");
-    expect(memberDelete.error).toBeNull();
-    expect(memberDelete.data).toEqual([]);
-    expect(await hasRole(member.id, "member")).toBe(1);
 
 
     for (const operation of ["assign", "revoke"] as const) {
@@ -125,41 +114,41 @@ test("admin role changes are idempotent, authorized, and preserve the final acti
       expect(await hasRole(admin.id, "admin")).toBe(1);
     }
     expect(await updateAdminUserRole({ userId: admin.id, role: "coach", operation: "assign" }, adminSession))
-      .toEqual({ ok: true, user: { id: admin.id, roles: ["admin", "coach", "member"] } });
+      .toEqual({ ok: true, user: { id: admin.id, roles: ["admin", "coach"] } });
     expect(await hasRole(admin.id, "coach")).toBe(1);
     expect(await updateAdminUserRole({ userId: admin.id, role: "coach", operation: "revoke" }, adminSession))
-      .toEqual({ ok: true, user: { id: admin.id, roles: ["admin", "member"] } });
+      .toEqual({ ok: true, user: { id: admin.id, roles: ["admin"] } });
     expect(await hasRole(admin.id, "coach")).toBe(0);
 
     expect(await updateAdminUserRole({ userId: member.id, role: "coach", operation: "assign" }, adminSession))
-      .toEqual({ ok: true, user: { id: member.id, roles: ["coach", "member"] } });
+      .toEqual({ ok: true, user: { id: member.id, roles: ["coach"] } });
     expect(await hasRole(member.id, "coach")).toBe(1);
 
     expect(await updateAdminUserRole({ userId: member.id, role: "coach", operation: "assign" }, adminSession))
-      .toEqual({ ok: true, user: { id: member.id, roles: ["coach", "member"] } });
+      .toEqual({ ok: true, user: { id: member.id, roles: ["coach"] } });
     expect(await hasRole(member.id, "coach")).toBe(1);
 
     expect(await updateAdminUserRole({ userId: member.id, role: "coach", operation: "revoke" }, adminSession))
-      .toEqual({ ok: true, user: { id: member.id, roles: ["member"] } });
+      .toEqual({ ok: true, user: { id: member.id, roles: [] } });
     expect(await hasRole(member.id, "coach")).toBe(0);
 
     expect(await updateAdminUserRole({ userId: member.id, role: "coach", operation: "revoke" }, adminSession))
-      .toEqual({ ok: true, user: { id: member.id, roles: ["member"] } });
+      .toEqual({ ok: true, user: { id: member.id, roles: [] } });
 
     expect(await updateAdminUserRole({ userId: member.id, role: "admin", operation: "assign" }, adminSession))
-      .toEqual({ ok: true, user: { id: member.id, roles: ["admin", "member"] } });
+      .toEqual({ ok: true, user: { id: member.id, roles: ["admin"] } });
     expect(await hasRole(member.id, "admin")).toBe(1);
 
     expect(await updateAdminUserRole({ userId: member.id, role: "admin", operation: "revoke" }, adminSession))
-      .toEqual({ ok: true, user: { id: member.id, roles: ["member"] } });
+      .toEqual({ ok: true, user: { id: member.id, roles: [] } });
     expect(await hasRole(member.id, "admin")).toBe(0);
 
     expect(await updateAdminUserRole({ userId: randomUUID(), role: "coach", operation: "assign" }, adminSession))
       .toEqual({ ok: false, reason: "not-found" });
 
-    await expect(updateAdminUserRole({ userId: admin.id, role: "member", operation: "revoke" }, memberSession))
+    await expect(updateAdminUserRole({ userId: admin.id, role: "admin", operation: "revoke" }, memberSession))
       .rejects.toThrow("NEXT_HTTP_ERROR_FALLBACK;404");
-    expect(await hasRole(admin.id, "member")).toBe(1);
+    expect(await hasRole(admin.id, "admin")).toBe(1);
 
     await expect(updateAdminUserRole({ userId: "invalid-id", role: "coach", operation: "assign" }, adminSession))
       .rejects.toBeInstanceOf(z.ZodError);

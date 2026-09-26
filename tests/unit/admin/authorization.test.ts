@@ -31,9 +31,9 @@ it("returns an active admin account", async () => {
   expect(redirect).not.toHaveBeenCalled();
 });
 
-it.each(["member", "coach"] as const)("rejects an active %s account", async (role) => {
+it.each([{ roles: [] }, { roles: ["coach"] }] satisfies { roles: ("coach")[] }[])("rejects an active %s account", async ({ roles }) => {
   readCurrentAccount.mockResolvedValue({
-    state: "active", userId: `${role}-1`, email: `${role}@example.com`, roles: [role],
+    state: "active", userId: "user-1", email: "user@example.com", roles: [...roles],
   } satisfies CurrentAccount);
 
   await expect(requireActiveAdmin(client)).rejects.toThrow("notFound");

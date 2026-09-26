@@ -39,17 +39,16 @@ The application-owned account record is:
 public.users
 ```
 
-Database provisioning creates the application user and default member role for email-based Auth users and synchronizes relevant Auth identity changes.
+Database provisioning creates the application user with no role assignments for email-based Auth users and synchronizes relevant Auth identity changes.
 
 Fixed roles:
 
 ```text
 admin
 coach
-member
 ```
 
-A user may hold multiple roles.
+Both elevated roles are optional. Normal authenticated accounts have no roles; ordinary access requires a valid active application account. Future club membership is a separate business concept.
 
 ## Role and status administration
 
@@ -57,7 +56,7 @@ Ordinary authenticated users cannot assign or revoke roles or change account sta
 
 A suspended user may retain role rows but must not receive active admin authorization.
 
-There is no implemented final-administrator protection or role/status administration RPC in the current migration. Initial administrator assignment requires a trusted database operation.
+Database triggers protect the final active administrator against suspension or admin-role revocation. RLS prevents self-status changes and self-admin assignment/revocation. Initial administrator assignment requires a trusted database operation.
 
 ## RLS expectations
 

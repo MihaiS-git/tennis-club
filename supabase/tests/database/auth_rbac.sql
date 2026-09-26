@@ -3,39 +3,29 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set search_path = extensions, public;
 
-select plan(72);
+select plan(76);
 
 insert into auth.users (id, email, aud, role)
 values
-  ('a13f15e2-7b5d-4b41-8d4b-4f2135081001', 'pgtap-member-a@example.test', 'authenticated', 'authenticated'),
-  ('a13f15e2-7b5d-4b41-8d4b-4f2135081002', 'pgtap-member-b@example.test', 'authenticated', 'authenticated');
+  ('a13f15e2-7b5d-4b41-8d4b-4f2135081001', 'pgtap-user-a@example.test', 'authenticated', 'authenticated'),
+  ('a13f15e2-7b5d-4b41-8d4b-4f2135081002', 'pgtap-user-b@example.test', 'authenticated', 'authenticated');
 
 select is(
-  (select count(*) from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001' and email = 'pgtap-member-a@example.test'),
+  (select count(*) from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001' and email = 'pgtap-user-a@example.test'),
   1::bigint,
   'auth user creation provisions a matching application profile'
 );
-select is(
-  (select count(*) from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001' and role_code = 'member'),
-  1::bigint,
-  'auth user creation assigns the member role'
-);
+select is((select status from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 'active'::public.user_status, 'zero-role account is active');
 select is(
   (select count(*) from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'),
-  1::bigint,
-  'new accounts have no additional roles'
+  0::bigint,
+  'new accounts have zero role assignments'
 );
 select is(
   (select count(*) from auth.users a left join public.users u on u.id = a.id
    where a.id in ('a13f15e2-7b5d-4b41-8d4b-4f2135081001', 'a13f15e2-7b5d-4b41-8d4b-4f2135081002') and u.id is null),
   0::bigint,
   'successful auth inserts leave no fixture user without a profile'
-);
-select is(
-  (select count(*) from auth.users a left join public.user_roles ur on ur.user_id = a.id and ur.role_code = 'member'
-   where a.id in ('a13f15e2-7b5d-4b41-8d4b-4f2135081001', 'a13f15e2-7b5d-4b41-8d4b-4f2135081002') and ur.user_id is null),
-  0::bigint,
-  'successful auth inserts leave no fixture user without the default role'
 );
 
 
@@ -45,18 +35,28 @@ select is(
   array['code']::text[], 'roles contains only code'
 );
 select is((select array_agg(code order by code) from public.roles),
-  array['admin', 'coach', 'member']::text[], 'only current role codes are seeded');
+  array['admin', 'coach']::text[], 'only current role codes are seeded');
 select throws_ok($$insert into public.roles (code) values ('Invalid')$$,
   '23514', null, 'role codes retain format validation');
 select throws_ok($$delete from auth.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'$$,
   '23503', null, 'Auth deletion is restricted by the application identity FK');
 select is((select count(*) from auth.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 1::bigint, 'Auth identity survives rejected deletion');
 select is((select count(*) from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 1::bigint, 'application identity survives rejected Auth deletion');
-select is((select count(*) from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001' and role_code = 'member'), 1::bigint, 'roles survive rejected Auth deletion');
+
+select has_view('public', 'user_role_sort_keys', 'role sort projection exists');
+select ok((select reloptions @> array['security_invoker=true'] from pg_class where oid = 'public.user_role_sort_keys'::regclass), 'view uses caller RLS');
+select is((select role_sort_key from public.user_role_sort_keys where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 0, 'zero-role key is zero');
+insert into public.user_roles (user_id, role_code) values ('a13f15e2-7b5d-4b41-8d4b-4f2135081001', 'coach');
+select is((select role_sort_key from public.user_role_sort_keys where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 1, 'coach key is one');
+insert into public.user_roles (user_id, role_code) values ('a13f15e2-7b5d-4b41-8d4b-4f2135081001', 'admin');
+select is((select role_sort_key from public.user_role_sort_keys where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 3, 'coach admin key is three');
+insert into public.user_roles (user_id, role_code) values ('a13f15e2-7b5d-4b41-8d4b-4f2135081002', 'admin');
+delete from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001' and role_code in ('coach', 'admin');
+select is((select role_sort_key from public.user_role_sort_keys where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002'), 2, 'admin key is two');
 
 -- Establish an active administrator before exercising status transitions on a pristine DB.
 insert into public.user_roles (user_id, role_code)
-values ('a13f15e2-7b5d-4b41-8d4b-4f2135081002', 'admin');
+values ('a13f15e2-7b5d-4b41-8d4b-4f2135081002', 'admin') on conflict do nothing;
 
 -- Use an old creation time so accidental overwrites with transaction now() are visible.
 update public.users set created_at = '2000-01-01 00:00:00+00'::timestamptz where id in ('a13f15e2-7b5d-4b41-8d4b-4f2135081001', 'a13f15e2-7b5d-4b41-8d4b-4f2135081002');
@@ -86,30 +86,34 @@ alter table public.users enable trigger users_set_updated_at;
 update public.user_roles set user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002' where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001' and role_code = 'coach';
 select ok((select updated_at > '2000-01-01 00:00:00+00'::timestamptz from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 'role reassignment touches old user');
 select ok((select updated_at > '2000-01-01 00:00:00+00'::timestamptz from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002'), 'role reassignment touches new user');
-delete from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002' and role_code = 'member';
+delete from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002' and role_code = 'coach';
+insert into public.user_roles (user_id, role_code) values ('a13f15e2-7b5d-4b41-8d4b-4f2135081001', 'coach');
+-- Trusted fixture setup bypasses only the timestamp trigger, then restores it.
+alter table public.users disable trigger users_set_updated_at;
+update public.users set updated_at = '2000-01-01 00:00:00+00'::timestamptz where id in ('a13f15e2-7b5d-4b41-8d4b-4f2135081001');
+alter table public.users enable trigger users_set_updated_at;
+update public.user_roles set role_code = 'admin' where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001' and role_code = 'coach';
+select ok((select updated_at > '2000-01-01 00:00:00+00'::timestamptz from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 'role code update touches account timestamp');
 -- Trusted fixture setup bypasses only the timestamp trigger, then restores it.
 alter table public.users disable trigger users_set_updated_at;
 update public.users set updated_at = '2000-01-01 00:00:00+00'::timestamptz where id in ('a13f15e2-7b5d-4b41-8d4b-4f2135081002');
 alter table public.users enable trigger users_set_updated_at;
-update public.user_roles set role_code = 'member' where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002' and role_code = 'coach';
-select ok((select updated_at > '2000-01-01 00:00:00+00'::timestamptz from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002'), 'role code update touches account timestamp');
--- Trusted fixture setup bypasses only the timestamp trigger, then restores it.
-alter table public.users disable trigger users_set_updated_at;
-update public.users set updated_at = '2000-01-01 00:00:00+00'::timestamptz where id in ('a13f15e2-7b5d-4b41-8d4b-4f2135081002');
-alter table public.users enable trigger users_set_updated_at;
-update public.user_roles set assigned_at = '2000-01-01 00:00:00+00'::timestamptz where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002' and role_code = 'member';
+update public.user_roles set assigned_at = '2000-01-01 00:00:00+00'::timestamptz where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002' and role_code = 'admin';
 select is((select updated_at from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002'), '2000-01-01 00:00:00+00'::timestamptz, 'assignment audit metadata alone preserves account timestamp');
 -- Trusted fixture setup bypasses only the timestamp trigger, then restores it.
 alter table public.users disable trigger users_set_updated_at;
 update public.users set updated_at = '2000-01-01 00:00:00+00'::timestamptz where id in ('a13f15e2-7b5d-4b41-8d4b-4f2135081001');
 alter table public.users enable trigger users_set_updated_at;
-update auth.users set email = 'pgtap-member-a-updated@example.test' where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001';
+update auth.users set email = 'pgtap-user-a-updated@example.test' where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001';
 select ok((select updated_at > '2000-01-01 00:00:00+00'::timestamptz from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 'Auth email synchronization touches account timestamp');
-select is((select email from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 'pgtap-member-a-updated@example.test', 'Auth email remains authoritative');
+select is((select email from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 'pgtap-user-a-updated@example.test', 'Auth email remains authoritative');
 select is((select count(*) from public.users where id in ('a13f15e2-7b5d-4b41-8d4b-4f2135081001', 'a13f15e2-7b5d-4b41-8d4b-4f2135081002') and created_at = '2000-01-01 00:00:00+00'::timestamptz), 2::bigint, 'account and role changes preserve creation timestamps');
 update public.users set status = 'active' where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001';
 
+delete from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001';
+
 set local role anon;
+select throws_ok($$select * from public.user_role_sort_keys$$, '42501', null, 'anonymous cannot read role sort view');
 select throws_ok($$select count(*) from public.users$$, '42501', null, 'anonymous users cannot read application profiles');
 select throws_ok($$select count(*) from public.user_roles$$, '42501', null, 'anonymous users cannot read role assignments');
 select throws_ok($$select count(*) from public.roles$$, '42501', null, 'anonymous users cannot read role definitions');
@@ -119,28 +123,27 @@ set local role authenticated;
 select set_config('request.jwt.claim.sub', 'a13f15e2-7b5d-4b41-8d4b-4f2135081001', true);
 select set_config('request.jwt.claim.role', 'authenticated', true);
 
-select is((select count(*) from public.users where id = auth.uid()), 1::bigint, 'member can read own profile');
-select is((select count(*) from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002'), 0::bigint, 'member cannot read another profile');
-select is((select count(*) from public.user_roles where user_id = auth.uid() and role_code = 'member'), 1::bigint, 'member can read own role');
-select is((select count(*) from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002'), 0::bigint, 'member cannot read another user role');
+select is((select count(*) from public.user_role_sort_keys where id <> auth.uid()), 0::bigint, 'normal user cannot discover other users via view');
+select is((select count(*) from public.users where id = auth.uid()), 1::bigint, 'normal user can read own profile');
+select is((select count(*) from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002'), 0::bigint, 'normal user cannot read another profile');
+select is((select count(*) from public.user_roles where user_id = auth.uid() ), 0::bigint, 'normal user can read its empty roles');
+select is((select count(*) from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002'), 0::bigint, 'normal user cannot read another user role');
 select throws_ok($$select count(*) from public.roles$$, '42501', null, 'authenticated users cannot read the internal role lookup');
-select is(public.has_role('admin'), false, 'member is not an administrator');
+select is(public.has_role('admin'), false, 'normal user is not an administrator');
 
 select throws_ok(
   $$insert into public.user_roles (user_id, role_code) values ('a13f15e2-7b5d-4b41-8d4b-4f2135081001', 'admin')$$,
-  '42501', null, 'member cannot self-assign admin'
+  '42501', null, 'normal user cannot self-assign admin'
 );
 select throws_ok(
   $$insert into public.user_roles (user_id, role_code) values ('a13f15e2-7b5d-4b41-8d4b-4f2135081001', 'coach')$$,
-  '42501', null, 'member cannot self-assign coach'
+  '42501', null, 'normal user cannot self-assign coach'
 );
-delete from public.user_roles where user_id = auth.uid() and role_code = 'member';
-select is((select count(*) from public.user_roles where user_id = auth.uid() and role_code = 'member'), 1::bigint, 'member cannot revoke own role');
 update public.users set status = 'suspended' where id = auth.uid();
-select is((select status from public.users where id = auth.uid()), 'active'::public.user_status, 'member cannot change own status');
+select is((select status from public.users where id = auth.uid()), 'active'::public.user_status, 'normal user cannot change own status');
 select throws_ok(
   $$insert into public.roles (code) values ('owner')$$,
-  '42501', null, 'member cannot create a privileged role definition'
+  '42501', null, 'normal user cannot create a privileged role definition'
 );
 
 reset role;
@@ -150,6 +153,7 @@ on conflict (user_id, role_code) do nothing;
 
 set local role authenticated;
 select set_config('request.jwt.claim.sub', 'a13f15e2-7b5d-4b41-8d4b-4f2135081002', true);
+select is((select count(*) from public.user_role_sort_keys where id in ('a13f15e2-7b5d-4b41-8d4b-4f2135081001', 'a13f15e2-7b5d-4b41-8d4b-4f2135081002')), 2::bigint, 'active admin sees both fixture users via view');
 
 select is(public.has_role('admin'), true, 'active administrator has admin role');
 -- Another active admin exists, isolating RLS from the final-admin invariant.
@@ -167,17 +171,13 @@ delete from public.user_roles where user_id = auth.uid() and role_code = 'coach'
 select is((select count(*) from public.user_roles where user_id = auth.uid() and role_code = 'coach'), 0::bigint, 'admin can revoke own coach role');
 delete from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001' and role_code = 'admin';
 
-delete from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001' and role_code = 'member';
-select is((select count(*) from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001' and role_code = 'member'), 1::bigint, 'admin cannot delete another account mandatory member role');
-delete from public.user_roles where user_id = auth.uid() and role_code = 'member';
-select is((select count(*) from public.user_roles where user_id = auth.uid() and role_code = 'member'), 1::bigint, 'admin cannot delete own mandatory member role');
 insert into public.user_roles (user_id, role_code) values ('a13f15e2-7b5d-4b41-8d4b-4f2135081001', 'admin');
 delete from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001' and role_code = 'admin';
 select is((select count(*) from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001' and role_code = 'admin'), 0::bigint, 'authenticated admin can revoke another admin while an active admin remains');
 
 
 select is((select count(*) from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 1::bigint, 'admin can read another profile');
-select is((select count(*) from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 1::bigint, 'admin can read another user role');
+select is((select count(*) from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 0::bigint, 'admin can read another zero-role account');
 reset role;
 -- Trusted fixture setup bypasses only the timestamp trigger, then restores it.
 alter table public.users disable trigger users_set_updated_at;
@@ -205,8 +205,8 @@ update public.users set status = 'suspended' where id = 'a13f15e2-7b5d-4b41-8d4b
 select is((select status from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 'suspended'::public.user_status, 'admin can suspend another account');
 
 select set_config('request.jwt.claim.sub', 'a13f15e2-7b5d-4b41-8d4b-4f2135081001', true);
-select is(public.has_role('member'), false, 'suspended member has no effective role');
-select is((select count(*) from public.user_roles where user_id = auth.uid() and role_code = 'member'), 1::bigint, 'suspension retains the mandatory member assignment');
+select is(public.has_role('coach'), false, 'suspended user has no effective role');
+select is((select count(*) from public.user_roles where user_id = auth.uid() ), 0::bigint, 'suspended account may have zero assignments');
 
 reset role;
 
@@ -287,7 +287,7 @@ select is(
   'suspended'::public.user_status,
   'can suspend an administrator when another active administrator remains'
 );
-select is((select array_agg(role_code order by role_code) from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002'), array['admin', 'member']::text[], 'suspended administrator retains all assigned roles');
+select is((select array_agg(role_code order by role_code) from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002'), array['admin']::text[], 'suspended administrator retains all assigned roles');
 
 update public.users set status = 'active'
 where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002';

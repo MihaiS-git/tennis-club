@@ -50,7 +50,7 @@ it("redirects an unauthenticated account before password verification or update"
 });
 
 it.each([
-  { state: "suspended", userId: "member-1", email: "member@example.com", roles: ["member"] },
+  { state: "suspended", userId: "member-1", email: "member@example.com", roles: [] },
   { state: "missing-profile" },
   { state: "load-error" },
 ] satisfies CurrentAccount[])(
@@ -87,7 +87,7 @@ it.each([
 ])("maps Supabase weak-password reasons %j on change", async (reasons, message) => {
   const report = vi.spyOn(logger, "warn").mockImplementation(() => {});
   readCurrentAccount.mockResolvedValue({
-    state: "active", userId: "member-1", email: "member@example.com", roles: ["member"],
+    state: "active", userId: "member-1", email: "member@example.com", roles: [],
   } satisfies CurrentAccount);
   signInWithPassword.mockResolvedValue({ data: { user: { id: "member-1" } }, error: null });
   updateUser.mockResolvedValue({ error: { code: "weak_password", reasons } });

@@ -9,7 +9,7 @@ import { createClient } from "@/lib/supabase/server";
 
 export const adminUserRoleSchema = z.object({
   userId: z.uuid(),
-  role: z.enum(["admin", "coach", "member"] satisfies UserRole[]),
+  role: z.enum(["admin", "coach"] satisfies UserRole[]),
   operation: z.enum(["assign", "revoke"]),
 });
 
@@ -22,7 +22,7 @@ export type AdminUserRoleSuccess = {
 
 export type AdminUserRoleFailure = {
   ok: false;
-  reason: "not-found" | "final-active-admin" | "self-management" | "member-role-required";
+  reason: "not-found" | "final-active-admin" | "self-management";
 };
 
 export type AdminUserRoleResult = AdminUserRoleSuccess | AdminUserRoleFailure;
@@ -42,10 +42,6 @@ export async function updateAdminUserRole(
 
   if (userId.toLowerCase() === actor.userId && role === "admin") {
     return { ok: false, reason: "self-management" };
-  }
-
-  if (role === "member" && operation === "revoke") {
-    return { ok: false, reason: "member-role-required" };
   }
 
   const target = await client.from("users").select("id").eq("id", userId).maybeSingle();

@@ -18,11 +18,9 @@ type ManagedUser = {
 const roleLabels: Record<UserRole, string> = {
   admin: "Admin",
   coach: "Coach",
-  member: "Member",
 };
 
 const failureMessages = {
-  "member-role-required": "The member role is required for every account.",
   "invalid-input": "Invalid user update.",
   "not-found": "This user no longer exists.",
   "final-active-admin": "At least one active administrator must remain.",
@@ -180,7 +178,7 @@ export function UserManagementDialog({ user, currentAdminId }: { user: ManagedUs
           <section className="pt-5" aria-labelledby={rolesId}>
             <h3 id={rolesId} className="font-heading text-base font-semibold">Roles</h3>
             <ul className="mt-3 divide-y divide-border">
-              {(["admin", "coach", "member"] as const).map((role) => {
+              {(["admin", "coach"] as const).map((role) => {
                 const assigned = roles.includes(role);
                 const policyDisabled = isOwnAccount && role === "admin";
                 return (
@@ -188,10 +186,10 @@ export function UserManagementDialog({ user, currentAdminId }: { user: ManagedUs
                     <div className="min-w-0">
                       <span className="font-medium text-primary">{roleLabels[role]}</span>
                       <span className="ml-2 text-xs text-muted-foreground">
-                        {role === "member" ? "Required" : assigned ? "Assigned" : "Not assigned"}
+                        {assigned ? "Assigned" : "Not assigned"}
                       </span>
                     </div>
-                    {role !== "member" && <button
+                    <button
                       type="button"
                       disabled={pending || policyDisabled}
                       aria-busy={pending && !policyDisabled}
@@ -200,7 +198,7 @@ export function UserManagementDialog({ user, currentAdminId }: { user: ManagedUs
                       className="min-w-18 rounded-control border border-border-strong bg-surface px-3 py-2 text-sm font-semibold text-primary enabled:hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-60"
                     >
                       {assigned ? "Remove" : "Assign"}
-                    </button>}
+                    </button>
                   </li>
                 );
               })}

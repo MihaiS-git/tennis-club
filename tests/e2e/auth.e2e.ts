@@ -74,7 +74,7 @@ async function findEmailLink(
   return link;
 }
 
-test("signup requires email confirmation before the member account is accessible", async ({ page, request }) => {
+test("signup requires email confirmation before the account is accessible", async ({ page, request }) => {
   const email = testEmail("signup");
   const password = "Signup-password-123";
 
@@ -97,7 +97,7 @@ test("signup requires email confirmation before the member account is accessible
   await expect(page).toHaveURL(/\/account$/);
   await expect(page.getByRole("heading", { name: "Your account" })).toBeVisible();
   await expect(page.getByText(email, { exact: true })).toBeVisible();
-  await expect(page.getByRole("list", { name: "Assigned roles" }).getByText("member")).toBeVisible();
+  await expect(page.getByRole("list", { name: "Assigned roles" }).getByRole("listitem")).toHaveCount(0);
 });
 
 test("recovery email permits password reset and sign-in with the new password", async ({ page, request }) => {

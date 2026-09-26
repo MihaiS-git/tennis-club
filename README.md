@@ -154,9 +154,9 @@ Coaches can:
 - view assigned coaching sessions;
 - access member information required for those sessions.
 
-### Member
+### Normal user
 
-Members can:
+Every authenticated application account is a normal user and needs no RBAC role. Active users can:
 
 - manage their profile;
 - book courts;
@@ -170,7 +170,7 @@ Members can:
 - record eligible match results;
 - view rankings and match history.
 
-A user may have more than one role.
+The RBAC roles are `admin` and `coach`; both are optional and may be combined. Normal users have `roles = []`. Future club membership/subscription is a separate business concept.
 
 ---
 
@@ -959,7 +959,21 @@ Court 2
 
 ---
 
+## Local development users
+
+Run `npm run seed:users` against the existing local Supabase stack to add 60 confirmed Auth accounts, `dev-user-001@example.test` through `dev-user-060@example.test`. Their shared development password is `Local-Tennis-Dev-2026!`. Sign in as your existing local administrator to inspect three pages of users, or use `dev-user-010@example.test` as a seeded administrator.
+
+The script uses Node 24's native TypeScript execution and the local Auth Admin API; normal provisioning creates application accounts with zero role assignments. It accepts only local HTTP loopback origins on port 54321 and rejects `NODE_ENV=production`; redirects are disabled. It obtains the local service-role credential from `LOCAL_SUPABASE_SERVICE_ROLE_KEY`, or from `supabase status -o json`. Credentials are never printed.
+
+Fixtures contain 48 users with no elevated roles, 6 Coach, 3 Admin, and 3 Coach + Admin. Every seventh user is suspended (8 suspended, 52 active); all 6 seeded administrators are active. Creation timestamps remain natural. Search `dev-user-` to isolate these fixtures, or `dev-user-01` for users 010–019.
+
+Reruns skip existing Auth accounts without changing their password, status, roles, or timestamps. Existing users, including the integration admin anchor, remain untouched. Verification reports an error if an existing fixture differs from its expected roles/status instead of repairing it. An interrupted run can leave a partially configured fixture that needs manual inspection. This command never resets Supabase, runs migrations, or seeds future player/profile data. No cleanup command is provided.
+
 ## Admin UI
+
+`/admin/users` uses server-side queries with RLS-enforced access. Search, filtering,
+sorting, and pagination are URL-driven and applied before pagination. Interactive
+filter controls update the URL without introducing direct browser-to-Supabase access.
 
 The admin interface should focus on operational workflows rather than only CRUD tables.
 
@@ -1193,12 +1207,14 @@ The goal is to prove the difficult architectural constraints before adding secon
 
 ## Local validation
 
+`npm test` runs unit, component, and local Supabase integration suites sequentially in separate Vitest processes. Run them individually with `npm run test:unit`, `npm run test:components`, or `npm run test:integration`. Integration files are serialized because final-admin tests temporarily modify shared administrator statuses. Start local Supabase beforehand; the test command does not reset or restart it. Playwright E2E remains separate. See [auth testing](docs/testing.md).
+
 Before expanding the platform, prove the following cases locally:
 
 - a member cannot access another member's private information;
 - browser payload manipulation cannot change authoritative prices;
 - browser payload manipulation cannot grant roles or discounts;
-- admin, coach, and member RLS policies behave correctly;
+- admin, coach, and normal-user RLS policies behave correctly;
 - two concurrent users cannot successfully reserve the same court/time;
 - two overlapping bookings cannot use the same coach;
 - abandoned checkout releases its booking hold;

@@ -211,7 +211,7 @@ Likely domains include:
 
 ## Current authentication flow
 
-Authentication uses the Next.js App Router and a user-scoped Supabase server client. An `AFTER INSERT` trigger on `auth.users` creates the matching `public.users` row and default `member` role in the same transaction, before email confirmation. If provisioning fails, the Auth insert fails too.
+Authentication uses the Next.js App Router and a user-scoped Supabase server client. An `AFTER INSERT` trigger on `auth.users` creates the matching `public.users` row with no role assignments in the same transaction, before email confirmation. If provisioning fails, the Auth insert fails too.
 
 ```text
 signup

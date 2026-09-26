@@ -28,7 +28,7 @@ function client(key = publishableKey) {
   });
 }
 
-test("account loading respects member RLS and suspension", async () => {
+test("account loading respects user RLS and suspension", async () => {
   const service = localFixtureClient();
   await ensureIntegrationAdminAnchor(service);
   const createdIds: string[] = [];
@@ -63,7 +63,7 @@ test("account loading respects member RLS and suspension", async () => {
       state: "active",
       userId: ownUser.data.user.id,
       email: ownEmail,
-      roles: ["member"],
+      roles: [],
     });
 
     const ownProfile = await member.from("users").select("id, email, status")
@@ -92,9 +92,9 @@ test("account loading respects member RLS and suspension", async () => {
       state: "suspended",
       userId: ownUser.data.user.id,
       email: ownEmail,
-      roles: ["member"],
+      roles: [],
     });
-    const roleCheck = await member.rpc("has_role", { required_role: "member" });
+    const roleCheck = await member.rpc("has_role", { required_role: "coach" });
     assert.strictEqual(roleCheck.error, null);
     assert.strictEqual(roleCheck.data, false);
   } finally {

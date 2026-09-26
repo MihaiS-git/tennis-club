@@ -92,8 +92,8 @@ it("keeps keyboard focus inside the open drawer", () => {
 });
 
 it.each([
-  ["active admin", { state: "active", userId: "admin-1", email: "admin@example.com", roles: ["admin", "member"] }, true],
-  ["active member", { state: "active", userId: "member-1", email: "member@example.com", roles: ["member"] }, false],
+  ["active admin", { state: "active", userId: "admin-1", email: "admin@example.com", roles: ["admin"] }, true],
+  ["active account", { state: "active", userId: "member-1", email: "member@example.com", roles: [] }, false],
   ["active coach", { state: "active", userId: "coach-1", email: "coach@example.com", roles: ["coach"] }, false],
   ["suspended admin", { state: "suspended", userId: "admin-1", email: "admin@example.com", roles: ["admin"] }, false],
   ["unauthenticated", { state: "unauthenticated" }, false],
