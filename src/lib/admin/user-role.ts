@@ -22,7 +22,7 @@ export type AdminUserRoleSuccess = {
 
 export type AdminUserRoleFailure = {
   ok: false;
-  reason: "not-found" | "final-active-admin";
+  reason: "not-found" | "final-active-admin" | "self-management" | "member-role-required";
 };
 
 export type AdminUserRoleResult = AdminUserRoleSuccess | AdminUserRoleFailure;
@@ -38,7 +38,15 @@ export async function updateAdminUserRole(
 ): Promise<AdminUserRoleResult> {
   const { userId, role, operation } = adminUserRoleSchema.parse(input);
   const client = supabase ?? await createClient();
-  await requireActiveAdmin(client);
+  const actor = await requireActiveAdmin(client);
+
+  if (userId.toLowerCase() === actor.userId && role === "admin") {
+    return { ok: false, reason: "self-management" };
+  }
+
+  if (role === "member" && operation === "revoke") {
+    return { ok: false, reason: "member-role-required" };
+  }
 
   const target = await client.from("users").select("id").eq("id", userId).maybeSingle();
   if (target.error) failUpdate("target", target.error.code);

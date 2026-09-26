@@ -16,6 +16,7 @@ export type AdminUserListItem = {
   email: string;
   status: "active" | "suspended";
   created_at: string;
+  updated_at: string;
   roles: UserRole[];
 };
 
@@ -27,7 +28,7 @@ export async function listAdminUsers(
 
   const { data, error } = await client
     .from("users")
-    .select("id, email, status, created_at, user_roles!user_roles_user_id_fkey(role_code)")
+    .select("id, email, status, created_at, updated_at, user_roles!user_roles_user_id_fkey(role_code)")
     .order("created_at", { ascending: false })
     .order("id", { ascending: false })
     .limit(USER_LIMIT);
@@ -37,11 +38,12 @@ export async function listAdminUsers(
     throw new Error("Unable to load users.");
   }
 
-  return data.map(({ id, email, status, created_at, user_roles }) => ({
+  return data.map(({ id, email, status, created_at, updated_at, user_roles }) => ({
     id,
     email,
     status: statusSchema.parse(status),
     created_at,
+    updated_at: z.iso.datetime({ offset: true }).parse(updated_at),
     roles: roleCodeSchema.array().parse(user_roles.map(({ role_code }) => role_code)).sort(),
   }));
 }

@@ -55,7 +55,7 @@ it("rejects an invalid status before mutation", async () => {
   expect(revalidatePath).not.toHaveBeenCalled();
 });
 
-it.each(["not-found", "final-active-admin"] as const)(
+it.each(["not-found", "final-active-admin", "self-management"] as const)(
   "preserves the status %s failure without revalidation",
   async (reason) => {
     const result = { ok: false, reason };
@@ -111,7 +111,7 @@ it("rejects an invalid role operation before mutation", async () => {
   expect(revalidatePath).not.toHaveBeenCalled();
 });
 
-it.each(["not-found", "final-active-admin"] as const)(
+it.each(["not-found", "final-active-admin", "self-management", "member-role-required"] as const)(
   "preserves the role %s failure without revalidation",
   async (reason) => {
     const result = { ok: false, reason };

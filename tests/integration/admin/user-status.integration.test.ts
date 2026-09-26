@@ -81,6 +81,29 @@ test("admin status changes use RLS and preserve the final active administrator",
     const adminSession = await signIn(admin.email);
     const memberSession = await signIn(member.email);
 
+    for (const status of ["active", "suspended"] as const) {
+      const ownStatus = await adminSession.from("users").update({ status }).eq("id", admin.id).select("id");
+      expect(ownStatus.error).toBeNull();
+      expect(ownStatus.data).toEqual([]);
+      expect(await statusOf(admin.id)).toBe("active");
+    }
+    for (const status of ["suspended", "active"] as const) {
+      const otherStatus = await adminSession.from("users").update({ status }).eq("id", member.id).select("id");
+      expect(otherStatus.error).toBeNull();
+      expect(otherStatus.data).toEqual([{ id: member.id }]);
+      expect(await statusOf(member.id)).toBe(status);
+    }
+
+
+    // Other active administrators exist, so this proves the application rule.
+    for (const status of ["active", "suspended"] as const) {
+      expect(await updateAdminUserStatus({ userId: admin.id.toUpperCase(), status }, adminSession))
+        .toEqual({ ok: false, reason: "self-management" });
+      expect(await updateAdminUserStatus({ userId: admin.id, status }, adminSession))
+        .toEqual({ ok: false, reason: "self-management" });
+      expect(await statusOf(admin.id)).toBe("active");
+    }
+
     expect(await updateAdminUserStatus({ userId: member.id, status: "suspended" }, adminSession))
       .toEqual({ ok: true, user: { id: member.id, status: "suspended" } });
     expect(await statusOf(member.id)).toBe("suspended");
@@ -125,7 +148,11 @@ test("admin status changes use RLS and preserve the final active administrator",
     }
 
     expect(await updateAdminUserStatus({ userId: admin.id, status: "suspended" }, adminSession))
-      .toEqual({ ok: false, reason: "final-active-admin" });
+      .toEqual({ ok: false, reason: "self-management" });
+    // Trusted writes still exercise the independent database invariant.
+    const finalAdmin = await service.from("users").update({ status: "suspended" }).eq("id", admin.id);
+    expect(finalAdmin.error?.code).toBe("23514");
+    expect(finalAdmin.error?.message).toBe("At least one active administrator must remain.");
     expect(await statusOf(admin.id)).toBe("active");
   } finally {
     for (const id of temporarilySuspendedIds) {

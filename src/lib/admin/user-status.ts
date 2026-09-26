@@ -20,7 +20,7 @@ export type AdminUserStatusSuccess = {
 
 export type AdminUserStatusFailure = {
   ok: false;
-  reason: "not-found" | "final-active-admin";
+  reason: "not-found" | "final-active-admin" | "self-management";
 };
 
 export type AdminUserStatusResult = AdminUserStatusSuccess | AdminUserStatusFailure;
@@ -31,7 +31,11 @@ export async function updateAdminUserStatus(
 ): Promise<AdminUserStatusResult> {
   const { userId, status } = adminUserStatusSchema.parse(input);
   const client = supabase ?? await createClient();
-  await requireActiveAdmin(client);
+  const actor = await requireActiveAdmin(client);
+
+  if (userId.toLowerCase() === actor.userId) {
+    return { ok: false, reason: "self-management" };
+  }
 
   const { data, error } = await client
     .from("users")

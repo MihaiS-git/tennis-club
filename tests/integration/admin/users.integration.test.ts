@@ -100,6 +100,10 @@ test("admin user listing is authorized, ordered, bounded, and includes roles", a
     const rows = await listAdminUsers(adminSession);
     assert.strictEqual(rows.length, 100, "The list must stop at 100 users.");
     assert.ok(rows.length > 1);
+    for (const row of rows) {
+      assert.strictEqual(typeof row.updated_at, "string");
+      assert.ok(!Number.isNaN(Date.parse(row.updated_at)));
+    }
     assert.ok(!rows.some((row) => row.id === oldest.id));
     assert.deepStrictEqual(
       rows.map((row) => row.id),

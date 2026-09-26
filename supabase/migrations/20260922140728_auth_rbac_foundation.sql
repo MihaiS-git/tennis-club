@@ -347,7 +347,7 @@ using (
 );
 
 
--- Only an active administrator may change application account status.
+-- Only an active administrator may change another account's status.
 --
 -- Column-level GRANT below ensures that even an administrator cannot
 -- use this policy to directly change email/id/timestamps.
@@ -357,9 +357,11 @@ for update
 to authenticated
 using (
   public.has_role('admin')
+  and id <> (select auth.uid())
 )
 with check (
   public.has_role('admin')
+  and id <> (select auth.uid())
 );
 
 
@@ -380,23 +382,27 @@ using (
 );
 
 
--- Only administrators can grant roles.
+-- Administrators can grant roles, except their own admin assignment.
 create policy user_roles_insert
 on public.user_roles
 for insert
 to authenticated
 with check (
   public.has_role('admin')
+  and not (role_code = 'admin' and user_id = (select auth.uid()))
 );
 
 
--- Only administrators can revoke roles.
+-- Administrators can revoke additional roles, except their own admin assignment.
+-- The member base role is mandatory.
 create policy user_roles_delete
 on public.user_roles
 for delete
 to authenticated
 using (
   public.has_role('admin')
+  and role_code <> 'member'
+  and not (role_code = 'admin' and user_id = (select auth.uid()))
 );
 
 

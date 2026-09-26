@@ -1,17 +1,8 @@
+import { requireActiveAdmin } from "@/lib/admin/authorization";
 import { listAdminUsers, type AdminUserListItem } from "@/lib/admin/users";
 
+import { formatUserDate } from "./date-format";
 import { UserManagementDialog } from "./user-management-dialog";
-
-const joinedDateFormatter = new Intl.DateTimeFormat("en-GB", {
-  day: "2-digit",
-  month: "short",
-  year: "numeric",
-  timeZone: "UTC",
-});
-
-function formatJoinedDate(value: string) {
-  return joinedDateFormatter.format(new Date(value)).replace("Sept", "Sep");
-}
 
 const roleLabels: Record<AdminUserListItem["roles"][number], string> = {
   admin: "Admin",
@@ -44,6 +35,7 @@ function RoleChips({ roles }: { roles: AdminUserListItem["roles"] }) {
 }
 
 export default async function AdminUsersPage() {
+  const actor = await requireActiveAdmin();
   const users = await listAdminUsers();
 
   return (
@@ -74,10 +66,10 @@ export default async function AdminUsersPage() {
                     <dt className="pt-1 text-xs text-muted-foreground">Roles</dt>
                     <dd><RoleChips roles={user.roles} /></dd>
                     <dt className="text-xs text-muted-foreground">Joined</dt>
-                    <dd className="text-foreground">{formatJoinedDate(user.created_at)}</dd>
+                    <dd className="text-foreground">{formatUserDate(user.created_at)}</dd>
                   </dl>
                   <div className="mt-5 border-t border-border pt-4">
-                    <UserManagementDialog user={user} />
+                    <UserManagementDialog user={user} currentAdminId={actor.userId} />
                   </div>
                 </article>
               ))}
@@ -101,9 +93,9 @@ export default async function AdminUsersPage() {
                       <td className="px-4 py-5 lg:px-5"><StatusBadge status={user.status} /></td>
                       <td className="px-4 py-5 lg:px-5"><RoleChips roles={user.roles} /></td>
                       <td className="px-4 py-5 text-muted-foreground lg:px-5">
-                        {formatJoinedDate(user.created_at)}
+                        {formatUserDate(user.created_at)}
                       </td>
-                      <td className="px-4 py-5 lg:px-5"><UserManagementDialog user={user} /></td>
+                      <td className="px-4 py-5 lg:px-5"><UserManagementDialog user={user} currentAdminId={actor.userId} /></td>
                     </tr>
                   ))}
                 </tbody>

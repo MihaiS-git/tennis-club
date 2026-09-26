@@ -7,6 +7,10 @@ import type { AdminUserListItem } from "../../../src/lib/admin/users";
 
 const { listAdminUsers } = vi.hoisted(() => ({ listAdminUsers: vi.fn() }));
 
+vi.mock("../../../src/lib/admin/authorization", () => ({
+  requireActiveAdmin: vi.fn().mockResolvedValue({ userId: "current-admin" }),
+}));
+
 vi.mock("../../../src/lib/admin/users", () => ({ listAdminUsers }));
 
 import AdminUsersPage from "../../../src/app/admin/users/page";
@@ -15,6 +19,7 @@ const member: AdminUserListItem = {
   id: "84c64ef2-6925-4901-a137-f01395541411",
   email: "member@example.com",
   status: "active",
+  updated_at: "2026-09-26T10:00:00+00:00",
   created_at: "2026-09-25T23:30:00-04:00",
   roles: ["member"],
 };
@@ -38,6 +43,10 @@ it("renders the page heading and supporting copy", async () => {
 it("renders an active member and the UTC joined date in the table and mobile list", async () => {
   await renderPage([member]);
 
+  for (const label of screen.getAllByText(/Last updated/)) {
+    expect(label.closest("dialog")).not.toBeNull();
+  }
+  expect(screen.queryByRole("columnheader", { name: "Last updated" })).toBeNull();
   const table = screen.getByRole("table");
   for (const heading of ["Email", "Status", "Roles", "Joined", "Actions"]) {
     expect(within(table).getByRole("columnheader", { name: heading }).getAttribute("scope")).toBe("col");
@@ -53,6 +62,7 @@ it("renders an active member and the UTC joined date in the table and mobile lis
   const card = screen.getByRole("article");
   expect(within(card.querySelector("p") as HTMLElement).getByText("member@example.com")).toBeTruthy();
   const details = card.querySelector("dl") as HTMLElement;
+  expect(within(details).queryByText(/Last updated/)).toBeNull();
   expect(within(details).getByText("Active")).toBeTruthy();
   expect(within(details).getByText("Member")).toBeTruthy();
   expect(within(details).getByText("26 Sep 2026")).toBeTruthy();
@@ -90,4 +100,12 @@ it("renders a simple empty state", async () => {
   expect(screen.getByText("No users found.")).toBeTruthy();
   expect(screen.queryByRole("table")).toBeNull();
   expect(screen.queryByRole("button", { name: "Manage" })).toBeNull();
+});
+
+
+it("passes the trusted current administrator identity to both dialog layouts", async () => {
+  await renderPage([{ ...member, id: "current-admin", roles: ["admin", "member"] }]);
+  const statusButtons = screen.getAllByRole("button", { name: "Suspend user", hidden: true });
+  expect(statusButtons).toHaveLength(2);
+  for (const button of statusButtons) expect(button.hasAttribute("disabled")).toBe(true);
 });

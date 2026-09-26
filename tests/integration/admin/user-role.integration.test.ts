@@ -83,6 +83,54 @@ test("admin role changes are idempotent, authorized, and preserve the final acti
     const adminSession = await signIn(admin.email);
     const memberSession = await signIn(member.email);
 
+    const selfDelete = await adminSession.from("user_roles").delete()
+      .eq("user_id", admin.id).eq("role_code", "admin").select("role_code");
+    expect(selfDelete.error).toBeNull();
+    expect(selfDelete.data).toEqual([]);
+    expect(await hasRole(admin.id, "admin")).toBe(1);
+    const selfInsert = await adminSession.from("user_roles").insert({ user_id: admin.id, role_code: "admin" });
+    expect(selfInsert.error?.code).toBe("42501");
+    const ownCoach = await adminSession.from("user_roles").insert({ user_id: admin.id, role_code: "coach" });
+    expect(ownCoach.error).toBeNull();
+    expect(await hasRole(admin.id, "coach")).toBe(1);
+    const ownCoachDelete = await adminSession.from("user_roles").delete().eq("user_id", admin.id).eq("role_code", "coach");
+    expect(ownCoachDelete.error).toBeNull();
+    expect(await hasRole(admin.id, "coach")).toBe(0);
+    const otherAdmin = await adminSession.from("user_roles").insert({ user_id: member.id, role_code: "admin" });
+    expect(otherAdmin.error).toBeNull();
+    expect(await hasRole(member.id, "admin")).toBe(1);
+    const otherAdminDelete = await adminSession.from("user_roles").delete().eq("user_id", member.id).eq("role_code", "admin");
+    expect(otherAdminDelete.error).toBeNull();
+    expect(await hasRole(member.id, "admin")).toBe(0);
+
+
+    for (const userId of [admin.id, member.id]) {
+      expect(await updateAdminUserRole({ userId, role: "member", operation: "revoke" }, adminSession))
+        .toEqual({ ok: false, reason: "member-role-required" });
+      expect(await hasRole(userId, "member")).toBe(1);
+    }
+    // Crafted direct requests must also respect the authenticated RLS boundary.
+    const memberDelete = await adminSession.from("user_roles").delete()
+      .eq("user_id", member.id).eq("role_code", "member").select("role_code");
+    expect(memberDelete.error).toBeNull();
+    expect(memberDelete.data).toEqual([]);
+    expect(await hasRole(member.id, "member")).toBe(1);
+
+
+    for (const operation of ["assign", "revoke"] as const) {
+      expect(await updateAdminUserRole({ userId: admin.id.toUpperCase(), role: "admin", operation }, adminSession))
+        .toEqual({ ok: false, reason: "self-management" });
+      expect(await updateAdminUserRole({ userId: admin.id, role: "admin", operation }, adminSession))
+        .toEqual({ ok: false, reason: "self-management" });
+      expect(await hasRole(admin.id, "admin")).toBe(1);
+    }
+    expect(await updateAdminUserRole({ userId: admin.id, role: "coach", operation: "assign" }, adminSession))
+      .toEqual({ ok: true, user: { id: admin.id, roles: ["admin", "coach", "member"] } });
+    expect(await hasRole(admin.id, "coach")).toBe(1);
+    expect(await updateAdminUserRole({ userId: admin.id, role: "coach", operation: "revoke" }, adminSession))
+      .toEqual({ ok: true, user: { id: admin.id, roles: ["admin", "member"] } });
+    expect(await hasRole(admin.id, "coach")).toBe(0);
+
     expect(await updateAdminUserRole({ userId: member.id, role: "coach", operation: "assign" }, adminSession))
       .toEqual({ ok: true, user: { id: member.id, roles: ["coach", "member"] } });
     expect(await hasRole(member.id, "coach")).toBe(1);
@@ -141,7 +189,11 @@ test("admin role changes are idempotent, authorized, and preserve the final acti
     }
 
     expect(await updateAdminUserRole({ userId: admin.id, role: "admin", operation: "revoke" }, adminSession))
-      .toEqual({ ok: false, reason: "final-active-admin" });
+      .toEqual({ ok: false, reason: "self-management" });
+    // Trusted writes still exercise the independent database invariant.
+    const finalAdmin = await service.from("user_roles").delete().eq("user_id", admin.id).eq("role_code", "admin");
+    expect(finalAdmin.error?.code).toBe("23514");
+    expect(finalAdmin.error?.message).toBe("At least one active administrator must remain.");
     expect(await hasRole(admin.id, "admin")).toBe(1);
   } finally {
     for (const id of temporarilySuspendedIds) {

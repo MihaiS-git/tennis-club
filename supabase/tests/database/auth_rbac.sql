@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set search_path = extensions, public;
 
-select plan(61);
+select plan(72);
 
 insert into auth.users (id, email, aud, role)
 values
@@ -152,6 +152,30 @@ set local role authenticated;
 select set_config('request.jwt.claim.sub', 'a13f15e2-7b5d-4b41-8d4b-4f2135081002', true);
 
 select is(public.has_role('admin'), true, 'active administrator has admin role');
+-- Another active admin exists, isolating RLS from the final-admin invariant.
+insert into public.user_roles (user_id, role_code) values ('a13f15e2-7b5d-4b41-8d4b-4f2135081001', 'admin');
+update public.users set status = 'suspended' where id = auth.uid();
+select is((select status from public.users where id = auth.uid()), 'active'::public.user_status, 'RLS prevents admin self-suspension');
+update public.users set status = 'active' where id = auth.uid();
+select is((select status from public.users where id = auth.uid()), 'active'::public.user_status, 'own account remains active after attempted idempotent status update');
+delete from public.user_roles where user_id = auth.uid() and role_code = 'admin';
+select is((select count(*) from public.user_roles where user_id = auth.uid() and role_code = 'admin'), 1::bigint, 'RLS prevents deleting own admin assignment');
+select throws_ok($$insert into public.user_roles (user_id, role_code) values ('a13f15e2-7b5d-4b41-8d4b-4f2135081002', 'admin')$$, '42501', null, 'RLS rejects own admin INSERT before uniqueness check');
+insert into public.user_roles (user_id, role_code) values ('a13f15e2-7b5d-4b41-8d4b-4f2135081002', 'coach');
+select is((select count(*) from public.user_roles where user_id = auth.uid() and role_code = 'coach'), 1::bigint, 'admin can assign own coach role');
+delete from public.user_roles where user_id = auth.uid() and role_code = 'coach';
+select is((select count(*) from public.user_roles where user_id = auth.uid() and role_code = 'coach'), 0::bigint, 'admin can revoke own coach role');
+delete from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001' and role_code = 'admin';
+
+delete from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001' and role_code = 'member';
+select is((select count(*) from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001' and role_code = 'member'), 1::bigint, 'admin cannot delete another account mandatory member role');
+delete from public.user_roles where user_id = auth.uid() and role_code = 'member';
+select is((select count(*) from public.user_roles where user_id = auth.uid() and role_code = 'member'), 1::bigint, 'admin cannot delete own mandatory member role');
+insert into public.user_roles (user_id, role_code) values ('a13f15e2-7b5d-4b41-8d4b-4f2135081001', 'admin');
+delete from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001' and role_code = 'admin';
+select is((select count(*) from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001' and role_code = 'admin'), 0::bigint, 'authenticated admin can revoke another admin while an active admin remains');
+
+
 select is((select count(*) from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 1::bigint, 'admin can read another profile');
 select is((select count(*) from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 1::bigint, 'admin can read another user role');
 reset role;
@@ -182,6 +206,7 @@ select is((select status from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4
 
 select set_config('request.jwt.claim.sub', 'a13f15e2-7b5d-4b41-8d4b-4f2135081001', true);
 select is(public.has_role('member'), false, 'suspended member has no effective role');
+select is((select count(*) from public.user_roles where user_id = auth.uid() and role_code = 'member'), 1::bigint, 'suspension retains the mandatory member assignment');
 
 reset role;
 
@@ -203,11 +228,14 @@ where u.status = 'active'
 alter table public.users disable trigger users_set_updated_at;
 update public.users set updated_at = '2000-01-01 00:00:00+00'::timestamptz where id in ('a13f15e2-7b5d-4b41-8d4b-4f2135081002');
 alter table public.users enable trigger users_set_updated_at;
+-- Trusted writes independently exercise the global final-admin invariant.
 select throws_ok(
   $$delete from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002' and role_code = 'admin'$$,
   '23514', 'At least one active administrator must remain.',
   'cannot revoke the only active administrator'
 );
+reset role;
+select set_config('request.jwt.claim.sub', 'a13f15e2-7b5d-4b41-8d4b-4f2135081001', true);
 select throws_ok(
   $$update public.users set status = 'suspended' where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002'$$,
   '23514', 'At least one active administrator must remain.',
@@ -259,6 +287,7 @@ select is(
   'suspended'::public.user_status,
   'can suspend an administrator when another active administrator remains'
 );
+select is((select array_agg(role_code order by role_code) from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002'), array['admin', 'member']::text[], 'suspended administrator retains all assigned roles');
 
 update public.users set status = 'active'
 where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002';
