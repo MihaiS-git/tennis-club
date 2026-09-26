@@ -33,9 +33,10 @@ create type public.user_status as enum (
 -- ============================================================
 
 create table public.users (
+  -- Restrict Auth deletion so application identity/history cannot disappear through a cascade.
   id uuid primary key
     references auth.users(id)
-    on delete cascade,
+    on delete restrict,
 
   -- auth.users remains the source of truth for the login email.
   -- We keep a synchronized copy because application/admin queries
@@ -48,7 +49,9 @@ create table public.users (
   -- still deny access because this account is suspended.
   status public.user_status not null default 'active',
 
+  -- Application account creation time; account/RBAC mutations do not change it.
   created_at timestamptz not null default now(),
+  -- Latest account/RBAC modification, excluding unrelated tennis/domain data.
   updated_at timestamptz not null default now()
 );
 
@@ -66,38 +69,14 @@ create unique index users_email_lower_unique
 create table public.roles (
   code text primary key,
 
-  name text not null,
-  description text not null,
-
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-
   constraint roles_code_format
     check (code ~ '^[a-z][a-z0-9_]*$')
 );
 
 
-insert into public.roles (
-  code,
-  name,
-  description
-)
-values
-  (
-    'admin',
-    'Administrator',
-    'Club administration and application management'
-  ),
-  (
-    'coach',
-    'Coach',
-    'Coaching-specific application capabilities'
-  ),
-  (
-    'member',
-    'Member',
-    'Standard registered tennis user'
-  );
+-- Lookup codes exist only for referential integrity.
+insert into public.roles (code)
+values ('admin'), ('coach'), ('member');
 
 
 -- ============================================================
@@ -155,10 +134,35 @@ for each row
 execute function public.set_updated_at();
 
 
-create trigger roles_set_updated_at
-before update on public.roles
+-- Role mutations only maintain account metadata; role decisions stay in TypeScript.
+create function public.touch_user_updated_at_from_role_change()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if tg_op = 'DELETE' then
+    update public.users set updated_at = now() where id = old.user_id;
+  elsif tg_op = 'INSERT' then
+    update public.users set updated_at = now() where id = new.user_id;
+  else
+    update public.users set updated_at = now() where id = new.user_id;
+    if old.user_id is distinct from new.user_id then
+      update public.users set updated_at = now() where id = old.user_id;
+    end if;
+  end if;
+
+  return null;
+end;
+$$;
+
+revoke all on function public.touch_user_updated_at_from_role_change() from public;
+
+create trigger user_roles_touch_user_updated_at
+after insert or delete or update of user_id, role_code on public.user_roles
 for each row
-execute function public.set_updated_at();
+execute function public.touch_user_updated_at_from_role_change();
 
 
 -- ============================================================
@@ -252,31 +256,6 @@ execute function public.handle_auth_user_email_updated();
 -- ============================================================
 -- CURRENT USER HELPERS
 -- ============================================================
-
-create or replace function public.current_user_is_active()
-returns boolean
-language sql
-stable
-security definer
-set search_path = ''
-as $$
-  select exists (
-    select 1
-    from public.users
-    where id = (select auth.uid())
-      and status = 'active'
-  );
-$$;
-
-
-revoke all
-on function public.current_user_is_active()
-from public;
-
-grant execute
-on function public.current_user_is_active()
-to authenticated;
-
 
 create or replace function public.has_role(required_role text)
 returns boolean
@@ -385,22 +364,6 @@ with check (
 
 
 -- ------------------------------------------------------------
--- public.roles
--- ------------------------------------------------------------
-
--- Role definitions are readable by authenticated users.
---
--- No INSERT / UPDATE / DELETE privilege is granted to them.
-create policy roles_select
-on public.roles
-for select
-to authenticated
-using (
-  public.current_user_is_active()
-);
-
-
--- ------------------------------------------------------------
 -- public.user_roles
 -- ------------------------------------------------------------
 
@@ -469,11 +432,6 @@ to authenticated;
 -- RLS further restricts this operation to admins.
 grant update (status)
 on table public.users
-to authenticated;
-
-
-grant select
-on table public.roles
 to authenticated;
 
 

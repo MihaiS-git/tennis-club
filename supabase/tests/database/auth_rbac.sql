@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set search_path = extensions, public;
 
-select plan(37);
+select plan(61);
 
 insert into auth.users (id, email, aud, role)
 values
@@ -38,6 +38,77 @@ select is(
   'successful auth inserts leave no fixture user without the default role'
 );
 
+
+select is(
+  (select array_agg(column_name::text order by ordinal_position) from information_schema.columns
+   where table_schema = 'public' and table_name = 'roles'),
+  array['code']::text[], 'roles contains only code'
+);
+select is((select array_agg(code order by code) from public.roles),
+  array['admin', 'coach', 'member']::text[], 'only current role codes are seeded');
+select throws_ok($$insert into public.roles (code) values ('Invalid')$$,
+  '23514', null, 'role codes retain format validation');
+select throws_ok($$delete from auth.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'$$,
+  '23503', null, 'Auth deletion is restricted by the application identity FK');
+select is((select count(*) from auth.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 1::bigint, 'Auth identity survives rejected deletion');
+select is((select count(*) from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 1::bigint, 'application identity survives rejected Auth deletion');
+select is((select count(*) from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001' and role_code = 'member'), 1::bigint, 'roles survive rejected Auth deletion');
+
+-- Establish an active administrator before exercising status transitions on a pristine DB.
+insert into public.user_roles (user_id, role_code)
+values ('a13f15e2-7b5d-4b41-8d4b-4f2135081002', 'admin');
+
+-- Use an old creation time so accidental overwrites with transaction now() are visible.
+update public.users set created_at = '2000-01-01 00:00:00+00'::timestamptz where id in ('a13f15e2-7b5d-4b41-8d4b-4f2135081001', 'a13f15e2-7b5d-4b41-8d4b-4f2135081002');
+-- Trusted fixture setup bypasses only the timestamp trigger, then restores it.
+alter table public.users disable trigger users_set_updated_at;
+update public.users set updated_at = '2000-01-01 00:00:00+00'::timestamptz where id in ('a13f15e2-7b5d-4b41-8d4b-4f2135081001');
+alter table public.users enable trigger users_set_updated_at;
+update public.users set status = 'suspended' where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001';
+select ok((select updated_at > '2000-01-01 00:00:00+00'::timestamptz from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 'status changes touch account timestamp');
+-- Trusted fixture setup bypasses only the timestamp trigger, then restores it.
+alter table public.users disable trigger users_set_updated_at;
+update public.users set updated_at = '2000-01-01 00:00:00+00'::timestamptz where id in ('a13f15e2-7b5d-4b41-8d4b-4f2135081001');
+alter table public.users enable trigger users_set_updated_at;
+insert into public.user_roles (user_id, role_code) values ('a13f15e2-7b5d-4b41-8d4b-4f2135081001', 'coach');
+select ok((select updated_at > '2000-01-01 00:00:00+00'::timestamptz from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 'role assignment touches account timestamp');
+-- Trusted fixture setup bypasses only the timestamp trigger, then restores it.
+alter table public.users disable trigger users_set_updated_at;
+update public.users set updated_at = '2000-01-01 00:00:00+00'::timestamptz where id in ('a13f15e2-7b5d-4b41-8d4b-4f2135081001');
+alter table public.users enable trigger users_set_updated_at;
+delete from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001' and role_code = 'coach';
+select ok((select updated_at > '2000-01-01 00:00:00+00'::timestamptz from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 'role revocation touches account timestamp');
+insert into public.user_roles (user_id, role_code) values ('a13f15e2-7b5d-4b41-8d4b-4f2135081001', 'coach');
+-- Trusted fixture setup bypasses only the timestamp trigger, then restores it.
+alter table public.users disable trigger users_set_updated_at;
+update public.users set updated_at = '2000-01-01 00:00:00+00'::timestamptz where id in ('a13f15e2-7b5d-4b41-8d4b-4f2135081001', 'a13f15e2-7b5d-4b41-8d4b-4f2135081002');
+alter table public.users enable trigger users_set_updated_at;
+update public.user_roles set user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002' where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001' and role_code = 'coach';
+select ok((select updated_at > '2000-01-01 00:00:00+00'::timestamptz from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 'role reassignment touches old user');
+select ok((select updated_at > '2000-01-01 00:00:00+00'::timestamptz from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002'), 'role reassignment touches new user');
+delete from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002' and role_code = 'member';
+-- Trusted fixture setup bypasses only the timestamp trigger, then restores it.
+alter table public.users disable trigger users_set_updated_at;
+update public.users set updated_at = '2000-01-01 00:00:00+00'::timestamptz where id in ('a13f15e2-7b5d-4b41-8d4b-4f2135081002');
+alter table public.users enable trigger users_set_updated_at;
+update public.user_roles set role_code = 'member' where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002' and role_code = 'coach';
+select ok((select updated_at > '2000-01-01 00:00:00+00'::timestamptz from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002'), 'role code update touches account timestamp');
+-- Trusted fixture setup bypasses only the timestamp trigger, then restores it.
+alter table public.users disable trigger users_set_updated_at;
+update public.users set updated_at = '2000-01-01 00:00:00+00'::timestamptz where id in ('a13f15e2-7b5d-4b41-8d4b-4f2135081002');
+alter table public.users enable trigger users_set_updated_at;
+update public.user_roles set assigned_at = '2000-01-01 00:00:00+00'::timestamptz where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002' and role_code = 'member';
+select is((select updated_at from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002'), '2000-01-01 00:00:00+00'::timestamptz, 'assignment audit metadata alone preserves account timestamp');
+-- Trusted fixture setup bypasses only the timestamp trigger, then restores it.
+alter table public.users disable trigger users_set_updated_at;
+update public.users set updated_at = '2000-01-01 00:00:00+00'::timestamptz where id in ('a13f15e2-7b5d-4b41-8d4b-4f2135081001');
+alter table public.users enable trigger users_set_updated_at;
+update auth.users set email = 'pgtap-member-a-updated@example.test' where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001';
+select ok((select updated_at > '2000-01-01 00:00:00+00'::timestamptz from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 'Auth email synchronization touches account timestamp');
+select is((select email from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 'pgtap-member-a-updated@example.test', 'Auth email remains authoritative');
+select is((select count(*) from public.users where id in ('a13f15e2-7b5d-4b41-8d4b-4f2135081001', 'a13f15e2-7b5d-4b41-8d4b-4f2135081002') and created_at = '2000-01-01 00:00:00+00'::timestamptz), 2::bigint, 'account and role changes preserve creation timestamps');
+update public.users set status = 'active' where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001';
+
 set local role anon;
 select throws_ok($$select count(*) from public.users$$, '42501', null, 'anonymous users cannot read application profiles');
 select throws_ok($$select count(*) from public.user_roles$$, '42501', null, 'anonymous users cannot read role assignments');
@@ -52,7 +123,7 @@ select is((select count(*) from public.users where id = auth.uid()), 1::bigint, 
 select is((select count(*) from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002'), 0::bigint, 'member cannot read another profile');
 select is((select count(*) from public.user_roles where user_id = auth.uid() and role_code = 'member'), 1::bigint, 'member can read own role');
 select is((select count(*) from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002'), 0::bigint, 'member cannot read another user role');
-select is((select count(*) from public.roles), 3::bigint, 'active member can read role definitions');
+select throws_ok($$select count(*) from public.roles$$, '42501', null, 'authenticated users cannot read the internal role lookup');
 select is(public.has_role('admin'), false, 'member is not an administrator');
 
 select throws_ok(
@@ -68,13 +139,14 @@ select is((select count(*) from public.user_roles where user_id = auth.uid() and
 update public.users set status = 'suspended' where id = auth.uid();
 select is((select status from public.users where id = auth.uid()), 'active'::public.user_status, 'member cannot change own status');
 select throws_ok(
-  $$insert into public.roles (code, name, description) values ('owner', 'Owner', 'Privileged')$$,
+  $$insert into public.roles (code) values ('owner')$$,
   '42501', null, 'member cannot create a privileged role definition'
 );
 
 reset role;
 insert into public.user_roles (user_id, role_code)
-values ('a13f15e2-7b5d-4b41-8d4b-4f2135081002', 'admin');
+values ('a13f15e2-7b5d-4b41-8d4b-4f2135081002', 'admin')
+on conflict (user_id, role_code) do nothing;
 
 set local role authenticated;
 select set_config('request.jwt.claim.sub', 'a13f15e2-7b5d-4b41-8d4b-4f2135081002', true);
@@ -82,6 +154,12 @@ select set_config('request.jwt.claim.sub', 'a13f15e2-7b5d-4b41-8d4b-4f2135081002
 select is(public.has_role('admin'), true, 'active administrator has admin role');
 select is((select count(*) from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 1::bigint, 'admin can read another profile');
 select is((select count(*) from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 1::bigint, 'admin can read another user role');
+reset role;
+-- Trusted fixture setup bypasses only the timestamp trigger, then restores it.
+alter table public.users disable trigger users_set_updated_at;
+update public.users set updated_at = '2000-01-01 00:00:00+00'::timestamptz where id in ('a13f15e2-7b5d-4b41-8d4b-4f2135081001');
+alter table public.users enable trigger users_set_updated_at;
+set local role authenticated;
 insert into public.user_roles (user_id, role_code, assigned_by)
 values ('a13f15e2-7b5d-4b41-8d4b-4f2135081001', 'coach', 'a13f15e2-7b5d-4b41-8d4b-4f2135081001');
 select is(
@@ -89,15 +167,21 @@ select is(
   'a13f15e2-7b5d-4b41-8d4b-4f2135081002'::uuid,
   'role assignment audit records the actual administrator despite a spoofed value'
 );
+select ok((select updated_at > '2000-01-01 00:00:00+00'::timestamptz from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 'authenticated admin role assignment touches timestamp');
+reset role;
+-- Trusted fixture setup bypasses only the timestamp trigger, then restores it.
+alter table public.users disable trigger users_set_updated_at;
+update public.users set updated_at = '2000-01-01 00:00:00+00'::timestamptz where id in ('a13f15e2-7b5d-4b41-8d4b-4f2135081001');
+alter table public.users enable trigger users_set_updated_at;
+set local role authenticated;
 delete from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001' and role_code = 'coach';
 select is((select count(*) from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001' and role_code = 'coach'), 0::bigint, 'admin can revoke a role');
+select ok((select updated_at > '2000-01-01 00:00:00+00'::timestamptz from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 'authenticated admin role revocation touches timestamp');
 update public.users set status = 'suspended' where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001';
 select is((select status from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'), 'suspended'::public.user_status, 'admin can suspend another account');
 
 select set_config('request.jwt.claim.sub', 'a13f15e2-7b5d-4b41-8d4b-4f2135081001', true);
-select is(public.current_user_is_active(), false, 'suspended member is inactive');
 select is(public.has_role('member'), false, 'suspended member has no effective role');
-select is((select count(*) from public.roles), 0::bigint, 'suspended member cannot read role definitions');
 
 reset role;
 
@@ -115,6 +199,10 @@ where u.status = 'active'
     where ur.user_id = u.id and ur.role_code = 'admin'
   );
 
+-- Trusted fixture setup bypasses only the timestamp trigger, then restores it.
+alter table public.users disable trigger users_set_updated_at;
+update public.users set updated_at = '2000-01-01 00:00:00+00'::timestamptz where id in ('a13f15e2-7b5d-4b41-8d4b-4f2135081002');
+alter table public.users enable trigger users_set_updated_at;
 select throws_ok(
   $$delete from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002' and role_code = 'admin'$$,
   '23514', 'At least one active administrator must remain.',
@@ -126,6 +214,13 @@ select throws_ok(
   'cannot suspend the only active administrator'
 );
 
+select is((select status from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002'), 'active'::public.user_status, 'rejected suspension preserves active status');
+select is((select count(*) from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002' and role_code = 'admin'), 1::bigint, 'rejected revocation preserves admin role');
+select is((select updated_at from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002'), '2000-01-01 00:00:00+00'::timestamptz, 'rejected status and role changes roll back timestamp touches');
+select throws_ok($$update public.user_roles set role_code = 'coach' where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002' and role_code = 'admin'$$, '23514', 'At least one active administrator must remain.', 'cannot replace final admin role');
+select throws_ok($$update public.user_roles set user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001' where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002' and role_code = 'admin'$$, '23514', 'At least one active administrator must remain.', 'cannot move final admin role to suspended user');
+select is((select updated_at from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002'), '2000-01-01 00:00:00+00'::timestamptz, 'rejected role UPDATE preserves account timestamp');
+select is((select count(*) from public.user_roles where user_id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081002' and role_code = 'admin'), 1::bigint, 'rejected role UPDATE preserves admin assignment');
 insert into public.user_roles (user_id, role_code)
 values ('a13f15e2-7b5d-4b41-8d4b-4f2135081001', 'admin');
 select is(

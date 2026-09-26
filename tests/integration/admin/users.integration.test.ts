@@ -5,6 +5,8 @@ import { assert, expect, test, vi } from "vitest";
 import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
 
+import { ensureIntegrationAdminAnchor } from "../admin-anchor";
+
 vi.mock("server-only", () => ({}));
 
 import { listAdminUsers } from "../../../src/lib/admin/users";
@@ -39,6 +41,7 @@ function client(key = publishableKey) {
 
 test("admin user listing is authorized, ordered, bounded, and includes roles", async () => {
   const service = client(localServiceRoleKey());
+  await ensureIntegrationAdminAnchor(service);
   const createdIds: string[] = [];
   const password = "admin-users-password-123";
 
@@ -123,6 +126,10 @@ test("admin user listing is authorized, ordered, bounded, and includes roles", a
     await expect(listAdminUsers(suspendedSession)).rejects.toThrow("NEXT_HTTP_ERROR_FALLBACK;404");
   } finally {
     for (const id of createdIds.reverse()) {
+      const roles = await service.from("user_roles").delete().eq("user_id", id);
+      assert.strictEqual(roles.error, null);
+      const account = await service.from("users").delete().eq("id", id);
+      assert.strictEqual(account.error, null);
       const result = await service.auth.admin.deleteUser(id);
       assert.strictEqual(result.error, null);
     }

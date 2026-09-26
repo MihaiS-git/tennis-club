@@ -5,6 +5,8 @@ import { assert, test } from "vitest";
 import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
 
+import { cleanupAuthFixtures, localFixtureClient } from "../auth-fixtures";
+
 import { changePasswordWithVerification } from "../../../src/lib/auth/password-change";
 
 function requiredEnvironmentVariable(
@@ -108,124 +110,138 @@ async function confirmSignUp(
 }
 
 test("signup provisions the application profile and default member role", async () => {
-  const email = `profile-provisioning-${randomUUID()}@example.test`;
-  const client = createAuthClient();
-  const signUp = await client.auth.signUp({
-    email,
-    password: "profile-password-123",
-    options: {
-      emailRedirectTo:
-        "http://localhost:3000/auth/callback?next=/account&flow=email-confirmation",
-    },
-  });
+  const service = localFixtureClient();
+  const createdIds: string[] = [];
+  try {
+    const email = `profile-provisioning-${randomUUID()}@example.test`;
+    const client = createAuthClient();
+    const signUp = await client.auth.signUp({
+      email,
+      password: "profile-password-123",
+      options: {
+        emailRedirectTo:
+          "http://localhost:3000/auth/callback?next=/account&flow=email-confirmation",
+      },
+    });
 
-  assert.strictEqual(signUp.error, null);
-  assert.ok(signUp.data.user);
-  assert.strictEqual(
-    signUp.data.session,
-    null,
-    "Signup must not authenticate before confirmation.",
-  );
-  assert.deepStrictEqual(provisioningCounts(signUp.data.user.id), [1, 1, 1, 0],
-    "A successful signup must already have its matching profile and only the member role.");
-  const pendingSession = await client.auth.getSession();
-  assert.strictEqual(pendingSession.error, null);
-  assert.strictEqual(pendingSession.data.session, null);
+    if (signUp.data.user) createdIds.push(signUp.data.user.id);
+    assert.strictEqual(signUp.error, null);
+    assert.ok(signUp.data.user);
+    assert.strictEqual(
+      signUp.data.session,
+      null,
+      "Signup must not authenticate before confirmation.",
+    );
+    assert.deepStrictEqual(provisioningCounts(signUp.data.user.id), [1, 1, 1, 0],
+      "A successful signup must already have its matching profile and only the member role.");
+    const pendingSession = await client.auth.getSession();
+    assert.strictEqual(pendingSession.error, null);
+    assert.strictEqual(pendingSession.data.session, null);
 
-  await confirmSignUp(email, client);
+    await confirmSignUp(email, client);
 
-  const profile = await client
-    .from("users")
-    .select("id, email, status")
-    .eq("id", signUp.data.user.id)
-    .single();
-  assert.strictEqual(profile.error, null);
-  assert.deepStrictEqual(profile.data, {
-    id: signUp.data.user.id,
-    email,
-    status: "active",
-  });
+    const profile = await client
+      .from("users")
+      .select("id, email, status")
+      .eq("id", signUp.data.user.id)
+      .single();
+    assert.strictEqual(profile.error, null);
+    assert.deepStrictEqual(profile.data, {
+      id: signUp.data.user.id,
+      email,
+      status: "active",
+    });
 
-  const roles = await client
-    .from("user_roles")
-    .select("role_code")
-    .eq("user_id", signUp.data.user.id);
-  assert.strictEqual(roles.error, null);
-  assert.deepStrictEqual(roles.data, [{ role_code: "member" }]);
+    const roles = await client
+      .from("user_roles")
+      .select("role_code")
+      .eq("user_id", signUp.data.user.id);
+    assert.strictEqual(roles.error, null);
+    assert.deepStrictEqual(roles.data, [{ role_code: "member" }]);
 
-  await client.auth.signOut({ scope: "local" });
+    await client.auth.signOut({ scope: "local" });
+  } finally {
+    await cleanupAuthFixtures(service, createdIds);
+  }
 });
 
 test("current-password verification protects a real Supabase password change", async () => {
-  const email = `password-change-${randomUUID()}@example.test`;
-  const oldPassword = "old-password-123";
-  const newPassword = "new-password-456";
-  const authenticatedClient = createAuthClient();
-  const signUp = await authenticatedClient.auth.signUp({
-    email,
-    password: oldPassword,
-    options: {
-      emailRedirectTo:
-        "http://localhost:3000/auth/callback?next=/account&flow=email-confirmation",
-    },
-  });
+  const service = localFixtureClient();
+  const createdIds: string[] = [];
+  try {
+    const email = `password-change-${randomUUID()}@example.test`;
+    const oldPassword = "old-password-123";
+    const newPassword = "new-password-456";
+    const authenticatedClient = createAuthClient();
+    const signUp = await authenticatedClient.auth.signUp({
+      email,
+      password: oldPassword,
+      options: {
+        emailRedirectTo:
+          "http://localhost:3000/auth/callback?next=/account&flow=email-confirmation",
+      },
+    });
 
-  assert.strictEqual(signUp.error, null);
-  assert.ok(signUp.data.user);
-  if (!signUp.data.session) await confirmSignUp(email, authenticatedClient);
+    if (signUp.data.user) createdIds.push(signUp.data.user.id);
+    assert.strictEqual(signUp.error, null);
+    assert.ok(signUp.data.user);
+    if (!signUp.data.session) await confirmSignUp(email, authenticatedClient);
 
-  const rejected = await changePasswordWithVerification({
-    authenticatedClient,
-    verificationClient: createAuthClient(),
-    userId: signUp.data.user.id,
-    email,
-    currentPassword: "incorrect-password",
-    newPassword,
-  });
+    const rejected = await changePasswordWithVerification({
+      authenticatedClient,
+      verificationClient: createAuthClient(),
+      userId: signUp.data.user.id,
+      email,
+      currentPassword: "incorrect-password",
+      newPassword,
+    });
 
-  assert.deepStrictEqual(rejected, {
-    ok: false,
-    reason: "current-password-incorrect",
-  });
+    assert.deepStrictEqual(rejected, {
+      ok: false,
+      reason: "current-password-incorrect",
+    });
 
-  const signInProbe = createAuthClient();
-  const unchangedSignIn = await signInProbe.auth.signInWithPassword({
-    email,
-    password: oldPassword,
-  });
-  assert.strictEqual(
-    unchangedSignIn.error,
-    null,
-    "A rejected change must preserve the old password.",
-  );
-  await signInProbe.auth.signOut({ scope: "local" });
+    const signInProbe = createAuthClient();
+    const unchangedSignIn = await signInProbe.auth.signInWithPassword({
+      email,
+      password: oldPassword,
+    });
+    assert.strictEqual(
+      unchangedSignIn.error,
+      null,
+      "A rejected change must preserve the old password.",
+    );
+    await signInProbe.auth.signOut({ scope: "local" });
 
-  const changed = await changePasswordWithVerification({
-    authenticatedClient,
-    verificationClient: createAuthClient(),
-    userId: signUp.data.user.id,
-    email,
-    currentPassword: oldPassword,
-    newPassword,
-  });
-  assert.deepStrictEqual(changed, { ok: true });
+    const changed = await changePasswordWithVerification({
+      authenticatedClient,
+      verificationClient: createAuthClient(),
+      userId: signUp.data.user.id,
+      email,
+      currentPassword: oldPassword,
+      newPassword,
+    });
+    assert.deepStrictEqual(changed, { ok: true });
 
-  await authenticatedClient.auth.signOut({ scope: "local" });
+    await authenticatedClient.auth.signOut({ scope: "local" });
 
-  const oldPasswordSignIn = await signInProbe.auth.signInWithPassword({
-    email,
-    password: oldPassword,
-  });
-  assert.ok(
-    oldPasswordSignIn.error,
-    "The old password must no longer sign in.",
-  );
+    const oldPasswordSignIn = await signInProbe.auth.signInWithPassword({
+      email,
+      password: oldPassword,
+    });
+    assert.ok(
+      oldPasswordSignIn.error,
+      "The old password must no longer sign in.",
+    );
 
-  const newPasswordSignIn = await signInProbe.auth.signInWithPassword({
-    email,
-    password: newPassword,
-  });
-  assert.strictEqual(newPasswordSignIn.error, null, "The new password must sign in.");
-  assert.strictEqual(newPasswordSignIn.data.user?.id, signUp.data.user.id);
-  await signInProbe.auth.signOut({ scope: "local" });
+    const newPasswordSignIn = await signInProbe.auth.signInWithPassword({
+      email,
+      password: newPassword,
+    });
+    assert.strictEqual(newPasswordSignIn.error, null, "The new password must sign in.");
+    assert.strictEqual(newPasswordSignIn.data.user?.id, signUp.data.user.id);
+    await signInProbe.auth.signOut({ scope: "local" });
+  } finally {
+    await cleanupAuthFixtures(service, createdIds);
+  }
 });

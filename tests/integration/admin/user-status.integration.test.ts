@@ -5,6 +5,8 @@ import { assert, expect, test, vi } from "vitest";
 import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
 
+import { ensureIntegrationAdminAnchor } from "../admin-anchor";
+
 vi.mock("server-only", () => ({}));
 
 import { updateAdminUserStatus } from "../../../src/lib/admin/user-status";
@@ -39,6 +41,7 @@ function client(key = publishableKey) {
 
 test("admin status changes use RLS and preserve the final active administrator", async () => {
   const service = client(localServiceRoleKey());
+  await ensureIntegrationAdminAnchor(service);
   const createdIds: string[] = [];
   const temporarilySuspendedIds: string[] = [];
   const password = "admin-status-password-123";
@@ -130,6 +133,10 @@ test("admin status changes use RLS and preserve the final active administrator",
       assert.strictEqual(result.error, null);
     }
     for (const id of createdIds.reverse()) {
+      const roles = await service.from("user_roles").delete().eq("user_id", id);
+      assert.strictEqual(roles.error, null);
+      const account = await service.from("users").delete().eq("id", id);
+      assert.strictEqual(account.error, null);
       const result = await service.auth.admin.deleteUser(id);
       assert.strictEqual(result.error, null);
     }
