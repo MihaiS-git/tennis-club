@@ -1,22 +1,37 @@
-export const MAX_AVATAR_SIZE = 5 * 1024 * 1024;
-const formats = {
-  "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp",
-} as const;
-export type AvatarMime = keyof typeof formats;
+import "server-only";
+
+import sharp from "sharp";
+import { avatarFileError } from "./avatar-file-validation";
+
+export { MAX_AVATAR_SIZE } from "./avatar-file-validation";
+const MAX_DIMENSION = 12_000;
+const MAX_PIXELS = 40_000_000;
+const dimensionError = "Use an image no larger than 12,000 pixels per side and 40 million pixels in total.";
 
 export async function validateAvatar(file: File) {
-  if (!file.size) return { ok: false, error: "Choose an image to upload." } as const;
-  if (file.size > MAX_AVATAR_SIZE) return { ok: false, error: "Use an image no larger than 5 MiB." } as const;
-  if (file.type !== "image/jpeg" && file.type !== "image/png" && file.type !== "image/webp") {
-    return { ok: false, error: "Choose a JPEG, PNG, or WebP image." } as const;
+  const error = avatarFileError(file);
+  if (error) return { ok: false, error } as const;
+  try {
+    const input = Buffer.from(await file.arrayBuffer());
+    // Decode only the first frame. Never disable the decoder's safety limits.
+    const image = sharp(input, { limitInputPixels: MAX_PIXELS, failOn: "warning", pages: 1 });
+    const metadata = await image.metadata();
+    const { width, height } = metadata;
+    if (!width || !height || width <= 0 || height <= 0 || width > MAX_DIMENSION
+      || height > MAX_DIMENSION || width * height > MAX_PIXELS) {
+      return { ok: false, error: dimensionError } as const;
+    }
+    const expectedFormat = file.type === "image/jpeg" ? "jpeg" : file.type === "image/png" ? "png" : "webp";
+    if (metadata.format !== expectedFormat) {
+      return { ok: false, error: "The image contents do not match its file type." } as const;
+    }
+    // toBuffer actually decodes the pixels; metadata/signatures alone are insufficient.
+    // Sharp strips source metadata by default.
+    const bytes = await image.rotate().resize(512, 512, { fit: "inside", withoutEnlargement: true })
+      .webp({ quality: 82 }).timeout({ seconds: 10 }).toBuffer();
+    return { ok: true, bytes } as const;
+  } catch (cause) {
+    const pixelLimit = cause instanceof Error && cause.message.includes("pixel limit");
+    return { ok: false, error: pixelLimit ? dimensionError : "Choose a valid JPEG, PNG, or WebP image." } as const;
   }
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  const jpeg = bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
-  const png = bytes.length >= 8 && [137, 80, 78, 71, 13, 10, 26, 10].every((value, index) => bytes[index] === value);
-  const webp = bytes.length >= 12 && new TextDecoder().decode(bytes.slice(0, 4)) === "RIFF"
-    && new TextDecoder().decode(bytes.slice(8, 12)) === "WEBP";
-  if (!(file.type === "image/jpeg" ? jpeg : file.type === "image/png" ? png : webp)) {
-    return { ok: false, error: "The image contents do not match its file type." } as const;
-  }
-  return { ok: true, bytes, mime: file.type, extension: formats[file.type] } as const;
 }

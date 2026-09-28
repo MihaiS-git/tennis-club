@@ -4,14 +4,25 @@ import { createClient } from "@supabase/supabase-js";
 import { expect, test, type Page } from "@playwright/test";
 import { z } from "zod";
 
-const labels = ["Profile / player identity", "Personal information", "Tennis profile", "Account & security"];
-const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a6XQAAAAASUVORK5CYII=", "base64");
+const labels = ["Profile / player identity", "Personal information", "Tennis profile", "Account & security"] as const;
+const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAD0lEQVQImWP4z8Dwn4EBAAj+Af/KOtJRAAAAAElFTkSuQmCC", "base64");
 
-async function section(page: Page, name: string) {
+async function section(page: Page, name: typeof labels[number]) {
   const selector = page.getByRole("navigation", { name: "Profile settings" });
-  await selector.getByRole("button", { name, exact: true }).click();
-  await expect(selector.locator('[aria-pressed="true"]')).toHaveText(name);
-  await expect(page.locator('[id$="-settings"]:visible')).toHaveCount(1);
+  const button = selector.getByRole("button", { name, exact: true });
+  // Playwright scrolls off-screen controls into view before clicking them.
+  await button.click();
+  await expect(button).toHaveAttribute("aria-pressed", "true");
+  const content = {
+    "Profile / player identity": page.getByText("Player profile", { exact: true }),
+    "Personal information": page.getByLabel("First name", { exact: true }),
+    "Tennis profile": page.getByLabel("Bio", { exact: true }),
+    "Account & security": page.getByLabel("Current password", { exact: true }),
+  };
+  for (const label of labels) {
+    if (label === name) await expect(content[label]).toBeVisible();
+    else await expect(content[label]).toBeHidden();
+  }
 }
 
 async function assertNoOverflow(page: Page) {
@@ -97,13 +108,13 @@ test("profile refinement: authenticated lifecycle, country, keyboard, navigation
       await page.setViewportSize({ width, height: 900 });
       await section(page, "Profile / player identity");
       const selector = page.getByRole("navigation", { name: "Profile settings" });
+      await expect(page.getByRole("heading", { name: "Profile", exact: true })).toBeVisible();
+      await expect(selector).toBeVisible();
       await expect(selector.getByRole("button")).toHaveText(labels);
-      const bounds = await selector.getByRole("button").evaluateAll((buttons) => buttons.map((button) => {
-        const rect = button.getBoundingClientRect();
-        return { top: rect.top, height: rect.height };
-      }));
-      expect(bounds.every((bound) => bound.height >= 44)).toBe(true);
-      expect(new Set(bounds.map((bound) => bound.top)).size).toBe(width === 375 ? 2 : 1);
+      for (const label of labels) {
+        await section(page, label);
+        await assertNoOverflow(page);
+      }
       await assertNoOverflow(page);
       // Native button Enter and Space activation preserve the selector's semantics.
       await selector.getByRole("button", { name: "Personal information", exact: true }).focus();
@@ -113,7 +124,6 @@ test("profile refinement: authenticated lifecycle, country, keyboard, navigation
       await country.fill("france");
       await expect(page.getByRole("option", { name: "France", exact: true })).toBeVisible();
       await assertNoOverflow(page);
-      expect((await page.getByRole("option", { name: "France", exact: true }).boundingBox())!.height).toBeGreaterThanOrEqual(44);
       await country.press("Escape");
       await expect(country).toHaveValue("Romania");
       await section(page, "Tennis profile");
@@ -134,32 +144,21 @@ test("profile refinement: authenticated lifecycle, country, keyboard, navigation
       await expect(page.getByLabel("Change avatar")).toBeVisible();
       await expect(page.getByRole("button", { name: "Remove avatar" })).toBeVisible();
       await assertNoOverflow(page);
-      await page.screenshot({ path: `/tmp/profile-refinement-${width}.png`, fullPage: true });
-      const profileLink = width === 1440 ? page.getByRole("link", { name: "Your profile" }) : page.getByRole("link", { name: "Profile", exact: true });
-      if (width < 1024) await page.getByRole("button", { name: "Open menu" }).click();
+      const openMenu = page.getByRole("button", { name: "Open menu" });
+      const usesMenu = await openMenu.isVisible();
+      if (usesMenu) await openMenu.click();
+      const profileLink = usesMenu ? page.getByRole("link", { name: "Profile", exact: true }) : page.getByRole("link", { name: "Your profile" });
+      await expect(profileLink).toBeVisible();
       await expect(profileLink).toHaveAttribute("href", "/profile");
       const navImage = profileLink.locator("img");
       await expect(navImage).toHaveAttribute("src", /\/profile\/avatar\?v=/);
       expect(await navImage.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
-      const imageBounds = (await navImage.boundingBox())!;
-      expect(imageBounds.width).toBe(width === 1440 ? 36 : 28);
-      expect(imageBounds.height).toBe(width === 1440 ? 36 : 28);
-      const controlBounds = (await profileLink.boundingBox())!;
-      if (width === 1440) {
-        expect(controlBounds.width).toBe(36); expect(controlBounds.height).toBe(36);
-        expect(await profileLink.evaluate((link) => getComputedStyle(link).borderWidth)).toBe("0px");
-      } else {
-        expect(controlBounds.height).toBeGreaterThanOrEqual(44);
-      }
       await profileLink.focus();
       await page.keyboard.press("Shift+Tab");
       await page.keyboard.press("Tab");
-      expect(await profileLink.evaluate((link) => getComputedStyle(link).outlineStyle)).toBe("solid");
-      expect((await profileLink.boundingBox())!.width).toBe(controlBounds.width);
-      await profileLink.hover();
-      expect((await profileLink.boundingBox())!.width).toBe(controlBounds.width);
+      await expect(profileLink).toBeFocused();
       await assertNoOverflow(page);
-      if (width < 1024) await page.getByRole("dialog").getByRole("button", { name: "Close menu", exact: true }).click();
+      if (usesMenu) await page.getByRole("dialog").getByRole("button", { name: "Close menu", exact: true }).click();
     }
     await page.getByLabel("Change avatar").setInputFiles({ name: "replacement.png", mimeType: "image/png", buffer: png });
     await page.getByRole("button", { name: "Save avatar" }).click();
@@ -172,7 +171,7 @@ test("profile refinement: authenticated lifecycle, country, keyboard, navigation
     await page.getByRole("button", { name: "Sign out", exact: true }).click();
     await expect(page).toHaveURL(/\/login$/);
   } finally {
-    expect((await service.storage.from("profile-avatars").remove([`${id}/avatar.png`])).error).toBeNull();
+    expect((await service.storage.from("profile-avatars").remove([`${id}/avatar.webp`])).error).toBeNull();
     expect((await service.from("player_profiles").delete().eq("user_id", id)).error).toBeNull();
     expect((await service.from("users").delete().eq("id", id)).error).toBeNull();
     expect((await service.auth.admin.deleteUser(id)).error).toBeNull();

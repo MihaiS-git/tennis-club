@@ -1,7 +1,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set search_path = extensions, public;
-select plan(29);
+select plan(32);
 select is((select count(*) from pg_trigger where tgrelid = 'public.player_profiles'::regclass
   and tgname = 'player_profiles_set_updated_at'), 0::bigint, 'player update timestamps have no maintenance trigger');
 select ok(has_column_privilege('authenticated', 'public.player_profiles', 'updated_at', 'UPDATE'),
@@ -57,11 +57,14 @@ select is((select first_name from public.users where id = 'b13f15e2-7b5d-4b41-8d
 update public.users set status = 'active' where id = 'b13f15e2-7b5d-4b41-8d4b-4f2135081002';
 select is((select status from public.users where id = 'b13f15e2-7b5d-4b41-8d4b-4f2135081002'), 'active'::public.user_status, 'admin status behavior preserved');
 
-insert into storage.objects (bucket_id, name) values ('profile-avatars', auth.uid()::text || '/avatar.png');
-select is((select count(*) from storage.objects where bucket_id = 'profile-avatars' and name = auth.uid()::text || '/avatar.png'), 1::bigint, 'owner avatar path allowed');
-select throws_ok($$insert into storage.objects (bucket_id, name) values ('profile-avatars', 'b13f15e2-7b5d-4b41-8d4b-4f2135081002/avatar.png')$$, '42501', null, 'other avatar path forbidden');
+insert into storage.objects (bucket_id, name) values ('profile-avatars', auth.uid()::text || '/avatar.webp');
+select is((select count(*) from storage.objects where bucket_id = 'profile-avatars' and name = auth.uid()::text || '/avatar.webp'), 1::bigint, 'owner avatar path allowed');
+select throws_ok($$insert into storage.objects (bucket_id, name) values ('profile-avatars', 'b13f15e2-7b5d-4b41-8d4b-4f2135081002/avatar.webp')$$, '42501', null, 'other avatar path forbidden');
 select throws_ok($$insert into storage.objects (bucket_id, name) values ('profile-avatars', auth.uid()::text || '/extra.png')$$, '42501', null, 'only canonical avatar filenames allowed');
+select throws_ok($$insert into storage.objects (bucket_id, name) values ('profile-avatars', auth.uid()::text || '/avatar.png')$$, '42501', null, 'legacy PNG filename forbidden');
+select throws_ok($$insert into storage.objects (bucket_id, name) values ('profile-avatars', auth.uid()::text || '/avatar.jpg')$$, '42501', null, 'legacy JPEG filename forbidden');
 reset role;
+select is((select allowed_mime_types from storage.buckets where id = 'profile-avatars'), array['image/webp']::text[], 'bucket only stores WebP');
 select is((select public from storage.buckets where id = 'profile-avatars'), false, 'avatar bucket is private');
 select is((select file_size_limit from storage.buckets where id = 'profile-avatars'), 5242880::bigint, 'bucket enforces five MiB');
 select * from finish();

@@ -10,6 +10,7 @@ import type { PersonalProfile, PlayerProfile } from "@/lib/profile/profile";
 import type { ProfileActionState } from "@/lib/profile/validation";
 import { sportyaLevels } from "@/lib/profile/validation";
 import { effectiveDisplayName } from "@/lib/profile/presentation";
+import { avatarFileError } from "@/lib/profile/avatar-file-validation";
 import { CountrySelect } from "./country-select";
 import { savePersonalAction, saveTennisAction, uploadAvatarAction, removeAvatarAction } from "./actions";
 
@@ -138,6 +139,8 @@ export function TennisProfileForm({ profile, personal = {} }: {
 export function AvatarForms({ hasAvatar, hasProfile }: { hasAvatar: boolean; hasProfile: boolean }) {
   const [uploadState, uploadAction] = useActionState(uploadAvatarAction, initialState);
   const [removeState, removeAction] = useActionState(removeAvatarAction, initialState);
+  const [selection, setSelection] = useState<{ state: ProfileActionState; error?: string } | null>(null);
+  const avatarError = selection?.error ?? (selection?.state === uploadState ? undefined : uploadState.fieldErrors?.avatar);
   useFeedback(uploadState);
   useFeedback(removeState);
   if (!hasProfile) return <p className="text-sm text-muted-foreground">Save your tennis profile to add an avatar.</p>;
@@ -145,11 +148,17 @@ export function AvatarForms({ hasAvatar, hasProfile }: { hasAvatar: boolean; has
     <details className="min-w-0">
       <summary className="min-h-11 cursor-pointer rounded-control px-1 py-3 text-sm font-medium text-primary hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary">Edit photo</summary>
       <div className="space-y-4 pt-3 [&_button]:min-h-11">
-        <form action={uploadAction} className="space-y-3">
+        <form action={uploadAction} className="space-y-3" onSubmit={(event) => {
+          const input = event.currentTarget.elements.namedItem("avatar");
+          const error = avatarFileError(input instanceof HTMLInputElement ? input.files?.[0] : undefined);
+          setSelection({ state: uploadState, error });
+          if (error) event.preventDefault();
+        }}>
           <FormMessage>{uploadState.formError}</FormMessage>
-          <FormField label={hasAvatar ? "Change avatar" : "Upload avatar"} htmlFor="avatar" error={uploadState.fieldErrors?.avatar} errorId="avatar-error">
+          <FormField label={hasAvatar ? "Change avatar" : "Upload avatar"} htmlFor="avatar" error={avatarError} errorId="avatar-error">
             <Input className="min-h-11 min-w-0" id="avatar" name="avatar" type="file" accept="image/jpeg,image/png,image/webp"
-              aria-invalid={Boolean(uploadState.fieldErrors?.avatar)} aria-describedby={`avatar-help${uploadState.fieldErrors?.avatar ? " avatar-error" : ""}`} />
+              onChange={(event) => setSelection({ state: uploadState, error: avatarFileError(event.target.files?.[0]) })}
+              aria-invalid={Boolean(avatarError)} aria-describedby={`avatar-help${avatarError ? " avatar-error" : ""}`} />
           </FormField>
           <p id="avatar-help" className="text-xs text-muted-foreground">JPEG, PNG, or WebP. Maximum 5 MiB.</p>
           <SubmitButton variant="secondary" pendingLabel="Uploading…">Save avatar</SubmitButton>

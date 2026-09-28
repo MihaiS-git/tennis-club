@@ -55,9 +55,10 @@ it.each([{ roles: [] }, { roles: ["admin", "coach"] }])("renders consolidated se
 });
 it("preserves an existing player identity and avatar alongside account controls", async () => {
   profileContext.mockResolvedValue({ client: {}, account: { state: "active", userId: "owner", email: "owner@example.com", roles: [] } });
-  loadProfile.mockResolvedValue({ personal: {}, player: { display_name: "Club player", avatar_path: "owner/avatar.png", updated_at: "2026-09-28T10:00:00Z", rating: 1200, sportya_level: "6" } });
+  loadProfile.mockResolvedValue({ personal: {}, player: { display_name: "Club player", avatar_path: "owner/avatar.webp", updated_at: "2026-09-28T10:00:00Z", rating: 1200, sportya_level: "6" } });
   render(await ProfilePage());
   expect(screen.getByRole("heading", { name: "Club player" })).toBeDefined();
+  expect(screen.getByRole("img", { name: "Your player avatar" }).getAttribute("loading")).toBe("eager");
   expect(screen.getByRole("img", { name: "Your player avatar" }).getAttribute("src")).toBe("/profile/avatar?v=2026-09-28T10%3A00%3A00Z");
   expect(screen.getByText("1200")).toBeDefined();
   expect(screen.getByText("6")).toBeDefined();

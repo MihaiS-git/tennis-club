@@ -1,6 +1,5 @@
 import { expect, it } from "vitest";
 import { personalInformationSchema, tennisProfileSchema, profileFormInput } from "../../../src/lib/profile/validation";
-import { MAX_AVATAR_SIZE, validateAvatar } from "../../../src/lib/profile/avatar-validation";
 
 const emptyPersonal = Object.fromEntries(Object.keys(personalInformationSchema.shape).map((key) => [key, ""]));
 const emptyTennis = Object.fromEntries(Object.keys(tennisProfileSchema.shape).map((key) => [key, ""]));
@@ -26,24 +25,6 @@ it("does not extract client ownership, rating, or avatar paths", () => {
   expect(profileFormInput(form, Object.keys(tennisProfileSchema.shape))).toEqual({ ...emptyTennis, display_name: "Ana" });
 });
 
-it.each([
-  ["image/jpeg", [255, 216, 255, 0], "jpg"],
-  ["image/png", [137, 80, 78, 71, 13, 10, 26, 10], "png"],
-  ["image/webp", Array.from(new TextEncoder().encode("RIFF0000WEBP")), "webp"],
-])("accepts the %s signature", async (mime, bytes, extension) => {
-  const result = await validateAvatar(new File([new Uint8Array(bytes)], "untrusted-name", { type: mime }));
-  expect(result).toMatchObject({ ok: true, extension });
-});
-it("rejects invalid types, forged MIME types, and empty images", async () => {
-  for (const file of [new File(["GIF89a"], "x.gif", { type: "image/gif" }), new File(["html"], "x.png", { type: "image/png" }), new File([], "x.png", { type: "image/png" })]) {
-    expect((await validateAvatar(file)).ok).toBe(false);
-  }
-});
-it("accepts exactly 5 MiB and rejects larger images before reading their bytes", async () => {
-  const bytes = new Uint8Array(MAX_AVATAR_SIZE); bytes.set([255, 216, 255]);
-  expect((await validateAvatar(new File([bytes], "x.jpg", { type: "image/jpeg" }))).ok).toBe(true);
-  expect((await validateAvatar(new File([bytes, "x"], "x.jpg", { type: "image/jpeg" }))).ok).toBe(false);
-});
 
 it.each(["", null, "4", "5", "6", "7", "8", "9"])("accepts individual Sportya level %s", (level) => {
   expect(tennisProfileSchema.parse({ ...emptyTennis, sportya_level: level }).sportya_level).toBe(level || null);

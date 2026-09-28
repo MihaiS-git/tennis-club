@@ -18,11 +18,11 @@ export function ProfileSettings({ identity, personal, tennis, account }: {
 
   return (
     <div className="space-y-5 md:space-y-6">
-      <nav aria-label="Profile settings" className="grid grid-cols-2 gap-1 rounded-card border border-border bg-surface p-1 sm:grid-cols-4">
+      <nav aria-label="Profile settings" className="flex min-w-0 max-w-full gap-1 overflow-x-auto overscroll-x-contain rounded-card border border-border bg-surface p-1 sm:grid sm:grid-cols-4 sm:overflow-visible">
         {sections.map(({ id, title }) => (
           <button key={id} type="button" aria-pressed={selected === id} aria-controls={`${id}-settings`}
             onClick={() => setSelected(id)}
-            className={`min-h-14 rounded-control px-2 py-2 text-xs font-medium leading-5 transition sm:text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${selected === id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-surface-muted hover:text-primary"}`}>
+            className={`min-h-12 shrink-0 whitespace-nowrap rounded-control px-2 py-2 text-xs font-medium leading-5 transition sm:min-h-14 sm:whitespace-normal sm:text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${selected === id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-surface-muted hover:text-primary"}`}>
             {title}
           </button>
         ))}

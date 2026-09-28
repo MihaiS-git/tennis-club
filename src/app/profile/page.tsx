@@ -1,4 +1,3 @@
-import Image from "next/image";
 import { UserRound } from "lucide-react";
 import { redirect } from "next/navigation";
 import { signOutAction } from "@/app/account/actions";
@@ -38,7 +37,9 @@ export default async function ProfilePage() {
             <section aria-labelledby="player-identity-heading" className="rounded-card border border-border bg-surface-elevated p-5 shadow-card sm:p-6 lg:p-8">
               <div className="grid min-w-0 gap-5 md:grid-cols-[minmax(0,1fr)_18rem] md:items-center md:gap-8">
                 <div className="flex min-w-0 items-center gap-4 sm:gap-6">
-                  {imageUrl ? <Image src={imageUrl} alt="Your player avatar" width={112} height={112} unoptimized className="size-20 shrink-0 rounded-full object-cover sm:size-28" />
+                  {imageUrl ?
+                    // eslint-disable-next-line @next/next/no-img-element -- The authenticated avatar endpoint serves normalized images directly.
+                    <img src={imageUrl} alt="Your player avatar" width={112} height={112} loading="eager" className="size-20 shrink-0 rounded-full object-cover sm:size-28" />
                     : <div role="img" aria-label="Default player avatar" className="flex size-20 shrink-0 items-center justify-center rounded-full bg-surface-muted text-primary sm:size-28"><UserRound className="size-9 sm:size-12" aria-hidden="true" /></div>}
                   <div className="min-w-0">
                     <p className="text-xs font-semibold uppercase tracking-wider text-accent">Player profile</p>

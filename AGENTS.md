@@ -395,7 +395,7 @@ Private data may include:
 - account information;
 - private preferences.
 
-Player avatars use the private Supabase Storage bucket `profile-avatars`, through the user-scoped server client and Next.js avatar actions. Store only object paths in player profiles. No browser Supabase client is introduced. See `docs/profiles.md` for the implemented workflow.
+Player avatars use the private Supabase Storage bucket `profile-avatars`, through the user-scoped server client and Next.js avatar actions. Decode JPEG/PNG/WebP sources with Sharp, enforce the 5 MiB upload, 12,000-pixel side, and 40-million-pixel limits, and normalize to WebP within 512 × 512 without enlargement or cropping. Store only the canonical `<user-id>/avatar.webp` path in player profiles; the bucket accepts only `image/webp` objects. Lightweight browser file checks are UX only. No browser Supabase client is introduced. See `docs/profiles.md` for the implemented workflow.
 
 Prefer schemas that make access boundaries explicit.
 

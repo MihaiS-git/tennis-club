@@ -719,7 +719,7 @@ AI-based partner matching is not required initially.
 
 `public.users` stores application identity/status and optional personal/contact information. `public.player_profiles` stores tennis information independently of RBAC. A player profile is created on the first tennis save, not at signup. Future `coach_profiles` will be a sibling domain entity; users may have either, both, or neither.
 
-`/profile` has separate personal and tennis saves, plus player-avatar upload/removal. `/profile` also includes account/email information, roles, password change, and sign out; `/account` redirects to `/profile`. Tennis information is readable only by active authenticated users, never anonymously. See [Profile implementation](docs/profiles.md).
+`/profile` has separate personal and tennis saves, plus player-avatar upload/removal. JPEG, PNG, and WebP avatar uploads (maximum 5 MiB) are decoded and normalized server-side with Sharp into metadata-free WebP images fitting within 512 × 512 without enlargement or cropping. Source dimensions are limited to 12,000 pixels per side and 40 million pixels. Only `<user-id>/avatar.webp` is stored in the private bucket and served through the authenticated avatar endpoint. `/profile` also includes account/email information, roles, password change, and sign out; `/account` redirects to `/profile`. Tennis information is readable only by active authenticated users, never anonymously. See [Profile implementation](docs/profiles.md).
 
 ### Tennis information for active authenticated users
 

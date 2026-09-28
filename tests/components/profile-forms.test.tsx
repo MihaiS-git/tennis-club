@@ -151,8 +151,41 @@ it("keeps photo upload and replacement/removal behind Edit photo using the exist
   expect(remove).not.toHaveBeenCalled();
   view.rerender(<AvatarForms hasAvatar hasProfile />);
   expect(screen.getByLabelText("Change avatar")).toBeDefined();
+  fireEvent.change(screen.getByLabelText("Change avatar"), { target: { files: [file] } });
   fireEvent.submit(screen.getByRole("button", { name: "Save avatar" }).closest("form")!);
   await waitFor(() => expect(upload).toHaveBeenCalledTimes(2));
   fireEvent.submit(screen.getByRole("button", { name: "Remove avatar" }).closest("form")!);
   await waitFor(() => expect(remove).toHaveBeenCalledOnce());
+});
+
+it.each([
+  ["unsupported MIME", () => new File(["GIF89a"], "avatar.gif", { type: "image/gif" }), "Choose a JPEG, PNG, or WebP image."],
+  ["zero bytes", () => new File([], "avatar.png", { type: "image/png" }), "Choose an image to upload."],
+  ["oversized input", () => new File([new Uint8Array(5 * 1024 * 1024 + 1)], "avatar.png", { type: "image/png" }), "Use an image no larger than 5 MiB."],
+] as const)("blocks %s before submission and clears the error for a valid selection", async (_name, invalidFile, error) => {
+  upload.mockResolvedValue({ success: "Avatar saved." });
+  render(<AvatarForms hasAvatar={false} hasProfile />);
+  const input = screen.getByLabelText("Upload avatar");
+  const form = screen.getByRole("button", { name: "Save avatar" }).closest("form")!;
+  fireEvent.change(input, { target: { files: [invalidFile()] } });
+  expect(screen.getByRole("alert").textContent).toBe(error);
+  expect(input.getAttribute("aria-invalid")).toBe("true");
+  fireEvent.submit(form);
+  expect(upload).not.toHaveBeenCalled();
+  fireEvent.change(input, { target: { files: [new File(["image"], "avatar.png", { type: "image/png" })] } });
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(input.getAttribute("aria-invalid")).toBe("false");
+  fireEvent.submit(form);
+  await waitFor(() => expect(upload).toHaveBeenCalledOnce());
+});
+
+it("keeps server image validation errors visible until a new file is selected", async () => {
+  upload.mockResolvedValue({ fieldErrors: { avatar: "Choose a valid JPEG, PNG, or WebP image." } });
+  render(<AvatarForms hasAvatar={false} hasProfile />);
+  const input = screen.getByLabelText("Upload avatar");
+  fireEvent.change(input, { target: { files: [new File(["malformed"], "avatar.png", { type: "image/png" })] } });
+  fireEvent.submit(screen.getByRole("button", { name: "Save avatar" }).closest("form")!);
+  await screen.findByText("Choose a valid JPEG, PNG, or WebP image.");
+  fireEvent.change(input, { target: { files: [new File(["new image"], "avatar.webp", { type: "image/webp" })] } });
+  expect(screen.queryByText("Choose a valid JPEG, PNG, or WebP image.")).toBeNull();
 });

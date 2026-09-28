@@ -45,3 +45,13 @@ it("does not refresh the layout when an avatar mutation fails", async () => {
   await removeAvatarAction();
   expect(revalidatePath).not.toHaveBeenCalled();
 });
+
+it("ignores user IDs and paths supplied with an avatar upload", async () => {
+  avatar.mockResolvedValue({ success: "Avatar saved." });
+  const data = new FormData();
+  const file = new File(["image"], "../../victim/avatar.jpg", { type: "image/png" });
+  data.set("avatar", file);
+  data.set("user_id", "victim"); data.set("avatar_path", "victim/avatar.webp");
+  await uploadAvatarAction({}, data);
+  expect(avatar).toHaveBeenCalledExactlyOnceWith(file);
+});
