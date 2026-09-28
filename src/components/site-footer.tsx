@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { ProfileDepartureLink as Link } from "./profile-departure-navigation";
 
 export function SiteFooter() {
   return (

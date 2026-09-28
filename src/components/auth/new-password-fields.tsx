@@ -1,7 +1,5 @@
 "use client";
 
-import { useState } from "react";
-
 import { FormField } from "@/components/form-field";
 import { PasswordInput } from "@/components/password-input";
 import type { AuthFieldName } from "@/lib/auth/action-state";
@@ -15,8 +13,6 @@ export function NewPasswordFields({
   fieldError: (field: AuthFieldName) => string | undefined;
   clearErrors: (fields: AuthFieldName[]) => void;
 }) {
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
   const passwordError = fieldError("password");
   const confirmationError = fieldError("confirmPassword");
   const passwordId = `${idPrefix}-password`;
@@ -33,9 +29,7 @@ export function NewPasswordFields({
           name="password"
           autoComplete="new-password"
           required
-          value={password}
-          onChange={(event) => {
-            setPassword(event.target.value);
+          onChange={() => {
             clearErrors(["password", "confirmPassword"]);
           }}
           aria-invalid={Boolean(passwordError)}
@@ -51,9 +45,7 @@ export function NewPasswordFields({
           name="confirmPassword"
           autoComplete="new-password"
           required
-          value={confirmPassword}
-          onChange={(event) => {
-            setConfirmPassword(event.target.value);
+          onChange={() => {
             clearErrors(["confirmPassword"]);
           }}
           aria-invalid={Boolean(confirmationError)}

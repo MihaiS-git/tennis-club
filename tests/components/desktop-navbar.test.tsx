@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { renderToReadableStream } from "react-dom/server";
 
 import type { CurrentAccount } from "../../src/lib/auth/account";
 
@@ -11,16 +12,25 @@ vi.mock("../../src/lib/auth/account", () => ({ readCurrentAccount }));
 vi.mock("../../src/lib/profile/navigation", () => ({ readNavigationProfile: async () => ({
   account: await readCurrentAccount(), avatarUrl: avatar.url,
 }) }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }));
+
 vi.mock("../../src/app/account/actions", () => ({ signOutAction: vi.fn() }));
 
 import { DesktopNavbar } from "../../src/components/desktop-navbar";
+import { ProfileNavigationAvatar } from "../../src/components/profile-navigation-avatar";
+
+async function renderNavbar() {
+  const stream = await renderToReadableStream(<DesktopNavbar />);
+  await stream.allReady;
+  render(<div dangerouslySetInnerHTML={{ __html: await new Response(stream).text() }} />);
+}
 
 beforeEach(() => readCurrentAccount.mockReset());
 afterEach(() => { cleanup(); avatar.url = null; });
 
 it("shows public navigation and signed-out actions", async () => {
   readCurrentAccount.mockResolvedValue({ state: "unauthenticated" } satisfies CurrentAccount);
-  render(await DesktopNavbar());
+  await renderNavbar();
 
   const navigation = screen.getByRole("navigation", { name: "Main navigation" });
   expect(within(navigation).getAllByRole("link").map((link) => link.textContent)).toEqual([
@@ -40,7 +50,7 @@ it("shows Matches, Profile, and direct Sign out for authenticated users", async 
     email: "member@example.com",
     roles: [],
   } satisfies CurrentAccount);
-  render(await DesktopNavbar());
+  await renderNavbar();
 
   const navigation = screen.getByRole("navigation", { name: "Main navigation" });
   expect(within(navigation).getAllByRole("link").map((link) => link.textContent)).toEqual([
@@ -59,7 +69,7 @@ it.each([
   ["suspended admin", { state: "suspended", userId: "admin-1", email: "admin@example.com", roles: ["admin"] }],
 ] satisfies ReadonlyArray<readonly [string, CurrentAccount]>)("does not show Users for %s", async (_description, account) => {
   readCurrentAccount.mockResolvedValue(account);
-  render(await DesktopNavbar());
+  await renderNavbar();
 
   const navigation = screen.getByRole("navigation", { name: "Main navigation" });
   expect(within(navigation).queryByRole("link", { name: "Users" })).toBeNull();
@@ -73,7 +83,7 @@ it("shows Users after Club for an active admin", async () => {
     email: "admin@example.com",
     roles: ["admin"],
   } satisfies CurrentAccount);
-  render(await DesktopNavbar());
+  await renderNavbar();
 
   const navigation = screen.getByRole("navigation", { name: "Main navigation" });
   expect(within(navigation).getAllByRole("link").map((link) => link.textContent)).toEqual([
@@ -87,7 +97,7 @@ it("shows Users after Club for an active admin", async () => {
 it.each([null, "/profile/avatar?v=updated"])("uses a circular avatar control or the original icon button (%s)", async (src) => {
   readCurrentAccount.mockResolvedValue({ state: "active", userId: "owner", roles: [] });
   avatar.url = src;
-  render(await DesktopNavbar());
+  await renderNavbar();
   const control = screen.getByRole("link", { name: "Your profile" });
   expect(control.getAttribute("href")).toBe("/profile");
   if (src) {
@@ -105,13 +115,19 @@ it.each([null, "/profile/avatar?v=updated"])("uses a circular avatar control or 
     expect(control.classList.contains("focus-visible:outline-2")).toBe(true);
     expect(control.classList.contains("focus-visible:outline-offset-2")).toBe(true);
     expect(control.querySelector("svg")).toBeNull();
-    fireEvent.error(image);
-    expect(control.querySelector("img")).toBeNull();
   } else {
     expect(control.querySelector("img")).toBeNull();
   }
-  expect(control.querySelector("svg")).not.toBeNull();
-  expect(control.className).toBe("inline-flex size-10 items-center justify-center rounded-control border border-border-strong text-primary hover:bg-surface-muted hover:text-accent");
+  if (!src) expect(control.querySelector("svg")).not.toBeNull();
   expect(control.getAttribute("href")).toBe("/profile");
   expect(screen.getByRole("button", { name: "Sign out" })).toBeDefined();
+});
+
+it("falls back to the profile icon when the avatar image fails", () => {
+  render(<ProfileNavigationAvatar src="/profile/avatar?v=updated" desktop />);
+  const control = screen.getByRole("link", { name: "Your profile" });
+  fireEvent.error(control.querySelector("img")!);
+  expect(control.querySelector("img")).toBeNull();
+  expect(control.querySelector("svg")).not.toBeNull();
+  expect(control.getAttribute("href")).toBe("/profile");
 });

@@ -2,7 +2,7 @@
 
 ## Security model
 
-Supabase Row Level Security is a primary application security boundary.
+Next.js is the complete primary application authorization boundary. Supabase Row Level Security remains active as defense-in-depth and secondary security.
 
 Authorization must not rely only on:
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { Menu, X } from "lucide-react";
-import Link from "next/link";
+import { ProfileDepartureLink as Link, ProfileDepartureForm } from "./profile-departure-navigation";
 import { useEffect, useId, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 
@@ -165,11 +165,11 @@ export function MobileNavbarMenu({ isAuthenticated, isAdmin, avatarUrl = null }:
                   <ProfileNavigationAvatar src={avatarUrl} />
                   Profile
                 </Link>
-                <form action={signOutAction}>
+                <ProfileDepartureForm action={signOutAction} onSubmit={closeMenu}>
                   <button type="submit" className="flex min-h-12 w-full items-center text-left text-sm font-medium text-primary hover:text-accent">
                     Sign out
                   </button>
-                </form>
+                </ProfileDepartureForm>
               </>
             ) : (
               <Link onClick={closeMenu} href="/login" className="flex min-h-12 items-center text-sm font-medium text-primary hover:text-accent">

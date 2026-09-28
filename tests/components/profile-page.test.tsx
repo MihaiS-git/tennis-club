@@ -1,13 +1,15 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-const { profileContext, loadProfile, redirect, signOutAction } = vi.hoisted(() => ({
-  profileContext: vi.fn(), loadProfile: vi.fn(), signOutAction: vi.fn(), redirect: vi.fn((path: string) => { throw new Error(`redirect:${path}`); }),
+import type { ComponentProps } from "react";
+import type { TennisProfileForm } from "../../src/app/profile/profile-forms";
+const { profileContext, loadProfile, redirect, signOutAction, tennisFormProps } = vi.hoisted(() => ({
+  profileContext: vi.fn(), loadProfile: vi.fn(), signOutAction: vi.fn(), tennisFormProps: vi.fn(), redirect: vi.fn((path: string) => { throw new Error(`redirect:${path}`); }),
 }));
 vi.mock("../../src/lib/profile/profile", () => ({ profileContext, loadProfile }));
-vi.mock("../../src/app/profile/profile-forms", () => ({ PersonalInformationForm: () => <p>Personal form</p>, TennisProfileForm: () => <p>Tennis form</p>, AvatarForms: () => <p>Avatar controls</p> }));
+vi.mock("../../src/app/profile/profile-forms", () => ({ PersonalInformationForm: () => <p>Personal form</p>, TennisProfileForm: (props: ComponentProps<typeof TennisProfileForm>) => { tennisFormProps(props); return <p>Tennis form</p>; }, AvatarForms: () => <p>Avatar controls</p> }));
 vi.mock("../../src/app/account/actions", () => ({ signOutAction, changePasswordAction: vi.fn() }));
-vi.mock("next/navigation", () => ({ redirect }));
+vi.mock("next/navigation", () => ({ redirect, useRouter: () => ({ bfcacheId: "profile-visit" }) }));
 import ProfilePage from "../../src/app/profile/page";
 import AccountPage from "../../src/app/account/page";
 beforeEach(() => { vi.resetAllMocks(); });
@@ -43,6 +45,7 @@ it.each([{ roles: [] }, { roles: ["admin", "coach"] }])("renders consolidated se
   expect(screen.queryByRole("img", { name: "Default player avatar" })).toBeNull();
   fireEvent.click(navigation.getByRole("button", { name: "Tennis profile" }));
   expect(screen.getByText("Tennis form")).toBeDefined();
+  expect(tennisFormProps).toHaveBeenCalledWith({ profile: null, personal: { first_name: undefined, last_name: undefined } });
   fireEvent.click(navigation.getByRole("button", { name: "Account & security" }));
   expect(screen.getByRole("heading", { name: "Account & security" })).toBeDefined();
   expect(screen.getByText("owner@example.com")).toBeDefined();
@@ -72,4 +75,23 @@ it("uses the existing personal name when no player display name is available", a
   expect(screen.getByRole("heading", { name: "Ana Popescu" })).toBeDefined();
   fireEvent.click(within(screen.getByRole("navigation", { name: "Profile settings" })).getByRole("button", { name: "Account & security" }));
   expect(screen.getByText("No assigned roles")).toBeDefined();
+});
+it.each([null, "Saved player name"])("passes only tennis fields and fallback names to the tennis form with display name %s", async (display_name) => {
+  profileContext.mockResolvedValue({ client: {}, account: { state: "active", userId: "owner", email: "owner@example.com", roles: [] } });
+  const personal = {
+    first_name: "Ana", last_name: "Popescu", phone: "123", date_of_birth: "1990-01-01",
+    address_line1: "Street", address_line2: "Apartment", city: "City", postal_code: "12345", country_code: "RO",
+  };
+  const player = {
+    display_name, sportya_level: "6", rating: 1200, handedness: "right", backhand: "two_handed",
+    preferred_game: "singles", preferred_surface: "clay", bio: "Club player",
+    avatar_path: "owner/avatar.webp", updated_at: "2026-09-28T10:00:00Z",
+  };
+  loadProfile.mockResolvedValue({ personal, player });
+  render(await ProfilePage());
+  fireEvent.click(within(screen.getByRole("navigation", { name: "Profile settings" })).getByRole("button", { name: "Tennis profile" }));
+  expect(tennisFormProps).toHaveBeenCalledWith({
+    profile: { display_name, sportya_level: "6", rating: 1200, handedness: "right", backhand: "two_handed", preferred_game: "singles", preferred_surface: "clay", bio: "Club player" },
+    personal: { first_name: "Ana", last_name: "Popescu" },
+  });
 });

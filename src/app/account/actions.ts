@@ -63,7 +63,7 @@ export async function changePasswordAction(
     return { formError: safeAuthError("password", result.code) };
   }
 
-  redirect("/profile?notice=password-changed");
+  return { success: "Your password has been changed." };
 }
 
 export async function signOutAction() {

@@ -4,8 +4,9 @@ import { Suspense } from "react";
 import { Toaster } from "sonner";
 
 import { DesktopNavbar } from "@/components/desktop-navbar";
-import { MobileNavbar } from "@/components/mobile-navbar";
+import { MobileNavbar, MobileNavbarFallback } from "@/components/mobile-navbar";
 import { QueryFlashMessages } from "@/components/query-flash-messages";
+import { ProfileDepartureProvider } from "@/components/profile-departure-navigation";
 import { SiteFooter } from "@/components/site-footer";
 
 import "./globals.css";
@@ -34,11 +35,15 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className={`${inter.variable} ${archivo.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col">
-        <MobileNavbar />
-        <DesktopNavbar />
+        <ProfileDepartureProvider>
+          <Suspense fallback={<MobileNavbarFallback />}>
+            <MobileNavbar />
+          </Suspense>
+          <DesktopNavbar />
 
-        {children}
-        <SiteFooter />
+          {children}
+          <SiteFooter />
+        </ProfileDepartureProvider>
 
         <Toaster
           position="bottom-right"

@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState } from "react";
 
 import { signInAction } from "@/app/(auth)/actions";
 import { FormMessage } from "@/components/auth-form";
@@ -14,8 +14,6 @@ import { initialAuthActionState } from "@/lib/auth/action-state";
 export function SignInForm() {
   const [state, action] = useActionState(signInAction, initialAuthActionState);
   const { formRef, clearErrors, fieldError, formError } = useActionErrors(state);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
 
   return (
     <form ref={formRef} action={action} className="space-y-4" noValidate>
@@ -27,9 +25,7 @@ export function SignInForm() {
           name="email"
           autoComplete="email"
           required
-          value={email}
-          onChange={(event) => {
-            setEmail(event.target.value);
+          onChange={() => {
             clearErrors(["email"]);
           }}
           aria-invalid={Boolean(fieldError("email"))}
@@ -42,9 +38,7 @@ export function SignInForm() {
           name="password"
           autoComplete="current-password"
           required
-          value={password}
-          onChange={(event) => {
-            setPassword(event.target.value);
+          onChange={() => {
             clearErrors(["password"]);
           }}
           aria-invalid={Boolean(fieldError("password"))}

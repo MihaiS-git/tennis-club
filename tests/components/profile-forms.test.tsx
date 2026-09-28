@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ProfileActionState } from "../../src/lib/profile/validation";
+import type { PlayerProfile } from "../../src/lib/profile/profile";
 const { personal, tennis, upload, remove, success } = vi.hoisted(() => ({
   personal: vi.fn(), tennis: vi.fn(), upload: vi.fn(), remove: vi.fn(), success: vi.fn(),
 }));
@@ -27,12 +28,15 @@ it("uses pending feedback and Sonner for a successful save", async () => {
   let finish: (state: ProfileActionState) => void = () => {};
   personal.mockImplementation(() => new Promise<ProfileActionState>((resolve) => { finish = resolve; }));
   render(<PersonalInformationForm profile={emptyPersonal} />);
-  fireEvent.submit(screen.getByRole("button", { name: "Save personal information" }).closest("form")!);
+  expect(screen.getByRole("button", { name: "Save personal information" }).hasAttribute("disabled")).toBe(true);
+  fireEvent.change(screen.getByLabelText("First name"), { target: { value: "Ana" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save personal information" }));
   const pending = await screen.findByRole("button", { name: "Saving…" }); expect(pending.hasAttribute("disabled")).toBe(true);
   finish({ success: "Personal information saved." }); await waitFor(() => expect(success).toHaveBeenCalledWith("Personal information saved."));
+  expect(screen.getByRole("button", { name: "Save personal information" }).hasAttribute("disabled")).toBe(true);
 });
 it("shows system rating without submitting it, and keeps tennis and personal saves separate", async () => {
-  render(<TennisProfileForm profile={{ display_name: "Ana", avatar_path: null, rating: 1200, sportya_level: null, handedness: null, backhand: null, preferred_game: null, preferred_surface: null, bio: null, updated_at: "2026-09-28T12:00:00Z" }} />);
+  render(<TennisProfileForm profile={{ display_name: "Ana", rating: 1200, sportya_level: null, handedness: null, backhand: null, preferred_game: null, preferred_surface: null, bio: null }} />);
   expect(screen.getByText("1200")).toBeDefined(); expect(document.querySelector('[name="rating"]')).toBeNull();
   fireEvent.change(screen.getByLabelText("Preferred game"), { target: { value: "doubles" } });
   fireEvent.submit(screen.getByRole("button", { name: "Save tennis profile" }).closest("form")!);
@@ -40,6 +44,66 @@ it("shows system rating without submitting it, and keeps tennis and personal sav
   const data = tennis.mock.calls[0][1] as FormData;
   expect(data.get("preferred_game")).toBe("doubles"); expect(data.has("rating")).toBe(false); expect(data.has("user_id")).toBe(false);
 });
+
+const persistedTennis: PlayerProfile = {
+  display_name: "Mihai Suciu", avatar_path: null, rating: 1200, sportya_level: "4",
+  handedness: "right", backhand: "two_handed", preferred_game: "singles", preferred_surface: "clay",
+  bio: "test", updated_at: "2026-09-28T12:00:00Z",
+};
+function expectTennisValues(sportya: string) {
+  for (const [label, value] of [
+    ["Display name", "Mihai Suciu"], ["Sportya level", sportya], ["Handedness", "right"],
+    ["Backhand", "two_handed"], ["Preferred game", "singles"], ["Preferred surface", "clay"], ["Bio", "test"],
+  ]) {
+    expect((screen.getByLabelText(label) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).value).toBe(value);
+  }
+}
+
+it("retains all tennis values after saving only Sportya and during the next local edit", async () => {
+  tennis.mockResolvedValue({ success: "Tennis profile saved." });
+  const view = render(<TennisProfileForm profile={persistedTennis} />);
+  expectTennisValues("4");
+  fireEvent.change(screen.getByLabelText("Sportya level"), { target: { value: "6" } });
+  fireEvent.submit(screen.getByRole("button", { name: "Save tennis profile" }).closest("form")!);
+  await waitFor(() => expect(success).toHaveBeenCalledWith("Tennis profile saved."));
+  expectTennisValues("6");
+  const submitted = tennis.mock.calls[0][1] as FormData;
+  for (const [name, value] of Object.entries({ ...persistedTennis, sportya_level: "6" })) {
+    if (name !== "avatar_path" && name !== "rating" && name !== "updated_at") expect(submitted.get(name)).toBe(value);
+  }
+  // The successful action's revalidation supplies the newly persisted server props.
+  view.rerender(<TennisProfileForm profile={{ ...persistedTennis, sportya_level: "6" }} />);
+  expectTennisValues("6");
+  fireEvent.change(screen.getByLabelText("Sportya level"), { target: { value: "7" } });
+  expectTennisValues("7");
+  expect(tennis).toHaveBeenCalledOnce();
+});
+
+it("retains submitted tennis preferences when a save returns validation errors", async () => {
+  tennis.mockResolvedValue({ fieldErrors: { sportya_level: "Select a supported Sportya level." } });
+  render(<TennisProfileForm profile={persistedTennis} />);
+  fireEvent.change(screen.getByLabelText("Sportya level"), { target: { value: "6" } });
+  fireEvent.submit(screen.getByRole("button", { name: "Save tennis profile" }).closest("form")!);
+  await screen.findByText("Select a supported Sportya level.");
+  expectTennisValues("6");
+  expect(screen.getByLabelText("Sportya level").getAttribute("aria-invalid")).toBe("true");
+  fireEvent.change(screen.getByLabelText("Sportya level"), { target: { value: "7" } });
+  expectTennisValues("7");
+  expect(screen.queryByText("Select a supported Sportya level.")).toBeNull();
+});
+
+it("retains personal information and country after a successful save", async () => {
+  personal.mockResolvedValue({ success: "Personal information saved." });
+  render(<PersonalInformationForm profile={{ ...emptyPersonal, first_name: "Mihai", phone: "123", country_code: "RO" }} />);
+  fireEvent.change(screen.getByLabelText("First name"), { target: { value: "Saved name" } });
+  fireEvent.submit(screen.getByRole("button", { name: "Save personal information" }).closest("form")!);
+  await waitFor(() => expect(success).toHaveBeenCalledWith("Personal information saved."));
+  expect((screen.getByLabelText("First name") as HTMLInputElement).value).toBe("Saved name");
+  expect((screen.getByLabelText("Phone") as HTMLInputElement).value).toBe("123");
+  expect((screen.getByRole("combobox", { name: "Country" }) as HTMLInputElement).value).toBe("Romania");
+  expect(document.querySelector<HTMLInputElement>('input[name="country_code"]')?.value).toBe("RO");
+});
+
 it("shows the avatar lifecycle controls", () => {
   const view = render(<AvatarForms hasAvatar={false} hasProfile={false} />);
   expect(screen.getByText("Save your tennis profile to add an avatar.")).toBeDefined();
@@ -188,4 +252,31 @@ it("keeps server image validation errors visible until a new file is selected", 
   await screen.findByText("Choose a valid JPEG, PNG, or WebP image.");
   fireEvent.change(input, { target: { files: [new File(["new image"], "avatar.webp", { type: "image/webp" })] } });
   expect(screen.queryByText("Choose a valid JPEG, PNG, or WebP image.")).toBeNull();
+});
+
+it.each(["upload", "remove"])("disables both avatar controls and blocks duplicate submits during %s", async (operation) => {
+  let finish: (state: ProfileActionState) => void = () => {};
+  const activeAction = operation === "upload" ? upload : remove;
+  const otherAction = operation === "upload" ? remove : upload;
+  activeAction.mockImplementation(() => new Promise<ProfileActionState>((resolve) => { finish = resolve; }));
+  render(<AvatarForms hasAvatar hasProfile />);
+  const input = screen.getByLabelText("Change avatar");
+  const uploadForm = screen.getByRole("button", { name: "Save avatar" }).closest("form")!;
+  const removeForm = screen.getByRole("button", { name: "Remove avatar" }).closest("form")!;
+  fireEvent.change(input, { target: { files: [new File(["image"], "avatar.png", { type: "image/png" })] } });
+  // Includes a same-tick second submission before pending UI can render.
+  fireEvent.submit(operation === "upload" ? uploadForm : removeForm);
+  fireEvent.submit(operation === "upload" ? removeForm : uploadForm);
+  await waitFor(() => expect(activeAction).toHaveBeenCalledOnce());
+  expect(otherAction).not.toHaveBeenCalled();
+  expect(input.hasAttribute("disabled")).toBe(true);
+  for (const form of [uploadForm, removeForm]) {
+    expect(within(form).getByRole("button").hasAttribute("disabled")).toBe(true);
+    fireEvent.submit(form);
+  }
+  expect(activeAction).toHaveBeenCalledOnce(); expect(otherAction).not.toHaveBeenCalled();
+  await act(async () => finish({ formError: "Please retry." }));
+  await screen.findByText("Please retry.");
+  expect(input.hasAttribute("disabled")).toBe(false);
+  for (const form of [uploadForm, removeForm]) expect(within(form).getByRole("button").hasAttribute("disabled")).toBe(false);
 });

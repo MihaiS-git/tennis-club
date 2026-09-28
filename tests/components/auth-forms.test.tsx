@@ -1,24 +1,30 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { hydrateRoot } from "react-dom/client";
+import { renderToString } from "react-dom/server";
 import type { FormEvent } from "react";
 
-const { signUpAction, signInAction } = vi.hoisted(() => ({
+const { signUpAction, signInAction, forgotPasswordAction, resetPasswordAction, changePasswordAction } = vi.hoisted(() => ({
   signUpAction: vi.fn(),
   signInAction: vi.fn(),
+  forgotPasswordAction: vi.fn(),
+  resetPasswordAction: vi.fn(),
+  changePasswordAction: vi.fn(),
 }));
 
 vi.mock("../../src/app/(auth)/actions", () => ({
   signUpAction,
   signInAction,
-  forgotPasswordAction: vi.fn(),
-  resetPasswordAction: vi.fn(),
+  forgotPasswordAction,
+  resetPasswordAction,
 }));
-vi.mock("../../src/app/account/actions", () => ({ changePasswordAction: vi.fn() }));
+vi.mock("../../src/app/account/actions", () => ({ changePasswordAction }));
 
 import { SignInForm } from "../../src/components/auth/sign-in-form";
 import { SignUpForm } from "../../src/components/auth/sign-up-form";
+import { ForgotPasswordForm } from "../../src/components/auth/forgot-password-form";
 import { ResetPasswordForm } from "../../src/components/auth/reset-password-form";
 import { ChangePasswordForm } from "../../src/components/auth/change-password-form";
 import { PasswordInput } from "../../src/components/password-input";
@@ -26,8 +32,52 @@ import { PasswordInput } from "../../src/components/password-input";
 beforeEach(() => {
   signUpAction.mockReset();
   signInAction.mockReset();
+  forgotPasswordAction.mockReset();
+  resetPasswordAction.mockReset();
+  changePasswordAction.mockReset();
 });
 afterEach(cleanup);
+
+it.each([
+  ["signin", SignInForm, signInAction, "Sign in"],
+  ["signup", SignUpForm, signUpAction, "Sign up"],
+  ["recovery", ForgotPasswordForm, forgotPasswordAction, "Send reset link"],
+  ["reset", ResetPasswordForm, resetPasswordAction, "Reset password"],
+  ["change", ChangePasswordForm, changePasswordAction, "Change password"],
+] as const)("preserves %s input entered before hydration through interaction and validation failure", async (_flow, Form, action, submitName) => {
+  action.mockResolvedValueOnce({ formError: "Please correct your details.", fieldErrors: { password: "Check your password." } });
+  const container = document.createElement("div");
+  document.body.append(container);
+  container.innerHTML = renderToString(<Form />);
+  const fields = [...container.querySelectorAll("input")];
+  const expected = new Map(fields.map((field) => [field.name, field.type === "email" ? "member@example.test" : `${field.name}-before-hydration-123`]));
+  // Native editing occurs before React attaches handlers to the server-rendered form.
+  for (const field of fields) field.value = expected.get(field.name) ?? "";
+  const root = hydrateRoot(container, <Form />);
+  try {
+    await act(async () => {});
+    if (fields.length > 1) {
+      const edited = fields[fields.length - 1];
+      const value = "Edited after hydration-123";
+      fireEvent.change(edited, { target: { value } });
+      expected.set(edited.name, value);
+      fireEvent.click(within(container).getAllByRole("button", { name: "Show password" })[0]);
+      expect(within(container).getByRole("button", { name: "Hide password" })).toBeDefined();
+    }
+    for (const field of fields) expect(field.value).toBe(expected.get(field.name));
+    fireEvent.click(within(container).getByRole("button", { name: submitName }));
+    await within(container).findByText("Please correct your details.");
+    expect(action).toHaveBeenCalledOnce();
+    const submitted: FormData = action.mock.calls[0][1];
+    for (const field of fields) {
+      expect(submitted.get(field.name)).toBe(expected.get(field.name));
+      expect(field.value).toBe(expected.get(field.name));
+    }
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
 
 it("submits sign-in credentials without a next field", async () => {
   signInAction.mockResolvedValueOnce({});

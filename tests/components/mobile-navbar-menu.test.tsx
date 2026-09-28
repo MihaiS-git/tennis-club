@@ -7,6 +7,8 @@ import type { CurrentAccount } from "../../src/lib/auth/account";
 
 const { readCurrentAccount, avatar } = vi.hoisted(() => ({ readCurrentAccount: vi.fn(), avatar: { url: null as string | null } }));
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }));
+
 vi.mock("../../src/app/account/actions", () => ({ signOutAction: vi.fn() }));
 vi.mock("../../src/lib/auth/account", () => ({ readCurrentAccount }));
 vi.mock("../../src/lib/profile/navigation", () => ({ readNavigationProfile: async () => ({

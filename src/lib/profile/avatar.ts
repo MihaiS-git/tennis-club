@@ -1,8 +1,12 @@
 import "server-only";
 
+import { unstable_rethrow } from "next/navigation";
+import { randomUUID } from "node:crypto";
 import { logger } from "@/lib/logger";
+import { createClient } from "@/lib/supabase/server";
 import { profileContext, type ProfileClient } from "./profile";
 import { validateAvatar } from "./avatar-validation";
+import { avatarMutationTransport } from "./avatar-coordination";
 import type { ProfileActionState } from "./validation";
 
 export const AVATAR_BUCKET = "profile-avatars";
@@ -31,7 +35,8 @@ export async function readPlayerAvatar(suppliedClient?: ProfileClient): Promise<
       return { kind: "error" };
     }
     return { kind: "image", file: result.data };
-  } catch {
+  } catch (error) {
+    unstable_rethrow(error);
     logger.error({ event: "profile.avatar_read_failed", stage: "request" }, "Failed to read avatar");
     return { kind: "error" };
   }
@@ -39,12 +44,27 @@ export async function readPlayerAvatar(suppliedClient?: ProfileClient): Promise<
 
 // Storage and PostgREST cannot share a transaction. Keep a copy of the previous
 // object until persistence succeeds, and compensate failed changes where possible.
-export async function changeAvatar(file: File | null, suppliedClient?: ProfileClient): Promise<ProfileActionState> {
+export async function changeAvatar(file: File | null): Promise<ProfileActionState> {
+  let leaseClient: ProfileClient | undefined;
+  let token: string | undefined;
   try {
-    const { client, account } = await profileContext(suppliedClient);
+    // Start transport bounds before acquisition, so its response cannot extend
+    // this request past the database lease's expiry.
+    const client = await createClient(avatarMutationTransport());
+    leaseClient = client;
+    const { account } = await profileContext(client);
     if (account.state !== "active") return { formError: "Avatar changes require an active account." };
     const image = file ? await validateAvatar(file) : null;
     if (image && !image.ok) return { fieldErrors: { avatar: image.error } };
+    const ownerToken = randomUUID();
+    // Retain the token even if the acquisition response is lost; finally can
+    // release only this attempt's row, never another request's lease.
+    token = ownerToken;
+    const acquired = await client.rpc("acquire_avatar_mutation", { p_token: ownerToken });
+    if (acquired.error) return failure("acquire");
+    if (acquired.data !== true) {
+      return { formError: "An avatar change is already in progress. Please try again shortly." };
+    }
     const profile = await client.from("player_profiles").select("avatar_path").eq("user_id", account.userId).maybeSingle();
     if (profile.error) return failure("load");
     if (!profile.data) return { formError: "Save your tennis profile before uploading an avatar." };
@@ -58,9 +78,8 @@ export async function changeAvatar(file: File | null, suppliedClient?: ProfileCl
     const path = `${account.userId}/avatar.webp`;
     const savePath = async (path: string | null) => {
       try {
-        const result = await client.from("player_profiles").update({ avatar_path: path, updated_at: new Date().toISOString() })
-          .eq("user_id", account.userId).select("user_id").maybeSingle();
-        return !result.error && Boolean(result.data);
+        const result = await client.rpc("persist_avatar_path", { p_token: ownerToken, p_path: path });
+        return !result.error && result.data === true;
       } catch {
         return false;
       }
@@ -93,6 +112,15 @@ export async function changeAvatar(file: File | null, suppliedClient?: ProfileCl
     return { success: "Avatar removed." };
   } catch {
     return failure("request");
+  } finally {
+    if (leaseClient && token) {
+      try {
+        const released = await leaseClient.rpc("release_avatar_mutation", { p_token: token });
+        if (released.error) failure("release");
+      } catch {
+        failure("release");
+      }
+    }
   }
 }
 

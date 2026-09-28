@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { AuthFormVisit } from "./auth/auth-form-visit";
 
 export function AuthShell({
   title,
@@ -15,7 +16,7 @@ export function AuthShell({
         <p className="text-sm font-medium text-accent">Tennis Club</p>
         <h1 className="mt-2 font-heading text-3xl font-semibold tracking-tight text-foreground">{title}</h1>
         {description ? <p className="mt-2 text-sm text-muted-foreground">{description}</p> : null}
-        <div className="mt-6">{children}</div>
+        <div className="mt-6"><AuthFormVisit>{children}</AuthFormVisit></div>
       </section>
     </main>
   );

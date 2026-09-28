@@ -60,7 +60,16 @@ export default async function ProfilePage() {
             </section>
           }
           personal={<PersonalInformationForm profile={profile.personal} />}
-          tennis={<TennisProfileForm profile={profile.player} personal={profile.personal} />}
+          tennis={<TennisProfileForm profile={profile.player ? {
+            display_name: profile.player.display_name,
+            sportya_level: profile.player.sportya_level,
+            rating: profile.player.rating,
+            handedness: profile.player.handedness,
+            backhand: profile.player.backhand,
+            preferred_game: profile.player.preferred_game,
+            preferred_surface: profile.player.preferred_surface,
+            bio: profile.player.bio,
+          } : null} personal={{ first_name: profile.personal.first_name, last_name: profile.personal.last_name }} />}
           account={
             <div className="space-y-6">
               <dl className="grid min-w-0 gap-5 rounded-control border border-border bg-background p-4 lg:grid-cols-2">

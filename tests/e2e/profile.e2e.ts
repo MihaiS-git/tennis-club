@@ -7,9 +7,12 @@ import { z } from "zod";
 const labels = ["Profile / player identity", "Personal information", "Tennis profile", "Account & security"] as const;
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAD0lEQVQImWP4z8Dwn4EBAAj+Af/KOtJRAAAAAElFTkSuQmCC", "base64");
 
+function sectionButton(page: Page, name: typeof labels[number]) {
+  return page.getByRole("navigation", { name: "Profile settings" }).getByRole("button", { name });
+}
+
 async function section(page: Page, name: typeof labels[number]) {
-  const selector = page.getByRole("navigation", { name: "Profile settings" });
-  const button = selector.getByRole("button", { name, exact: true });
+  const button = sectionButton(page, name);
   // Playwright scrolls off-screen controls into view before clicking them.
   await button.click();
   await expect(button).toHaveAttribute("aria-pressed", "true");
@@ -82,6 +85,7 @@ test("profile refinement: authenticated lifecycle, country, keyboard, navigation
     await page.getByRole("button", { name: "Save personal information" }).click();
     await expect(page.getByText("Personal information saved.", { exact: true })).toBeVisible();
     expect((await service.from("player_profiles").select("user_id").eq("user_id", id)).data).toEqual([]);
+    page.once("dialog", (dialog) => dialog.accept());
     await page.reload();
     await expect(page.getByRole("heading", { name: "Mihai Suciu", exact: true })).toBeVisible();
     await section(page, "Tennis profile");
@@ -117,7 +121,7 @@ test("profile refinement: authenticated lifecycle, country, keyboard, navigation
       }
       await assertNoOverflow(page);
       // Native button Enter and Space activation preserve the selector's semantics.
-      await selector.getByRole("button", { name: "Personal information", exact: true }).focus();
+      await sectionButton(page, "Personal information").focus();
       await page.keyboard.press("Enter");
       await expect(page.getByLabel("First name")).toBeVisible();
       await page.getByLabel("First name").fill("Unsaved name");
@@ -128,7 +132,7 @@ test("profile refinement: authenticated lifecycle, country, keyboard, navigation
       await expect(country).toHaveValue("Romania");
       await section(page, "Tennis profile");
       await page.getByLabel("Bio").fill("Unsaved bio");
-      await selector.getByRole("button", { name: "Account & security", exact: true }).focus();
+      await sectionButton(page, "Account & security").focus();
       await page.keyboard.press("Space");
       await expect(page.getByLabel("Current password")).toBeVisible();
       await expect(page.getByRole("main").getByRole("button", { name: "Sign out" })).toHaveCount(0);
@@ -169,6 +173,8 @@ test("profile refinement: authenticated lifecycle, country, keyboard, navigation
     await expect(page.getByRole("link", { name: "Your profile" }).locator("svg")).toHaveCount(1);
     expect(forbiddenRequests).toEqual([]);
     await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    await expect(page.getByText("You have unsaved changes in 2 sections.", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Leave without saving", exact: true }).click();
     await expect(page).toHaveURL(/\/login$/);
   } finally {
     expect((await service.storage.from("profile-avatars").remove([`${id}/avatar.webp`])).error).toBeNull();

@@ -9,12 +9,28 @@ import { tennisProfileSchema } from "../../../src/lib/profile/validation";
 // Substitute only the request-cookie client factory. Auth, application checks,
 // the GET handler, database queries, and Storage requests all run for real.
 const { request } = vi.hoisted(() => {
-  const request: { client?: SupabaseClient } = {};
+  const request: { client?: SupabaseClient; pauseAfterUpload?: () => Promise<void> } = {};
   return { request };
 });
-vi.mock("../../../src/lib/supabase/server", () => ({ createClient: async () => {
+vi.mock("../../../src/lib/supabase/server", () => ({ createClient: async (fetchOverride?: typeof fetch) => {
   if (!request.client) throw new Error("Missing test request session");
-  return request.client;
+  if (!fetchOverride) return request.client;
+  const session = await request.client.auth.getSession();
+  if (session.error) throw session.error;
+  const pause = request.pauseAfterUpload;
+  const client = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_PUBLISHABLE_KEY!, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    global: { fetch: async (input, init) => {
+      const response = await fetchOverride(input, init);
+      if (pause && init?.method === "POST" && String(input).includes("/storage/v1/object/profile-avatars/")) await pause();
+      return response;
+    } },
+  });
+  if (session.data.session) {
+    const { access_token, refresh_token } = session.data.session;
+    expect((await client.auth.setSession({ access_token, refresh_token })).error).toBeNull();
+  }
+  return client;
 } }));
 import { changeAvatar, AVATAR_BUCKET } from "../../../src/lib/profile/avatar";
 import { saveTennisProfile } from "../../../src/lib/profile/profile";
@@ -26,7 +42,7 @@ const webpBytes = new Uint8Array(await source().webp().toBuffer());
 const jpegBytes = new Uint8Array(await source().jpeg().toBuffer());
 const png = () => new File([pngBytes], "../../victim/avatar.jpg", { type: "image/png" });
 
-test.each(["access/input rejection", "authenticated retrieval", "Storage lifecycle"])("real avatar %s", async (scenario) => {
+test.each(["access/input rejection", "authenticated retrieval", "Storage lifecycle", "mutation exclusion"])("real avatar %s", async (scenario) => {
   const service = localFixtureClient();
   await ensureIntegrationAdminAnchor(service);
   const ids: string[] = [];
@@ -58,6 +74,54 @@ test.each(["access/input rejection", "authenticated retrieval", "Storage lifecyc
       const result = await service.storage.from(AVATAR_BUCKET).list(owner.id);
       expect(result.error).toBeNull(); return result.data?.map((object) => object.name).sort();
     };
+
+    if (scenario === "mutation exclusion") {
+      expect(await changeAvatar(png())).toHaveProperty("success");
+      const tab = userClient();
+      const session = (await owner.client.auth.getSession()).data.session;
+      if (!session) throw new Error("Missing owner session");
+      expect((await tab.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token })).error).toBeNull();
+      let entered: () => void = () => {};
+      const written = new Promise<void>((resolve) => { entered = resolve; });
+      let resume: () => void = () => {};
+      const paused = new Promise<void>((resolve) => { resume = resolve; });
+      request.pauseAfterUpload = async () => { entered(); await paused; };
+      const uploading = changeAvatar(png());
+      try {
+        await written;
+        // Storage replacement finished, but its DB persistence has not started.
+        request.client = tab;
+        request.pauseAfterUpload = undefined;
+        expect(await changeAvatar(null)).toEqual({
+          formError: "An avatar change is already in progress. Please try again shortly.",
+        });
+        const lease = await service.from("avatar_mutation_leases").select("token").eq("user_id", owner.id).single();
+        expect(lease.error).toBeNull(); expect(lease.data?.token).toBeTruthy();
+        expect(await path()).toBe(`${owner.id}/avatar.webp`);
+        expect(await objects()).toEqual(["avatar.webp"]);
+      } finally {
+        resume();
+        expect(await uploading).toHaveProperty("success");
+        request.pauseAfterUpload = undefined;
+      }
+      expect(await path()).toBe(`${owner.id}/avatar.webp`);
+      expect((await tab.storage.from(AVATAR_BUCKET).download(`${owner.id}/avatar.webp`)).error).toBeNull();
+      expect((await service.from("avatar_mutation_leases").select("token").eq("user_id", owner.id)).data).toEqual([]);
+
+      // Two real PostgREST requests contend atomically for the same owner.
+      const tokens = [randomUUID(), randomUUID()];
+      const claims = await Promise.all([
+        owner.client.rpc("acquire_avatar_mutation", { p_token: tokens[0] }),
+        tab.rpc("acquire_avatar_mutation", { p_token: tokens[1] }),
+      ]);
+      for (const claim of claims) expect(claim.error).toBeNull();
+      expect(claims.map((claim) => claim.data).sort()).toEqual([false, true]);
+      const winningToken = tokens[claims.findIndex((claim) => claim.data === true)];
+      expect((await tab.rpc("release_avatar_mutation", { p_token: winningToken })).data).toBe(true);
+      expect(await changeAvatar(null)).toHaveProperty("success");
+      expect(await path()).toBeNull(); expect(await objects()).toEqual([]);
+      return;
+    }
 
     if (scenario === "authenticated retrieval") {
       // Seed a real object without using the application's replacement workflow.
@@ -157,6 +221,7 @@ test.each(["access/input rejection", "authenticated retrieval", "Storage lifecyc
     expect((await GET()).status).toBe(404);
   } finally {
     request.client = undefined;
+    request.pauseAfterUpload = undefined;
     for (const id of ids) {
       expect((await service.storage.from(AVATAR_BUCKET).remove([`${id}/avatar.webp`])).error).toBeNull();
       expect((await service.from("player_profiles").delete().eq("user_id", id)).error).toBeNull();

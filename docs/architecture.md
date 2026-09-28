@@ -35,9 +35,11 @@ PostgreSQL
 
 Architectural rule:
 
-> Next.js is the application boundary, TypeScript decides business behavior, PostgreSQL guarantees data integrity, RLS protects data access, and Stripe owns payment processing.
+> Next.js is the complete primary application authorization boundary, TypeScript decides business behavior, PostgreSQL guarantees data integrity, RLS provides defense-in-depth as secondary security, and Stripe owns payment processing.
 
 ## Next.js responsibilities
+
+Next.js Cache Components prerenders public/shared content and streams request-specific auth/account UI behind Suspense boundaries. Protected page reads use route-specific loading boundaries. Supabase access remains server-first: clients, sessions, accounts, roles, status, and profile/avatar metadata are never persistently cached. The navigation helper's React `cache()` only deduplicates reads within a server request.
 
 Use:
 

@@ -116,6 +116,8 @@ Use the App Router.
 
 Prefer Server Components by default.
 
+Cache Components is enabled. Keep public/shared content prerenderable and isolate request-specific auth/account UI behind Suspense boundaries. Never persistently cache user-scoped Supabase clients, sessions, accounts, roles, status, or profile/avatar metadata. React `cache()` may deduplicate reads within one server request.
+
 Add `"use client"` only when the component actually requires browser-side behavior such as:
 
 - state;
@@ -170,7 +172,7 @@ The proxy is responsible for authentication session maintenance, such as:
 - refreshing/verifying the session when required;
 - propagating updated cookies and response headers.
 
-Do not put application authorization or domain rules in the proxy. In particular, do not put membership, pricing, booking, or role-specific business logic there. Authorization belongs in the application/RLS layers described below.
+Do not put application authorization or domain rules in the proxy. In particular, do not put membership, pricing, booking, or role-specific business logic there. Next.js is the complete primary application authorization boundary; RLS provides defense-in-depth as secondary security.
 
 When implementing Supabase SSR cookie handling, use the current `@supabase/ssr` `getAll()` / `setAll()` cookie API. Do not copy deprecated `get` / `set` / `remove` examples from older Supabase tutorials.
 
@@ -323,7 +325,7 @@ A valid future example is Supabase Realtime. If such a feature is introduced:
 
 - keep the scope narrow;
 - expose only browser-safe values;
-- retain RLS as the authorization boundary;
+- retain RLS as defense-in-depth and secondary security;
 - document the new browser access path in both `README.md` and `AGENTS.md`.
 
 ### Privileged server client
@@ -352,7 +354,7 @@ Never expose the secret key to:
 
 ## RLS and authorization
 
-Supabase RLS is a primary security boundary, not optional defense-in-depth.
+Next.js is the complete primary application authorization boundary. Supabase RLS must remain active as defense-in-depth and secondary security.
 
 Authorization must not rely only on:
 
@@ -396,6 +398,8 @@ Private data may include:
 - private preferences.
 
 Player avatars use the private Supabase Storage bucket `profile-avatars`, through the user-scoped server client and Next.js avatar actions. Decode JPEG/PNG/WebP sources with Sharp, enforce the 5 MiB upload, 12,000-pixel side, and 40-million-pixel limits, and normalize to WebP within 512 × 512 without enlargement or cropping. Store only the canonical `<user-id>/avatar.webp` path in player profiles; the bucket accepts only `image/webp` objects. Lightweight browser file checks are UX only. No browser Supabase client is introduced. See `docs/profiles.md` for the implemented workflow.
+
+Avatar mutations share one UI pending state and a committed per-user database lease across Storage, persistence, and compensation. Preserve token-scoped acquisition/release, ownership-checked path persistence, and bounded transport deadlines shorter than lease expiry. Do not hold database transactions open during Storage HTTP requests or substitute an in-memory lock.
 
 Prefer schemas that make access boundaries explicit.
 

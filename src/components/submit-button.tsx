@@ -8,10 +8,12 @@ export function SubmitButton({
   children,
   pendingLabel,
   variant = "primary",
+  disabled = false,
 }: {
   children: string;
   pendingLabel: string;
   variant?: "primary" | "secondary";
+  disabled?: boolean;
 }) {
   const { pending } = useFormStatus();
 
@@ -19,8 +21,8 @@ export function SubmitButton({
     <Button
       variant={variant}
       type="submit"
-      disabled={pending}
-      aria-disabled={pending}
+      disabled={pending || disabled}
+      aria-disabled={pending || disabled}
     >
       {pending ? pendingLabel : children}
     </Button>

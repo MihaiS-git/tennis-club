@@ -37,6 +37,20 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+it("returns password-change success through action state without redirecting", async () => {
+  readCurrentAccount.mockResolvedValue({
+    state: "active", userId: "member-1", email: "member@example.com", roles: [],
+  } satisfies CurrentAccount);
+  signInWithPassword.mockResolvedValue({ data: { user: { id: "member-1" } }, error: null });
+  updateUser.mockResolvedValue({ error: null });
+
+  await expect(changePasswordAction({}, validPasswordForm())).resolves.toStrictEqual({
+    success: "Your password has been changed.",
+  });
+  expect(updateUser).toHaveBeenCalledExactlyOnceWith({ password: "new-password-123" });
+  expect(redirect).not.toHaveBeenCalled();
+});
+
 it("redirects an unauthenticated account before password verification or update", async () => {
   readCurrentAccount.mockResolvedValue({ state: "unauthenticated" } satisfies CurrentAccount);
 

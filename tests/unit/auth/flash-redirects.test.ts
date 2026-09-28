@@ -62,14 +62,15 @@ it("maps a provider recovery failure to one safe notice", async () => {
   expect(redirect.mock.calls[0][0]).not.toContain("mailbox unavailable");
 });
 
-it("redirects a verified password change with a fixed notice code", async () => {
+it("returns a success message for a verified password change without redirecting", async () => {
   const form = new FormData();
   form.set("currentPassword", "old-password-123");
   form.set("password", "new-password-456");
   form.set("confirmPassword", "new-password-456");
 
-  await expect(changePasswordAction({}, form)).rejects.toThrow(
-    "redirect:/profile?notice=password-changed",
-  );
+  await expect(changePasswordAction({}, form)).resolves.toEqual({
+    success: "Your password has been changed.",
+  });
+  expect(redirect).not.toHaveBeenCalled();
   expect(changePasswordWithVerification).toHaveBeenCalledOnce();
 });

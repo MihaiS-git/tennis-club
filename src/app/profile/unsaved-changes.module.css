@@ -1,0 +1,71 @@
+/* Sonner combines the shared Toaster utility classes with this local class.
+   Important declarations in components outrank the shared important utilities. */
+@layer components {
+  .confirmation[data-sonner-toast][data-styled="true"] {
+    width: min(420px, calc(100vw - 2rem)) !important;
+    max-width: none !important;
+    padding: 1rem !important;
+  }
+
+  @media (max-width: 600px) {
+    .confirmation[data-sonner-toast][data-styled="true"] {
+      width: min(420px, calc(100vw - var(--mobile-offset-left, 12px) - var(--mobile-offset-right, 12px))) !important;
+    }
+  }
+}
+
+.confirmation[data-sonner-toast][data-styled="true"] {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 1rem 0.75rem;
+}
+
+.confirmation[data-sonner-toast][data-styled="true"] > [data-content] {
+  grid-column: 1 / -1;
+  min-width: 0;
+  font-size: 0.875rem;
+  overflow-wrap: break-word;
+}
+
+.confirmation[data-sonner-toast][data-styled="true"] > [data-button] {
+  justify-self: end;
+  margin: 0;
+  max-width: 100%;
+  height: auto;
+  min-height: 2.5rem;
+  justify-content: center;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--ui-radius-control);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  overflow-wrap: normal;
+}
+
+.confirmation[data-sonner-toast][data-styled="true"] > [data-cancel] {
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--foreground);
+}
+
+.confirmation[data-sonner-toast][data-styled="true"] > [data-cancel]:hover {
+  background: var(--surface-muted);
+}
+
+.confirmation[data-sonner-toast][data-styled="true"] > [data-action] {
+  background: var(--danger);
+  color: var(--primary-foreground);
+}
+
+.confirmation[data-sonner-toast][data-styled="true"] > [data-button]:focus-visible {
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+@media (max-width: 360px) {
+  .confirmation[data-sonner-toast][data-styled="true"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .confirmation[data-sonner-toast][data-styled="true"] > [data-button] {
+    width: 100%;
+  }
+}

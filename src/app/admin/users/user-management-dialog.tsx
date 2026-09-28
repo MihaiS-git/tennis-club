@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { updateUserRoleAction, updateUserStatusAction } from "./actions";
@@ -42,6 +42,12 @@ export function UserManagementDialog({ user, currentAdminId }: { user: ManagedUs
     status: user.status,
     roles: user.roles.join("|"),
   });
+
+  useLayoutEffect(() => () => {
+    // Activity hides pages without unmounting their open dialogs.
+    if (dialogRef.current?.open) dialogRef.current.close();
+    setIsOpen(false);
+  }, []);
 
   useEffect(() => {
     if (!isOpen) return;

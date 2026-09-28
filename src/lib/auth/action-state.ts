@@ -5,6 +5,7 @@ export type AuthFieldName =
   | "currentPassword";
 
 export type AuthActionState = {
+  success?: string;
   fieldErrors?: Partial<Record<AuthFieldName, string>>;
   formError?: string;
 };

@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState } from "react";
 
 import { forgotPasswordAction } from "@/app/(auth)/actions";
 import { FormMessage } from "@/components/auth-form";
@@ -13,7 +13,6 @@ import { initialAuthActionState } from "@/lib/auth/action-state";
 export function ForgotPasswordForm() {
   const [state, action] = useActionState(forgotPasswordAction, initialAuthActionState);
   const { formRef, clearErrors, fieldError, formError } = useActionErrors(state);
-  const [email, setEmail] = useState("");
 
   return (
     <form ref={formRef} action={action} className="space-y-4" noValidate>
@@ -25,9 +24,7 @@ export function ForgotPasswordForm() {
           name="email"
           autoComplete="email"
           required
-          value={email}
-          onChange={(event) => {
-            setEmail(event.target.value);
+          onChange={() => {
             clearErrors(["email"]);
           }}
           aria-invalid={Boolean(fieldError("email"))}

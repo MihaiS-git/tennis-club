@@ -120,7 +120,7 @@ PostgreSQL
 
 The main architectural rule is:
 
-> **Next.js is the application boundary, TypeScript decides business behavior, PostgreSQL guarantees data integrity, RLS protects data access, and Stripe owns payment processing.**
+> **Next.js is the complete primary application authorization boundary, TypeScript decides business behavior, PostgreSQL guarantees data integrity, RLS provides defense-in-depth as secondary security, and Stripe owns payment processing.**
 
 Direct browser-to-Supabase access is not part of the initial architecture. It may be added later only for a concrete feature that benefits from it.
 
@@ -176,7 +176,7 @@ The RBAC roles are `admin` and `coach`; both are optional and may be combined. N
 
 ## Security model
 
-Supabase RLS is a real application security boundary.
+Next.js is the complete primary application authorization boundary. Supabase RLS remains active as defense-in-depth and secondary security.
 
 Typical authorization rules include:
 
@@ -721,6 +721,10 @@ AI-based partner matching is not required initially.
 
 `/profile` has separate personal and tennis saves, plus player-avatar upload/removal. JPEG, PNG, and WebP avatar uploads (maximum 5 MiB) are decoded and normalized server-side with Sharp into metadata-free WebP images fitting within 512 × 512 without enlargement or cropping. Source dimensions are limited to 12,000 pixels per side and 40 million pixels. Only `<user-id>/avatar.webp` is stored in the private bucket and served through the authenticated avatar endpoint. `/profile` also includes account/email information, roles, password change, and sign out; `/account` redirects to `/profile`. Tennis information is readable only by active authenticated users, never anonymously. See [Profile implementation](docs/profiles.md).
 
+Personal and tennis forms independently compare editable values against their last successful save. Explicit shared navigation links and sign-out submissions warn through Sonner when leaving a dirty Profile visit; internal section switches preserve drafts. Reload/close/document departures use native `beforeunload` protection while dirty. Same-document browser back/forward has no supported App Router blocker and retains the existing fresh-visit behavior without a warning. See [Profile visit protection and browser limitations](docs/profiles.md#unsaved-changes-and-visit-lifecycle).
+
+Avatar upload and removal share one UI pending state. A user-scoped database lease serializes each owner's Storage, persistence, and compensation workflow across server instances. Token-checked RPCs acquire/release the lease and persist the avatar path; bounded HTTP requests stop stale workers before abandoned leases can be reclaimed. See [Avatar workflow](docs/profiles.md#avatar-workflow).
+
 ### Tennis information for active authenticated users
 
 Potentially includes:
@@ -1253,7 +1257,7 @@ Before expanding the platform, prove the following cases locally:
 - TanStack Query will be introduced when interactive client-side server state justifies it, and it will call the Next.js server boundary rather than Supabase directly.
 - No ORM is required initially.
 - No separate backend framework is required initially.
-- RLS is part of the primary authorization architecture.
+- Next.js is the complete primary application authorization boundary; RLS provides defense-in-depth as secondary security.
 - Domain algorithms remain in TypeScript.
 - PostgreSQL RPCs are used only where database-level atomicity or integrity requires them.
 

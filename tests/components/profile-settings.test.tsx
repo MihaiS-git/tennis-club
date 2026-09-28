@@ -1,9 +1,69 @@
 // @vitest-environment jsdom
-import { afterEach, expect, it } from "vitest";
+import { Activity, StrictMode, useState } from "react";
+import { ProfileDepartureLink as Link, ProfileDepartureProvider } from "../../src/components/profile-departure-navigation";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { ProfileSettings } from "../../src/app/profile/profile-settings";
 
-afterEach(cleanup);
+vi.mock("next/navigation", () => ({ useRouter: () => ({ bfcacheId: "profile-visit" }) }));
+vi.mock("next/link", () => ({ default: ({ onNavigate, onClick, href, children, ...props }: import("react").ComponentProps<"a"> & { onNavigate?: (event: { preventDefault: () => void }) => void }) =>
+  <a {...props} href={href} onClick={(event) => {
+    onClick?.(event);
+    if (!event.defaultPrevented && event.button === 0 && !event.ctrlKey && !event.metaKey && props.target !== "_blank") onNavigate?.({ preventDefault: () => event.preventDefault() });
+    event.preventDefault();
+  }}>{children}</a> }));
+
+beforeEach(() => window.history.replaceState(null, "", "/profile"));
+afterEach(() => { cleanup(); window.history.replaceState(null, "", "/"); });
+
+function PersonalDraft({ firstName }: { firstName: string }) {
+  const [value, setValue] = useState(firstName);
+  return <input aria-label="First name" value={value} onChange={(event) => setValue(event.target.value)} />;
+}
+
+function settings(firstName: string) {
+  return <ProfileSettings identity={<p>Player summary</p>} personal={<PersonalDraft firstName={firstName} />}
+    tennis={<p>Tennis details</p>} account={<p>Account details</p>} />;
+}
+
+function selectPersonal() {
+  fireEvent.click(screen.getByRole("button", { name: "Personal information" }));
+  return screen.getByLabelText("First name") as HTMLInputElement;
+}
+
+it("discards drafts on a link departure even if a quick return keeps the same route tree", () => {
+  render(<StrictMode><ProfileDepartureProvider>
+    <Link href="/">Club homepage</Link>
+    {settings("Saved name")}
+  </ProfileDepartureProvider></StrictMode>);
+  fireEvent.change(selectPersonal(), { target: { value: "Unsaved draft" } });
+  fireEvent.click(screen.getByRole("button", { name: "Tennis profile" }));
+  expect(selectPersonal().value).toBe("Unsaved draft");
+  fireEvent.click(screen.getByRole("link", { name: "Club homepage" }));
+  expect(selectPersonal().value).toBe("Saved name");
+});
+
+it.each(["", "Saved name"])("starts fresh with current server data %j after Activity restores a visit", (firstName) => {
+  const view = render(<Activity mode="visible">{settings("Previous name")}</Activity>);
+  fireEvent.change(selectPersonal(), { target: { value: "Unsaved draft" } });
+  view.rerender(<Activity mode="hidden">{settings(firstName)}</Activity>);
+  view.rerender(<Activity mode="visible">{settings(firstName)}</Activity>);
+  expect(selectPersonal().value).toBe(firstName);
+});
+
+it("preserves drafts for same-route links and links opened in another tab", () => {
+  render(<>
+    <Link href="/profile#personal" onClick={(event) => event.preventDefault()}>Profile section</Link>
+    <Link href="/" target="_blank" onClick={(event) => event.preventDefault()}>Homepage in another tab</Link>
+    <Link href="/">Club homepage</Link>
+    {settings("Saved name")}
+  </>);
+  fireEvent.change(selectPersonal(), { target: { value: "Unsaved draft" } });
+  fireEvent.click(screen.getByRole("link", { name: "Profile section" }));
+  fireEvent.click(screen.getByRole("link", { name: "Homepage in another tab" }));
+  fireEvent.click(screen.getByRole("link", { name: "Club homepage" }), { ctrlKey: true });
+  expect(selectPersonal().value).toBe("Unsaved draft");
+});
 
 it("provides labelled section controls and preserves edits when switching settings", () => {
   render(<ProfileSettings
