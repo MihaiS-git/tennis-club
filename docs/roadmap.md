@@ -51,7 +51,7 @@
 
 ## V2 — Tennis-specific features
 
-- player profiles;
+- expanded player-profile features (basic `/profile` and avatars are implemented);
 - partner matching;
 - match recording;
 - Elo rating;

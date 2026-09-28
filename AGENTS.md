@@ -378,15 +378,15 @@ When adding a table containing private or user-owned data, consider its RLS poli
 
 ## Public and private user data
 
-Do not mix publicly readable player information and sensitive/private account information without considering RLS implications.
+Keep account/personal/contact information in `public.users` separate from tennis information in `public.player_profiles`. Tennis profiles are readable by active authenticated users, never anonymously. Owners may edit their own permitted fields; rating is system-managed. Future `coach_profiles` is a sibling domain entity, not an RBAC role or a required extension of player profiles.
 
-Public tennis data may include:
+Tennis data visible to active authenticated users may include:
 
 - display name;
 - rating;
 - ranking;
 - match statistics;
-- public rating history.
+- rating history (when implemented).
 
 Private data may include:
 
@@ -394,6 +394,8 @@ Private data may include:
 - billing metadata;
 - account information;
 - private preferences.
+
+Player avatars use the private Supabase Storage bucket `profile-avatars`, through the user-scoped server client and Next.js avatar actions. Store only object paths in player profiles. No browser Supabase client is introduced. See `docs/profiles.md` for the implemented workflow.
 
 Prefer schemas that make access boundaries explicit.
 
@@ -930,7 +932,9 @@ When changing database structure:
 5. add or update tests;
 6. verify the migration from a clean local database when practical.
 
-Do not edit an already-applied migration to represent a new production change. Add a new migration instead.
+This project currently uses a development database. For unreleased schema, maintain clean, scope-focused migration history: edit the migration that naturally owns the schema and add focused migrations for new domains/infrastructure. Do not accumulate corrective patch migrations for unreleased schema. Never run `supabase db reset` without explicit user approval.
+
+For released production schema, do not edit an already-applied migration to represent a new change; add a new migration instead.
 
 ---
 

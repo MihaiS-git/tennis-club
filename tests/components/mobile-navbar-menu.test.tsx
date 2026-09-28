@@ -48,15 +48,17 @@ it("shows signed-out links and closes on link selection or Escape", () => {
   expect(document.activeElement).toBe(trigger);
 });
 
-it("shows Matches, Account, and direct Sign out for authenticated users", () => {
+it("shows Matches, Profile, and direct Sign out for authenticated users", () => {
   render(<MobileNavbarMenu isAuthenticated isAdmin={false} />);
   fireEvent.click(screen.getByRole("button", { name: "Open menu" }));
 
   const drawer = screen.getByRole("dialog", { name: "Mobile navigation menu" });
   const navigation = within(drawer).getByRole("navigation", { name: "Mobile navigation" });
   expect(within(navigation).getAllByRole("link").map((link) => link.textContent)).toEqual([
-    "Courts", "Coaching", "Matches", "Rankings", "Club", "Account",
+    "Courts", "Coaching", "Matches", "Rankings", "Club", "Profile",
   ]);
+  expect(within(navigation).getByRole("link", { name: "Profile" }).getAttribute("href")).toBe("/profile");
+  expect(within(navigation).queryByRole("link", { name: "Account" })).toBeNull();
   expect(within(navigation).getByRole("button", { name: "Sign out" })).toBeDefined();
   expect(within(navigation).queryByText("Sign in")).toBeNull();
 });
@@ -110,7 +112,7 @@ it.each([
   const usersLink = within(navigation).queryByRole("link", { name: "Users" });
   if (showsUsers) {
     expect(links.map((link) => link.textContent)).toEqual([
-      "Courts", "Coaching", "Matches", "Rankings", "Club", "Users", "Account",
+      "Courts", "Coaching", "Matches", "Rankings", "Club", "Users", "Profile",
     ]);
     expect(usersLink?.getAttribute("href")).toBe("/admin/users");
   } else {

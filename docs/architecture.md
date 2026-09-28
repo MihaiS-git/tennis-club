@@ -2,7 +2,7 @@
 
 ## System boundary
 
-The application is a modular Next.js application for one tennis club with multiple locations. The diagram below shows the intended architecture as booking and payment features are added; the current implementation is the authentication and account foundation.
+The application is a modular Next.js application for one tennis club with multiple locations. The diagram below shows the intended architecture as booking and payment features are added; the current implementation includes authentication, RBAC/Admin Users, personal/contact information, and player profiles with Storage avatars.
 
 ```text
 Browser
@@ -193,7 +193,12 @@ auth.users
 public.users
 public.roles
 public.user_roles
+public.player_profiles
 ```
+
+`public.users` owns account and personal/contact data; `player_profiles` owns optional tennis data. Future `coach_profiles` is a sibling domain entity. The `/profile` Server Component reads through the user-scoped server client, and route-local Server Actions delegate mutations to TypeScript application functions. The private `profile-avatars` bucket stores uploaded player images; profile rows contain only object paths. Browser-side Supabase access is not introduced. See `profiles.md`.
+
+Unreleased development schema is evolved in its owning migration, with focused migrations for new domains/infrastructure; released production migrations remain immutable. Rebuilding local history requires explicit approval for a destructive database reset.
 
 Future domain entities are introduced when their workflow is implemented rather than creating the full future schema mechanically.
 

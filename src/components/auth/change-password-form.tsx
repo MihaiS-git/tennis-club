@@ -17,7 +17,7 @@ export function ChangePasswordForm() {
   const [currentPassword, setCurrentPassword] = useState("");
 
   return (
-    <form ref={formRef} action={action} className="mt-4 space-y-4" noValidate>
+    <form ref={formRef} action={action} className="mt-4 space-y-4 [&_input]:min-h-11" noValidate>
       <FormMessage>{formError}</FormMessage>
       <FormField label="Current password" htmlFor="current-password" error={fieldError("currentPassword")} errorId="current-password-error">
         <PasswordInput
@@ -35,7 +35,7 @@ export function ChangePasswordForm() {
         />
       </FormField>
       <NewPasswordFields idPrefix="change" fieldError={fieldError} clearErrors={clearErrors} />
-      <SubmitButton pendingLabel="Changing password…">Change password</SubmitButton>
+      <div className="w-full sm:w-fit [&>button]:min-h-11"><SubmitButton pendingLabel="Changing password…">Change password</SubmitButton></div>
     </form>
   );
 }

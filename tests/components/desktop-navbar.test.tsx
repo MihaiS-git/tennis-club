@@ -28,10 +28,10 @@ it("shows public navigation and signed-out actions", async () => {
   expect(screen.getByRole("link", { name: "Sign in" }).getAttribute("href")).toBe("/login");
   expect(screen.getByRole("link", { name: "Book a court" }).getAttribute("href")).toBe("/book");
   expect(screen.queryByRole("button", { name: "Sign out" })).toBeNull();
-  expect(screen.queryByRole("link", { name: "Your account" })).toBeNull();
+  expect(screen.queryByRole("link", { name: "Your profile" })).toBeNull();
 });
 
-it("shows Matches, account, and direct Sign out for authenticated users", async () => {
+it("shows Matches, Profile, and direct Sign out for authenticated users", async () => {
   readCurrentAccount.mockResolvedValue({
     state: "active",
     userId: "member-1",
@@ -45,7 +45,7 @@ it("shows Matches, account, and direct Sign out for authenticated users", async 
     "Courts", "Coaching", "Matches", "Rankings", "Club",
   ]);
   expect(screen.getByRole("link", { name: "Book a court" }).getAttribute("href")).toBe("/book");
-  expect(screen.getByRole("link", { name: "Your account" }).getAttribute("href")).toBe("/account");
+  expect(screen.getByRole("link", { name: "Your profile" }).getAttribute("href")).toBe("/profile");
   expect(screen.getByRole("button", { name: "Sign out" })).toBeDefined();
   expect(screen.queryByRole("link", { name: "Sign in" })).toBeNull();
 });
@@ -78,6 +78,6 @@ it("shows Users after Club for an active admin", async () => {
     "Courts", "Coaching", "Matches", "Rankings", "Club", "Users",
   ]);
   expect(within(navigation).getByRole("link", { name: "Users" }).getAttribute("href")).toBe("/admin/users");
-  expect(screen.getByRole("link", { name: "Your account" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Your profile" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
 });

@@ -43,9 +43,9 @@ AI-based partner matching is not required initially.
 
 ## Player profiles
 
-Keep public tennis information conceptually separate from private account information.
+The implemented `public.player_profiles` entity is separate from account/personal/contact information in `public.users`. Tennis data is readable only by active authenticated users, never anonymously. Future `coach_profiles` will be a sibling entity. Player avatars are stored in Supabase Storage; rows store only the object path. See `profiles.md`.
 
-Potential public tennis information:
+Tennis information for active authenticated users:
 
 - display name;
 - rating;

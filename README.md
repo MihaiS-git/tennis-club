@@ -57,7 +57,7 @@ This is **not a multi-tenant SaaS platform**. One tennis club owns and operates 
 - Supabase Auth
 - Supabase PostgreSQL
 - Supabase Row Level Security
-- Supabase Storage where required
+- Supabase Storage for uploaded player avatars
 - Supabase Realtime where useful
 
 ### Payments
@@ -717,9 +717,11 @@ AI-based partner matching is not required initially.
 
 ## Player profiles
 
-Player data should distinguish public tennis information from private account information.
+`public.users` stores application identity/status and optional personal/contact information. `public.player_profiles` stores tennis information independently of RBAC. A player profile is created on the first tennis save, not at signup. Future `coach_profiles` will be a sibling domain entity; users may have either, both, or neither.
 
-### Public tennis information
+`/profile` has separate personal and tennis saves, plus player-avatar upload/removal. `/profile` also includes account/email information, roles, password change, and sign out; `/account` redirects to `/profile`. Tennis information is readable only by active authenticated users, never anonymously. See [Profile implementation](docs/profiles.md).
+
+### Tennis information for active authenticated users
 
 Potentially includes:
 
@@ -844,8 +846,8 @@ Likely starting entities:
 auth.users
     Supabase managed
 
-profiles
-user_private_profiles
+public.users
+public.player_profiles
 
 roles
 user_roles
@@ -1052,7 +1054,7 @@ Administrative resource screens manage:
 
 ### V2 — Tennis-specific features
 
-- player profiles;
+- expanded player-profile features (basic `/profile` is implemented);
 - partner matching;
 - match recording;
 - Elo rating;
@@ -1182,7 +1184,7 @@ Recommended sequence:
 
 ```text
 1. Supabase project and database foundation
-2. Authentication, profiles, roles and RLS
+2. Authentication, application users, player profiles, roles and RLS
 3. Locations and courts
 4. Court availability
 5. Booking domain model
@@ -1204,6 +1206,10 @@ Recommended sequence:
 The goal is to prove the difficult architectural constraints before adding secondary tennis features.
 
 ---
+
+## Migration history
+
+The database is currently development-only. Maintain clean migrations by scope: extend unreleased foundation schema in its owning migration, and add focused migrations for new domains/infrastructure. Released production migrations remain immutable. Rebuilding rewritten local history requires `supabase db reset`; obtain explicit approval first because it deletes local data.
 
 ## Local validation
 

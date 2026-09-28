@@ -33,7 +33,7 @@ Supabase owns:
 auth.users
 ```
 
-The application-owned account record is:
+The application-owned account and optional personal/contact record is:
 
 ```text
 public.users
@@ -52,7 +52,7 @@ Both elevated roles are optional. Normal authenticated accounts have no roles; o
 
 ## Role and status administration
 
-Ordinary authenticated users cannot assign or revoke roles or change account status. Current database policies allow an active administrator to insert/delete role assignments and update only the `status` column of an application user through the normal user-scoped Supabase client. The role-assignment trigger records the actual authenticated administrator as `assigned_by`.
+Ordinary authenticated users cannot assign or revoke roles or change account status. Active administrators may insert/delete role assignments and update another account’s `status` through the user-scoped client. Active owners may update only their own permitted personal/contact fields. Column grants and field-specific security triggers keep these UPDATE policy boundaries separate; identity/email/timestamps remain unavailable for direct updates. The role-assignment trigger records the actual authenticated administrator as `assigned_by`.
 
 A suspended user may retain role rows but must not receive active admin authorization.
 
@@ -68,22 +68,22 @@ Typical boundaries:
 - coaches can manage their own availability;
 - coaches can access sessions assigned to them;
 - admins can manage club resources according to role;
-- public tennis/ranking data may be visible more broadly;
+- player-profile tennis data is visible only to active authenticated users;
 - account/payment/private information remains restricted.
 
 When adding a private or user-owned table, design its RLS policies as part of the same change.
 
 ## Public and private player data
 
-Keep publicly readable tennis information conceptually separate from sensitive account information.
+Keep tennis information in `public.player_profiles` separate from sensitive account/personal/contact information in `public.users`. Player profiles are readable by active authenticated users, never anonymous users. Suspended accounts do not receive player-profile reads or mutations. Rating has no authenticated INSERT/UPDATE grant. Owners cannot target another user or change ownership. Future coach profiles are a separate sibling domain; membership remains separate from RBAC.
 
-Potential public tennis data:
+Tennis data for active authenticated users:
 
 - display name;
 - rating;
 - ranking;
 - match statistics;
-- public rating history;
+- rating history (future);
 - optional tennis preferences.
 
 Private data:
@@ -94,6 +94,10 @@ Private data:
 - private preferences.
 
 This separation matters because PostgreSQL RLS primarily controls rows, not arbitrary per-column visibility.
+
+## Player avatar storage
+
+`profile-avatars` is private, with active-user reads and owner-only writes to `<user-id>/avatar.jpg`, `.png`, or `.webp`. Next.js validates MIME, signature and a 5 MiB maximum before upload. The authenticated `/profile/avatar` endpoint checks active account status and downloads the current user’s image on the server, with private, no-store response headers. No browser-to-Supabase access or privileged application client is used. See `profiles.md` for compensation and failure limitations.
 
 ## User-scoped Supabase client
 

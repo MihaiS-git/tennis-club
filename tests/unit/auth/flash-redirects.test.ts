@@ -69,7 +69,7 @@ it("redirects a verified password change with a fixed notice code", async () => 
   form.set("confirmPassword", "new-password-456");
 
   await expect(changePasswordAction({}, form)).rejects.toThrow(
-    "redirect:/account?notice=password-changed",
+    "redirect:/profile?notice=password-changed",
   );
   expect(changePasswordWithVerification).toHaveBeenCalledOnce();
 });

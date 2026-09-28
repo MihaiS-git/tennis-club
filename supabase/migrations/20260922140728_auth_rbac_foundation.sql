@@ -49,9 +49,20 @@ create table public.users (
   -- still deny access because this account is suspended.
   status public.user_status not null default 'active',
 
+  -- Optional personal/contact information; provisioning does not require a complete profile.
+  first_name text,
+  last_name text,
+  phone text,
+  date_of_birth date,
+  address_line1 text,
+  address_line2 text,
+  city text,
+  postal_code text,
+  country_code char(2),
+
   -- Application account creation time; account/RBAC mutations do not change it.
   created_at timestamptz not null default now(),
-  -- Latest account/RBAC modification, excluding unrelated tennis/domain data.
+  -- Last modification of this row, including personal/contact and account/RBAC changes.
   updated_at timestamptz not null default now()
 );
 
@@ -353,6 +364,37 @@ with check (
   and id <> (select auth.uid())
 );
 
+create policy users_update_personal
+on public.users for update to authenticated
+using (id = (select auth.uid()) and status = 'active')
+with check (id = (select auth.uid()) and status = 'active');
+
+-- UPDATE policies are ORed and column grants are shared. Keep their column
+-- boundaries separate so the owner policy cannot enable self-status changes
+-- and the admin policy cannot enable editing someone else's personal fields.
+-- Returning NULL retains the existing no-affected-row behavior for denied updates.
+create function public.guard_user_field_updates()
+returns trigger language plpgsql set search_path = '' as $$
+begin
+  if current_user = 'authenticated' then
+    if tg_argv[0] = 'status' and old.id = auth.uid() then
+      return null;
+    elsif tg_argv[0] = 'personal' and old.id <> auth.uid() then
+      return null;
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+revoke all on function public.guard_user_field_updates() from public;
+create trigger users_guard_status_update before update of status on public.users
+for each row execute function public.guard_user_field_updates('status');
+create trigger users_guard_personal_update before update of
+  first_name, last_name, phone, date_of_birth, address_line1, address_line2,
+  city, postal_code, country_code on public.users
+for each row execute function public.guard_user_field_updates('personal');
+
 
 -- ------------------------------------------------------------
 -- public.user_roles
@@ -419,13 +461,15 @@ on table public.users
 to authenticated;
 
 
--- The only mutable public.users field exposed to authenticated
--- requests is status.
---
--- RLS further restricts this operation to admins.
+-- Status is admin-managed; personal fields are owner-managed. RLS and the
+-- field guards retain both boundaries without exposing identity or timestamps.
 grant update (status)
 on table public.users
 to authenticated;
+
+grant update (first_name, last_name, phone, date_of_birth, address_line1,
+  address_line2, city, postal_code, country_code)
+on public.users to authenticated;
 
 
 grant select, insert, delete

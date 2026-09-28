@@ -63,12 +63,12 @@ export async function changePasswordAction(
     return { formError: safeAuthError("password", result.code) };
   }
 
-  redirect("/account?notice=password-changed");
+  redirect("/profile?notice=password-changed");
 }
 
 export async function signOutAction() {
   const supabase = await createClient();
   const { error } = await supabase.auth.signOut({ scope: "local" });
-  if (error) redirect("/account?notice=signout-failed");
+  if (error) redirect("/profile?notice=signout-failed");
   redirect("/login");
 }

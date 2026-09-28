@@ -61,8 +61,8 @@ export async function DesktopNavbar() {
           {isAuthenticated && (
             <>
               <Link
-                href="/account"
-                aria-label="Your account"
+                href="/profile"
+                aria-label="Your profile"
                 className="inline-flex size-10 items-center justify-center rounded-control border border-border-strong text-primary hover:bg-surface-muted hover:text-accent"
               >
                 <UserRound aria-hidden="true" className="size-5" strokeWidth={1.8} />

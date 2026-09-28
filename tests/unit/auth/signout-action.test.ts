@@ -32,14 +32,14 @@ it("redirects to login after successful local sign-out", async () => {
   expect(redirect).toHaveBeenCalledExactlyOnceWith("/login");
 });
 
-it("stays on account with a trusted notice after failed local sign-out", async () => {
+it("returns to profile with a trusted notice after failed local sign-out", async () => {
   signOut.mockResolvedValue({ error: { message: "provider-private-error" } });
 
   await expect(signOutAction()).rejects.toThrow(
-    "redirect:/account?notice=signout-failed",
+    "redirect:/profile?notice=signout-failed",
   );
 
   expect(signOut).toHaveBeenCalledExactlyOnceWith({ scope: "local" });
-  expect(redirect).toHaveBeenCalledExactlyOnceWith("/account?notice=signout-failed");
+  expect(redirect).toHaveBeenCalledExactlyOnceWith("/profile?notice=signout-failed");
   expect(redirect.mock.calls[0][0]).not.toContain("provider-private-error");
 });

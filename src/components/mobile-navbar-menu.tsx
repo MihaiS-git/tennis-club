@@ -158,8 +158,8 @@ export function MobileNavbarMenu({ isAuthenticated, isAdmin }: { isAuthenticated
           <div className="mt-2 border-t border-border pt-2">
             {isAuthenticated ? (
               <>
-                <Link onClick={closeMenu} href="/account" className="flex min-h-12 items-center text-sm font-medium text-primary hover:text-accent">
-                  Account
+                <Link onClick={closeMenu} href="/profile" className="flex min-h-12 items-center text-sm font-medium text-primary hover:text-accent">
+                  Profile
                 </Link>
                 <form action={signOutAction}>
                   <button type="submit" className="flex min-h-12 w-full items-center text-left text-sm font-medium text-primary hover:text-accent">
