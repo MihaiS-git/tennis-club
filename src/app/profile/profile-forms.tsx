@@ -8,6 +8,9 @@ import { Input } from "@/components/input";
 import { SubmitButton } from "@/components/submit-button";
 import type { PersonalProfile, PlayerProfile } from "@/lib/profile/profile";
 import type { ProfileActionState } from "@/lib/profile/validation";
+import { sportyaLevels } from "@/lib/profile/validation";
+import { effectiveDisplayName } from "@/lib/profile/presentation";
+import { CountrySelect } from "./country-select";
 import { savePersonalAction, saveTennisAction, uploadAvatarAction, removeAvatarAction } from "./actions";
 
 const initialState: ProfileActionState = {};
@@ -41,14 +44,17 @@ export function PersonalInformationForm({ profile }: { profile: PersonalProfile 
           <div className="grid min-w-0 gap-5 sm:grid-cols-2">
             {fields.map(([name, label, type, autoComplete]) => (
               <FormField key={name} label={label} htmlFor={name} error={errorFor(name)} errorId={`${name}-error`}>
-                <Input id={name} name={name} type={type} autoComplete={autoComplete} value={values[name] ?? ""}
+                {name === "country_code" ? <CountrySelect value={values.country_code ?? ""} error={errorFor(name)}
+                  onChange={(value) => {
+                    setValues({ ...values, country_code: value });
+                    setEdited({ state, fields: [...(edited?.state === state ? edited.fields : []), name] });
+                  }} /> : <Input id={name} name={name} type={type} autoComplete={autoComplete} value={values[name] ?? ""}
                   className="min-h-11 min-w-0"
                   onChange={(event) => {
                     setValues({ ...values, [name]: event.target.value });
                     setEdited({ state, fields: [...(edited?.state === state ? edited.fields : []), name] });
                   }}
-                  aria-invalid={Boolean(errorFor(name))} aria-describedby={[name === "country_code" ? "country-help" : "", errorFor(name) ? `${name}-error` : ""].filter(Boolean).join(" ") || undefined} />
-                {name === "country_code" && <p id="country-help" className="mt-2 text-xs leading-5 text-muted-foreground">Use your country’s two-letter abbreviation, e.g. RO for Romania.</p>}
+                  aria-invalid={Boolean(errorFor(name))} aria-describedby={errorFor(name) ? `${name}-error` : undefined} />}
               </FormField>
             ))}
           </div>
@@ -60,18 +66,20 @@ export function PersonalInformationForm({ profile }: { profile: PersonalProfile 
 }
 
 const tennisChoices = {
-  handedness: [["right", "Right"], ["left", "Left"]],
-  backhand: [["one_handed", "One handed"], ["two_handed", "Two handed"]],
+  handedness: [["right", "Right-handed"], ["left", "Left-handed"]],
+  backhand: [["one_handed", "One-handed"], ["two_handed", "Two-handed"]],
   preferred_game: [["singles", "Singles"], ["doubles", "Doubles"], ["both", "Both"]],
   preferred_surface: [["clay", "Clay"], ["hard", "Hard"], ["grass", "Grass"], ["carpet", "Carpet"], ["any", "Any"]],
 } as const;
 const choiceLabels = { handedness: "Handedness", backhand: "Backhand", preferred_game: "Preferred game", preferred_surface: "Preferred surface" };
 const tennisChoiceNames = ["handedness", "backhand", "preferred_game", "preferred_surface"] as const;
 
-export function TennisProfileForm({ profile }: { profile: PlayerProfile | null }) {
+export function TennisProfileForm({ profile, personal = {} }: {
+  profile: PlayerProfile | null; personal?: Partial<Pick<PersonalProfile, "first_name" | "last_name">>;
+}) {
   const [state, action] = useActionState(saveTennisAction, initialState);
   const [values, setValues] = useState<Record<string, string>>({
-    display_name: profile?.display_name ?? "", sportya_level: profile?.sportya_level ?? "",
+    display_name: effectiveDisplayName(profile?.display_name, personal), sportya_level: profile?.sportya_level ?? "",
     handedness: profile?.handedness ?? "", backhand: profile?.backhand ?? "", preferred_game: profile?.preferred_game ?? "",
     preferred_surface: profile?.preferred_surface ?? "", bio: profile?.bio ?? "",
   });
@@ -91,8 +99,13 @@ export function TennisProfileForm({ profile }: { profile: PlayerProfile | null }
         <div className="grid min-w-0 gap-5 sm:grid-cols-2">
           {[["display_name", "Display name"], ["sportya_level", "Sportya level"]].map(([name, label]) => (
             <FormField key={name} label={label} htmlFor={name} error={errorFor(name)} errorId={`${name}-error`}>
-              <Input {...fieldProps(name)} className="min-h-11 min-w-0" onChange={(event) => change(name, event.target.value)}
-                aria-describedby={[`${name}-help`, errorFor(name) ? `${name}-error` : ""].filter(Boolean).join(" ")} />
+              {name === "sportya_level" ? <select {...fieldProps(name)} onChange={(event) => change(name, event.target.value)}
+                aria-describedby={[`${name}-help`, errorFor(name) ? `${name}-error` : ""].filter(Boolean).join(" ")}
+                className="min-h-11 w-full min-w-0 rounded-control border border-border bg-surface px-3 py-2.5 text-sm text-foreground focus:border-primary focus:ring-2 focus:ring-focus/20">
+                <option value="">Not specified</option>
+                {sportyaLevels.map((level) => <option key={level} value={level}>Level {level}</option>)}
+              </select> : <Input {...fieldProps(name)} className="min-h-11 min-w-0" onChange={(event) => change(name, event.target.value)}
+                aria-describedby={[`${name}-help`, errorFor(name) ? `${name}-error` : ""].filter(Boolean).join(" ")} />}
               <p id={`${name}-help`} className="mt-2 text-xs leading-5 text-muted-foreground">{name === "display_name" ? "The name other club players will see." : "Your level on Sportya, if you use it."}</p>
             </FormField>
           ))}

@@ -21,9 +21,13 @@ export async function saveTennisAction(_state: ProfileActionState, formData: For
 export async function uploadAvatarAction(_state: ProfileActionState, formData: FormData): Promise<ProfileActionState> {
   const file = formData.get("avatar");
   if (!(file instanceof File)) return { fieldErrors: { avatar: "Choose an image to upload." } };
-  return refreshOnSuccess(await changeAvatar(file));
+  const result = refreshOnSuccess(await changeAvatar(file));
+  if (result.success) revalidatePath("/", "layout");
+  return result;
 }
 
 export async function removeAvatarAction() {
-  return refreshOnSuccess(await changeAvatar(null));
+  const result = refreshOnSuccess(await changeAvatar(null));
+  if (result.success) revalidatePath("/", "layout");
+  return result;
 }

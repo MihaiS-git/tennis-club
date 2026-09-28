@@ -6,8 +6,11 @@ import { useEffect, useId, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import { signOutAction } from "@/app/account/actions";
+import { ProfileNavigationAvatar } from "./profile-navigation-avatar";
 
-export function MobileNavbarMenu({ isAuthenticated, isAdmin }: { isAuthenticated: boolean; isAdmin: boolean }) {
+export function MobileNavbarMenu({ isAuthenticated, isAdmin, avatarUrl = null }: {
+  isAuthenticated: boolean; isAdmin: boolean; avatarUrl?: string | null;
+}) {
   const [isOpen, setIsOpen] = useState(false);
   const menuId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -65,7 +68,7 @@ export function MobileNavbarMenu({ isAuthenticated, isAdmin }: { isAuthenticated
   }
 
   return (
-    <header className="w-full border-b border-border bg-surface lg:hidden">
+    <header className="sticky top-0 z-30 w-full border-b border-border bg-surface lg:hidden">
       <div className="flex h-16 items-center justify-between gap-2 px-4">
         <Link
           href="/"
@@ -158,7 +161,8 @@ export function MobileNavbarMenu({ isAuthenticated, isAdmin }: { isAuthenticated
           <div className="mt-2 border-t border-border pt-2">
             {isAuthenticated ? (
               <>
-                <Link onClick={closeMenu} href="/profile" className="flex min-h-12 items-center text-sm font-medium text-primary hover:text-accent">
+                <Link onClick={closeMenu} href="/profile" className="flex min-h-12 items-center gap-2 text-sm font-medium text-primary hover:text-accent">
+                  <ProfileNavigationAvatar src={avatarUrl} />
                   Profile
                 </Link>
                 <form action={signOutAction}>

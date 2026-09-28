@@ -1,12 +1,13 @@
 import { z } from "zod";
+import { isCountryCode } from "./countries";
 
 const optionalText = (limit: number) => z.string().trim().max(limit, `Use at most ${limit} characters.`)
   .transform((value) => value || null);
 const choice = <T extends string>(values: readonly [T, ...T[]]) =>
   z.union([z.enum(values), z.literal("")]).transform((value) => value || null);
 
-// Kept separate until the controlled Sportya values are established.
-export const sportyaLevelSchema = optionalText(80);
+export const sportyaLevels = ["4", "5", "6", "7", "8", "9"] as const;
+export const sportyaLevelSchema = choice(sportyaLevels).nullable();
 
 export const personalInformationSchema = z.strictObject({
   first_name: optionalText(100),
@@ -17,8 +18,8 @@ export const personalInformationSchema = z.strictObject({
   address_line2: optionalText(200),
   city: optionalText(100),
   postal_code: optionalText(20),
-  country_code: z.string().trim().toUpperCase().refine((value) => value === "" || /^[A-Z]{2}$/.test(value),
-    "Enter a two-letter country code.").transform((value) => value || null),
+  country_code: z.string().trim().toUpperCase().refine((value) => value === "" || isCountryCode(value),
+    "Select a supported country.").transform((value) => value || null),
 });
 
 export const tennisProfileSchema = z.strictObject({

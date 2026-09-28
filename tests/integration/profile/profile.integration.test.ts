@@ -33,12 +33,18 @@ test(
     }
     try {
       const owner = await fixture(); const other = await fixture();
-      expect((await owner.client.from("player_profiles").select("user_id")).data).toEqual([]);
-      expect(await savePersonalInformation({ ...personal, first_name: "Ana", phone: "123" }, owner.client)).toHaveProperty("success");
-      expect((await owner.client.from("users").select("first_name, phone").eq("id", owner.id).single()).data).toEqual({ first_name: "Ana", phone: "123" });
+      expect((await owner.client.from("player_profiles").select("user_id").eq("user_id", owner.id)).data).toEqual([]);
+      expect(await savePersonalInformation({ ...personal, first_name: "Ana", phone: "123", country_code: "RO" }, owner.client)).toHaveProperty("success");
+      expect((await owner.client.from("users").select("first_name, phone, country_code").eq("id", owner.id).single()).data).toEqual({ first_name: "Ana", phone: "123", country_code: "RO" });
       expect((await other.client.from("users").select("first_name, phone").eq("id", owner.id)).data).toEqual([]);
       expect((await other.client.from("users").update({ first_name: "spoof" }).eq("id", owner.id).select("id")).data).toEqual([]);
-      expect(await saveTennisProfile({ ...tennis, display_name: "Ana" }, owner.client)).toHaveProperty("success");
+      expect((await owner.client.from("player_profiles").select("user_id").eq("user_id", owner.id)).data).toEqual([]);
+      expect(await savePersonalInformation({ ...personal, country_code: "ZZ" }, owner.client)).toHaveProperty("fieldErrors.country_code");
+      expect(await saveTennisProfile({ ...tennis, sportya_level: "5.5" }, owner.client)).toHaveProperty("fieldErrors.sportya_level");
+      expect(await saveTennisProfile({ ...tennis, display_name: "Ana", sportya_level: "6" }, owner.client)).toHaveProperty("success");
+      expect(await savePersonalInformation({ ...personal, first_name: "Changed" }, owner.client)).toHaveProperty("success");
+      expect((await owner.client.from("player_profiles").select("display_name, sportya_level").eq("user_id", owner.id).single()).data)
+        .toEqual({ display_name: "Ana", sportya_level: "6" });
       expect(await saveTennisProfile({ ...tennis, bio: "Clay player" }, owner.client)).toHaveProperty("success");
       expect((await other.client.from("player_profiles").select("user_id, bio").eq("user_id", owner.id)).data).toEqual([{ user_id: owner.id, bio: "Clay player" }]);
       const anonymous = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_PUBLISHABLE_KEY!);

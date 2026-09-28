@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ProfileActionState } from "../../src/lib/profile/validation";
 const { personal, tennis, upload, remove, success } = vi.hoisted(() => ({
   personal: vi.fn(), tennis: vi.fn(), upload: vi.fn(), remove: vi.fn(), success: vi.fn(),
@@ -48,15 +48,111 @@ it("shows the avatar lifecycle controls", () => {
   expect(screen.getByLabelText("Change avatar").getAttribute("accept")).toBe("image/jpeg,image/png,image/webp");
   expect(screen.getByRole("button", { name: "Remove avatar" })).toBeDefined();
 });
-it("presents Country with a helpful hint while preserving the submitted code and validation", async () => {
-  personal.mockResolvedValue({ fieldErrors: { country_code: "Enter a two-letter country code." } });
+
+it.each([["Romania", "RO", "🇷🇴"], ["France", "FR", "🇫🇷"], ["United Kingdom", "GB", "🇬🇧"]])("searches English names and submits %s as %s", async (name, code, flag) => {
   render(<PersonalInformationForm profile={emptyPersonal} />);
-  const country = screen.getByLabelText("Country");
-  expect(country.getAttribute("name")).toBe("country_code");
-  expect(country.getAttribute("aria-describedby")).toBe("country-help");
-  fireEvent.change(country, { target: { value: "RO" } });
+  const country = screen.getByRole("combobox", { name: "Country" });
+  fireEvent.focus(country);
+  fireEvent.change(country, { target: { value: name.toUpperCase() } });
+  const list = screen.getByRole("listbox", { name: "Countries" });
+  expect(within(list).getAllByRole("option")).toHaveLength(1);
+  const option = within(list).getByRole("option", { name });
+  expect(within(option).getByText(flag).getAttribute("aria-hidden")).toBe("true");
+  fireEvent.click(option);
+  expect((country as HTMLInputElement).value).toBe(name);
+  expect(country.parentElement?.querySelector('[aria-hidden="true"]')?.textContent).toBe(flag);
   fireEvent.submit(screen.getByRole("button", { name: "Save personal information" }).closest("form")!);
-  await screen.findByText("Enter a two-letter country code.");
-  expect(country.getAttribute("aria-describedby")).toBe("country-help country_code-error");
-  expect(personal.mock.calls[0][1].get("country_code")).toBe("RO");
+  await waitFor(() => expect(personal).toHaveBeenCalledOnce());
+  expect(personal.mock.calls[0][1].get("country_code")).toBe(code);
+  expect(screen.queryByText(/two-letter abbreviation/)).toBeNull();
+});
+it("loads an existing country and supports keyboard search, selection, Escape and errors", async () => {
+  personal.mockResolvedValue({ fieldErrors: { country_code: "Select a supported country." } });
+  render(<PersonalInformationForm profile={{ ...emptyPersonal, country_code: "RO" }} />);
+  const country = screen.getByRole("combobox", { name: "Country" });
+  expect((country as HTMLInputElement).value).toBe("Romania");
+  const selectedFlag = country.parentElement?.querySelector('[aria-hidden="true"]');
+  expect(selectedFlag?.textContent).toBe("🇷🇴");
+  expect(selectedFlag?.getAttribute("aria-hidden")).toBe("true");
+  fireEvent.focus(country);
+  fireEvent.change(country, { target: { value: "united" } });
+  fireEvent.keyDown(country, { key: "ArrowDown" });
+  expect(document.getElementById(country.getAttribute("aria-activedescendant")!)?.textContent).toBe("🇬🇧United Kingdom");
+  fireEvent.keyDown(country, { key: "Enter" });
+  expect((country as HTMLInputElement).value).toBe("United Kingdom");
+  expect(country.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.keyDown(country, { key: "ArrowDown" });
+  fireEvent.change(country, { target: { value: "invalid country" } });
+  expect(screen.getByRole("status").textContent).toBe("No countries found.");
+  fireEvent.keyDown(country, { key: "Escape" });
+  expect((country as HTMLInputElement).value).toBe("United Kingdom");
+  fireEvent.submit(screen.getByRole("button", { name: "Save personal information" }).closest("form")!);
+  await screen.findByText("Select a supported country.");
+  expect(country.getAttribute("aria-invalid")).toBe("true");
+  expect(country.getAttribute("aria-describedby")).toBe("country_code-error");
+  expect(personal.mock.calls[0][1].get("country_code")).toBe("GB");
+  fireEvent.focus(country);
+  fireEvent.change(country, { target: { value: "france" } });
+  fireEvent.keyDown(country, { key: "Enter" });
+  expect(screen.queryByText("Select a supported country.")).toBeNull();
+});
+it("never submits a free-form country search value and permits clearing a country", async () => {
+  render(<PersonalInformationForm profile={emptyPersonal} />);
+  const country = screen.getByRole("combobox", { name: "Country" });
+  expect(country.getAttribute("placeholder")).toBe("Select a country");
+  expect(country.parentElement?.querySelector('[aria-hidden="true"]')).toBeNull();
+  fireEvent.focus(country);
+  fireEvent.change(country, { target: { value: "arbitrary" } });
+  fireEvent.blur(country);
+  expect((country as HTMLInputElement).value).toBe("");
+  fireEvent.focus(country);
+  fireEvent.click(screen.getByRole("option", { name: "Not specified" }));
+  fireEvent.submit(screen.getByRole("button", { name: "Save personal information" }).closest("form")!);
+  await waitFor(() => expect(personal).toHaveBeenCalledOnce());
+  expect(personal.mock.calls[0][1].get("country_code")).toBe("");
+});
+it.each([
+  ["Mihai", "Suciu", "Mihai Suciu"], ["Mihai", null, "Mihai"], [null, "Suciu", "Suciu"], [null, null, ""],
+])("initially displays the effective personal name for %s / %s", (first_name, last_name, expected) => {
+  render(<TennisProfileForm profile={null} personal={{ first_name, last_name }} />);
+  expect((screen.getByLabelText("Display name") as HTMLInputElement).value).toBe(expected);
+});
+it("keeps a chosen display name after personal-name changes and submits only individual Sportya levels", async () => {
+  const profile = { display_name: "Chosen player", avatar_path: null, rating: null, sportya_level: "6", handedness: null, backhand: null, preferred_game: null, preferred_surface: null, bio: null, updated_at: "2026-09-28T12:00:00Z" };
+  const view = render(<TennisProfileForm profile={profile} personal={{ first_name: "Mihai", last_name: "Suciu" }} />);
+  view.rerender(<TennisProfileForm profile={profile} personal={{ first_name: "Changed", last_name: "Name" }} />);
+  expect((screen.getByLabelText("Display name") as HTMLInputElement).value).toBe("Chosen player");
+  const sportya = screen.getByRole("combobox", { name: "Sportya level" });
+  expect(within(sportya).getAllByRole("option").map((option) => [option.textContent, (option as HTMLOptionElement).value]))
+    .toEqual([["Not specified", ""], ...["4", "5", "6", "7", "8", "9"].map((value) => [`Level ${value}`, value])]);
+  fireEvent.change(sportya, { target: { value: "9" } });
+  fireEvent.submit(screen.getByRole("button", { name: "Save tennis profile" }).closest("form")!);
+  await waitFor(() => expect(tennis).toHaveBeenCalledOnce());
+  expect(tennis.mock.calls[0][1].get("sportya_level")).toBe("9");
+});
+it("keeps photo upload and replacement/removal behind Edit photo using the existing actions", async () => {
+  upload.mockResolvedValue({ success: "Avatar saved." }); remove.mockResolvedValue({ success: "Avatar removed." });
+  const view = render(<AvatarForms hasAvatar={false} hasProfile={false} />);
+  expect(screen.queryByText("Edit photo")).toBeNull();
+  expect(document.querySelector('input[type="file"]')).toBeNull();
+  expect(document.querySelector("form")).toBeNull();
+  view.rerender(<AvatarForms hasAvatar={false} hasProfile />);
+  const details = screen.getByText("Edit photo").closest("details")!;
+  expect(details.open).toBe(false);
+  details.open = true;
+  expect(screen.queryByRole("button", { name: "Remove avatar" })).toBeNull();
+  const file = new File(["image"], "avatar.png", { type: "image/png" });
+  const input = screen.getByLabelText("Upload avatar") as HTMLInputElement;
+  // jsdom does not serialize file inputs into FormData; check action connection here,
+  // with real file validation/storage lifecycle covered by existing unit/integration tests.
+  fireEvent.change(input, { target: { files: [file] } });
+  fireEvent.submit(screen.getByRole("button", { name: "Save avatar" }).closest("form")!);
+  await waitFor(() => expect(upload).toHaveBeenCalledOnce());
+  expect(remove).not.toHaveBeenCalled();
+  view.rerender(<AvatarForms hasAvatar hasProfile />);
+  expect(screen.getByLabelText("Change avatar")).toBeDefined();
+  fireEvent.submit(screen.getByRole("button", { name: "Save avatar" }).closest("form")!);
+  await waitFor(() => expect(upload).toHaveBeenCalledTimes(2));
+  fireEvent.submit(screen.getByRole("button", { name: "Remove avatar" }).closest("form")!);
+  await waitFor(() => expect(remove).toHaveBeenCalledOnce());
 });

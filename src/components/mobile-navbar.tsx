@@ -1,15 +1,14 @@
-import { readCurrentAccount } from "@/lib/auth/account";
-import { createClient } from "@/lib/supabase/server";
+import { readNavigationProfile } from "@/lib/profile/navigation";
 import { MobileNavbarMenu } from "./mobile-navbar-menu";
 
 export async function MobileNavbar() {
-  const supabase = await createClient();
-  const account = await readCurrentAccount(supabase);
+  const { account, avatarUrl } = await readNavigationProfile();
 
   return (
     <MobileNavbarMenu
       isAuthenticated={account.state !== "unauthenticated"}
       isAdmin={account.state === "active" && account.roles.includes("admin")}
+      avatarUrl={avatarUrl}
     />
   );
 }

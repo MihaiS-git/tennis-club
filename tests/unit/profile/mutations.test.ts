@@ -65,3 +65,18 @@ it("returns a safe error when persistence fails or affects no row", async () => 
   const state = await savePersonalInformation(personal);
   expect(state).toHaveProperty("formError"); expect(JSON.stringify(state)).not.toContain("secret");
 });
+
+it("personal saves never create or overwrite a chosen player display name", async () => {
+  expect(await savePersonalInformation({ ...personal, first_name: "Changed", last_name: "Name" })).toHaveProperty("success");
+  expect(from).toHaveBeenCalledExactlyOnceWith("users");
+  expect(insert).not.toHaveBeenCalled();
+  expect(update.mock.calls[0][0]).not.toHaveProperty("display_name");
+});
+it.each([{ country_code: "ZZ" }, { country_code: "UK" }])("rejects noncanonical countries before any server persistence %j", async (input) => {
+  expect(await savePersonalInformation({ ...personal, ...input })).toHaveProperty("fieldErrors.country_code");
+  expect(from).not.toHaveBeenCalled();
+});
+it.each(["3", "10", "5.5", "advanced"])("rejects invalid Sportya %s before server persistence", async (sportya_level) => {
+  expect(await saveTennisProfile({ ...tennis, sportya_level })).toHaveProperty("fieldErrors.sportya_level");
+  expect(from).not.toHaveBeenCalled();
+});

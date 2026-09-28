@@ -13,9 +13,9 @@ it("normalizes optional personal data and country codes", () => {
 it.each([{ date_of_birth: "2026-02-30" }, { country_code: "Romania" }, { phone: "x".repeat(41) }, { first_name: "x".repeat(101) }, { status: "active" }, { id: "victim" }, { email: "spoof@example.test" }, { created_at: "now" }])(
   "rejects invalid personal information %j", (input) => expect(personalInformationSchema.safeParse({ ...emptyPersonal, ...input }).success).toBe(false),
 );
-it("keeps Sportya free text and normalizes optional choices", () => {
-  expect(tennisProfileSchema.parse({ ...emptyTennis, sportya_level: " Level 4 ", preferred_game: "both" }))
-    .toMatchObject({ sportya_level: "Level 4", preferred_game: "both", bio: null, handedness: null });
+it("normalizes optional tennis choices", () => {
+  expect(tennisProfileSchema.parse({ ...emptyTennis, sportya_level: "4", preferred_game: "both" }))
+    .toMatchObject({ sportya_level: "4", preferred_game: "both", bio: null, handedness: null });
 });
 it.each([{ handedness: "ambidextrous" }, { preferred_surface: "ice" }, { bio: "x".repeat(2001) }, { rating: 2000 }, { user_id: "someone" }, { avatar_path: "someone/avatar.png" }])(
   "rejects invalid or managed tennis fields %j", (input) => expect(tennisProfileSchema.safeParse({ ...emptyTennis, ...input }).success).toBe(false),
@@ -43,4 +43,25 @@ it("accepts exactly 5 MiB and rejects larger images before reading their bytes",
   const bytes = new Uint8Array(MAX_AVATAR_SIZE); bytes.set([255, 216, 255]);
   expect((await validateAvatar(new File([bytes], "x.jpg", { type: "image/jpeg" }))).ok).toBe(true);
   expect((await validateAvatar(new File([bytes, "x"], "x.jpg", { type: "image/jpeg" }))).ok).toBe(false);
+});
+
+it.each(["", null, "4", "5", "6", "7", "8", "9"])("accepts individual Sportya level %s", (level) => {
+  expect(tennisProfileSchema.parse({ ...emptyTennis, sportya_level: level }).sportya_level).toBe(level || null);
+});
+it.each(["3", "10", "4.5", "5.5", "6.5", "7.5", "8.5", "beginner", "advanced", "anything", 4])(
+  "rejects invalid individual Sportya level %s", (level) => {
+    expect(tennisProfileSchema.safeParse({ ...emptyTennis, sportya_level: level }).success).toBe(false);
+  },
+);
+it.each(["ZZ", "UK", "EU", "XK", "AA", "Romania", "R0"])("rejects noncanonical country %s", (country_code) => {
+  expect(personalInformationSchema.safeParse({ ...emptyPersonal, country_code }).success).toBe(false);
+});
+it.each([
+  ["handedness", ["right", "left"]], ["backhand", ["one_handed", "two_handed"]],
+  ["preferred_game", ["singles", "doubles", "both"]], ["preferred_surface", ["clay", "hard", "grass", "carpet", "any"]],
+])("preserves canonical %s values and rejects arbitrary values", (field, values) => {
+  for (const value of ["", ...values]) {
+    expect(tennisProfileSchema.parse({ ...emptyTennis, [field]: value })).toHaveProperty(field, value || null);
+  }
+  expect(tennisProfileSchema.safeParse({ ...emptyTennis, [field]: "invalid" }).success).toBe(false);
 });

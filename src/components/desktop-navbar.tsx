@@ -1,18 +1,16 @@
 import Link from "next/link";
-import { UserRound } from "lucide-react";
 
 import { signOutAction } from "@/app/account/actions";
-import { readCurrentAccount } from "@/lib/auth/account";
-import { createClient } from "@/lib/supabase/server";
+import { readNavigationProfile } from "@/lib/profile/navigation";
+import { ProfileNavigationAvatar } from "./profile-navigation-avatar";
 
 export async function DesktopNavbar() {
-  const supabase = await createClient();
-  const account = await readCurrentAccount(supabase);
+  const { account, avatarUrl } = await readNavigationProfile();
   const isAuthenticated = account.state !== "unauthenticated";
   const isAdmin = account.state === "active" && account.roles.includes("admin");
 
   return (
-    <header className="hidden w-full border-b border-border bg-surface lg:block">
+    <header className="sticky top-0 z-30 hidden w-full border-b border-border bg-surface lg:block">
       <div className="mx-auto grid h-18 max-w-7xl grid-cols-[1fr_auto_1fr] items-center gap-3 px-6 xl:gap-8 xl:px-8">
         <Link
           href="/"
@@ -60,13 +58,7 @@ export async function DesktopNavbar() {
           </Link>
           {isAuthenticated && (
             <>
-              <Link
-                href="/profile"
-                aria-label="Your profile"
-                className="inline-flex size-10 items-center justify-center rounded-control border border-border-strong text-primary hover:bg-surface-muted hover:text-accent"
-              >
-                <UserRound aria-hidden="true" className="size-5" strokeWidth={1.8} />
-              </Link>
+              <ProfileNavigationAvatar src={avatarUrl} desktop />
               <form action={signOutAction}>
                 <button
                   type="submit"

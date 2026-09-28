@@ -1,6 +1,6 @@
 # Profiles
 
-`/profile` is an authenticated application page. Active accounts have separate personal-information and tennis-profile saves. `/profile` also contains account/email information, roles, the existing password-change form (including current-password verification), and sign out. `/account` redirects to `/profile`; anonymous visitors continue to `/login`. A missing application account, suspended account, or load failure shows an unavailable/restricted page.
+`/profile` is an authenticated application page. Active accounts have separate personal-information and tennis-profile saves. `/profile` also contains account/email information, roles, the existing password-change form (including current-password verification), with sign out in global navigation. `/account` redirects to `/profile`; anonymous visitors continue to `/login`. A missing application account, suspended account, or load failure shows an unavailable/restricted page.
 
 ## Data and authorization
 
@@ -8,11 +8,19 @@
 
 Active owners may update their permitted personal fields. Existing owner/admin account reads remain in place. Status remains managed by another active administrator. Column grants and field guards prevent the owner/admin UPDATE policies from enabling each other's mutations. Identity, email, and timestamps cannot be directly updated by authenticated clients.
 
-`public.player_profiles` is optional and created on the first tennis save. It is not created during signup. It contains display name, avatar object path, free-text Sportya level, nullable system-managed rating, handedness, backhand, preferred game/surface, bio, and timestamps. Tennis data is readable by active authenticated users, never anonymously. Next.js verifies authentication, active status, ownership, input validation, and explicit allowed fields; RLS provides defense in depth. Rating, ownership, avatar paths, and timestamps are never accepted from tennis form inputs. No deletion feature is implemented.
+`public.player_profiles` is optional and created on the first tennis save. It is not created during signup. It contains display name, avatar object path, individual Sportya level (only strings `"4"` through `"9"`, or null), nullable system-managed rating, handedness, backhand, preferred game/surface, bio, and timestamps. Tennis data is readable by active authenticated users, never anonymously. Next.js verifies authentication, active status, ownership, input validation, and explicit allowed fields; RLS provides defense in depth. Rating, ownership, avatar paths, and timestamps are never accepted from tennis form inputs. No deletion feature is implemented.
 
 Player timestamps default to `now()` on creation. Next.js explicitly sets `updated_at` on tennis updates and avatar path changes, including compensation updates. The user-scoped client has UPDATE permission on this column for those server writes; no player timestamp maintenance trigger is used. The existing `users.updated_at` trigger behavior is unchanged.
 
 Future `coach_profiles` will be a sibling entity. A user may have player/coach profiles, both, or neither. Profiles do not grant RBAC roles; membership remains separate from RBAC.
+
+## Profile presentation
+
+The four full-label section buttons display one section at a time while keeping forms mounted to preserve unsaved edits. Mobile uses two columns; tablet and desktop use four. Country selection searches English names derived locally with `Intl.DisplayNames` from the application-owned 249 ISO alpha-2 codes in `src/lib/profile/countries.ts`. Only canonical codes are submitted; server validation checks membership in that set.
+
+A nonempty persisted display name takes precedence. Otherwise the identity summary and Tennis profile input use the whitespace-normalized first and last name. Saving personal information never creates or updates the tennis row. Tennis saves may persist the displayed fallback as the chosen name. Sportya uses a controlled individual-level select; doubles half-levels are excluded.
+
+Desktop navigation and the mobile drawer share a cached server-render read of the authenticated account and its avatar metadata. Active users with an avatar use the same private `/profile/avatar` endpoint as the identity summary. No path or Storage URL is sent to the browser. A failed image falls back to the profile icon, and successful avatar mutations refresh the root layout.
 
 ## Avatar workflow
 

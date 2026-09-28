@@ -25,3 +25,23 @@ it("requires a File for upload and delegates removal without client ownership", 
   avatar.mockResolvedValue({ success: "Removed" }); await removeAvatarAction();
   expect(avatar).toHaveBeenCalledExactlyOnceWith(null); expect(revalidatePath).toHaveBeenCalledWith("/profile");
 });
+
+it.each(["upload", "remove"])("refreshes the shared navigation after a successful avatar %s", async (operation) => {
+  avatar.mockResolvedValue({ success: "Avatar changed." });
+  if (operation === "upload") {
+    const data = new FormData();
+    const file = new File(["image"], "avatar.png", { type: "image/png" });
+    data.set("avatar", file);
+    await uploadAvatarAction({}, data);
+    expect(avatar).toHaveBeenCalledExactlyOnceWith(file);
+  } else {
+    await removeAvatarAction();
+    expect(avatar).toHaveBeenCalledExactlyOnceWith(null);
+  }
+  expect(revalidatePath.mock.calls).toEqual([["/profile"], ["/", "layout"]]);
+});
+it("does not refresh the layout when an avatar mutation fails", async () => {
+  avatar.mockResolvedValue({ formError: "Unable to change avatar." });
+  await removeAvatarAction();
+  expect(revalidatePath).not.toHaveBeenCalled();
+});

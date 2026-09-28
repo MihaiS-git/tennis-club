@@ -5,6 +5,7 @@ import { signOutAction } from "@/app/account/actions";
 import { ChangePasswordForm } from "@/components/auth/change-password-form";
 import { SubmitButton } from "@/components/submit-button";
 import { loadProfile, profileContext } from "@/lib/profile/profile";
+import { effectiveDisplayName, playerAvatarUrl } from "@/lib/profile/presentation";
 import { AvatarForms, PersonalInformationForm, TennisProfileForm } from "./profile-forms";
 import { ProfileSettings } from "./profile-settings";
 
@@ -22,8 +23,8 @@ export default async function ProfilePage() {
       <form action={signOutAction} className="[&>button]:min-h-11"><SubmitButton variant="secondary" pendingLabel="Signing out…">Sign out</SubmitButton></form>
     </section></main>;
   }
-  const imageUrl = profile.player?.avatar_path ? `/profile/avatar?v=${encodeURIComponent(profile.player.updated_at)}` : null;
-  const playerName = profile.player?.display_name || [profile.personal.first_name, profile.personal.last_name].filter(Boolean).join(" ") || "Your profile";
+  const imageUrl = playerAvatarUrl(profile.player);
+  const playerName = effectiveDisplayName(profile.player?.display_name, profile.personal) || "Your profile";
   return (
     <main className="flex-1 bg-background">
       <div className="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 sm:py-10 lg:space-y-8 lg:px-8 lg:py-12">
@@ -58,7 +59,7 @@ export default async function ProfilePage() {
             </section>
           }
           personal={<PersonalInformationForm profile={profile.personal} />}
-          tennis={<TennisProfileForm profile={profile.player} />}
+          tennis={<TennisProfileForm profile={profile.player} personal={profile.personal} />}
           account={
             <div className="space-y-6">
               <dl className="grid min-w-0 gap-5 rounded-control border border-border bg-background p-4 lg:grid-cols-2">
@@ -75,10 +76,6 @@ export default async function ProfilePage() {
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">Enter your current password to choose a new one.</p>
                 <ChangePasswordForm />
               </section>
-              <div className="flex flex-wrap items-center justify-between gap-4 border-t border-border pt-6">
-                <div><h3 className="text-sm font-semibold">Sign out</h3><p className="mt-1 text-sm text-muted-foreground">End your session on this device.</p></div>
-                <form action={signOutAction} className="[&>button]:min-h-11"><SubmitButton variant="secondary" pendingLabel="Signing out…">Sign out</SubmitButton></form>
-              </div>
             </div>
           }
         />
