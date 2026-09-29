@@ -1,7 +1,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set search_path = extensions, public;
-select plan(28);
+select plan(21);
 
 insert into public.locations (id, name, slug, timezone, is_active) values
 ('c1000000-0000-4000-8000-000000000001', 'Active', 'test-locations-active', 'Europe/Bucharest', true),
@@ -15,28 +15,8 @@ insert into public.courts (location_id, name, slug, surface, environment, is_act
 select throws_ok($$insert into public.courts (location_id, name, slug, surface, environment)
   values ('c1000000-0000-4000-8000-000000000001', 'Covered', 'covered', 'clay', 'covered')$$,
   '23514', null, 'covered is not a permanent environment');
-select is((select supports_balloon from public.courts where slug = 'hidden'), false, 'balloon support defaults to false');
-select is((select balloon_installed from public.courts where slug = 'hidden'), false, 'balloon installation defaults to false');
-select lives_ok($$insert into public.courts (location_id, name, slug, surface, environment, supports_balloon)
-  values ('c1000000-0000-4000-8000-000000000003', 'Seasonal outdoor', 'seasonal-outdoor', 'clay', 'outdoor', true)$$,
-  'outdoor court may support an uninstalled balloon');
-select lives_ok($$insert into public.courts (location_id, name, slug, surface, environment, supports_balloon, balloon_installed)
-  values ('c1000000-0000-4000-8000-000000000003', 'Balloon installed', 'balloon-installed', 'clay', 'outdoor', true, true)$$,
-  'supported outdoor balloon may be installed');
-select throws_ok($$insert into public.courts (location_id, name, slug, surface, environment, balloon_installed)
-  values ('c1000000-0000-4000-8000-000000000003', 'Unsupported', 'unsupported', 'clay', 'outdoor', true)$$,
-  '23514', null, 'installed balloon requires support');
-select throws_ok($$insert into public.courts (location_id, name, slug, surface, environment, supports_balloon)
-  values ('c1000000-0000-4000-8000-000000000003', 'Indoor balloon', 'indoor-balloon', 'clay', 'indoor', true)$$,
-  '23514', null, 'balloon support is only for outdoor courts');
-select throws_ok($$update public.courts set supports_balloon = false where slug = 'balloon-installed'$$,
-  '23514', null, 'cannot remove support while a balloon is installed');
-select throws_ok($$insert into public.courts (location_id, name, slug, surface, environment, supports_balloon)
-  values ('c1000000-0000-4000-8000-000000000003', 'Null support', 'null-support', 'clay', 'outdoor', null)$$,
-  '23502', null, 'balloon support cannot be null');
-select throws_ok($$insert into public.courts (location_id, name, slug, surface, environment, balloon_installed)
-  values ('c1000000-0000-4000-8000-000000000003', 'Null installation', 'null-installation', 'clay', 'outdoor', null)$$,
-  '23502', null, 'balloon installation cannot be null');
+select hasnt_column('public', 'courts', 'supports_balloon', 'obsolete capability column removed');
+select hasnt_column('public', 'courts', 'balloon_installed', 'obsolete installation column removed');
 
 select throws_ok($$insert into public.courts (location_id, name, slug, surface, environment)
   values ('c1000000-0000-4000-8000-000000000001', 'Bad surface', 'bad-surface', 'sand', 'outdoor')$$,

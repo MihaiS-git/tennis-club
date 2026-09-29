@@ -329,7 +329,7 @@ When TanStack Query is introduced, update both `README.md` and `AGENTS.md` toget
 
 A court belongs to exactly one location.
 
-`locations` represent physical locations of the same club; `courts` belong to those locations. This foundation supports one initial location and later multiple locations, not multi-tenancy. Active locations and their active courts may be discovered without authentication through the server-only `listActiveLocationsWithCourts()` read model. SELECT-only RLS hides inactive locations and courts, including active courts at inactive locations; no browser database client or public mutation access is introduced.
+`locations` represent physical locations of the same club; `courts` belong to those locations. This foundation supports one initial location and later multiple locations, not multi-tenancy. Active locations and their active courts may be discovered without authentication through the server-only `listActiveLocationsWithCourts()` read model. Public SELECT policies hide inactive locations and courts, including active courts at inactive locations; active administrators have separate resource-management policies. No browser database client or public mutation access is introduced.
 
 A coach may work at multiple locations.
 
@@ -978,6 +978,15 @@ Fixtures contain 48 users with no elevated roles, 6 Coach, 3 Admin, and 3 Coach 
 Reruns skip existing Auth accounts without changing their password, status, roles, or timestamps. Existing users, including the integration admin anchor, remain untouched. Verification reports an error if an existing fixture differs from its expected roles/status instead of repairing it. An interrupted run can leave a partially configured fixture that needs manual inspection. This command never resets Supabase, runs migrations, or seeds future player/profile data. No cleanup command is provided.
 
 ## Admin UI
+
+`/admin/courts` groups all courts by physical location, including inactive resources.
+Active administrators create, edit, move, activate/deactivate, and order courts through
+user-scoped Server Actions. Each court has a clay/hard/grass/carpet surface, an
+outdoor/indoor environment, and a lighting flag. Counts are derived from records.
+Slugs are generated on creation, preserved on edits (including moves), and unique
+within the selected location. Court RLS grants the required SELECT/INSERT/UPDATE
+access with no hard deletion. Temporary balloon capability/installation flags have
+been removed; date-based court coverage is a future separate domain.
 
 `/admin/locations` lists all physical locations and lets active administrators create,
 edit, activate/deactivate, and order them through user-scoped Server Actions. Each

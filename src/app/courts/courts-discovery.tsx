@@ -50,7 +50,7 @@ export async function CourtsDiscovery() {
                       </div>
                       <div>
                         <dt className="sr-only">Environment</dt>
-                        <dd>{court.environment === "indoor" ? "Indoor" : court.balloon_installed ? "Balloon covered" : "Outdoor"}</dd>
+                        <dd>{court.environment === "indoor" ? "Indoor" : "Outdoor"}</dd>
                       </div>
                       {court.has_lighting && (
                         <div>

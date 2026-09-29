@@ -22,8 +22,8 @@ const locations: PublicLocation[] = [
     city: "Cluj-Napoca", postal_code: "400000", country_code: "RO",
     timezone: "Europe/Bucharest",
     courts: [
-      { id: "one", name: "Court One", slug: "one", surface: "clay", environment: "outdoor", supports_balloon: false, balloon_installed: false, has_lighting: true },
-      { id: "two", name: "Court Two", slug: "two", surface: "hard", environment: "indoor", supports_balloon: false, balloon_installed: false, has_lighting: false },
+      { id: "one", name: "Court One", slug: "one", surface: "clay", environment: "outdoor", has_lighting: true },
+      { id: "two", name: "Court Two", slug: "two", surface: "hard", environment: "indoor", has_lighting: false },
     ],
   },
   {
@@ -31,7 +31,7 @@ const locations: PublicLocation[] = [
     address_line1: null, address_line2: null, city: null, postal_code: null, country_code: null,
     timezone: "Europe/Bucharest",
     courts: [
-      { id: "three", name: "Court Three", slug: "three", surface: "grass", environment: "outdoor", supports_balloon: true, balloon_installed: true, has_lighting: false },
+      { id: "three", name: "Court Three", slug: "three", surface: "grass", environment: "outdoor", has_lighting: false },
     ],
   },
 ];
@@ -78,7 +78,7 @@ it("renders the public court count and groups court details under each location"
   expect(north.getByRole("heading", { name: "Court Three" })).toBeTruthy();
   for (const label of ["Clay", "Hard", "Outdoor", "Indoor"]) expect(central.getByText(label)).toBeTruthy();
   expect(north.getByText("Grass")).toBeTruthy();
-  expect(north.getByText("Balloon covered")).toBeTruthy();
+  expect(north.getByText("Outdoor")).toBeTruthy();
   expect(central.getAllByText("Floodlit")).toHaveLength(1);
   expect(north.queryByText("Floodlit")).toBeNull();
   expect(listActiveLocationsWithCourts).toHaveBeenCalledExactlyOnceWith();
@@ -101,9 +101,9 @@ it("shows temporary public opening hours and the hourly starting price", async (
   expect(page.getByText("From €10/hour")).toBeTruthy();
 });
 
-it("shows a balloon-capable court as outdoor when its balloon is not installed", async () => {
+it("shows the stored environment without a temporary coverage state", async () => {
   listActiveLocationsWithCourts.mockResolvedValue([{
-    ...locations[1], courts: [{ ...locations[1].courts[0], balloon_installed: false }],
+    ...locations[1], courts: [{ ...locations[1].courts[0] }],
   }]);
   const page = within(await renderPage());
   expect(page.getByText("Outdoor")).toBeTruthy();

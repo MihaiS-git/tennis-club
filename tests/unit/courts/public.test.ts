@@ -26,27 +26,36 @@ const court = {
   surface: "clay", has_lighting: true,
 };
 
-test.each([
-  { environment: "outdoor", supports_balloon: false, balloon_installed: false },
-  { environment: "outdoor", supports_balloon: true, balloon_installed: false },
-  { environment: "outdoor", supports_balloon: true, balloon_installed: true },
-  { environment: "indoor", supports_balloon: false, balloon_installed: false },
-])("exposes the public environment and balloon state: $environment / $supports_balloon / $balloon_installed", async (state) => {
+test.each([{ environment: "outdoor" }, { environment: "indoor" }])("exposes the public environment: $environment", async (state) => {
   const data = [{ ...location, courts: [{ ...court, ...state }] }];
   const query = mockRead(data);
   expect(await listActiveLocationsWithCourts()).toEqual(data);
-  expect(query.select).toHaveBeenCalledWith(expect.stringContaining("environment, supports_balloon, balloon_installed"));
+  expect(query.select).toHaveBeenCalledWith(expect.stringContaining("environment, has_lighting"));
+  expect(query.select.mock.calls[0][0]).not.toMatch(/supports_balloon|balloon_installed/);
 });
 
 test.each([
-  { environment: "covered", supports_balloon: false, balloon_installed: false },
-  { environment: "outdoor", supports_balloon: false, balloon_installed: true },
-  { environment: "indoor", supports_balloon: true, balloon_installed: false },
-  { environment: "outdoor", supports_balloon: null, balloon_installed: false },
-  { environment: "outdoor", supports_balloon: false, balloon_installed: null },
-])("rejects invalid public court state: $environment / $supports_balloon / $balloon_installed", async (state) => {
+  { environment: "covered" }, { environment: "other" }, { environment: null },
+])("rejects invalid public court environment: $environment", async (state) => {
   mockRead([{ ...location, courts: [{ ...court, ...state }] }]);
   await expect(listActiveLocationsWithCourts()).rejects.toThrow("Unable to load courts.");
+});
+
+test("does not expose obsolete or admin-only fields even if supplied by an adapter", async () => {
+  mockRead([{ ...location, courts: [{ ...court, environment: "outdoor", supports_balloon: true, balloon_installed: true, is_active: true }] }]);
+  const [result] = await listActiveLocationsWithCourts();
+  expect(result.courts[0]).toEqual({ ...court, environment: "outdoor" });
+});
+
+test("keeps explicit active filters, inner court embedding and deterministic ordering", async () => {
+  const query = mockRead([]);
+  await listActiveLocationsWithCourts();
+  expect(query.select.mock.calls[0][0]).toContain("courts!inner(");
+  expect(query.eq.mock.calls).toEqual([["is_active", true], ["courts.is_active", true]]);
+  expect(query.order.mock.calls).toEqual([
+    ["display_order"], ["name"], ["id"],
+    ["display_order", { referencedTable: "courts" }], ["name", { referencedTable: "courts" }], ["id", { referencedTable: "courts" }],
+  ]);
 });
 
 test("uses the existing server client and returns empty public discovery", async () => {

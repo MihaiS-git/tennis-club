@@ -21,7 +21,6 @@ test("public discovery excludes inactive resources and locations without active 
       id, location_id: [ids[0], ids[0], ids[0], ids[0], ids[0], ids[4], ids[1], ids[2], ids[5]][index], slug: `test-${id}`,
       name: ["Zulu", "Beta", "Alpha", "Alpha", "Inactive", "Hidden by location", "Beta court", "Alpha court", "Inactive only"][index],
       surface: "clay", environment: index === 2 ? "indoor" : "outdoor", display_order: index === 0 ? 0 : 1,
-      supports_balloon: index === 0 || index === 1, balloon_installed: index === 0,
       is_active: index !== 4 && index !== 8,
     })))).error).toBeNull();
 
@@ -39,17 +38,21 @@ test("public discovery excludes inactive resources and locations without active 
     });
     expect(locations[0].courts[0]).toEqual({
       id: courtIds[0], name: "Zulu", slug: `test-${courtIds[0]}`, surface: "clay",
-      environment: "outdoor", supports_balloon: true, balloon_installed: true, has_lighting: false,
+      environment: "outdoor", has_lighting: false,
     });
     expect(locations[0].courts.find((court) => court.id === courtIds[1])).toMatchObject({
-      environment: "outdoor", supports_balloon: true, balloon_installed: false,
+      environment: "outdoor",
     });
     expect(locations[0].courts.find((court) => court.id === courtIds[2])).toMatchObject({
-      environment: "indoor", supports_balloon: false, balloon_installed: false,
+      environment: "indoor",
     });
     expect(locations[1].courts[0]).toMatchObject({
-      environment: "outdoor", supports_balloon: false, balloon_installed: false,
+      environment: "outdoor",
     });
+    for (const location of locations) for (const court of location.courts) {
+      expect(court).not.toHaveProperty("supports_balloon");
+      expect(court).not.toHaveProperty("balloon_installed");
+    }
     expect(await listActiveLocationsWithCourts(anonymous)).toEqual(read);
   } finally {
     expect((await service.from("courts").delete().in("location_id", ids)).error).toBeNull();

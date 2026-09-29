@@ -24,16 +24,12 @@ create table public.courts (
   slug text not null,
   surface text not null check (surface in ('clay', 'hard', 'grass', 'carpet')),
   environment text not null check (environment in ('outdoor', 'indoor')),
-  supports_balloon boolean not null default false,
-  balloon_installed boolean not null default false,
   has_lighting boolean not null default false,
   is_active boolean not null default true,
   display_order integer not null default 0,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  unique (location_id, slug),
-  constraint courts_balloon_outdoor check (not supports_balloon or environment = 'outdoor'),
-  constraint courts_balloon_requires_support check (not balloon_installed or supports_balloon)
+  unique (location_id, slug)
 );
 
 alter table public.locations enable row level security;
@@ -61,3 +57,14 @@ create policy courts_select on public.courts for select to anon, authenticated
 using (is_active and exists (
   select 1 from public.locations where id = courts.location_id and is_active
 ));
+create policy courts_admin_select on public.courts for select to authenticated
+using ((select public.has_role('admin')));
+grant insert (location_id, name, slug, surface, environment, has_lighting,
+  is_active, display_order, updated_at) on public.courts to authenticated;
+grant update (location_id, name, surface, environment, has_lighting,
+  is_active, display_order, updated_at) on public.courts to authenticated;
+create policy courts_admin_insert on public.courts for insert to authenticated
+with check ((select public.has_role('admin')));
+create policy courts_admin_update on public.courts for update to authenticated
+using ((select public.has_role('admin')))
+with check ((select public.has_role('admin')));
