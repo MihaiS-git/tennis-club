@@ -9,6 +9,8 @@ create table public.locations (
   postal_code text,
   country_code text,
   timezone text not null,
+  currency text not null default 'EUR'
+    constraint locations_currency_check check (currency in ('EUR', 'USD', 'GBP', 'RON', 'CHF')),
   is_active boolean not null default true,
   display_order integer not null default 0,
   created_at timestamptz not null default now(),
@@ -41,6 +43,20 @@ grant select on public.locations, public.courts to anon, authenticated;
 
 create policy locations_select on public.locations for select to anon, authenticated
 using (is_active);
+-- Separate authenticated policies keep the admin helper out of anonymous reads.
+create policy locations_admin_select on public.locations for select to authenticated
+using ((select public.has_role('admin')));
+grant insert (name, slug, address_line1, address_line2, city, postal_code,
+  country_code, timezone, currency, is_active, display_order, updated_at)
+  on public.locations to authenticated;
+grant update (name, address_line1, address_line2, city, postal_code,
+  country_code, timezone, currency, is_active, display_order, updated_at)
+  on public.locations to authenticated;
+create policy locations_admin_insert on public.locations for insert to authenticated
+with check ((select public.has_role('admin')));
+create policy locations_admin_update on public.locations for update to authenticated
+using ((select public.has_role('admin')))
+with check ((select public.has_role('admin')));
 create policy courts_select on public.courts for select to anon, authenticated
 using (is_active and exists (
   select 1 from public.locations where id = courts.location_id and is_active

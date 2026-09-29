@@ -979,6 +979,14 @@ Reruns skip existing Auth accounts without changing their password, status, role
 
 ## Admin UI
 
+`/admin/locations` lists all physical locations and lets active administrators create,
+edit, activate/deactivate, and order them through user-scoped Server Actions. Each
+location stores its IANA timezone and one currency (EUR, USD, GBP, RON, or CHF;
+default EUR). Slugs are generated from names on creation and preserved on edits;
+collisions require a different name. Location counts are derived from records.
+Location RLS grants active administrators SELECT/INSERT/UPDATE, with no deletion
+access; public discovery still filters for active locations with active courts.
+
 `/admin/users` uses server-side queries with RLS-enforced access. Search, filtering,
 sorting, and pagination are URL-driven and applied before pagination. Interactive
 filter controls update the URL without introducing direct browser-to-Supabase access.
