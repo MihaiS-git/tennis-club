@@ -13,9 +13,10 @@ export default defineConfig({
     channel: "chrome",
   },
   webServer: {
-    command: "npm run dev",
+    command: "npm run --silent build && npm run --silent start",
     url: "http://localhost:3000",
-    reuseExistingServer: true,
-    timeout: 120_000,
+    reuseExistingServer: false,
+    stderr: "pipe",
+    timeout: 180_000,
   },
 });

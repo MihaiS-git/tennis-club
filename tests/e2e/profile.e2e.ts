@@ -1,8 +1,7 @@
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { expect, test, type Page } from "@playwright/test";
-import { z } from "zod";
+import { localServiceRoleKey } from "./helpers/supabase";
 
 const labels = ["Profile / player identity", "Personal information", "Tennis profile", "Account & security"] as const;
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAD0lEQVQImWP4z8Dwn4EBAAj+Af/KOtJRAAAAAElFTkSuQmCC", "base64");
@@ -36,8 +35,7 @@ test("profile refinement: authenticated lifecycle, country, keyboard, navigation
   test.setTimeout(120_000);
   const url = process.env.SUPABASE_URL!;
   expect(["127.0.0.1", "localhost", "[::1]"]).toContain(new URL(url).hostname);
-  const key = process.env.LOCAL_SUPABASE_SERVICE_ROLE_KEY ?? z.object({ SERVICE_ROLE_KEY: z.string().min(1) })
-    .parse(JSON.parse(execFileSync("supabase", ["status", "-o", "json"], { encoding: "utf8" }))).SERVICE_ROLE_KEY;
+  const key = localServiceRoleKey();
   const service = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
   const email = `profile-e2e-${randomUUID()}@example.test`;
   const password = "Profile-e2e-password-123";

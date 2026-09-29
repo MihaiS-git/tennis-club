@@ -1,9 +1,10 @@
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
 import { createClient } from "@supabase/supabase-js";
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { z } from "zod";
+
+import { localServiceRoleKey } from "./helpers/supabase";
 
 const mailpitMessagesSchema = z.object({
   messages: z.array(z.object({
@@ -12,20 +13,9 @@ const mailpitMessagesSchema = z.object({
   })),
 });
 const mailpitMessageSchema = z.object({ Text: z.string() });
-const localStatusSchema = z.object({ SERVICE_ROLE_KEY: z.string().min(1) });
 
 function testEmail(journey: string): string {
   return `e2e-${journey}-${randomUUID()}@example.test`;
-}
-
-function localServiceRoleKey(): string {
-  const configured = process.env.LOCAL_SUPABASE_SERVICE_ROLE_KEY;
-  if (configured) return configured;
-
-  const status = execFileSync("supabase", ["status", "-o", "json"], {
-    encoding: "utf8",
-  });
-  return localStatusSchema.parse(JSON.parse(status)).SERVICE_ROLE_KEY;
 }
 
 async function createConfirmedUser(email: string, password: string): Promise<void> {

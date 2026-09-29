@@ -1217,7 +1217,7 @@ The database is currently development-only. Maintain clean migrations by scope: 
 
 ## Local validation
 
-`npm test` runs unit, component, and local Supabase integration suites sequentially in separate Vitest processes. Run them individually with `npm run test:unit`, `npm run test:components`, or `npm run test:integration`. Integration files are serialized because final-admin tests temporarily modify shared administrator statuses. Start local Supabase beforehand; the test command does not reset or restart it. Playwright E2E remains separate. See [auth testing](docs/testing.md).
+`npm test` runs unit, component, and local Supabase integration suites sequentially in separate Vitest processes. Run them individually with `npm run test:unit`, `npm run test:components`, or `npm run test:integration`. Integration files are serialized because final-admin tests temporarily modify shared administrator statuses. Start local Supabase beforehand; the test command does not reset or restart it. Playwright E2E remains separate: `npm run test:e2e:auth` builds and starts the production application on port 3000 without reusing an existing server. Stop any server on that port before running the suite. See [auth testing](docs/testing.md).
 
 Before expanding the platform, prove the following cases locally:
 

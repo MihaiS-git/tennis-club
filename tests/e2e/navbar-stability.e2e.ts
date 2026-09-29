@@ -1,16 +1,14 @@
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { expect, test } from "@playwright/test";
-import { z } from "zod";
+import { localServiceRoleKey } from "./helpers/supabase";
 
 test("resolved authenticated navbar stays visible during client navigation to a missing route", async ({ page }) => {
   test.setTimeout(90_000);
   const url = process.env.SUPABASE_URL;
   if (!url) throw new Error("SUPABASE_URL is required for navigation setup.");
   expect(["127.0.0.1", "localhost", "[::1]"]).toContain(new URL(url).hostname);
-  const key = process.env.LOCAL_SUPABASE_SERVICE_ROLE_KEY ?? z.object({ SERVICE_ROLE_KEY: z.string().min(1) })
-    .parse(JSON.parse(execFileSync("supabase", ["status", "-o", "json"], { encoding: "utf8" }))).SERVICE_ROLE_KEY;
+  const key = localServiceRoleKey();
   const service = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
   const email = `navbar-stability-${randomUUID()}@example.test`;
   const password = "Navigation-password-123";
