@@ -67,6 +67,7 @@ export function CourtDialog({ court, locations, locationId }: {
         setFormError(result.reason === "duplicate-slug"
           ? court ? "This court’s slug already exists at the selected location. Choose a different location."
             : "A court with this generated slug already exists at the selected location. Use a different name."
+          : result.reason === "has-coverage" ? "Remove this court’s coverage periods before changing it to indoor."
           : result.reason === "invalid-location" ? "This location no longer exists. Select another location."
             : "This court no longer exists.");
       }

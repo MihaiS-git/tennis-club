@@ -7,6 +7,7 @@ vi.mock("../../src/lib/admin/courts", () => ({ listAdminCourts }));
 vi.mock("../../src/lib/admin/locations", () => ({ listAdminLocations }));
 vi.mock("../../src/app/admin/courts/actions", () => ({ saveCourtAction }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn() } }));
+vi.mock("../../src/lib/admin/court-coverage", () => ({ listAdminCourtCoverage: vi.fn().mockResolvedValue([]) }));
 import AdminCourtsPage from "../../src/app/admin/courts/page";
 import { CourtDialog } from "../../src/app/admin/courts/court-dialog";
 const locations = [
@@ -100,4 +101,15 @@ it("blocks duplicate submissions while pending", async () => {
   expect(screen.getByRole("button", { name: "Close" }).hasAttribute("disabled")).toBe(true);
   resolve({ ok: true, id: court.id });
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+});
+
+it("shows coverage management only for outdoor courts in both layouts", async () => {
+  listAdminLocations.mockResolvedValue([locations[0]]);
+  listAdminCourts.mockResolvedValue([court, { ...court, id: "outdoor", name: "Outdoor Court", environment: "outdoor" }]);
+  render(await AdminCourtsPage());
+  expect(screen.getAllByRole("button", { name: "Add coverage period" })).toHaveLength(2);
+  for (const name of screen.getAllByText("Court One")) {
+    const container = name.closest("article") ?? name.closest("tr");
+    expect(container?.querySelector("section")).toBeNull();
+  }
 });

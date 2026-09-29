@@ -986,7 +986,17 @@ outdoor/indoor environment, and a lighting flag. Counts are derived from records
 Slugs are generated on creation, preserved on edits (including moves), and unique
 within the selected location. Court RLS grants the required SELECT/INSERT/UPDATE
 access with no hard deletion. Temporary balloon capability/installation flags have
-been removed; date-based court coverage is a future separate domain.
+been removed. Outdoor courts have exact, inclusive calendar-date coverage periods
+managed within `/admin/courts` (add, edit, remove). `court_coverage_periods` is
+admin-only, including reads; future schedules are not public. A GiST exclusion
+constraint prevents overlaps for the same court. A generated outdoor discriminator
+and composite foreign key reject indoor coverage and prevent changing a court to
+indoor until its periods are removed, including concurrent writes. `updated_at`
+is application-controlled; configuration intervals may be hard deleted.
+`getCourtStateForDate(environment, periods, date)` in `src/lib/courts/state.ts`
+returns indoor, outdoor, or covered from inclusive date intervals, with no seasonal
+inference. Callers supply a calendar date explicitly. Public `/courts` remains
+unchanged to preserve its existing read model.
 
 `/admin/locations` lists all physical locations and lets active administrators create,
 edit, activate/deactivate, and order them through user-scoped Server Actions. Each

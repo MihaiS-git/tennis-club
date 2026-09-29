@@ -49,7 +49,7 @@ export async function saveAdminCourt(input: unknown, supabase?: Awaited<ReturnTy
   const { data, error } = await query.select("id").maybeSingle();
   if (error) {
     if (error.code === "23505") return { ok: false, reason: "duplicate-slug" };
-    if (error.code === "23503") return { ok: false, reason: "invalid-location" };
+    if (error.code === "23503") return { ok: false, reason: error.details?.includes("court_coverage_periods") ? "has-coverage" : "invalid-location" };
     logger.error({ event: "admin.court_save_failed", actorId: actor.userId, courtId: id, code: error.code }, "Failed to save court");
     throw new Error("Unable to save court.");
   }

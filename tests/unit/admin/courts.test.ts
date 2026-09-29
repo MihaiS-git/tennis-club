@@ -95,3 +95,8 @@ it("lists inactive courts without filtering location or status and orders consis
   expect(query.order.mock.calls).toEqual([["display_order"], ["name"], ["id"]]);
   expect(query.eq).not.toHaveBeenCalled();
 });
+
+it("explains coverage preventing an indoor conversion safely", async () => {
+  query.maybeSingle.mockResolvedValue({ data: null, error: { code: "23503", details: "Key is still referenced from table court_coverage_periods" } });
+  expect(await saveAdminCourt({ id, fields: { ...fields, environment: "indoor" } })).toEqual({ ok: false, reason: "has-coverage" });
+});

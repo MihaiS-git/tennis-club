@@ -1,4 +1,7 @@
 import Link from "next/link";
+import { Fragment } from "react";
+import { listAdminCourtCoverage } from "@/lib/admin/court-coverage";
+import { CoveragePeriods } from "./coverage-periods";
 import { listAdminCourts } from "@/lib/admin/courts";
 import { listAdminLocations } from "@/lib/admin/locations";
 import { courtSurfaceLabels, courtEnvironmentLabels } from "@/lib/admin/courts-validation";
@@ -12,7 +15,7 @@ function CourtStatus({ active }: { active: boolean }) {
 }
 
 export default async function AdminCourtsPage() {
-  const [courts, locations] = await Promise.all([listAdminCourts(), listAdminLocations()]);
+  const [courts, locations, periods] = await Promise.all([listAdminCourts(), listAdminLocations(), listAdminCourtCoverage()]);
   const locationChoices = locations.map(({ id, name, is_active }) => ({ id, name, is_active }));
   return <main className="flex-1 bg-background">
     <div className="mx-auto max-w-7xl px-6 py-10 md:px-8 md:py-12 lg:py-16">
@@ -50,6 +53,7 @@ export default async function AdminCourtsPage() {
                     <dt className="text-muted-foreground">Order</dt><dd>{court.display_order}</dd>
                   </dl>
                   <div className="mt-5 border-t border-border pt-4"><CourtDialog court={court} locations={locationChoices} /></div>
+                  {court.environment === "outdoor" && <CoveragePeriods courtId={court.id} periods={periods.filter((period) => period.court_id === court.id)} />}
                 </article>)}
               </div>
               <div className="hidden overflow-hidden rounded-card border border-border bg-surface lg:block">
@@ -58,7 +62,7 @@ export default async function AdminCourtsPage() {
                     <tr>{["Name", "Status", "Surface", "Environment", "Lighting", "Order", "Actions"].map((label) => <th key={label} scope="col" className="px-4 py-4 lg:px-5">{label}</th>)}</tr>
                   </thead>
                   <tbody className="divide-y divide-border">
-                    {locationCourts.map((court) => <tr key={court.id}>
+                    {locationCourts.map((court) => <Fragment key={court.id}><tr>
                       <td className="break-words px-4 py-5 font-semibold text-foreground lg:px-5">{court.name}</td>
                       <td className="px-4 py-5 lg:px-5"><CourtStatus active={court.is_active} /></td>
                       <td className="px-4 py-5 lg:px-5">{courtSurfaceLabels[court.surface]}</td>
@@ -66,7 +70,9 @@ export default async function AdminCourtsPage() {
                       <td className="px-4 py-5 lg:px-5">{court.has_lighting ? "Floodlit" : "No lighting"}</td>
                       <td className="px-4 py-5 lg:px-5">{court.display_order}</td>
                       <td className="px-4 py-5 lg:px-5"><CourtDialog court={court} locations={locationChoices} /></td>
-                    </tr>)}
+                    </tr>
+                    {court.environment === "outdoor" && <tr><td colSpan={7} className="px-5 pb-5"><CoveragePeriods courtId={court.id} periods={periods.filter((period) => period.court_id === court.id)} /></td></tr>}
+                    </Fragment>)}
                   </tbody>
                 </table>
               </div>
