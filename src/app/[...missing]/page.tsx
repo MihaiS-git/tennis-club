@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 
-// Keep unmatched client navigations within the shared root layout.
+export const instant = false;
+
 export default function MissingPage() {
   notFound();
 }

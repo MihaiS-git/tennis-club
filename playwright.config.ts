@@ -12,7 +12,8 @@ export default defineConfig({
     browserName: "chromium",
     channel: "chrome",
   },
-  webServer: {
+  // Opt in when testing against a server that is already running, without a build.
+  webServer: process.env.PLAYWRIGHT_USE_EXISTING_SERVER === "1" ? undefined : {
     command: "npm run --silent build && npm run --silent start",
     url: "http://localhost:3000",
     reuseExistingServer: false,
