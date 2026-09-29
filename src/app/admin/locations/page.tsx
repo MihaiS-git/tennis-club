@@ -1,5 +1,8 @@
+import { Fragment } from "react";
 import { listAdminLocations } from "@/lib/admin/locations";
+import { listAdminOpeningHours } from "@/lib/admin/opening-hours";
 import { LocationDialog } from "./location-dialog";
+import { OpeningHours } from "./opening-hours";
 
 function LocationStatus({ active }: { active: boolean }) {
   return <span className={`inline-flex rounded-control px-2.5 py-1 text-xs font-semibold ${active
@@ -9,7 +12,7 @@ function LocationStatus({ active }: { active: boolean }) {
 }
 
 export default async function AdminLocationsPage() {
-  const locations = await listAdminLocations();
+  const [locations, openingHours] = await Promise.all([listAdminLocations(), listAdminOpeningHours()]);
   return <main className="flex-1 bg-background">
     <div className="mx-auto max-w-7xl px-6 py-10 md:px-8 md:py-12 lg:py-16">
       <header className="mb-8 md:mb-10">
@@ -32,6 +35,7 @@ export default async function AdminLocationsPage() {
               <dt className="text-muted-foreground">Order</dt><dd>{location.display_order}</dd>
             </dl>
             <div className="mt-5 border-t border-border pt-4"><LocationDialog location={location} /></div>
+            <div className="mt-4 border-t border-border pt-4"><OpeningHours locationId={location.id} intervals={openingHours.filter((interval) => interval.location_id === location.id)} /></div>
           </article>)}
         </div>
         <div className="hidden overflow-hidden rounded-card border border-border bg-surface lg:block">
@@ -40,7 +44,7 @@ export default async function AdminLocationsPage() {
               <tr>{["Name", "Status", "City", "Timezone", "Currency", "Order", "Actions"].map((label) => <th key={label} scope="col" className="px-4 py-4 lg:px-5">{label}</th>)}</tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {locations.map((location) => <tr key={location.id}>
+              {locations.map((location) => <Fragment key={location.id}><tr>
                 <td className="break-words px-4 py-5 font-semibold text-foreground lg:px-5">{location.name}</td>
                 <td className="px-4 py-5 lg:px-5"><LocationStatus active={location.is_active} /></td>
                 <td className="break-words px-4 py-5 lg:px-5">{location.city ?? "—"}</td>
@@ -48,7 +52,7 @@ export default async function AdminLocationsPage() {
                 <td className="px-4 py-5 lg:px-5">{location.currency}</td>
                 <td className="px-4 py-5 lg:px-5">{location.display_order}</td>
                 <td className="px-4 py-5 lg:px-5"><LocationDialog location={location} /></td>
-              </tr>)}
+              </tr><tr><td colSpan={7} className="px-5 pb-5"><OpeningHours locationId={location.id} intervals={openingHours.filter((interval) => interval.location_id === location.id)} /></td></tr></Fragment>)}
             </tbody>
           </table>
         </div>

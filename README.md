@@ -1006,6 +1006,16 @@ collisions require a different name. Location counts are derived from records.
 Location RLS grants active administrators SELECT/INSERT/UPDATE, with no deletion
 access; public discovery still filters for active locations with active courts.
 
+Location opening hours are managed on the same screen, Monday through Sunday,
+with add/edit/remove controls for multiple intervals per day. `location_opening_hours`
+stores local minute-of-day boundaries (0–1440, including `24:00`), with Monday = 0
+and Sunday = 6. A GiST exclusion constraint prevents overlaps for the same location
+and weekday while allowing adjacent intervals. Active admins alone can read/write
+these rows through user-scoped Server Actions and RLS; `updated_at` is application-controlled.
+Days without intervals display Closed; a wholly empty schedule is explicitly marked
+not configured and has no inferred hours. There are no date exceptions yet. The
+public `/courts` temporary “Open daily 07:00–24:00” fallback remains independent.
+
 `/admin/users` uses server-side queries with RLS-enforced access. Search, filtering,
 sorting, and pagination are URL-driven and applied before pagination. Interactive
 filter controls update the URL without introducing direct browser-to-Supabase access.
