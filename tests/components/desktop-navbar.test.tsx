@@ -39,6 +39,7 @@ it("shows public navigation and signed-out actions", async () => {
   expect(within(navigation).queryByRole("link", { name: "Matches" })).toBeNull();
   expect(screen.getByRole("link", { name: "Sign in" }).getAttribute("href")).toBe("/login");
   expect(screen.getByRole("link", { name: "Book a court" }).getAttribute("href")).toBe("/book");
+  expect(screen.queryByRole("link", { name: "Admin" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Sign out" })).toBeNull();
   expect(screen.queryByRole("link", { name: "Your profile" })).toBeNull();
 });
@@ -56,6 +57,7 @@ it("shows Matches, Profile, and direct Sign out for authenticated users", async 
   expect(within(navigation).getAllByRole("link").map((link) => link.textContent)).toEqual([
     "Courts", "Coaching", "Matches", "Rankings", "Club",
   ]);
+  expect(screen.queryByRole("link", { name: "Admin" })).toBeNull();
   expect(screen.getByRole("link", { name: "Book a court" }).getAttribute("href")).toBe("/book");
   expect(screen.getByRole("link", { name: "Your profile" }).getAttribute("href")).toBe("/profile");
   expect(screen.getByRole("button", { name: "Sign out" })).toBeDefined();
@@ -67,16 +69,16 @@ it.each([
   ["load error", { state: "load-error" }],
   ["active coach", { state: "active", userId: "coach-1", email: "coach@example.com", roles: ["coach"] }],
   ["suspended admin", { state: "suspended", userId: "admin-1", email: "admin@example.com", roles: ["admin"] }],
-] satisfies ReadonlyArray<readonly [string, CurrentAccount]>)("does not show Users for %s", async (_description, account) => {
+] satisfies ReadonlyArray<readonly [string, CurrentAccount]>)("does not show Admin for %s", async (_description, account) => {
   readCurrentAccount.mockResolvedValue(account);
   await renderNavbar();
 
   const navigation = screen.getByRole("navigation", { name: "Main navigation" });
-  expect(within(navigation).queryByRole("link", { name: "Users" })).toBeNull();
+  expect(within(navigation).queryByRole("link", { name: "Admin" })).toBeNull();
   expect(within(navigation).getByRole("link", { name: "Club" })).toBeTruthy();
 });
 
-it("shows Users after Club for an active admin", async () => {
+it("shows Admin after Club for an active admin", async () => {
   readCurrentAccount.mockResolvedValue({
     state: "active",
     userId: "admin-1",
@@ -87,9 +89,10 @@ it("shows Users after Club for an active admin", async () => {
 
   const navigation = screen.getByRole("navigation", { name: "Main navigation" });
   expect(within(navigation).getAllByRole("link").map((link) => link.textContent)).toEqual([
-    "Courts", "Coaching", "Matches", "Rankings", "Club", "Users",
+    "Courts", "Coaching", "Matches", "Rankings", "Club", "Admin",
   ]);
-  expect(within(navigation).getByRole("link", { name: "Users" }).getAttribute("href")).toBe("/admin/users");
+  expect(within(navigation).getByRole("link", { name: "Admin" }).getAttribute("href")).toBe("/admin");
+  expect(within(navigation).queryByRole("link", { name: "Users" })).toBeNull();
   expect(screen.getByRole("link", { name: "Your profile" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
 });

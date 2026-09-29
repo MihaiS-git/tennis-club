@@ -13,8 +13,8 @@ async function AccountNavigationLink({ admin = false }: { admin?: boolean }) {
   if (!visible) return null;
 
   return (
-    <Link className="text-sm font-medium text-foreground hover:text-accent" href={admin ? "/admin/users" : "/matches"}>
-      {admin ? "Users" : "Matches"}
+    <Link className="text-sm font-medium text-foreground hover:text-accent" href={admin ? "/admin" : "/matches"}>
+      {admin ? "Admin" : "Matches"}
     </Link>
   );
 }

@@ -1,3 +1,4 @@
+import { AdminNavigation } from "@/components/admin-navigation";
 import { Fragment } from "react";
 import { listAdminLocations } from "@/lib/admin/locations";
 import { listAdminOpeningHours } from "@/lib/admin/opening-hours";
@@ -15,6 +16,7 @@ export default async function AdminLocationsPage() {
   const [locations, openingHours] = await Promise.all([listAdminLocations(), listAdminOpeningHours()]);
   return <main className="flex-1 bg-background">
     <div className="mx-auto max-w-7xl px-6 py-10 md:px-8 md:py-12 lg:py-16">
+      <AdminNavigation current="/admin/locations" />
       <header className="mb-8 md:mb-10">
         <h1 className="font-heading text-4xl font-semibold tracking-tight text-foreground md:text-5xl">Locations</h1>
         <p className="mt-3 max-w-2xl text-base text-muted-foreground">Manage the club’s physical locations, including inactive locations.</p>

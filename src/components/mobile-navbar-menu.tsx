@@ -153,8 +153,8 @@ export function MobileNavbarMenu({ isAuthenticated, isAdmin, avatarUrl = null }:
             Club
           </Link>
           {isAdmin && (
-            <Link onClick={closeMenu} href="/admin/users" className="flex min-h-12 items-center text-sm font-medium text-foreground hover:text-accent">
-              Users
+            <Link onClick={closeMenu} href="/admin" className="flex min-h-12 items-center text-sm font-medium text-foreground hover:text-accent">
+              Admin
             </Link>
           )}
 

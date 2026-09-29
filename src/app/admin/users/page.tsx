@@ -1,3 +1,4 @@
+import { AdminNavigation } from "@/components/admin-navigation";
 import Link from "next/link";
 import { Pagination } from "@/components/pagination";
 import { ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
@@ -66,6 +67,7 @@ export default async function AdminUsersPage({ searchParams }: {
   return (
     <main className="flex-1 bg-background">
       <div className="mx-auto max-w-7xl px-6 py-10 md:px-8 md:py-12 lg:py-16">
+        <AdminNavigation current="/admin/users" />
         <header className="mb-8 md:mb-10">
           <h1 className="font-heading text-4xl font-semibold tracking-tight text-foreground md:text-5xl">
             Users

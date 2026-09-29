@@ -41,6 +41,9 @@ it("renders the page heading and supporting copy", async () => {
   await renderPage([]);
 
   expect(screen.getByRole("heading", { level: 1, name: "Users" })).toBeTruthy();
+  const navigation = screen.getByRole("navigation", { name: "Admin navigation" });
+  expect(within(navigation).getByRole("link", { name: "Overview" }).getAttribute("href")).toBe("/admin");
+  expect(within(navigation).getByRole("link", { name: "Users" }).getAttribute("aria-current")).toBe("page");
   expect(screen.getByText("Manage accounts, coaches and administrators.")).toBeTruthy();
   expect(listAdminUsers).toHaveBeenCalledOnce();
 });

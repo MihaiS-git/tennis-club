@@ -105,22 +105,23 @@ it.each([
   ["unauthenticated", { state: "unauthenticated" }, false],
   ["missing profile", { state: "missing-profile" }, false],
   ["load error", { state: "load-error" }, false],
-] satisfies ReadonlyArray<readonly [string, CurrentAccount, boolean]>)("shows Users only for %s in the mobile navbar", async (_description, account, showsUsers) => {
+] satisfies ReadonlyArray<readonly [string, CurrentAccount, boolean]>)("shows Admin only for %s in the mobile navbar", async (_description, account, showsAdmin) => {
   readCurrentAccount.mockResolvedValue(account);
   render(await MobileNavbar());
   fireEvent.click(screen.getByRole("button", { name: "Open menu" }));
 
   const navigation = within(screen.getByRole("dialog", { name: "Mobile navigation menu" }))
     .getByRole("navigation", { name: "Mobile navigation" });
+  expect(within(navigation).queryByRole("link", { name: "Users" })).toBeNull();
   const links = within(navigation).getAllByRole("link");
-  const usersLink = within(navigation).queryByRole("link", { name: "Users" });
-  if (showsUsers) {
+  const adminLink = within(navigation).queryByRole("link", { name: "Admin" });
+  if (showsAdmin) {
     expect(links.map((link) => link.textContent)).toEqual([
-      "Courts", "Coaching", "Matches", "Rankings", "Club", "Users", "Profile",
+      "Courts", "Coaching", "Matches", "Rankings", "Club", "Admin", "Profile",
     ]);
-    expect(usersLink?.getAttribute("href")).toBe("/admin/users");
+    expect(adminLink?.getAttribute("href")).toBe("/admin");
   } else {
-    expect(usersLink).toBeNull();
+    expect(adminLink).toBeNull();
   }
 });
 

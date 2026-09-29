@@ -5,6 +5,7 @@ import type { AdminLocation } from "../../src/lib/admin/locations";
 
 const { listAdminLocations, saveLocationAction } = vi.hoisted(() => ({ listAdminLocations: vi.fn(), saveLocationAction: vi.fn() }));
 vi.mock("../../src/lib/admin/locations", () => ({ listAdminLocations }));
+vi.mock("../../src/lib/admin/opening-hours", () => ({ listAdminOpeningHours: vi.fn().mockResolvedValue([]) }));
 vi.mock("../../src/app/admin/locations/actions", () => ({ saveLocationAction }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn() } }));
 import AdminLocationsPage from "../../src/app/admin/locations/page";
@@ -26,6 +27,9 @@ it("renders records and visibly distinguishes inactive locations in desktop and 
   listAdminLocations.mockResolvedValue([location, { ...location, id: "other", name: "North", is_active: true }]);
   render(await AdminLocationsPage());
   expect(screen.getByRole("heading", { name: "Locations" })).toBeTruthy();
+  const navigation = screen.getByRole("navigation", { name: "Admin navigation" });
+  expect(within(navigation).getByRole("link", { name: "Overview" }).getAttribute("href")).toBe("/admin");
+  expect(within(navigation).getByRole("link", { name: "Locations" }).getAttribute("aria-current")).toBe("page");
   expect(screen.getByText("2 locations")).toBeTruthy();
   const row = within(screen.getByRole("table")).getAllByRole("row")[1];
   expect(within(row).getByText("Central Club")).toBeTruthy();
