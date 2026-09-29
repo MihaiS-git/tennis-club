@@ -21,13 +21,17 @@ create table public.courts (
   name text not null,
   slug text not null,
   surface text not null check (surface in ('clay', 'hard', 'grass', 'carpet')),
-  environment text not null check (environment in ('outdoor', 'indoor', 'covered')),
+  environment text not null check (environment in ('outdoor', 'indoor')),
+  supports_balloon boolean not null default false,
+  balloon_installed boolean not null default false,
   has_lighting boolean not null default false,
   is_active boolean not null default true,
   display_order integer not null default 0,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  unique (location_id, slug)
+  unique (location_id, slug),
+  constraint courts_balloon_outdoor check (not supports_balloon or environment = 'outdoor'),
+  constraint courts_balloon_requires_support check (not balloon_installed or supports_balloon)
 );
 
 alter table public.locations enable row level security;

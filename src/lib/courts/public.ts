@@ -10,9 +10,12 @@ const courtSchema = z.object({
   name: z.string(),
   slug: z.string(),
   surface: z.enum(["clay", "hard", "grass", "carpet"]),
-  environment: z.enum(["outdoor", "indoor", "covered"]),
+  environment: z.enum(["outdoor", "indoor"]),
+  supports_balloon: z.boolean(),
+  balloon_installed: z.boolean(),
   has_lighting: z.boolean(),
-});
+}).refine((court) => !court.supports_balloon || court.environment === "outdoor")
+  .refine((court) => !court.balloon_installed || court.supports_balloon);
 const locationSchema = z.object({
   id: z.uuid(),
   name: z.string(),
@@ -35,7 +38,7 @@ export async function listActiveLocationsWithCourts(
   const client = supabase ?? await createClient();
   // Inner embedding excludes locations that have no active courts.
   const { data, error } = await client.from("locations")
-    .select("id, name, slug, address_line1, address_line2, city, postal_code, country_code, timezone, courts!inner(id, name, slug, surface, environment, has_lighting)")
+    .select("id, name, slug, address_line1, address_line2, city, postal_code, country_code, timezone, courts!inner(id, name, slug, surface, environment, supports_balloon, balloon_installed, has_lighting)")
     .eq("is_active", true)
     .eq("courts.is_active", true)
     .order("display_order")

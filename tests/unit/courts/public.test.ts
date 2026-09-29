@@ -13,7 +13,41 @@ function mockRead(data: unknown, error: { code: string; message: string } | null
     then(resolve: (result: unknown) => unknown) { return Promise.resolve({ data, error }).then(resolve); },
   };
   vi.mocked(createClient).mockResolvedValue({ from: () => query } as unknown as Awaited<ReturnType<typeof createClient>>);
+  return query;
 }
+
+const location = {
+  id: "c1000000-0000-4000-8000-000000000001", name: "Central", slug: "central",
+  address_line1: null, address_line2: null, city: null, postal_code: null, country_code: null,
+  timezone: "Europe/Bucharest",
+};
+const court = {
+  id: "c2000000-0000-4000-8000-000000000001", name: "Court One", slug: "one",
+  surface: "clay", has_lighting: true,
+};
+
+test.each([
+  { environment: "outdoor", supports_balloon: false, balloon_installed: false },
+  { environment: "outdoor", supports_balloon: true, balloon_installed: false },
+  { environment: "outdoor", supports_balloon: true, balloon_installed: true },
+  { environment: "indoor", supports_balloon: false, balloon_installed: false },
+])("exposes the public environment and balloon state: $environment / $supports_balloon / $balloon_installed", async (state) => {
+  const data = [{ ...location, courts: [{ ...court, ...state }] }];
+  const query = mockRead(data);
+  expect(await listActiveLocationsWithCourts()).toEqual(data);
+  expect(query.select).toHaveBeenCalledWith(expect.stringContaining("environment, supports_balloon, balloon_installed"));
+});
+
+test.each([
+  { environment: "covered", supports_balloon: false, balloon_installed: false },
+  { environment: "outdoor", supports_balloon: false, balloon_installed: true },
+  { environment: "indoor", supports_balloon: true, balloon_installed: false },
+  { environment: "outdoor", supports_balloon: null, balloon_installed: false },
+  { environment: "outdoor", supports_balloon: false, balloon_installed: null },
+])("rejects invalid public court state: $environment / $supports_balloon / $balloon_installed", async (state) => {
+  mockRead([{ ...location, courts: [{ ...court, ...state }] }]);
+  await expect(listActiveLocationsWithCourts()).rejects.toThrow("Unable to load courts.");
+});
 
 test("uses the existing server client and returns empty public discovery", async () => {
   mockRead([]);
