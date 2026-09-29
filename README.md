@@ -329,6 +329,8 @@ When TanStack Query is introduced, update both `README.md` and `AGENTS.md` toget
 
 A court belongs to exactly one location.
 
+`locations` represent physical locations of the same club; `courts` belong to those locations. This foundation supports one initial location and later multiple locations, not multi-tenancy. Active locations and their active courts may be discovered without authentication through the server-only `listActiveLocationsWithCourts()` read model. SELECT-only RLS hides inactive locations and courts, including active courts at inactive locations; no browser database client or public mutation access is introduced.
+
 A coach may work at multiple locations.
 
 Each location may define:
