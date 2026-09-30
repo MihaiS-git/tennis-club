@@ -1,7 +1,9 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { cache } from "react";
 
-export async function createClient(fetchOverride?: typeof fetch) {
+// Share the user-scoped client only within one server render/request.
+export const createClient = cache(async function createClient(fetchOverride?: typeof fetch) {
   const cookieStore = await cookies();
 
   return createServerClient(
@@ -26,4 +28,4 @@ export async function createClient(fetchOverride?: typeof fetch) {
       },
     },
   );
-}
+});

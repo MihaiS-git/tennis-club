@@ -2,7 +2,7 @@ import "server-only";
 
 import { z } from "zod";
 import { requireActiveAdmin } from "@/lib/admin/authorization";
-import { generateLocationSlug, locationCurrencies, locationMutationSchema, type LocationMutationResult } from "@/lib/admin/locations-validation";
+import { generateLocationSlug, locationArchiveSchema, locationCurrencies, locationMutationSchema, type LocationMutationResult } from "@/lib/admin/locations-validation";
 import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
 
@@ -11,16 +11,17 @@ const locationSchema = z.object({
   address_line1: z.string().nullable(), address_line2: z.string().nullable(),
   city: z.string().nullable(), postal_code: z.string().nullable(), country_code: z.string().nullable(),
   timezone: z.string(), currency: z.enum(locationCurrencies),
-  is_active: z.boolean(), display_order: z.number().int(),
+  is_active: z.boolean(), archived_at: z.iso.datetime({ offset: true }).nullable(), display_order: z.number().int(),
   created_at: z.iso.datetime({ offset: true }), updated_at: z.iso.datetime({ offset: true }),
 });
 export type AdminLocation = z.infer<typeof locationSchema>;
-const columns = "id, name, slug, address_line1, address_line2, city, postal_code, country_code, timezone, currency, is_active, display_order, created_at, updated_at";
+const columns = "id, name, slug, address_line1, address_line2, city, postal_code, country_code, timezone, currency, is_active, archived_at, display_order, created_at, updated_at";
 
-export async function listAdminLocations(supabase?: Awaited<ReturnType<typeof createClient>>): Promise<AdminLocation[]> {
+export async function listAdminLocations(supabase?: Awaited<ReturnType<typeof createClient>>, view: "current" | "archived" = "current"): Promise<AdminLocation[]> {
   const client = supabase ?? await createClient();
   await requireActiveAdmin(client);
-  const { data, error } = await client.from("locations").select(columns)
+  const query = client.from("locations").select(columns);
+  const { data, error } = await (view === "archived" ? query.not("archived_at", "is", null) : query.is("archived_at", null))
     .order("display_order").order("name").order("id");
   const parsed = z.array(locationSchema).safeParse(data);
   if (error || !parsed.success) {
@@ -49,7 +50,7 @@ export async function saveAdminLocation(input: unknown, supabase?: Awaited<Retur
   // creation time, and update time cannot be assigned by the caller.
   const values = { ...fields, updated_at: new Date().toISOString() };
   const query = id
-    ? client.from("locations").update(values).eq("id", id)
+    ? client.from("locations").update(values).eq("id", id).is("archived_at", null)
     : client.from("locations").insert({ ...values, slug });
   const { data, error } = await query.select("id").maybeSingle();
   if (error) {
@@ -61,4 +62,23 @@ export async function saveAdminLocation(input: unknown, supabase?: Awaited<Retur
   const locationId = z.uuid().parse(data.id);
   logger.info({ event: id ? "admin.location_updated" : "admin.location_created", actorId: actor.userId, locationId, active: fields.is_active }, "Location saved");
   return { ok: true, id: locationId };
+}
+
+export async function setAdminLocationArchived(input: unknown, supabase?: Awaited<ReturnType<typeof createClient>>): Promise<LocationMutationResult> {
+  const client = supabase ?? await createClient();
+  const actor = await requireActiveAdmin(client);
+  const parsed = locationArchiveSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, reason: "invalid-input", fieldErrors: { form: "Choose a valid location." } };
+  const { id, archived } = parsed.data;
+  const query = client.from("locations").update({ archived_at: archived ? new Date().toISOString() : null,
+    is_active: false, updated_at: new Date().toISOString() }).eq("id", id);
+  const { data, error } = await (archived ? query.is("archived_at", null) : query.not("archived_at", "is", null))
+    .select("id").maybeSingle();
+  if (error) {
+    logger.error({ event: "admin.location_archive_failed", actorId: actor.userId, locationId: id, archived, code: error.code }, "Failed to change location archive state");
+    throw new Error("Unable to change location archive state.");
+  }
+  if (!data) return { ok: false, reason: "not-found" };
+  logger.info({ event: archived ? "admin.location_archived" : "admin.location_restored", actorId: actor.userId, locationId: id }, "Location archive state changed");
+  return { ok: true, id };
 }

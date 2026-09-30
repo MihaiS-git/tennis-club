@@ -479,6 +479,22 @@ Do not turn PostgreSQL functions into a second application/business-logic layer.
 
 ---
 
+## Court pricing rule sets
+
+Admin pricing definitions apply to selected courts, not surfaces. One definition has
+one stable `rule_set_id` and expands to one atomic `location_pricing_rules` row per
+court × weekday. Create and Edit use the same multi-court, multi-weekday form; the
+admin manages one logical table row per definition. Indoor courts allow only the
+`indoor` state; outdoor courts allow `outdoor` or `covered`. Currency comes from the
+court's location. Validate all selected court/day targets against that location's
+opening hours before saving. User-scoped transactional RPCs create, replace and
+delete complete rule sets; PostgreSQL enforces court/location/environment integrity
+and per-court/state/day/date/time overlap exclusion. Times are half-open `[start,
+end)`, so adjacent intervals are valid and the boundary belongs to the later rule.
+The resolver uses court ID, derived state, date, weekday and minute, never surface.
+
+---
+
 ## Booking rules
 
 Bookings are concurrency-sensitive.
@@ -792,6 +808,21 @@ when
 Use the existing Tailwind CSS setup.
 
 Preserve existing design conventions.
+
+### Global application UX contract
+
+- Present dense management data in compact tables instead of repeated large cards.
+- Allow safe direct editing of simple scalar fields such as status, enum/select values, booleans, and ordering values. Use focused dialogs, popovers, or forms for compound and structural data.
+- Support bulk operations for predictably repetitive work.
+- Use the same form, field semantics, validation, and interaction model for Create and Edit of one business object.
+- Present logical business objects to users; do not expose atomic persistence rows as UI entities.
+- Make time and timezone controls mouse-selectable while allowing typing where appropriate.
+- Show prominent validation and operation errors inside or immediately beside the failed operation. Preserve submitted values, translate infrastructure/database errors into safe messages, and reserve space where needed to prevent nearby controls from moving.
+- Apply filter and context selections immediately when the selection itself is sufficient; omit redundant View or Apply steps.
+- Use progressive disclosure so secondary configuration and actions do not overpower the primary entity.
+- Prefer deactivate/archive/restore over destructive deletion for long-lived entities with historical relationships, when appropriate.
+- Keep shared application and section navigation stable through route transitions. Never replace a whole application shell with a bare loading message; keep loading feedback within the smallest data-dependent region.
+- Keep UX changes server-first and within existing Tailwind/design-system conventions. Add no UI framework or generalized abstraction without a concrete need.
 
 Do not introduce an additional styling framework without a concrete requirement.
 

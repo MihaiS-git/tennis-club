@@ -37,6 +37,7 @@ export async function listActiveLocationsWithCourts(
   const { data, error } = await client.from("locations")
     .select("id, name, slug, address_line1, address_line2, city, postal_code, country_code, timezone, courts!inner(id, name, slug, surface, environment, has_lighting)")
     .eq("is_active", true)
+    .is("archived_at", null)
     .eq("courts.is_active", true)
     .order("display_order")
     .order("name")

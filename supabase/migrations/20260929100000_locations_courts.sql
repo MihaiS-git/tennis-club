@@ -12,6 +12,8 @@ create table public.locations (
   currency text not null default 'EUR'
     constraint locations_currency_check check (currency in ('EUR', 'USD', 'GBP', 'RON', 'CHF')),
   is_active boolean not null default true,
+  archived_at timestamptz,
+  constraint locations_archived_inactive_check check (archived_at is null or not is_active),
   display_order integer not null default 0,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -38,7 +40,7 @@ revoke all on public.locations, public.courts from anon, authenticated;
 grant select on public.locations, public.courts to anon, authenticated;
 
 create policy locations_select on public.locations for select to anon, authenticated
-using (is_active);
+using (is_active and archived_at is null);
 -- Separate authenticated policies keep the admin helper out of anonymous reads.
 create policy locations_admin_select on public.locations for select to authenticated
 using ((select public.has_role('admin')));
@@ -46,7 +48,7 @@ grant insert (name, slug, address_line1, address_line2, city, postal_code,
   country_code, timezone, currency, is_active, display_order, updated_at)
   on public.locations to authenticated;
 grant update (name, address_line1, address_line2, city, postal_code,
-  country_code, timezone, currency, is_active, display_order, updated_at)
+  country_code, timezone, currency, is_active, display_order, archived_at, updated_at)
   on public.locations to authenticated;
 create policy locations_admin_insert on public.locations for insert to authenticated
 with check ((select public.has_role('admin')));
@@ -55,7 +57,7 @@ using ((select public.has_role('admin')))
 with check ((select public.has_role('admin')));
 create policy courts_select on public.courts for select to anon, authenticated
 using (is_active and exists (
-  select 1 from public.locations where id = courts.location_id and is_active
+  select 1 from public.locations where id = courts.location_id and is_active and archived_at is null
 ));
 create policy courts_admin_select on public.courts for select to authenticated
 using ((select public.has_role('admin')));

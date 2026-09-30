@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test } from "vitest";
-import { listAdminLocations, saveAdminLocation } from "../../../src/lib/admin/locations";
+import { listAdminLocations, saveAdminLocation, setAdminLocationArchived } from "../../../src/lib/admin/locations";
 import { listActiveLocationsWithCourts } from "../../../src/lib/courts/public";
 import { cleanupAuthFixtures, localFixtureClient } from "../auth-fixtures";
 import { ensureIntegrationAdminAnchor } from "../admin-anchor";
@@ -68,6 +68,22 @@ test("admin location workflow uses real authorization, RLS and persistence", asy
       slug: "public-fixture", surface: "clay", environment: "outdoor" });
     assert.strictEqual(court.error, null);
     expect((await listActiveLocationsWithCourts(publicClient())).some((row) => row.id === result.id)).toBe(true);
+    expect(await saveAdminLocation({ id: result.id, fields: { ...fields, currency: "GBP" } }, admin.client)).toEqual({ ok: true, id: result.id });
+    expect((await listAdminLocations(admin.client)).find((row) => row.id === result.id)?.currency).toBe("GBP");
+    expect(await setAdminLocationArchived({ id: result.id, archived: true }, admin.client)).toEqual({ ok: true, id: result.id });
+    expect((await listAdminLocations(admin.client)).some((row) => row.id === result.id)).toBe(false);
+    expect((await listAdminLocations(admin.client, "archived")).find((row) => row.id === result.id)).toMatchObject({ is_active: false, archived_at: expect.any(String) });
+    expect((await service.from("locations").select("id, is_active, archived_at").eq("id", result.id).single()).data)
+      .toMatchObject({ id: result.id, is_active: false, archived_at: expect.any(String) });
+    expect((await publicClient().from("locations").select("id").eq("id", result.id)).data).toEqual([]);
+    expect((await publicClient().from("courts").select("id").eq("location_id", result.id)).data).toEqual([]);
+    expect((await listActiveLocationsWithCourts(publicClient())).some((row) => row.id === result.id)).toBe(false);
+    expect(await setAdminLocationArchived({ id: result.id, archived: false }, admin.client)).toEqual({ ok: true, id: result.id });
+    expect((await listAdminLocations(admin.client)).find((row) => row.id === result.id)).toMatchObject({ is_active: false, archived_at: null });
+    expect((await listAdminLocations(admin.client, "archived")).some((row) => row.id === result.id)).toBe(false);
+    for (const session of [member.client, coach.client, publicClient()]) {
+      await expect(setAdminLocationArchived({ id: result.id, archived: true }, session)).rejects.toThrow();
+    }
     expect(await saveAdminLocation({ id: result.id, fields: { ...fields, is_active: false } }, admin.client)).toEqual({ ok: true, id: result.id });
     for (const session of [publicClient(), admin.client]) {
       expect((await listActiveLocationsWithCourts(session)).some((row) => row.id === result.id)).toBe(false);

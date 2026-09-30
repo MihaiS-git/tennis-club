@@ -9,6 +9,7 @@ function mockRead(data: unknown, error: { code: string; message: string } | null
   const query = {
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
+    is: vi.fn().mockReturnThis(),
     order: vi.fn().mockReturnThis(),
     then(resolve: (result: unknown) => unknown) { return Promise.resolve({ data, error }).then(resolve); },
   };
@@ -52,6 +53,7 @@ test("keeps explicit active filters, inner court embedding and deterministic ord
   await listActiveLocationsWithCourts();
   expect(query.select.mock.calls[0][0]).toContain("courts!inner(");
   expect(query.eq.mock.calls).toEqual([["is_active", true], ["courts.is_active", true]]);
+  expect(query.is).toHaveBeenCalledWith("archived_at", null);
   expect(query.order.mock.calls).toEqual([
     ["display_order"], ["name"], ["id"],
     ["display_order", { referencedTable: "courts" }], ["name", { referencedTable: "courts" }], ["id", { referencedTable: "courts" }],

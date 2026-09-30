@@ -8,19 +8,19 @@ vi.mock("../../../src/lib/admin/authorization", () => ({ requireActiveAdmin }));
 vi.mock("../../../src/lib/supabase/server", () => ({ createClient }));
 vi.mock("../../../src/lib/logger", () => ({ logger }));
 
-import { listAdminLocations, saveAdminLocation } from "../../../src/lib/admin/locations";
+import { listAdminLocations, saveAdminLocation, setAdminLocationArchived } from "../../../src/lib/admin/locations";
 
 const id = "a1000000-0000-4000-8000-000000000001";
 const fields = { name: " Central Club ", address_line1: "", address_line2: "", city: "Cluj", postal_code: "",
   country_code: "RO", timezone: "Europe/Bucharest", currency: "EUR", is_active: true, display_order: 0 };
-const query = { insert: vi.fn(), update: vi.fn(), eq: vi.fn(), select: vi.fn(), maybeSingle: vi.fn(), order: vi.fn() };
+const query = { insert: vi.fn(), update: vi.fn(), eq: vi.fn(), is: vi.fn(), not: vi.fn(), select: vi.fn(), maybeSingle: vi.fn(), order: vi.fn() };
 const client = { from: vi.fn(() => query) };
 
 beforeEach(() => {
   vi.clearAllMocks();
   createClient.mockResolvedValue(client);
   requireActiveAdmin.mockResolvedValue({ userId: "admin" });
-  for (const key of ["insert", "update", "eq", "select", "order"] as const) query[key].mockReturnValue(query);
+  for (const key of ["insert", "update", "eq", "is", "not", "select", "order"] as const) query[key].mockReturnValue(query);
   query.maybeSingle.mockResolvedValue({ data: { id }, error: null });
 });
 
@@ -42,6 +42,7 @@ it.each([false, true])("edits and sets active=%s, preserving the existing slug",
     expect(query.update).toHaveBeenCalledWith(expect.objectContaining({ name: "Renamed", currency: "RON", is_active, display_order: 3, updated_at: now.toISOString() }));
     expect(query.update.mock.calls[0][0]).not.toHaveProperty("slug");
     expect(query.eq).toHaveBeenCalledWith("id", id);
+    expect(query.is).toHaveBeenCalledWith("archived_at", null);
     expect(query.insert).not.toHaveBeenCalled();
   } finally { vi.useRealTimers(); }
 });
@@ -100,11 +101,34 @@ it("rejects names that cannot generate a nonempty slug only on creation", async 
 });
 
 it("lists inactive records too, with admin authorization and stable ordering", async () => {
-  const location = { ...fields, id, slug: "central", address_line1: null, address_line2: null, postal_code: null,
+  const location = { ...fields, id, slug: "central", address_line1: null, address_line2: null, postal_code: null, archived_at: null,
     is_active: false, created_at: "2026-09-29T10:00:00Z", updated_at: "2026-09-29T10:00:00Z" };
   query.order.mockReturnValueOnce(query).mockReturnValueOnce(query).mockResolvedValueOnce({ data: [location], error: null });
   await expect(listAdminLocations()).resolves.toEqual([location]);
   expect(requireActiveAdmin).toHaveBeenCalledWith(client);
   expect(query.order.mock.calls).toEqual([["display_order"], ["name"], ["id"]]);
+  expect(query.is).toHaveBeenCalledWith("archived_at", null);
   expect(query.eq).not.toHaveBeenCalled();
+});
+
+it("lists archived locations only when requested", async () => {
+  query.order.mockReturnValueOnce(query).mockReturnValueOnce(query).mockResolvedValueOnce({ data: [], error: null });
+  await expect(listAdminLocations(undefined, "archived")).resolves.toEqual([]);
+  expect(query.not).toHaveBeenCalledWith("archived_at", "is", null);
+  expect(query.is).not.toHaveBeenCalled();
+});
+
+it("archives and restores without deletion and leaves inactive on both operations", async () => {
+  await expect(setAdminLocationArchived({ id, archived: true })).resolves.toEqual({ ok: true, id });
+  expect(query.update.mock.calls[0][0]).toMatchObject({ is_active: false, archived_at: expect.any(String) });
+  expect(query.is).toHaveBeenCalledWith("archived_at", null);
+  await expect(setAdminLocationArchived({ id, archived: false })).resolves.toEqual({ ok: true, id });
+  expect(query.update.mock.calls[1][0]).toMatchObject({ is_active: false, archived_at: null });
+  expect(query.not).toHaveBeenCalledWith("archived_at", "is", null);
+});
+
+it("denies archive before any write for non-admins", async () => {
+  requireActiveAdmin.mockRejectedValue(new Error("notFound"));
+  await expect(setAdminLocationArchived({ id, archived: true })).rejects.toThrow("notFound");
+  expect(client.from).not.toHaveBeenCalled();
 });

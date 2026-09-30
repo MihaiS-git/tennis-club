@@ -3,54 +3,47 @@ const { requireActiveAdmin, createClient } = vi.hoisted(() => ({ requireActiveAd
 vi.mock("../../../src/lib/admin/authorization", () => ({ requireActiveAdmin }));
 vi.mock("../../../src/lib/supabase/server", () => ({ createClient }));
 vi.mock("../../../src/lib/logger", () => ({ logger: { error: vi.fn(), info: vi.fn() } }));
-import { listAdminOpeningHours, saveAdminOpeningHours, removeAdminOpeningHours } from "../../../src/lib/admin/opening-hours";
+import { listAdminOpeningHours, mutateAdminOpeningHours } from "../../../src/lib/admin/opening-hours";
 const location_id = "c6000000-0000-4000-8000-000000000011";
-const id = "c6000000-0000-4000-8000-000000000021";
-const input = { location_id, weekday: 0, opens_at: "07:00", closes_at: "24:00" };
-const query = { select: vi.fn(), eq: vi.fn(), insert: vi.fn(), update: vi.fn(), delete: vi.fn(), maybeSingle: vi.fn(), order: vi.fn() };
-const client = { from: vi.fn(() => query) };
+const input = { location_id, weekdays: [0, 1, 2, 3, 4], replace_ids: [], intervals: [{ opens_at: "07:00", closes_at: "24:00" }] };
+const query = { select: vi.fn(), eq: vi.fn(), order: vi.fn() };
+const client = { from: vi.fn(() => query), rpc: vi.fn() };
 beforeEach(() => {
   vi.resetAllMocks(); createClient.mockResolvedValue(client); requireActiveAdmin.mockResolvedValue({ userId: "admin" });
-  for (const key of ["select", "eq", "insert", "update", "delete", "order"] as const) query[key].mockReturnValue(query);
-  query.maybeSingle.mockResolvedValue({ data: { id }, error: null });
+  query.select.mockReturnValue(query); query.eq.mockReturnValue(query);
+  query.order.mockImplementation((column: string) => column === "id" ? Promise.resolve({ data: [], error: null }) : query);
+  client.rpc.mockResolvedValue({ data: { status: "ok" }, error: null });
 });
-it.each([undefined, id])("creates/edits with explicit minutes and application timestamp (id=%s)", async (intervalId) => {
-  expect(await saveAdminOpeningHours({ ...input, id: intervalId })).toEqual({ ok: true, id });
-  expect(requireActiveAdmin).toHaveBeenCalledWith(client);
-  const values = (intervalId ? query.update : query.insert).mock.calls[0][0];
-  expect(values).toMatchObject({ weekday: 0, opens_at_minute: 420, closes_at_minute: 1440 });
-  expect(Number.isNaN(Date.parse(values.updated_at))).toBe(false);
-  expect(values).not.toHaveProperty("created_at");
-  if (intervalId) { expect(query.eq.mock.calls).toEqual([["id", id], ["location_id", location_id]]); expect(values).not.toHaveProperty("location_id"); }
-  else expect(values.location_id).toBe(location_id);
+
+it("passes all selected weekdays in one minute-based RPC and reads the committed result", async () => {
+  expect(await mutateAdminOpeningHours(input)).toEqual({ ok: true, intervals: [] });
+  expect(client.rpc).toHaveBeenCalledExactlyOnceWith("mutate_location_opening_hours", {
+    p_location_id: location_id, p_weekdays: [0, 1, 2, 3, 4], p_replace_ids: [],
+    p_opens_at_minutes: [420], p_closes_at_minutes: [1440],
+  });
+  expect(query.eq).toHaveBeenCalledWith("location_id", location_id);
 });
-it("removes only the identified location interval", async () => {
-  expect(await removeAdminOpeningHours({ location_id, id })).toEqual({ ok: true, id });
-  expect(query.delete).toHaveBeenCalledOnce(); expect(query.eq.mock.calls).toEqual([["id", id], ["location_id", location_id]]);
+
+it("sends grouped replace and remove through the same RPC", async () => {
+  const ids = Array.from({ length: 5 }, () => crypto.randomUUID());
+  await mutateAdminOpeningHours({ ...input, replace_ids: ids, intervals: [{ opens_at: "08:00", closes_at: "22:00" }] });
+  expect(client.rpc.mock.calls[0][1].p_replace_ids).toEqual(ids);
+  expect(client.rpc.mock.calls[0][1].p_weekdays).toEqual(input.weekdays);
+  await mutateAdminOpeningHours({ ...input, replace_ids: ids, intervals: [] });
+  expect(client.rpc.mock.calls[1][1]).toMatchObject({ p_weekdays: input.weekdays, p_replace_ids: ids, p_opens_at_minutes: [], p_closes_at_minutes: [] });
 });
-it.each([() => saveAdminOpeningHours({}), () => removeAdminOpeningHours({}), () => listAdminOpeningHours()])("authorizes before database access", async (operation) => {
+
+it("authorizes before database access and rejects invalid input", async () => {
+  expect(await mutateAdminOpeningHours({ ...input, weekdays: [0, 0] })).toMatchObject({ ok: false, reason: "invalid-input" });
+  expect(client.rpc).not.toHaveBeenCalled();
   requireActiveAdmin.mockRejectedValue(new Error("denied"));
-  await expect(operation()).rejects.toThrow("denied"); expect(client.from).not.toHaveBeenCalled();
+  await expect(mutateAdminOpeningHours(input)).rejects.toThrow("denied");
+  await expect(listAdminOpeningHours()).rejects.toThrow("denied");
 });
-it("rejects invalid input and mass assignment before querying", async () => {
-  for (const changes of [{ closes_at: "invalid" }, { opens_at: "24:00" }, { weekday: 7 }, { created_at: "spoof" }]) {
-    expect(await saveAdminOpeningHours({ ...input, ...changes })).toMatchObject({ ok: false, reason: "invalid-input" });
-  }
-  expect(await removeAdminOpeningHours({ location_id, id, weekday: 1 })).toMatchObject({ ok: false, reason: "invalid-input" });
-  expect(client.from).not.toHaveBeenCalled();
-});
-it.each([["23P01", "overlap"], ["23503", "not-found"]])("maps %s to safe %s error", async (code, reason) => {
-  query.maybeSingle.mockResolvedValue({ data: null, error: { code, message: "internal details" } });
-  expect(await saveAdminOpeningHours(input)).toEqual({ ok: false, reason });
-});
-it("handles missing rows and hides unexpected database errors", async () => {
-  query.maybeSingle.mockResolvedValue({ data: null, error: null });
-  expect(await saveAdminOpeningHours({ ...input, id })).toEqual({ ok: false, reason: "not-found" });
-  query.maybeSingle.mockResolvedValue({ data: null, error: { code: "XX", message: "private" } });
-  await expect(saveAdminOpeningHours(input)).rejects.toThrow("Unable to change opening hours.");
-});
-it("reads validated rows in deterministic order without inventing defaults", async () => {
-  query.order.mockReturnValueOnce(query).mockReturnValueOnce(query).mockReturnValueOnce(query).mockResolvedValueOnce({ data: [], error: null });
-  expect(await listAdminOpeningHours()).toEqual([]);
-  expect(query.order.mock.calls).toEqual([["location_id"], ["weekday"], ["opens_at_minute"], ["id"]]);
+
+it("returns specific conflict days and hides unexpected database errors", async () => {
+  client.rpc.mockResolvedValueOnce({ data: { status: "overlap", weekdays: [1] }, error: null });
+  expect(await mutateAdminOpeningHours(input)).toEqual({ ok: false, reason: "overlap", weekdays: [1] });
+  client.rpc.mockResolvedValueOnce({ data: null, error: { code: "XX", message: "private" } });
+  await expect(mutateAdminOpeningHours(input)).rejects.toThrow("Unable to change opening hours.");
 });

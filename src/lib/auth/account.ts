@@ -1,6 +1,7 @@
 import "server-only";
 
 import { z } from "zod";
+import { cache } from "react";
 
 import { decideAccountAccess } from "@/lib/auth/decisions";
 import { logger } from "@/lib/logger";
@@ -19,7 +20,8 @@ export type CurrentAccount =
   | { state: "suspended"; userId: string; email: string; roles: UserRole[] }
   | { state: "active"; userId: string; email: string; roles: UserRole[] };
 
-export async function readCurrentAccount(
+// Deduplicate identity, profile, and role reads for callers sharing a request client.
+export const readCurrentAccount = cache(async function readCurrentAccount(
   supabase: SupabaseClient,
 ): Promise<CurrentAccount> {
   const { data: identity, error: identityError } = await supabase.auth.getUser();
@@ -69,4 +71,4 @@ export async function readCurrentAccount(
     email: profileResult.data.email,
     roles: parsedRoles.data,
   };
-}
+});

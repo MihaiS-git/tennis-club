@@ -1,7 +1,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set search_path = extensions, public;
-select plan(21);
+select plan(26);
 
 insert into public.locations (id, name, slug, timezone, is_active) values
 ('c1000000-0000-4000-8000-000000000001', 'Active', 'test-locations-active', 'Europe/Bucharest', true),
@@ -63,6 +63,21 @@ set local role authenticated;
 select is((select count(*) from public.courts where location_id in
   ('c1000000-0000-4000-8000-000000000001', 'c1000000-0000-4000-8000-000000000002', 'c1000000-0000-4000-8000-000000000003')),
   2::bigint, 'authenticated public discovery has the same visibility');
+reset role;
+select throws_ok($$update public.locations set archived_at = now() where slug = 'test-locations-active'$$,
+  '23514', null, 'active location cannot be archived without deactivation');
+update public.locations set is_active = false, archived_at = now() where slug = 'test-locations-active';
+select ok((select archived_at is not null from public.locations where slug = 'test-locations-active'),
+  'archived location remains stored');
+set local role anon;
+select is((select count(*) from public.locations where slug = 'test-locations-active'), 0::bigint,
+  'archived location hidden from anonymous location discovery');
+select is((select count(*) from public.courts where location_id = 'c1000000-0000-4000-8000-000000000001'), 0::bigint,
+  'courts at archived location hidden anonymously');
+reset role;
+set local role authenticated;
+select is((select count(*) from public.courts where location_id = 'c1000000-0000-4000-8000-000000000001'), 0::bigint,
+  'courts at archived location hidden from normal authenticated users');
 reset role;
 select * from finish();
 rollback;

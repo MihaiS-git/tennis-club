@@ -2,11 +2,7 @@ import { z } from "zod";
 import { isCountryCode } from "@/lib/profile/countries";
 
 export const locationCurrencies = ["EUR", "USD", "GBP", "RON", "CHF"] as const;
-export const locationCurrencyLabels: Record<typeof locationCurrencies[number], string> = {
-  EUR: "Euro", USD: "US Dollar", GBP: "British Pound", RON: "Romanian Leu", CHF: "Swiss Franc",
-};
-
-const timezones = new Set(Intl.supportedValuesOf("timeZone"));
+const timezones = new Set(typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : []);
 function isIanaTimezone(value: string) {
   try {
     const canonical = new Intl.DateTimeFormat("en", { timeZone: value }).resolvedOptions().timeZone;
@@ -42,6 +38,8 @@ export const locationMutationSchema = z.strictObject({
   id: z.uuid().optional(),
   fields: locationFieldsSchema,
 });
+
+export const locationArchiveSchema = z.strictObject({ id: z.uuid(), archived: z.boolean() });
 
 export type LocationFormValues = z.input<typeof locationFieldsSchema>;
 export type LocationMutationResult =

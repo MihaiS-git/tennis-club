@@ -1,13 +1,18 @@
+"use client";
+
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 
 const sections = [
   { label: "Overview", href: "/admin" },
   { label: "Locations", href: "/admin/locations" },
   { label: "Courts", href: "/admin/courts" },
+  { label: "Pricing", href: "/admin/pricing" },
   { label: "Users", href: "/admin/users" },
 ] as const;
 
-export function AdminNavigation({ current }: { current: typeof sections[number]["href"] }) {
+export function AdminNavigation() {
+  const current = usePathname();
   return (
     <nav aria-label="Admin navigation" className="mb-8 flex flex-wrap gap-2 border-b border-border pb-4">
       {sections.map(({ label, href }) => (

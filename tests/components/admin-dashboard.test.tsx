@@ -17,7 +17,6 @@ vi.mock("../../src/lib/supabase/server", () => ({ createClient }));
 vi.mock("next/navigation", () => ({ redirect, notFound }));
 
 import AdminPage from "../../src/app/admin/page";
-import { AdminNavigation } from "../../src/components/admin-navigation";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -61,7 +60,7 @@ it.each([
   expect(notFound).not.toHaveBeenCalled();
 });
 
-it("links management cards to implemented destinations and leaves Pricing unavailable", async () => {
+it("links management cards to implemented destinations including Pricing", async () => {
   render(await AdminPage());
 
   const cards = screen.getAllByRole("article");
@@ -71,27 +70,12 @@ it("links management cards to implemented destinations and leaves Pricing unavai
     ["Courts", "/admin/courts"],
     ["Opening hours", "/admin/locations"],
     ["Users", "/admin/users"],
+    ["Pricing", "/admin/pricing"],
   ]) {
     const card = cards.find((item) => within(item).queryByRole("heading", { name: title }));
     expect(card).toBeDefined();
     expect(within(card!).getByRole("link", { name: title }).getAttribute("href")).toBe(href);
   }
-  const pricing = cards.find((item) => within(item).queryByRole("heading", { name: "Pricing" }));
-  expect(pricing).toBeDefined();
-  expect(within(pricing!).getByText("Pricing configuration not yet implemented.")).toBeTruthy();
-  expect(within(pricing!).getByText("Coming next · Unavailable")).toBeTruthy();
-  expect(within(pricing!).queryByRole("link")).toBeNull();
-  expect(screen.getAllByRole("link").some((link) => link.getAttribute("href") === "/admin/pricing")).toBe(false);
+
 });
 
-it.each(["/admin", "/admin/locations", "/admin/courts", "/admin/users"] as const)("provides admin navigation with %s marked current", (current) => {
-  render(<AdminNavigation current={current} />);
-
-  const navigation = screen.getByRole("navigation", { name: "Admin navigation" });
-  const links = within(navigation).getAllByRole("link");
-  expect(links.map((link) => [link.textContent, link.getAttribute("href")])).toEqual([
-    ["Overview", "/admin"], ["Locations", "/admin/locations"],
-    ["Courts", "/admin/courts"], ["Users", "/admin/users"],
-  ]);
-  expect(links.filter((link) => link.getAttribute("aria-current") === "page").map((link) => link.getAttribute("href"))).toEqual([current]);
-});

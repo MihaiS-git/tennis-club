@@ -59,6 +59,29 @@ select throws_ok($$update public.location_opening_hours set created_at = now()$$
 select results_eq($$delete from public.location_opening_hours where location_id = 'c6000000-0000-4000-8000-000000000012' and weekday = 2 returning weekday$$,
   array[2], 'admin removes');
 
+select is(public.mutate_location_opening_hours(
+  'c6000000-0000-4000-8000-000000000011', array[4,5], array[]::uuid[], array[420], array[720])->>'status',
+  'ok', 'one weekly call creates both weekdays');
+select is((select count(*) from public.location_opening_hours where location_id = 'c6000000-0000-4000-8000-000000000011'
+  and weekday in (4,5) and opens_at_minute = 420), 2::bigint, 'both weekday rows persist');
+select is(public.mutate_location_opening_hours(
+  'c6000000-0000-4000-8000-000000000011', array[1,6], array[]::uuid[], array[480], array[600])->>'status',
+  'overlap', 'one conflicting weekday rejects the entire operation');
+select is((select count(*) from public.location_opening_hours where location_id = 'c6000000-0000-4000-8000-000000000011'
+  and weekday = 6), 0::bigint, 'non-conflicting weekday also rolls back');
+select is(public.mutate_location_opening_hours(
+  'c6000000-0000-4000-8000-000000000011', array[4,5],
+  array(select id from public.location_opening_hours where location_id = 'c6000000-0000-4000-8000-000000000011' and weekday in (4,5)),
+  array[480], array[780])->>'status', 'ok', 'grouped edit replaces both weekdays');
+select is((select count(*) from public.location_opening_hours where location_id = 'c6000000-0000-4000-8000-000000000011'
+  and weekday in (4,5) and opens_at_minute = 480 and closes_at_minute = 780), 2::bigint, 'grouped edit persisted together');
+select is(public.mutate_location_opening_hours(
+  'c6000000-0000-4000-8000-000000000011', array[4,5],
+  array(select id from public.location_opening_hours where location_id = 'c6000000-0000-4000-8000-000000000011' and weekday in (4,5)),
+  array[]::integer[], array[]::integer[])->>'status', 'ok', 'grouped remove commits together');
+select is((select count(*) from public.location_opening_hours where location_id = 'c6000000-0000-4000-8000-000000000011'
+  and weekday in (4,5)), 0::bigint, 'grouped removal cleared both weekdays');
+
 -- Member, coach and suspended admin share the same denied operations.
 reset role;
 create function pg_temp.test_denied_hours(subject uuid) returns setof text language plpgsql as $$
@@ -68,6 +91,8 @@ begin
   return next results_eq('update public.location_opening_hours set closes_at_minute = 1439 where location_id = ''c6000000-0000-4000-8000-000000000011'' returning weekday', array[]::integer[], 'non-admin update rejected');
   return next results_eq('delete from public.location_opening_hours where location_id = ''c6000000-0000-4000-8000-000000000011'' returning weekday', array[]::integer[], 'non-admin delete rejected');
   return next is((select count(*) from public.location_opening_hours), 0::bigint, 'non-admin cannot read hours');
+  return next throws_ok('select public.mutate_location_opening_hours(''c6000000-0000-4000-8000-000000000011'', array[6], array[]::uuid[], array[420], array[720])',
+    '42501', null, 'non-admin weekly mutation rejected');
 end;
 $$;
 grant execute on function pg_temp.test_denied_hours(uuid) to authenticated;

@@ -49,6 +49,16 @@ select results_eq($$update public.locations set is_active = false where slug = '
   array[false], 'admin can deactivate a location');
 select results_eq($$update public.locations set is_active = true where slug = 'admin-locations-active' returning is_active$$,
   array[true], 'admin can reactivate a location');
+select results_eq($$update public.locations set archived_at = now(), is_active = false
+  where slug = 'admin-locations-created' returning is_active$$,
+  array[false], 'admin archive deactivates a location');
+select ok((select archived_at is not null from public.locations where slug = 'admin-locations-created'),
+  'archived location remains stored and visible to admin');
+select throws_ok($$update public.locations set is_active = true where slug = 'admin-locations-created'$$,
+  '23514', null, 'archived location cannot become active');
+select results_eq($$update public.locations set archived_at = null where slug = 'admin-locations-created' returning is_active$$,
+  array[false], 'restore leaves location inactive');
+update public.locations set archived_at = now() where slug = 'admin-locations-created';
 select is((select updated_at from public.locations where slug = 'admin-locations-active'),
   '2000-01-01'::timestamptz, 'database leaves updated_at application controlled');
 select is((select updated_at from public.locations where slug = 'admin-locations-inactive'),
@@ -89,6 +99,7 @@ select throws_ok($$insert into public.locations (name, slug, timezone) values ('
 select throws_ok($$update public.locations set name = 'Spoof' where slug = 'admin-locations-active'$$,
   '42501', null, 'anonymous update denied');
 select is((select count(*) from public.locations where slug = 'admin-locations-inactive'), 0::bigint, 'inactive location hidden anonymously');
+select is((select count(*) from public.locations where slug = 'admin-locations-created'), 0::bigint, 'archived location hidden anonymously');
 reset role;
 select * from finish();
 rollback;

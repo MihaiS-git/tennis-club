@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test } from "vitest";
-import { listAdminOpeningHours, saveAdminOpeningHours, removeAdminOpeningHours } from "../../../src/lib/admin/opening-hours";
+import { listAdminOpeningHours, mutateAdminOpeningHours } from "../../../src/lib/admin/opening-hours";
 import { cleanupAuthFixtures, localFixtureClient } from "../auth-fixtures";
 import { ensureIntegrationAdminAnchor } from "../admin-anchor";
 
-test("opening hours add/edit/remove, concurrency protection and authorization use real persistence", async () => {
+test("weekly opening hours create, conflict rollback, grouped replace/remove, and authorization", async () => {
   const service = localFixtureClient();
   await ensureIntegrationAdminAnchor(service);
   const userIds: string[] = [];
@@ -29,35 +29,38 @@ test("opening hours add/edit/remove, concurrency protection and authorization us
     const location = await service.from("locations").insert({ name: "Opening hours fixture", slug: `hours-${randomUUID()}`, timezone: "Europe/Bucharest" }).select("id").single();
     assert.strictEqual(location.error, null); assert.ok(location.data); locationIds.push(location.data.id);
     const location_id = location.data.id;
-    const input = { location_id, weekday: 0, opens_at: "07:00", closes_at: "24:00" };
-    expect((await listAdminOpeningHours(admin)).filter((row) => row.location_id === location_id)).toEqual([]);
-    const saved = await saveAdminOpeningHours(input, admin); assert.ok(saved.ok);
-    expect((await listAdminOpeningHours(admin)).find((row) => row.id === saved.id)).toMatchObject({ opens_at_minute: 420, closes_at_minute: 1440 });
-    expect(await saveAdminOpeningHours({ ...input, opens_at: "08:00", closes_at: "09:00" }, admin)).toEqual({ ok: false, reason: "overlap" });
-    assert.strictEqual((await service.from("location_opening_hours").update({ updated_at: "2000-01-01T00:00:00Z" }).eq("id", saved.id)).error, null);
-    expect(await saveAdminOpeningHours({ ...input, id: saved.id, closes_at: "12:00" }, admin)).toEqual({ ok: true, id: saved.id });
-    const updated = (await listAdminOpeningHours(admin)).find((row) => row.id === saved.id);
-    expect(updated?.closes_at_minute).toBe(720);
-    expect(Date.parse(updated!.updated_at)).toBeGreaterThan(Date.parse("2000-01-01T00:00:00Z"));
-    const adjacent = await saveAdminOpeningHours({ ...input, opens_at: "12:00" }, admin); assert.ok(adjacent.ok);
-    // Two competing requests cannot both reserve overlapping configuration intervals.
-    const competing = await Promise.all([
-      saveAdminOpeningHours({ ...input, weekday: 1 }, admin),
-      saveAdminOpeningHours({ ...input, weekday: 1, opens_at: "08:00" }, admin),
-    ]);
-    expect(competing.filter((result) => result.ok)).toHaveLength(1);
-    expect(competing.filter((result) => !result.ok)).toEqual([{ ok: false, reason: "overlap" }]);
-    for (const session of [member, publicClient()]) {
-      await expect(listAdminOpeningHours(session)).rejects.toThrow();
-      await expect(saveAdminOpeningHours(input, session)).rejects.toThrow();
-      await expect(removeAdminOpeningHours({ location_id, id: saved.id }, session)).rejects.toThrow();
-      expect((await session.from("location_opening_hours").insert({ location_id, weekday: 5, opens_at_minute: 420, closes_at_minute: 1440 })).error?.code).toBe("42501");
-    }
-    expect(await removeAdminOpeningHours({ location_id: randomUUID(), id: saved.id }, admin)).toEqual({ ok: false, reason: "not-found" });
-    expect(await removeAdminOpeningHours({ location_id, id: saved.id }, admin)).toEqual({ ok: true, id: saved.id });
-    expect((await listAdminOpeningHours(admin)).some((row) => row.id === saved.id)).toBe(false);
-    expect(await removeAdminOpeningHours({ location_id, id: adjacent.id }, admin)).toEqual({ ok: true, id: adjacent.id });
-    expect((await listAdminOpeningHours(admin)).filter((row) => row.location_id === location_id && row.weekday === 0)).toEqual([]);
+    const days = [0, 1, 2, 3, 4];
+    const created = await mutateAdminOpeningHours({ location_id, weekdays: days, replace_ids: [], intervals: [{ opens_at: "07:00", closes_at: "24:00" }] }, admin);
+    assert.ok(created.ok);
+    expect(created.intervals.map((row) => row.weekday)).toEqual(days);
+    expect(created.intervals.every((row) => row.opens_at_minute === 420 && row.closes_at_minute === 1440)).toBe(true);
+
+    const conflict = await mutateAdminOpeningHours({ location_id, weekdays: [1, 5], replace_ids: [], intervals: [{ opens_at: "08:00", closes_at: "12:00" }] }, admin);
+    expect(conflict).toEqual({ ok: false, reason: "overlap", weekdays: [1] });
+    expect((await listAdminOpeningHours(admin)).filter((row) => row.location_id === location_id && row.weekday === 5)).toEqual([]);
+
+    const edited = await mutateAdminOpeningHours({ location_id, weekdays: days, replace_ids: created.intervals.map((row) => row.id),
+      intervals: [{ opens_at: "07:00", closes_at: "12:00" }, { opens_at: "12:00", closes_at: "20:00" }] }, admin);
+    assert.ok(edited.ok);
+    expect(edited.intervals).toHaveLength(10);
+    for (const day of days) expect(edited.intervals.filter((row) => row.weekday === day).map((row) => [row.opens_at_minute, row.closes_at_minute]))
+      .toEqual([[420, 720], [720, 1200]]);
+
+    const blockedEdit = await mutateAdminOpeningHours({ location_id, weekdays: days,
+      replace_ids: edited.intervals.filter((row) => row.opens_at_minute === 420).map((row) => row.id),
+      intervals: [{ opens_at: "07:00", closes_at: "13:00" }] }, admin);
+    expect(blockedEdit).toEqual({ ok: false, reason: "overlap", weekdays: days });
+    expect((await listAdminOpeningHours(admin)).filter((row) => row.location_id === location_id && row.opens_at_minute === 420)
+      .every((row) => row.closes_at_minute === 720)).toBe(true);
+
+    const removed = await mutateAdminOpeningHours({ location_id, weekdays: days,
+      replace_ids: edited.intervals.filter((row) => row.opens_at_minute === 720).map((row) => row.id), intervals: [] }, admin);
+    assert.ok(removed.ok);
+    expect(removed.intervals).toHaveLength(5);
+    expect(removed.intervals.every((row) => row.closes_at_minute === 720)).toBe(true);
+
+    await expect(mutateAdminOpeningHours({ location_id, weekdays: [6], replace_ids: [], intervals: [{ opens_at: "08:00", closes_at: "22:00" }] }, member)).rejects.toThrow();
+    expect((await member.rpc("mutate_location_opening_hours", { p_location_id: location_id, p_weekdays: [6], p_replace_ids: [], p_opens_at_minutes: [480], p_closes_at_minutes: [1320] })).error?.code).toBe("42501");
   } finally {
     if (locationIds.length) {
       assert.strictEqual((await service.from("location_opening_hours").delete().in("location_id", locationIds)).error, null);

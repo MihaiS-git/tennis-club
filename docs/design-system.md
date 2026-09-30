@@ -117,6 +117,23 @@ Base UI direction:
 
 Avoid excessively rounded generic SaaS styling.
 
+## Global application UX rules
+
+These rules apply across the application, including future screens.
+
+- Use compact tables for dense management data rather than repeated large cards.
+- Support safe direct editing for scalar status, enum/select, boolean, and ordering fields. Use focused dialogs, popovers, or forms for compound or structural fields.
+- Provide bulk operations for predictably repetitive work.
+- Give Create and Edit of the same business object one form with the same fields, semantics, validation, and interaction.
+- Show logical business objects in the UI, not the atomic database rows used to persist them.
+- Let people select time and timezone values with a mouse while allowing typing when useful.
+- Put prominent validation and operation errors inside or immediately beside the failed operation. Keep submitted values, hide raw infrastructure/database errors, and reserve space where needed so adjacent controls stay in place.
+- Apply a filter or context selection immediately when no further input is needed; omit redundant View and Apply controls.
+- Reveal secondary configuration and actions progressively so the primary entity remains visually dominant.
+- Use deactivate/archive/restore for long-lived entities with historical relationships when appropriate.
+- Keep application and section navigation visually stable during navigation. Restrict loading feedback to the smallest data-dependent content region.
+- Prefer server-first rendering, existing Tailwind conventions, and existing design tokens. Introduce a UI framework or generalized abstraction only for a concrete need.
+
 ## Photography assets
 
 Photography under `public/` is user-provided product material.

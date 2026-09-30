@@ -1,9 +1,11 @@
 import { beforeEach, expect, it, vi } from "vitest";
 
-const { saveAdminLocation, revalidatePath } = vi.hoisted(() => ({ saveAdminLocation: vi.fn(), revalidatePath: vi.fn() }));
-vi.mock("../../../src/lib/admin/locations", () => ({ saveAdminLocation }));
+const { saveAdminLocation, setAdminLocationArchived, revalidatePath } = vi.hoisted(() => ({
+  saveAdminLocation: vi.fn(), setAdminLocationArchived: vi.fn(), revalidatePath: vi.fn(),
+}));
+vi.mock("../../../src/lib/admin/locations", () => ({ saveAdminLocation, setAdminLocationArchived }));
 vi.mock("next/cache", () => ({ revalidatePath }));
-import { saveLocationAction } from "../../../src/app/admin/locations/actions";
+import { archiveLocationAction, saveLocationAction } from "../../../src/app/admin/locations/actions";
 
 beforeEach(() => vi.clearAllMocks());
 it("delegates to the authorized domain mutation and refreshes admin and public reads on success", async () => {
@@ -24,4 +26,12 @@ it("propagates authorization control flow without revalidation", async () => {
   saveAdminLocation.mockRejectedValue(new Error("notFound"));
   await expect(saveLocationAction({})).rejects.toThrow("notFound");
   expect(revalidatePath).not.toHaveBeenCalled();
+});
+
+it("revalidates current, archived, and public reads after archive changes", async () => {
+  setAdminLocationArchived.mockResolvedValue({ ok: true, id: "location" });
+  expect(await archiveLocationAction({ archived: true })).toEqual({ ok: true, id: "location" });
+  expect(revalidatePath.mock.calls).toEqual([
+    ["/admin/locations"], ["/courts"],
+  ]);
 });

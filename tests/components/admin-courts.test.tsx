@@ -27,9 +27,7 @@ it("groups courts under the correct locations and distinguishes inactive courts 
   listAdminLocations.mockResolvedValue(locations);
   listAdminCourts.mockResolvedValue([court, { ...court, id: "other", name: "Court Two", location_id: locations[1].id, is_active: true }]);
   render(await AdminCourtsPage());
-  const navigation = screen.getByRole("navigation", { name: "Admin navigation" });
-  expect(within(navigation).getByRole("link", { name: "Overview" }).getAttribute("href")).toBe("/admin");
-  expect(within(navigation).getByRole("link", { name: "Courts" }).getAttribute("aria-current")).toBe("page");
+  expect(screen.queryByRole("navigation", { name: "Admin navigation" })).toBeNull();
   const central = within(screen.getByRole("region", { name: "Central" }));
   const north = within(screen.getByRole("region", { name: "North" }));
   expect(central.getAllByText("Court One")).toHaveLength(2);

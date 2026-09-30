@@ -998,23 +998,46 @@ returns indoor, outdoor, or covered from inclusive date intervals, with no seaso
 inference. Callers supply a calendar date explicitly. Public `/courts` remains
 unchanged to preserve its existing read model.
 
-`/admin/locations` lists all physical locations and lets active administrators create,
-edit, activate/deactivate, and order them through user-scoped Server Actions. Each
-location stores its IANA timezone and one currency (EUR, USD, GBP, RON, or CHF;
+`/admin/locations` shows current locations in a compact table. Clicking or keyboard
+activating a row opens the full Location form for name, address, city, postal code,
+country, timezone, currency, and status. The same interaction applies to the mobile
+item. Archive and Restore are inside that dialog, including in the archived view.
+Archiving sets `archived_at` and deactivates the location;
+restoring clears the archive timestamp but leaves it inactive until explicitly activated.
+Current admin selectors omit archived locations. These operations use user-scoped
+Server Actions. Each location stores its IANA timezone and one currency (EUR, USD, GBP, RON, or CHF;
 default EUR). Slugs are generated from names on creation and preserved on edits;
 collisions require a different name. Location counts are derived from records.
 Location RLS grants active administrators SELECT/INSERT/UPDATE, with no deletion
-access; public discovery still filters for active locations with active courts.
+access. The database prevents an archived location from being active. Public discovery
+filters for active, unarchived locations with active courts.
 
-Location opening hours are managed on the same screen, Monday through Sunday,
-with add/edit/remove controls for multiple intervals per day. `location_opening_hours`
-stores local minute-of-day boundaries (0–1440, including `24:00`), with Monday = 0
-and Sunday = 6. A GiST exclusion constraint prevents overlaps for the same location
-and weekday while allowing adjacent intervals. Active admins alone can read/write
-these rows through user-scoped Server Actions and RLS; `updated_at` is application-controlled.
+Location opening hours appear as a useful weekly summary beside an explicit Edit or
+Set hours action. The compact weekly editor groups weekdays only when their complete
+interval sets match. One form selects weekdays, supports multiple intervals, and
+creates, replaces, or removes grouped intervals together. A user-scoped transactional
+RPC commits each multi-day change atomically while RLS remains active.
+`location_opening_hours` stores local minute-of-day boundaries (0–1440, including
+`24:00`), with Monday = 0 and Sunday = 6. A GiST exclusion constraint prevents
+overlaps for the same location and weekday while allowing adjacent intervals.
 Days without intervals display Closed; a wholly empty schedule is explicitly marked
 not configured and has no inferred hours. There are no date exceptions yet. The
 public `/courts` temporary “Open daily 07:00–24:00” fallback remains independent.
+
+`/admin/pricing` manages logical hourly rule sets for one or more specific courts at a
+location. Each definition selects a compatible operational state (outdoor or covered
+for outdoor courts; indoor for indoor courts), weekdays, a half-open local minute
+interval `[start, end)`, optional inclusive calendar-date bounds, and a price in
+the location's currency. The same form creates and edits a whole definition. One
+`rule_set_id` joins its atomic court/day rows, and the admin table shows one row
+per definition. A user-scoped transactional RPC creates, replaces or removes the
+entire set; the per-court/state/day GiST exclusion constraint prevents overlapping
+date/time applicability and permits adjacent intervals. Next.js validates every
+selected court and weekday against environment and configured opening hours before
+calling the RPC. RLS remains active. Later opening-hours edits do not rewrite
+pricing; consumers must still check opening hours independently. The resolver uses
+court, derived state, date, weekday and local minute. Public `/courts` remains
+unchanged. See [Pricing](docs/pricing.md).
 
 `/admin/users` uses server-side queries with RLS-enforced access. Search, filtering,
 sorting, and pagination are URL-driven and applied before pagination. Interactive
