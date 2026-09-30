@@ -265,6 +265,9 @@ it("opens the full editor from the desktop location identity and orders rows by 
   listAdminLocations.mockResolvedValue([{ ...location, id: "north", name: "North" }, location]);
   render(await AdminLocationsPage({}));
   const table = screen.getByRole("table", { name: "Locations" });
+  const toolbar = screen.getByRole("link", { name: "Archived" }).parentElement;
+  expect(screen.getByRole("button", { name: "Create location" }).parentElement?.parentElement).toBe(toolbar);
+  expect(toolbar?.nextElementSibling?.contains(table)).toBe(true);
   const rows = within(table).getAllByRole("row").slice(1);
   expect(rows[0].getAttribute("aria-label")).toBe("Edit location Central Club");
   expect(rows[1].getAttribute("aria-label")).toBe("Edit location North");

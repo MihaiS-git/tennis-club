@@ -21,7 +21,6 @@ export const courtFieldsSchema = z.strictObject({
   environment: z.enum(courtEnvironments, "Select indoor or outdoor."),
   has_lighting: z.boolean(),
   is_active: z.boolean(),
-  display_order: z.number().int("Enter a whole number.").min(-2147483648).max(2147483647),
 });
 export const courtMutationSchema = z.strictObject({
   id: z.uuid().optional(),

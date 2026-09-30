@@ -58,6 +58,12 @@ it("opens the native dialog from Manage", () => {
 
 it("shows email, status, and both elevated roles", () => {
   const dialog = openDialog();
+  const header = dialog.querySelector("header")!;
+  expect(within(header).getByRole("heading", { name: "Manage user" })).toBeTruthy();
+  expect(within(header).getByRole("button", { name: "Close" })).toBeTruthy();
+  expect(header.textContent).not.toContain(user.email);
+  expect(header.className).toContain("border-b");
+  expect(header.className).not.toContain("rounded-card");
   expect(within(dialog).getByText(user.email)).toBeTruthy();
   expect(within(dialog).getByText("Active")).toBeTruthy();
   expect(within(dialog).getByRole("heading", { name: "Account status" })).toBeTruthy();

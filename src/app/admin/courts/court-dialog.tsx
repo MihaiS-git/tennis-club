@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Input } from "@/components/input";
+import { ModalDialog } from "@/components/modal-dialog";
 import type { AdminCourt } from "@/lib/admin/courts";
 import type { AdminLocation } from "@/lib/admin/locations";
 import { courtSurfaces, courtEnvironments, courtSurfaceLabels, courtEnvironmentLabels } from "@/lib/admin/courts-validation";
@@ -12,28 +13,19 @@ type LocationChoice = Pick<AdminLocation, "id" | "name" | "is_active">;
 const selectClass = "min-h-11 w-full rounded-control border border-border bg-surface px-3 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-focus/20";
 const buttonClass = "inline-flex min-h-9 items-center justify-center rounded-control border border-border-strong bg-surface px-3 py-2 text-sm font-semibold text-primary hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-60";
 
-export function CourtDialog({ court, locations, locationId }: {
+export function CourtDialog({ court, locations, locationId, open: controlledOpen, onOpenChange }: {
   court?: AdminCourt; locations: LocationChoice[]; locationId?: string;
+  open?: boolean; onOpenChange?: (open: boolean) => void;
 }) {
   const prefix = useId();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const pendingRef = useRef(false);
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlledOpen ?? internalOpen;
+  const setOpen = onOpenChange ?? setInternalOpen;
   const [pending, setPending] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState("");
-
-  useLayoutEffect(() => {
-    const dialog = dialogRef.current;
-    return () => { dialog?.close(); setOpen(false); };
-  }, []);
-  useEffect(() => {
-    if (!open) return;
-    dialogRef.current?.showModal();
-    const overflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => { document.body.style.overflow = overflow; };
-  }, [open]);
 
   function errorProps(field: string) {
     return { "aria-invalid": Boolean(fieldErrors[field]), "aria-describedby": fieldErrors[field] ? `${prefix}-${field}-error` : undefined };
@@ -54,7 +46,6 @@ export function CourtDialog({ court, locations, locationId }: {
         fields: {
           location_id: text("location_id"), name: text("name"), surface: text("surface"), environment: text("environment"),
           has_lighting: text("has_lighting") === "true", is_active: text("is_active") === "true",
-          display_order: text("display_order").trim() ? Number(text("display_order")) : NaN,
         },
       });
       if (result.ok) {
@@ -78,11 +69,7 @@ export function CourtDialog({ court, locations, locationId }: {
     }
   }
 
-  return <>
-    <button type="button" className={buttonClass} disabled={locations.length === 0} onClick={() => {
-      setFieldErrors({}); setFormError(""); setOpen(true);
-    }}>{court ? "Edit court" : "Create court"}</button>
-    <dialog ref={dialogRef} aria-labelledby={`${prefix}-title`}
+  const dialog = <ModalDialog ref={dialogRef} active={open} aria-labelledby={`${prefix}-title`}
       onClose={() => setOpen(false)} onCancel={(event) => { if (pendingRef.current) event.preventDefault(); }}
       className="fixed inset-0 m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-lg overflow-y-auto rounded-card border border-border bg-surface p-0 text-foreground shadow-floating backdrop:bg-foreground/50">
       {open && <div className="p-5 sm:p-6">
@@ -129,18 +116,17 @@ export function CourtDialog({ court, locations, locationId }: {
                 <option value="true">Active</option><option value="false">Inactive</option>
               </select>{fieldError("is_active")}
             </div>
-            <div>
-              <label htmlFor={`${prefix}-display_order`} className="mb-1.5 block text-sm font-medium">Display order</label>
-              <Input id={`${prefix}-display_order`} name="display_order" type="number" required step="1" min="-2147483648" max="2147483647"
-                defaultValue={court?.display_order ?? 0} {...errorProps("display_order")} />
-              <p className="mt-1 text-xs text-muted-foreground">Lower numbers appear first within the location.</p>{fieldError("display_order")}
-            </div>
             <button type="submit" aria-busy={pending} className="w-full rounded-control bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary-hover disabled:cursor-wait disabled:opacity-60">
               {pending ? "Saving…" : "Save court"}
             </button>
           </fieldset>
         </form>
       </div>}
-    </dialog>
+    </ModalDialog>;
+  return <>
+    {controlledOpen === undefined && <button type="button" className={buttonClass} disabled={locations.length === 0} onClick={() => {
+      setFieldErrors({}); setFormError(""); setOpen(true);
+    }}>{court ? "Edit court" : "Create court"}</button>}
+    {dialog}
   </>;
 }

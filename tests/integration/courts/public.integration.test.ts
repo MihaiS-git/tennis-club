@@ -20,7 +20,7 @@ test("public discovery excludes inactive resources and locations without active 
     expect((await service.from("courts").insert(courtIds.map((id, index) => ({
       id, location_id: [ids[0], ids[0], ids[0], ids[0], ids[0], ids[4], ids[1], ids[2], ids[5]][index], slug: `test-${id}`,
       name: ["Zulu", "Beta", "Alpha", "Alpha", "Inactive", "Hidden by location", "Beta court", "Alpha court", "Inactive only"][index],
-      surface: "clay", environment: index === 2 ? "indoor" : "outdoor", display_order: index === 0 ? 0 : 1,
+      surface: "clay", environment: index === 2 ? "indoor" : "outdoor",
       is_active: index !== 4 && index !== 8,
     })))).error).toBeNull();
 
@@ -28,7 +28,7 @@ test("public discovery excludes inactive resources and locations without active 
     const locations = read.filter((location) => ids.includes(location.id));
     expect(locations.map((location) => location.id)).toEqual([ids[0], ids[2], ids[1]]);
     expect(locations[0].courts.map((court) => court.id)).toEqual([
-      courtIds[0], ...[courtIds[2], courtIds[3]].sort(), courtIds[1],
+      ...[courtIds[2], courtIds[3]].sort(), courtIds[1], courtIds[0],
     ]);
     expect(locations.slice(1).map((location) => location.courts.map((court) => court.id))).toEqual([[courtIds[7]], [courtIds[6]]]);
     expect(locations[0]).toEqual({
@@ -36,9 +36,10 @@ test("public discovery excludes inactive resources and locations without active 
       address_line1: null, address_line2: null, city: null, postal_code: null, country_code: null,
       courts: locations[0].courts,
     });
+    const firstAlphaId = [courtIds[2], courtIds[3]].sort()[0];
     expect(locations[0].courts[0]).toEqual({
-      id: courtIds[0], name: "Zulu", slug: `test-${courtIds[0]}`, surface: "clay",
-      environment: "outdoor", has_lighting: false,
+      id: firstAlphaId, name: "Alpha", slug: `test-${firstAlphaId}`, surface: "clay",
+      environment: firstAlphaId === courtIds[2] ? "indoor" : "outdoor", has_lighting: false,
     });
     expect(locations[0].courts.find((court) => court.id === courtIds[1])).toMatchObject({
       environment: "outdoor",

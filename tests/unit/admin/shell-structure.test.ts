@@ -13,6 +13,6 @@ it("keeps navigation in the shared layout rather than individual pages", () => {
   }
 });
 
-it("has no route-level full-admin loading replacements", () => {
-  for (const file of loadingFiles) expect(existsSync(resolve(adminRoot, file))).toBe(false);
+it("has loading boundaries for the Admin overview and each section", () => {
+  for (const file of loadingFiles) expect(existsSync(resolve(adminRoot, file))).toBe(true);
 });

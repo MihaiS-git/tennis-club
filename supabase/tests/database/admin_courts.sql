@@ -26,12 +26,12 @@ set local request.jwt.claims = '{"sub":"c4000000-0000-4000-8000-000000000001","r
 select is((select count(*) from public.courts where location_id in
   ('c4000000-0000-4000-8000-000000000011', 'c4000000-0000-4000-8000-000000000012')),
   3::bigint, 'active admin sees inactive courts and courts at inactive locations');
-select lives_ok($$insert into public.courts (location_id, name, slug, surface, environment, has_lighting, is_active, display_order, updated_at)
-  values ('c4000000-0000-4000-8000-000000000012', 'Admin created', 'created', 'carpet', 'indoor', true, false, 4, '2026-09-29')$$,
+select lives_ok($$insert into public.courts (location_id, name, slug, surface, environment, has_lighting, is_active, updated_at)
+  values ('c4000000-0000-4000-8000-000000000012', 'Admin created', 'created', 'carpet', 'indoor', true, false, '2026-09-29')$$,
   'admin may create a court at an inactive location');
 select results_eq($$update public.courts set name = 'Edited', surface = 'grass', environment = 'outdoor', has_lighting = true,
-  display_order = 8, updated_at = '2026-09-29' where id = 'c4000000-0000-4000-8000-000000000022' returning display_order$$,
-  array[8], 'admin may edit and order an inactive court');
+  updated_at = '2026-09-29' where id = 'c4000000-0000-4000-8000-000000000022' returning name$$,
+  array['Edited']::text[], 'admin may edit an inactive court');
 select results_eq($$update public.courts set is_active = false where id = 'c4000000-0000-4000-8000-000000000021' returning is_active$$,
   array[false], 'admin may deactivate a court');
 select results_eq($$update public.courts set is_active = true where id = 'c4000000-0000-4000-8000-000000000021' returning is_active$$,

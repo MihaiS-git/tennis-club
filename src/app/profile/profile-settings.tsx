@@ -2,6 +2,7 @@
 
 import { useCallback, useLayoutEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
+import { SegmentedNavigation, segmentedNavigationItemClass } from "@/components/segmented-navigation";
 import { ProfileUnsavedChanges, useDirtyProfileSections } from "./unsaved-changes";
 
 const subscribeToHydration = () => () => {};
@@ -38,7 +39,7 @@ function ProfileSettingsContent({ identity, personal, tennis, account }: Paramet
 
   return (
     <div className="space-y-5 md:space-y-6">
-      <nav aria-label="Profile settings" className="flex min-w-0 max-w-full gap-1 overflow-x-auto overscroll-x-contain rounded-card border border-border bg-surface p-1 sm:grid sm:grid-cols-4 sm:overflow-visible">
+      <SegmentedNavigation aria-label="Profile settings" columns={4}>
         {sections.map(({ id, title }) => {
           const isDirty = dirtySections.some((form) => form === id);
           return (
@@ -46,7 +47,7 @@ function ProfileSettingsContent({ identity, personal, tennis, account }: Paramet
               disabled={!hydrated}
               aria-label={isDirty ? `${title}, unsaved changes` : undefined}
               onClick={() => setSelected(id)}
-              className={`min-h-12 shrink-0 whitespace-nowrap rounded-control px-2 py-2 text-xs font-medium leading-5 transition sm:min-h-14 sm:whitespace-normal sm:text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-wait disabled:opacity-60 ${selected === id ? "bg-primary text-primary-foreground" : "text-muted-foreground enabled:hover:bg-surface-muted enabled:hover:text-primary"}`}>
+              className={`${segmentedNavigationItemClass(selected === id, true)} disabled:cursor-wait disabled:opacity-60`}>
               <span className="relative inline-block">
                 {title}
                 {isDirty && <span role="img" aria-label="Unsaved changes"
@@ -55,7 +56,7 @@ function ProfileSettingsContent({ identity, personal, tennis, account }: Paramet
             </button>
           );
         })}
-      </nav>
+      </SegmentedNavigation>
       {sections.map(({ id, title, description, content }) => (
         <div key={id} id={`${id}-settings`} hidden={selected !== id}>
           {id === "identity" ? content : (

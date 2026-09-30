@@ -27,7 +27,7 @@ test("multi-court rule-set lifecycle is atomic and scoped to active admins", asy
     const location = await service.from("locations").insert({ name: "Pricing fixture", slug: `pricing-${randomUUID()}`, timezone: "Europe/Bucharest", currency: "RON" }).select("id").single();
     assert.strictEqual(location.error, null); assert.ok(location.data); location_id = location.data.id;
     const pricingLocationId = location.data.id;
-    const courtRows = ["One", "Two", "Three"].map((name, display_order) => ({ location_id, name, slug: `${name.toLowerCase()}-${randomUUID()}`, surface: "clay", environment: "outdoor", display_order }));
+    const courtRows = ["One", "Two", "Three"].map((name) => ({ location_id, name, slug: `${name.toLowerCase()}-${randomUUID()}`, surface: "clay", environment: "outdoor" }));
     const createdCourts = await service.from("courts").insert(courtRows).select("id, name");
     assert.strictEqual(createdCourts.error, null); assert.ok(createdCourts.data);
     const courtIds = new Map(createdCourts.data.map((court) => [court.name, court.id]));

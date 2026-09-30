@@ -12,9 +12,10 @@ import { minorToMajor } from "@/lib/pricing/money";
 export const pricingButtonClass = "rounded-control border border-border-strong px-3 py-2 text-sm font-semibold text-primary hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-60";
 export type PricingCourt = Pick<AdminCourt, "id" | "location_id" | "name" | "surface" | "environment">;
 
-export function PricingRuleForm({ location, courts, rule, pending, fieldErrors, onSave, onCancel }: {
+export function PricingRuleForm({ location, courts, rule, pending, fieldErrors, onSave, onCancel, onRemove }: {
   location: Pick<AdminLocation, "id" | "currency">; courts: PricingCourt[]; rule?: PricingRuleSet;
   pending: boolean; fieldErrors: Record<string, string>; onSave: (input: unknown) => void; onCancel: () => void;
+  onRemove?: () => void;
 }) {
   const prefix = useId();
   const [selectedDays, setSelectedDays] = useState(rule?.weekdays ?? [0]);
@@ -24,7 +25,7 @@ export function PricingRuleForm({ location, courts, rule, pending, fieldErrors, 
     .some((court) => (court.environment === "indoor") !== (state === "indoor"));
   const stateError = fieldErrors.court_state ?? (incompatible
     ? "Selected courts must share a valid state: indoor courts use Indoor; outdoor courts use Outdoor or Covered." : "");
-  return <form aria-label="Pricing rule" className="mb-6 rounded-card border border-border bg-surface p-5"
+  return <form aria-label="Pricing rule"
     onSubmit={(event) => {
       event.preventDefault(); const data = new FormData(event.currentTarget);
       onSave({ ...(rule ? { rule_set_id: rule.rule_set_id } : {}), location_id: location.id,
@@ -33,9 +34,8 @@ export function PricingRuleForm({ location, courts, rule, pending, fieldErrors, 
         price_per_hour: data.get("price_per_hour"),
       });
     }}>
-    <h3 className="mb-4 font-semibold">{rule ? "Edit pricing rule" : "Add pricing rule"}</h3>
-    <fieldset disabled={pending} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      <fieldset className="sm:col-span-2 lg:col-span-3" aria-invalid={Boolean(fieldErrors.court_ids)} aria-describedby={`${prefix}-courts-error`}>
+    <fieldset disabled={pending} className="grid gap-4 sm:grid-cols-2">
+      <fieldset className="sm:col-span-2" aria-invalid={Boolean(fieldErrors.court_ids)} aria-describedby={`${prefix}-courts-error`}>
         <legend className="mb-2 text-sm font-medium">Courts</legend>
         <div className="flex flex-wrap gap-x-4 gap-y-2">
           {courts.map((court) => <label key={court.id} className="flex items-center gap-2 text-sm">
@@ -56,7 +56,7 @@ export function PricingRuleForm({ location, courts, rule, pending, fieldErrors, 
         </select>
         <p id={`${prefix}-state-error`} className="mt-1 text-sm text-danger">{stateError}</p>
       </div>
-      <fieldset className="sm:col-span-2 lg:col-span-3" aria-invalid={Boolean(fieldErrors.weekdays)} aria-describedby={`${prefix}-days-error`}>
+      <fieldset className="sm:col-span-2" aria-invalid={Boolean(fieldErrors.weekdays)} aria-describedby={`${prefix}-days-error`}>
         <legend className="mb-2 text-sm font-medium">Days</legend>
         <div className="mb-3 flex flex-wrap gap-2">
           <button type="button" className={pricingButtonClass} onClick={() => setSelectedDays([0, 1, 2, 3, 4])}>Monday–Friday</button>
@@ -91,6 +91,10 @@ export function PricingRuleForm({ location, courts, rule, pending, fieldErrors, 
         <button type="button" className={pricingButtonClass} onClick={onCancel}>Cancel</button>
       </div>
     </fieldset>
+    {rule && onRemove && <div className="mt-4 border-t border-border pt-4">
+      <button type="button" className="rounded-control border border-danger px-3 py-2 text-sm font-semibold text-danger hover:bg-danger-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-60"
+        disabled={pending} onClick={onRemove}>Remove rule</button>
+    </div>}
     <p className="mt-3 text-sm text-muted-foreground">Times include the start and exclude the end; adjacent intervals are valid. Use HH:mm; end time may be 24:00. Date boundaries are inclusive. Prices accept up to two decimal places.</p>
   </form>;
 }

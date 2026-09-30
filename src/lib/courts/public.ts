@@ -42,7 +42,6 @@ export async function listActiveLocationsWithCourts(
     .order("display_order")
     .order("name")
     .order("id")
-    .order("display_order", { referencedTable: "courts" })
     .order("name", { referencedTable: "courts" })
     .order("id", { referencedTable: "courts" });
 

@@ -21,7 +21,10 @@ const rule = { rule_set_id: "c7000000-0000-4000-8000-000000000041", location_id:
   court_state: "outdoor", weekdays: [0, 1, 2, 3, 4], starts_at_minute: 960, ends_at_minute: 1200,
   starts_on: null, ends_on: null, price_per_hour_minor: 1200,
   created_at: "2026-09-29T00:00:00Z", updated_at: "2026-09-29T00:00:00Z" } as const;
-beforeEach(() => { vi.resetAllMocks(); savePricingRuleAction.mockResolvedValue({ ok: true, id: rule.rule_set_id }); removePricingRuleAction.mockResolvedValue({ ok: true, id: rule.rule_set_id }); });
+beforeEach(() => { vi.resetAllMocks(); savePricingRuleAction.mockResolvedValue({ ok: true, id: rule.rule_set_id }); removePricingRuleAction.mockResolvedValue({ ok: true, id: rule.rule_set_id });
+  HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new Event("close")); };
+});
 afterEach(cleanup);
 
 it("renders one compact table row for a multi-court Mon–Fri rule", () => {
@@ -36,7 +39,8 @@ it("renders one compact table row for a multi-court Mon–Fri rule", () => {
 });
 it.each([false, true])("uses the same form fields for create and edit (edit=%s)", async (editing) => {
   render(<PricingRules location={location} courts={[...courts]} rules={editing ? [{ ...rule, court_ids: [...rule.court_ids], weekdays: [...rule.weekdays] }] : []} />);
-  fireEvent.click(screen.getByRole("button", { name: editing ? "Edit" : "Add rule" }));
+  fireEvent.click(editing ? screen.getByRole("row", { name: /Edit pricing rule/ }) : screen.getByRole("button", { name: "Add rule" }));
+  expect((screen.getByRole("dialog", { name: editing ? "Edit pricing" : "Add pricing" }) as HTMLDialogElement).open).toBe(true);
   const form = screen.getByRole("form", { name: "Pricing rule" });
   expect(within(form).getByRole("group", { name: "Courts" })).toBeTruthy();
   expect(within(form).getByRole("group", { name: "Days" })).toBeTruthy();
@@ -80,7 +84,7 @@ it.each([
 it.each([false, true])("reports the same weekday validation for create and edit (edit=%s)", async (editing) => {
   savePricingRuleAction.mockResolvedValue({ ok: false, reason: "invalid-input", fieldErrors: { weekdays: "Select at least one weekday." } });
   render(<PricingRules location={location} courts={[...courts]} rules={editing ? [{ ...rule, court_ids: [...rule.court_ids], weekdays: [...rule.weekdays] }] : []} />);
-  fireEvent.click(screen.getByRole("button", { name: editing ? "Edit" : "Add rule" }));
+  fireEvent.click(editing ? screen.getByRole("row", { name: /Edit pricing rule/ }) : screen.getByRole("button", { name: "Add rule" }));
   const form = screen.getByRole("form", { name: "Pricing rule" });
   if (editing) for (const name of ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])
     fireEvent.click(within(form).getByRole("checkbox", { name }));
@@ -102,25 +106,60 @@ it("rejects incompatible court state in the form and allows selecting a compatib
 });
 it("removes the whole logical rule", async () => {
   render(<PricingRules location={location} courts={[...courts]} rules={[{ ...rule, court_ids: [...rule.court_ids], weekdays: [...rule.weekdays] }]} />);
-  fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+  fireEvent.click(screen.getByRole("row", { name: /Edit pricing rule/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Remove rule" }));
   await waitFor(() => expect(removePricingRuleAction).toHaveBeenCalledExactlyOnceWith({ rule_set_id: rule.rule_set_id, location_id: location.id }));
+});
+
+it("opens edit from desktop and mobile rows with pointer and keyboard", () => {
+  render(<PricingRules location={location} courts={[...courts]} rules={[{ ...rule, court_ids: [...rule.court_ids], weekdays: [...rule.weekdays] }]} />);
+  const row = screen.getByRole("row", { name: /Edit pricing rule/ });
+  const card = screen.getByRole("button", { name: /Edit pricing rule/ });
+  fireEvent.click(row);
+  expect((screen.getByRole("dialog", { name: "Edit pricing" }) as HTMLDialogElement).open).toBe(true);
+  expect(screen.getByRole("form", { name: "Pricing rule" }).closest("dialog")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  fireEvent.keyDown(row, { key: "Enter" });
+  expect((screen.getByRole("dialog", { name: "Edit pricing" }) as HTMLDialogElement).open).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  fireEvent.keyDown(row, { key: " " });
+  expect((screen.getByRole("dialog", { name: "Edit pricing" }) as HTMLDialogElement).open).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  fireEvent.click(card);
+  expect((screen.getByRole("dialog", { name: "Edit pricing" }) as HTMLDialogElement).open).toBe(true);
+  expect(screen.queryByRole("columnheader", { name: "Actions" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
 });
 it("displays courts in location order even when persisted IDs are ordered differently", () => {
   const reordered = { ...rule, court_ids: [courts[1].id, courts[0].id], weekdays: [...rule.weekdays] };
   render(<PricingRules location={location} courts={[...courts]} rules={[reordered]} />);
   expect(screen.getByRole("cell", { name: "Court 1, Court 2" })).toBeTruthy();
 });
-it("location changes navigate immediately and a single location hides the selector", async () => {
+it("location changes navigate immediately and a single location keeps the shared selector", async () => {
   const second = { ...location, id: "c7000000-0000-4000-8000-000000000012", name: "West Club", currency: "RON" as const };
   listAdminLocations.mockResolvedValue([location, second]); listAdminPricingRules.mockResolvedValue([]); listAdminCourts.mockResolvedValue([]);
   const view = render(await AdminPricingPage({ searchParams: Promise.resolve({ location: second.id }) }));
   expect(listAdminPricingRules).toHaveBeenCalledWith(second.id);
   expect(screen.queryByRole("button", { name: "View pricing" })).toBeNull();
+  const toolbar = screen.getByLabelText("Location").closest("label")?.parentElement;
+  expect(screen.getByText(/Currency: RON/).parentElement?.parentElement).toBe(toolbar);
+  expect(screen.getByRole("button", { name: "Add rule" }).parentElement?.parentElement).toBe(toolbar);
   fireEvent.change(screen.getByLabelText("Location"), { target: { value: location.id } });
   expect(push).toHaveBeenCalledExactlyOnceWith(`/admin/pricing?location=${location.id}`);
   view.unmount();
   listAdminLocations.mockResolvedValue([location]);
   render(await AdminPricingPage({ searchParams: Promise.resolve({ location: second.id }) }));
-  expect(screen.queryByLabelText("Location")).toBeNull();
-  expect(screen.getByText("Central Club")).toBeTruthy(); expect(screen.getByText(/Currency: EUR/)).toBeTruthy();
+  expect((screen.getByLabelText("Location") as HTMLSelectElement).value).toBe(location.id);
+  expect(screen.getByRole("option", { name: /Central Club/ })).toBeTruthy();
+  expect(screen.getByText(/Currency: EUR/)).toBeTruthy();
+  expect(screen.queryByRole("heading", { name: "Central Club" })).toBeNull();
+});
+it("keeps the location selector when the URL names an unknown location", async () => {
+  const second = { ...location, id: "c7000000-0000-4000-8000-000000000012", name: "West Club" };
+  listAdminLocations.mockResolvedValue([location, second]);
+  render(await AdminPricingPage({ searchParams: Promise.resolve({ location: "c7000000-0000-4000-8000-000000000099" }) }));
+  expect(screen.getByText("Select an existing location.")).toBeTruthy();
+  fireEvent.change(screen.getByLabelText("Location"), { target: { value: location.id } });
+  expect(push).toHaveBeenCalledExactlyOnceWith(`/admin/pricing?location=${location.id}`);
 });

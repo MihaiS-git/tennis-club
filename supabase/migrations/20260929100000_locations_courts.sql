@@ -28,7 +28,6 @@ create table public.courts (
   environment text not null check (environment in ('outdoor', 'indoor')),
   has_lighting boolean not null default false,
   is_active boolean not null default true,
-  display_order integer not null default 0,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (location_id, slug)
@@ -62,9 +61,9 @@ using (is_active and exists (
 create policy courts_admin_select on public.courts for select to authenticated
 using ((select public.has_role('admin')));
 grant insert (location_id, name, slug, surface, environment, has_lighting,
-  is_active, display_order, updated_at) on public.courts to authenticated;
+  is_active, updated_at) on public.courts to authenticated;
 grant update (location_id, name, surface, environment, has_lighting,
-  is_active, display_order, updated_at) on public.courts to authenticated;
+  is_active, updated_at) on public.courts to authenticated;
 create policy courts_admin_insert on public.courts for insert to authenticated
 with check ((select public.has_role('admin')));
 create policy courts_admin_update on public.courts for update to authenticated

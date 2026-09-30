@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useLayoutEffect, useRef } from "react";
+import { SegmentedNavigation, segmentedNavigationItemClass } from "./segmented-navigation";
 
 const sections = [
   { label: "Overview", href: "/admin" },
@@ -13,20 +15,32 @@ const sections = [
 
 export function AdminNavigation() {
   const current = usePathname();
+  const navRef = useRef<HTMLElement>(null);
+  const activeRef = useRef<HTMLAnchorElement>(null);
+
+  useLayoutEffect(() => {
+    const nav = navRef.current;
+    const active = activeRef.current;
+    if (!nav || !active) return;
+    const bounds = nav.getBoundingClientRect();
+    const activeBounds = active.getBoundingClientRect();
+    if (activeBounds.left < bounds.left) nav.scrollLeft += activeBounds.left - bounds.left;
+    else if (activeBounds.right > bounds.right) nav.scrollLeft += activeBounds.right - bounds.right;
+  }, [current]);
+
   return (
-    <nav aria-label="Admin navigation" className="mb-8 flex flex-wrap gap-2 border-b border-border pb-4">
+    <SegmentedNavigation ref={navRef} aria-label="Admin navigation" columns={5} className="mb-8">
       {sections.map(({ label, href }) => (
         <Link
           key={href}
+          ref={current === href ? activeRef : undefined}
           href={href}
           aria-current={current === href ? "page" : undefined}
-          className={`inline-flex min-h-10 items-center rounded-control px-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${current === href
-            ? "bg-primary text-primary-foreground"
-            : "text-primary hover:bg-surface-muted"}`}
+          className={segmentedNavigationItemClass(current === href)}
         >
           {label}
         </Link>
       ))}
-    </nav>
+    </SegmentedNavigation>
   );
 }

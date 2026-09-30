@@ -5,7 +5,6 @@ import { requireActiveAdmin } from "@/lib/admin/authorization";
 const sections = [
   { title: "Locations", description: "Manage physical club locations, address, timezone and currency.", href: "/admin/locations" },
   { title: "Courts", description: "Manage courts, surfaces, lighting and seasonal coverage.", href: "/admin/courts" },
-  { title: "Opening hours", description: "Configure weekly opening schedules by location.", href: "/admin/locations" },
   { title: "Pricing", description: "Manage hourly pricing for courts, states, days and dates.", href: "/admin/pricing" },
   { title: "Users", description: "Manage users, status and roles.", href: "/admin/users" },
 ];
@@ -23,23 +22,12 @@ export default async function AdminPage() {
           Manage club locations, courts and accounts.
         </p>
       </header>
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2">
         {sections.map(({ title, description, href }) => (
-          <article key={title} className="rounded-card border border-border bg-surface p-6">
-            <h2 className="font-heading text-xl font-semibold text-foreground">
-              {href ? (
-                <Link href={href} className="rounded-control text-primary hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary">
-                  {title}
-                </Link>
-              ) : title}
-            </h2>
+          <Link key={title} href={href} className="block rounded-card border border-border bg-surface p-6 transition-colors hover:border-primary hover:bg-surface-muted focus-visible:border-primary focus-visible:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">
+            <h2 className="font-heading text-xl font-semibold text-primary">{title}</h2>
             <p className="mt-3 text-sm text-muted-foreground">{description}</p>
-            {!href && (
-              <span className="mt-4 inline-flex rounded-control bg-surface-muted px-2.5 py-1 text-xs font-semibold text-muted-foreground">
-                Coming next · Unavailable
-              </span>
-            )}
-          </article>
+          </Link>
         ))}
       </div>
     </>

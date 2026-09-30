@@ -15,10 +15,19 @@ vi.mock("../../src/lib/profile/navigation", () => ({ readNavigationProfile: asyn
   account: await readCurrentAccount(), avatarUrl: avatar.url,
 }) }));
 
-import { MobileNavbarMenu } from "../../src/components/mobile-navbar-menu";
-import { MobileNavbar } from "../../src/components/mobile-navbar";
+import { MobileNavbarMenu, MobileNavbarShell } from "../../src/components/mobile-navbar-menu";
+import { MobileNavbar, MobileNavbarFallback } from "../../src/components/mobile-navbar";
 
 afterEach(() => { cleanup(); avatar.url = null; });
+
+it("keeps the public mobile header geometry while account navigation is pending", () => {
+  render(<MobileNavbarShell><MobileNavbarFallback /></MobileNavbarShell>);
+  const header = screen.getByRole("banner");
+  expect(header.querySelector(".h-16")).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Tennis Club" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Book a court" })).toBeTruthy();
+  expect(header.querySelector(".size-10[aria-hidden='true']")).toBeTruthy();
+});
 
 it("shows signed-out links and closes on link selection or Escape", () => {
   render(<MobileNavbarMenu isAuthenticated={false} isAdmin={false} />);

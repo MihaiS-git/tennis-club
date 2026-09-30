@@ -22,6 +22,22 @@ it.each([false, true])("adds/edits calendar dates (editing=%s)", async (editing)
 it("removes an interval", async () => {
   render(<CoveragePeriods courtId={courtId} periods={[period]} />);
   expect(screen.getByText("15 Oct 2026 — 15 Apr 2027")).toBeTruthy();
+  const edit = screen.getByRole("button", { name: "Edit period" });
+  const remove = screen.getByRole("button", { name: "Remove period" });
+  expect(edit.title).toBe("Edit period");
+  expect(remove.title).toBe("Remove period");
+  expect(edit.querySelector("svg")).toBeTruthy();
+  expect(remove.querySelector("svg")).toBeTruthy();
+  expect(edit.textContent).toBe("");
+  expect(remove.textContent).toBe("");
+  expect(edit.className).toContain("size-8");
+  expect(remove.className).toContain("size-8");
+  expect(edit.parentElement).toBe(remove.parentElement);
+  expect(edit.parentElement?.previousElementSibling?.textContent).toBe("15 Oct 2026 — 15 Apr 2027");
+  const add = screen.getByRole("button", { name: "Add coverage period" });
+  expect(add.textContent?.trim()).toBe("Add period");
+  expect(add.querySelector("svg")).toBeTruthy();
+  expect(add.className).not.toContain("border");
   fireEvent.click(screen.getByRole("button", { name: "Remove period" }));
   await waitFor(() => expect(removeCoverageAction).toHaveBeenCalledExactlyOnceWith({ court_id: courtId, id: period.id }));
 });

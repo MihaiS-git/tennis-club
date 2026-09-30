@@ -63,19 +63,22 @@ it.each([
 it("links management cards to implemented destinations including Pricing", async () => {
   render(await AdminPage());
 
-  const cards = screen.getAllByRole("article");
-  expect(cards).toHaveLength(5);
+  const cards = screen.getAllByRole("link");
+  expect(cards).toHaveLength(4);
+  const grid = cards[0].parentElement;
+  expect(grid?.classList.contains("grid")).toBe(true);
+  expect(grid?.classList.contains("sm:grid-cols-2")).toBe(true);
+  expect(grid?.className).not.toMatch(/(?:^|\s)(?:grid-cols-|lg:grid-cols-|xl:grid-cols-)/);
   for (const [title, href] of [
     ["Locations", "/admin/locations"],
     ["Courts", "/admin/courts"],
-    ["Opening hours", "/admin/locations"],
     ["Users", "/admin/users"],
     ["Pricing", "/admin/pricing"],
   ]) {
     const card = cards.find((item) => within(item).queryByRole("heading", { name: title }));
     expect(card).toBeDefined();
-    expect(within(card!).getByRole("link", { name: title }).getAttribute("href")).toBe(href);
+    expect(card!.getAttribute("href")).toBe(href);
+    expect(card!.className).toContain("focus-visible:outline-2");
   }
 
 });
-

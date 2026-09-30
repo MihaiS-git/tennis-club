@@ -5,6 +5,7 @@ import { Toaster } from "sonner";
 
 import { DesktopNavbar } from "@/components/desktop-navbar";
 import { MobileNavbar, MobileNavbarFallback } from "@/components/mobile-navbar";
+import { MobileNavbarShell } from "@/components/mobile-navbar-menu";
 import { QueryFlashMessages } from "@/components/query-flash-messages";
 import { ProfileDepartureProvider } from "@/components/profile-departure-navigation";
 import { SiteFooter } from "@/components/site-footer";
@@ -36,9 +37,11 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <body className="flex min-h-full flex-col">
         <ProfileDepartureProvider>
-          <Suspense fallback={<MobileNavbarFallback />}>
-            <MobileNavbar />
-          </Suspense>
+          <MobileNavbarShell>
+            <Suspense fallback={<MobileNavbarFallback />}>
+              <MobileNavbar />
+            </Suspense>
+          </MobileNavbarShell>
           <DesktopNavbar />
 
           {children}

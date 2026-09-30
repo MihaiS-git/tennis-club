@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import type { AdminUserListItem } from "../../../src/lib/admin/users";
@@ -34,7 +34,11 @@ async function renderPage(users: AdminUserListItem[]) {
   render(await AdminUsersPage({ searchParams: Promise.resolve({}) }));
 }
 
-beforeEach(() => { vi.clearAllMocks(); navigation.query = ""; });
+beforeEach(() => {
+  vi.clearAllMocks(); navigation.query = "";
+  HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", ""); };
+  HTMLDialogElement.prototype.close = function () { this.removeAttribute("open"); this.dispatchEvent(new Event("close")); };
+});
 afterEach(cleanup);
 
 it("renders the page heading and supporting copy", async () => {
@@ -54,7 +58,7 @@ it("renders an active account and the UTC joined date in the table and mobile li
   }
   expect(screen.queryByRole("columnheader", { name: "Last updated" })).toBeNull();
   const table = screen.getByRole("table");
-  for (const heading of ["Email", "Status", "Roles", "Joined", "Actions"]) {
+  for (const heading of ["Email", "Status", "Roles", "Joined"]) {
     expect(within(table).getByRole("columnheader", { name: heading }).getAttribute("scope")).toBe("col");
   }
   const row = within(table).getAllByRole("row")[1];
@@ -63,16 +67,16 @@ it("renders an active account and the UTC joined date in the table and mobile li
   expect(within(cells[1]).getByText("Active")).toBeTruthy();
   expect(within(cells[2]).getByText("—")).toBeTruthy();
   expect(within(cells[3]).getByText("26 Sep 2026")).toBeTruthy();
-  expect(within(row).getByRole("button", { name: "Manage" })).toBeTruthy();
+  expect(row.getAttribute("tabindex")).toBe("0");
 
-  const card = screen.getByRole("article");
+  const card = screen.getByRole("button", { name: "Manage user member@example.com" });
   expect(within(card.querySelector("p") as HTMLElement).getByText("member@example.com")).toBeTruthy();
   const details = card.querySelector("dl") as HTMLElement;
   expect(within(details).queryByText(/Last updated/)).toBeNull();
   expect(within(details).getByText("Active")).toBeTruthy();
   expect(within(details).getByText("—")).toBeTruthy();
   expect(within(details).getByText("26 Sep 2026")).toBeTruthy();
-  expect(within(card).getByRole("button", { name: "Manage" })).toBeTruthy();
+  expect(card.getAttribute("tabindex")).toBe("0");
   expect(document.body.textContent).not.toContain(member.id);
 });
 
@@ -83,6 +87,24 @@ it("renders every role in the returned order", async () => {
   expect(within(within(row).getAllByRole("cell")[2]).getAllByText(/^(Admin|Coach)$/).map((node) => node.textContent)).toEqual([
     "Admin", "Coach",
   ]);
+});
+
+it("opens Manage from the table row and mobile card with keyboard or pointer", async () => {
+  await renderPage([member]);
+  const row = screen.getByRole("row", { name: "Manage user member@example.com" });
+  const card = screen.getByRole("button", { name: "Manage user member@example.com" });
+  fireEvent.click(row);
+  expect(screen.getByRole("dialog", { name: "Manage user" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  fireEvent.keyDown(row, { key: "Enter" });
+  expect(screen.getByRole("dialog", { name: "Manage user" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  fireEvent.keyDown(row, { key: " " });
+  expect(screen.getByRole("dialog", { name: "Manage user" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  fireEvent.click(card);
+  expect(screen.getByRole("dialog", { name: "Manage user" })).toBeTruthy();
+  expect(screen.queryByRole("columnheader", { name: "Actions" })).toBeNull();
 });
 
 it("renders suspended users and multiple rows", async () => {
@@ -96,8 +118,8 @@ it("renders suspended users and multiple rows", async () => {
   expect(within(within(rows[1]).getAllByRole("cell")[0]).getByText("member@example.com")).toBeTruthy();
   expect(within(within(rows[2]).getAllByRole("cell")[0]).getByText("coach@example.com")).toBeTruthy();
   expect(within(within(rows[2]).getAllByRole("cell")[1]).getByText("Suspended")).toBeTruthy();
-  expect(within(screen.getAllByRole("article")[1].querySelector("dl") as HTMLElement).getByText("Suspended")).toBeTruthy();
-  expect(screen.getAllByRole("button", { name: "Manage" })).toHaveLength(4);
+  expect(within(screen.getByRole("button", { name: "Manage user coach@example.com" }).querySelector("dl") as HTMLElement).getByText("Suspended")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Manage" })).toBeNull();
 });
 
 it("renders a simple empty state", async () => {
@@ -187,7 +209,7 @@ it.each(["email", "status", "roles", "joined"] as const)("renders and toggles %s
         dir: active ? dir === "asc" ? "desc" : "asc" : column === "joined" ? "desc" : "asc",
       });
     }
-    expect(within(headings[4]).queryByRole("link")).toBeNull();
+    expect(headings).toHaveLength(4);
     cleanup();
   }
 });

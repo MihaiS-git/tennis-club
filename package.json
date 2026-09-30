@@ -8,7 +8,9 @@
   "packageManager": "npm@12.0.2",
   "scripts": {
     "dev": "next dev",
-    "seed:users": "node --env-file=.env.local scripts/seed-dev-users.ts",
+    "seed:users": "node --env-file=.env.local scripts/seed-dev-users.ts --users-only",
+    "db:dev:reconcile": "node --env-file=.env.local scripts/reconcile-local-db.ts",
+    "db:dev:seed": "node --env-file=.env.local scripts/seed-dev-users.ts",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",

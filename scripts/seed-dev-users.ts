@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
+import { seedDevData } from "./seed-dev-data.ts";
 
 export const DEV_USER_PASSWORD = "Local-Tennis-Dev-2026!";
 
@@ -17,17 +18,12 @@ export function localSupabaseUrl(value: string | undefined, environment: string 
   return origin === "http://localhost:54321" ? "http://127.0.0.1:54321" : origin;
 }
 
-export const devUsers = Array.from({ length: 60 }, (_, index) => {
-  const number = index + 1;
-  const roles = number % 20 === 0 ? ["admin", "coach"]
-    : number % 10 === 0 ? ["admin"]
-    : number % 5 === 0 ? ["coach"] : [];
-  return {
-    email: `dev-user-${String(number).padStart(3, "0")}@example.test`,
-    roles,
-    status: number % 7 === 0 ? "suspended" : "active",
-  };
-});
+export const devUsers = [
+  { email: "dev-admin@example.test", roles: ["admin"] },
+  { email: "dev-coach@example.test", roles: ["coach"] },
+  { email: "dev-player-001@example.test", roles: [] },
+  { email: "dev-player-002@example.test", roles: [] },
+];
 
 function localServiceRoleKey() {
   if (process.env.LOCAL_SUPABASE_SERVICE_ROLE_KEY?.trim()) {
@@ -54,7 +50,7 @@ export async function seedDevUsers(service: SupabaseClient) {
     if (result.data.users.length < 1000) break;
   }
 
-  const created: { id: string; status: string }[] = [];
+  const created: string[] = [];
   let reused = 0;
   for (const fixture of devUsers) {
     if (existing.has(fixture.email)) {
@@ -71,7 +67,7 @@ export async function seedDevUsers(service: SupabaseClient) {
       throw new Error(`Unable to create ${fixture.email}. Earlier fixtures may already exist; rerunning skips them.`);
     }
     const id = result.data.user.id;
-    created.push({ id, status: fixture.status });
+    created.push(id);
     const additionalRoles = fixture.roles;
     if (additionalRoles.length) {
       const roles = await service.from("user_roles").insert(
@@ -79,13 +75,6 @@ export async function seedDevUsers(service: SupabaseClient) {
       );
       if (roles.error) throw new Error(`Unable to assign fixture roles to ${fixture.email}.`);
     }
-  }
-
-  // Establish all seeded administrators before suspending any newly created user.
-  const suspendedIds = created.filter((user) => user.status === "suspended").map((user) => user.id);
-  if (suspendedIds.length) {
-    const result = await service.from("users").update({ status: "suspended" }).in("id", suspendedIds);
-    if (result.error) throw new Error("Unable to suspend the newly created development fixtures.");
   }
 
   const result = await service.from("users")
@@ -97,18 +86,17 @@ export async function seedDevUsers(service: SupabaseClient) {
     status: z.enum(["active", "suspended"]),
     user_roles: z.array(z.object({ role_code: z.enum(["coach", "admin"]) })),
   })).safeParse(result.data);
-  if (!parsed.success || parsed.data.length !== 60) throw new Error("Expected exactly 60 provisioned development accounts.");
+  if (!parsed.success || parsed.data.length !== devUsers.length) throw new Error("Expected four provisioned development accounts.");
   for (const fixture of devUsers) {
     const row = parsed.data.find((user) => user.email === fixture.email);
     const roles = row?.user_roles.map((role) => role.role_code).sort().join(",");
-    if (!row || row.status !== fixture.status || roles !== fixture.roles.join(",")) {
+    if (!row || row.status !== "active" || roles !== fixture.roles.join(",")) {
       throw new Error(`Fixture verification failed for ${fixture.email}. Existing accounts were preserved; inspect its status/roles manually.`);
     }
   }
   console.log(JSON.stringify({
     created: created.length, reused, verified: parsed.data.length,
-    roles: { noRoles: 48, coach: 6, admin: 3, coachAdmin: 3 },
-    status: { active: 52, suspended: 8 },
+    roles: { noRoles: 2, coach: 1, admin: 1 },
   }, null, 2));
 }
 
@@ -120,6 +108,7 @@ async function main() {
     global: { fetch: (input, init) => fetch(input, { ...init, redirect: "error" }) },
   });
   await seedDevUsers(service);
+  if (!process.argv.includes("--users-only")) await seedDevData(service);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

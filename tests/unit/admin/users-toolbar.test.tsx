@@ -19,27 +19,24 @@ it("has no Apply button", () => {
   render(<UsersToolbar />);
   expect(screen.queryByRole("button", { name: "Apply" })).toBeNull();
 });
-it("keeps a permanent desktop clear slot with no inactive link", () => {
+it("keeps search and filters in one wrapping toolbar", () => {
   navigation.query = "";
   const view = render(<UsersToolbar />);
   const toolbar = view.container.firstElementChild!;
-  const slot = toolbar.lastElementChild!;
-  expect(toolbar.classList.contains("lg:grid")).toBe(true);
-  expect(toolbar.classList.contains("lg:grid-cols-[minmax(320px,1fr)_144px_112px_96px]")).toBe(true);
-  expect(toolbar.children).toHaveLength(4);
-  expect(slot.classList.contains("lg:flex")).toBe(true);
-  expect(slot.children).toHaveLength(0);
+  expect(toolbar.children).toHaveLength(3);
+  expect(toolbar.firstElementChild?.querySelector('input[name="q"]')).toBeTruthy();
+  expect(Array.from(toolbar.children).slice(1).map((child) => child.querySelector("select")?.name)).toEqual(["status", "role"]);
   expect(screen.queryByRole("link", { name: "Clear filters" })).toBeNull();
 
   navigation.query = "status=active";
   view.rerender(<UsersToolbar />);
-  expect(toolbar.lastElementChild).toBe(slot);
-  expect(screen.getByRole("link", { name: "Clear filters" }).parentElement).toBe(slot);
+  expect(toolbar.children).toHaveLength(4);
+  expect(screen.getByRole("link", { name: "Clear filters" }).parentElement).toBe(toolbar);
 
   navigation.query = "";
   view.rerender(<UsersToolbar />);
-  expect(toolbar.lastElementChild).toBe(slot);
-  expect(slot.children).toHaveLength(0);
+  expect(toolbar.children).toHaveLength(3);
+  expect(screen.queryByRole("link", { name: "Clear filters" })).toBeNull();
 });
 it.each([["Status", "status", "suspended"], ["Role", "role", "admin"]])("applies %s immediately, preserving other params and removing page", (label, key, value) => {
   render(<UsersToolbar />);

@@ -967,15 +967,17 @@ Court 2
 
 ---
 
-## Local development users
+## Local development database tooling
 
-Run `npm run seed:users` against the existing local Supabase stack to add 60 confirmed Auth accounts, `dev-user-001@example.test` through `dev-user-060@example.test`. Their shared development password is `Local-Tennis-Dev-2026!`. Sign in as your existing local administrator to inspect three pages of users, or use `dev-user-010@example.test` as a seeded administrator.
+Run `npm run db:dev:reconcile` once against an already-running local Supabase database after editing applied migrations. Its only current statement drops the obsolete `public.courts.display_order` column if present. It does not reset the database or change migration history. Current migration files remain canonical.
 
-The script uses Node 24's native TypeScript execution and the local Auth Admin API; normal provisioning creates application accounts with zero role assignments. It accepts only local HTTP loopback origins on port 54321 and rejects `NODE_ENV=production`; redirects are disabled. It obtains the local service-role credential from `LOCAL_SUPABASE_SERVICE_ROLE_KEY`, or from `supabase status -o json`. Credentials are never printed.
+Run `npm run db:dev:seed` for four confirmed Auth users, two locations, weekly opening hours, six courts, and one outdoor coverage period. The shared development password is `Local-Tennis-Dev-2026!`. `npm run seed:users` remains available to seed only the four users.
 
-Fixtures contain 48 users with no elevated roles, 6 Coach, 3 Admin, and 3 Coach + Admin. Every seventh user is suspended (8 suspended, 52 active); all 6 seeded administrators are active. Creation timestamps remain natural. Search `dev-user-` to isolate these fixtures, or `dev-user-01` for users 010–019.
+The accounts are `dev-admin@example.test` (Admin), `dev-coach@example.test` (Coach), and `dev-player-001@example.test` and `dev-player-002@example.test` (no role). Existing accounts are never modified. A conflicting account status or role fails verification for manual inspection.
 
-Reruns skip existing Auth accounts without changing their password, status, roles, or timestamps. Existing users, including the integration admin anchor, remain untouched. Verification reports an error if an existing fixture differs from its expected roles/status instead of repairing it. An interrupted run can leave a partially configured fixture that needs manual inspection. This command never resets Supabase, runs migrations, or seeds future player/profile data. No cleanup command is provided.
+The location slugs are `dev-central-club` and `dev-riverside-club`. Both are active, in București, use `Europe/Bucharest` and RON. Central opens daily 07:00–22:00. Riverside opens Monday–Friday 08:00–12:00 and 14:00–21:00, weekends 08:00–20:00. Central has three outdoor clay courts and one indoor hard court; Riverside has one outdoor clay and one outdoor hard court. Riverside Court 2 is inactive. Central Court 1 has coverage from 2026-10-01 through 2027-03-31.
+
+The scripts require a local HTTP loopback Supabase API on port 54321 and reject `NODE_ENV=production`. The reconciliation runner connects only to local PostgreSQL on port 54322. The seed uses the local Auth Admin API and the service credential from `LOCAL_SUPABASE_SERVICE_ROLE_KEY` or `supabase status -o json`; credentials are never printed. Reruns reuse Auth users by email, locations by slug, courts by location and slug, and hours and coverage by exact values. Existing divergent location or court fixtures cause an error. No cleanup or reset command is provided. Previously seeded `dev-user-001` through `dev-user-060` accounts are left untouched.
 
 ## Admin UI
 

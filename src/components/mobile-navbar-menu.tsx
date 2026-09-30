@@ -2,13 +2,33 @@
 
 import { Menu, X } from "lucide-react";
 import { ProfileDepartureLink as Link, ProfileDepartureForm } from "./profile-departure-navigation";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import { signOutAction } from "@/app/account/actions";
 import { ProfileNavigationAvatar } from "./profile-navigation-avatar";
 
-export function MobileNavbarMenu({ isAuthenticated, isAdmin, avatarUrl = null }: {
+export function MobileNavbarShell({ children }: { children: ReactNode }) {
+  return <header className="sticky top-0 z-30 w-full border-b border-border bg-surface lg:hidden">
+    <div className="flex h-16 items-center justify-between gap-2 px-4">
+      <Link href="/" className="font-heading text-base font-semibold tracking-tight text-primary hover:text-accent sm:text-lg">
+        Tennis Club
+      </Link>
+      <div className="flex items-center gap-2">
+        <Link href="/book" className="inline-flex min-h-10 items-center justify-center whitespace-nowrap rounded-control bg-primary px-3 text-xs font-semibold text-primary-foreground transition hover:bg-primary-hover sm:text-sm">
+          Book a court
+        </Link>
+        {children}
+      </div>
+    </div>
+  </header>;
+}
+
+export function MobileNavbarMenu(props: Parameters<typeof MobileNavbarControls>[0]) {
+  return <MobileNavbarShell><MobileNavbarControls {...props} /></MobileNavbarShell>;
+}
+
+export function MobileNavbarControls({ isAuthenticated, isAdmin, avatarUrl = null }: {
   isAuthenticated: boolean; isAdmin: boolean; avatarUrl?: string | null;
 }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -68,22 +88,7 @@ export function MobileNavbarMenu({ isAuthenticated, isAdmin, avatarUrl = null }:
   }
 
   return (
-    <header className="sticky top-0 z-30 w-full border-b border-border bg-surface lg:hidden">
-      <div className="flex h-16 items-center justify-between gap-2 px-4">
-        <Link
-          href="/"
-          className="font-heading text-base font-semibold tracking-tight text-primary hover:text-accent sm:text-lg"
-        >
-          Tennis Club
-        </Link>
-
-        <div className="flex items-center gap-2">
-          <Link
-            href="/book"
-            className="inline-flex min-h-10 items-center justify-center whitespace-nowrap rounded-control bg-primary px-3 text-xs font-semibold text-primary-foreground transition hover:bg-primary-hover sm:text-sm"
-          >
-            Book a court
-          </Link>
+    <>
           <button
             ref={triggerRef}
             type="button"
@@ -95,8 +100,6 @@ export function MobileNavbarMenu({ isAuthenticated, isAdmin, avatarUrl = null }:
           >
             <Menu aria-hidden="true" className="size-5" strokeWidth={1.8} />
           </button>
-        </div>
-      </div>
 
       {isOpen && (
         <button
@@ -179,6 +182,6 @@ export function MobileNavbarMenu({ isAuthenticated, isAdmin, avatarUrl = null }:
           </div>
         </nav>
       </section>
-    </header>
+    </>
   );
 }

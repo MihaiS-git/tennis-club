@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { AdminPageHeader, AdminToolbar } from "@/components/admin-page-controls";
 import { listAdminLocations } from "@/lib/admin/locations";
 import { listAdminOpeningHours } from "@/lib/admin/opening-hours";
 import { countries } from "@/lib/profile/countries";
@@ -19,17 +20,11 @@ export default async function AdminLocationsPage({ searchParams }: {
   }).sort((a, b) => a.location.name.localeCompare(b.location.name) || a.location.id.localeCompare(b.location.id));
 
   return <>
-    <header className="mb-8 md:mb-10">
-      <h1 className="font-heading text-4xl font-semibold tracking-tight text-foreground md:text-5xl">Locations</h1>
-      <p className="mt-3 max-w-2xl text-base text-muted-foreground">Manage the club’s physical locations and their operating details.</p>
-    </header>
-    <div className="mb-5 flex flex-wrap items-center justify-end gap-3">
-      <Link href={archived ? "/admin/locations" : "/admin/locations?view=archived"}
+    <AdminPageHeader title="Locations" description="Manage the club’s physical locations and their operating details." />
+    <AdminToolbar primary={<Link href={archived ? "/admin/locations" : "/admin/locations?view=archived"}
         className="inline-flex min-h-9 items-center rounded-control px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-surface-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">
         {archived ? "Current locations" : "Archived"}
-      </Link>
-      {!archived && <LocationDialog />}
-    </div>
+      </Link>} action={!archived ? <LocationDialog /> : undefined} />
     {rows.length === 0 ? <p className="rounded-control border border-border bg-surface px-4 py-6 text-sm text-muted-foreground">
       {archived ? "No archived locations." : "No locations found."}
     </p> : <>

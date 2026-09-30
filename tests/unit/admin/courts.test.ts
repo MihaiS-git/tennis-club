@@ -12,7 +12,7 @@ import { listAdminCourts, saveAdminCourt } from "../../../src/lib/admin/courts";
 const id = "c3000000-0000-4000-8000-000000000001";
 const location_id = "c3000000-0000-4000-8000-000000000002";
 const fields = { location_id, name: " Court One ", surface: "clay", environment: "outdoor",
-  has_lighting: false, is_active: true, display_order: 0 };
+  has_lighting: false, is_active: true };
 const query = { insert: vi.fn(), update: vi.fn(), eq: vi.fn(), select: vi.fn(), maybeSingle: vi.fn(), order: vi.fn() };
 const client = { from: vi.fn(() => query) };
 beforeEach(() => {
@@ -35,9 +35,9 @@ it.each([false, true])("edits, moves and sets active=%s without changing the slu
   vi.useFakeTimers(); vi.setSystemTime(new Date("2026-09-29T18:00:00Z"));
   try {
     const nextLocation = "c3000000-0000-4000-8000-000000000003";
-    expect(await saveAdminCourt({ id, fields: { ...fields, name: "Renamed", location_id: nextLocation, is_active, display_order: 8, has_lighting: true } }))
+    expect(await saveAdminCourt({ id, fields: { ...fields, name: "Renamed", location_id: nextLocation, is_active, has_lighting: true } }))
       .toEqual({ ok: true, id });
-    expect(query.update).toHaveBeenCalledWith({ ...fields, name: "Renamed", location_id: nextLocation, is_active, display_order: 8, has_lighting: true, updated_at: "2026-09-29T18:00:00.000Z" });
+    expect(query.update).toHaveBeenCalledWith({ ...fields, name: "Renamed", location_id: nextLocation, is_active, has_lighting: true, updated_at: "2026-09-29T18:00:00.000Z" });
     expect(query.update.mock.calls[0][0]).not.toHaveProperty("slug");
     expect(query.eq).toHaveBeenCalledWith("id", id);
   } finally { vi.useRealTimers(); }
@@ -51,7 +51,7 @@ it("denies unauthorized callers before querying courts", async () => {
 it.each([
   { ...fields, surface: "sand" }, { ...fields, environment: "covered" }, { ...fields, location_id: "bad" },
   { ...fields, is_active: "true" }, { ...fields, has_lighting: null }, { ...fields, name: " " },
-  { ...fields, display_order: 1.5 }, { ...fields, display_order: 2147483648 },
+  { ...fields, display_order: 1 },
   { ...fields, slug: "spoof" }, { ...fields, updated_at: "2000-01-01" },
   { ...fields, supports_balloon: true }, { ...fields, balloon_installed: true },
 ])("rejects invalid, obsolete and system-managed inputs", async (invalid) => {
@@ -89,10 +89,10 @@ it("generates slugs using the established accent and punctuation normalization",
 });
 it("lists inactive courts without filtering location or status and orders consistently", async () => {
   const court = { ...fields, id, slug: "court-one", is_active: false, created_at: "2026-09-29T10:00:00Z", updated_at: "2026-09-29T10:00:00Z" };
-  query.order.mockReturnValueOnce(query).mockReturnValueOnce(query).mockResolvedValueOnce({ data: [court], error: null });
+  query.order.mockReturnValueOnce(query).mockResolvedValueOnce({ data: [court], error: null });
   expect(await listAdminCourts()).toEqual([court]);
   expect(requireActiveAdmin).toHaveBeenCalledWith(client);
-  expect(query.order.mock.calls).toEqual([["display_order"], ["name"], ["id"]]);
+  expect(query.order.mock.calls).toEqual([["name"], ["id"]]);
   expect(query.eq).not.toHaveBeenCalled();
 });
 

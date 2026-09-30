@@ -9,17 +9,17 @@ import { createClient } from "@/lib/supabase/server";
 const courtSchema = z.object({
   id: z.uuid(), location_id: z.uuid(), name: z.string(), slug: z.string(),
   surface: z.enum(courtSurfaces), environment: z.enum(courtEnvironments),
-  has_lighting: z.boolean(), is_active: z.boolean(), display_order: z.number().int(),
+  has_lighting: z.boolean(), is_active: z.boolean(),
   created_at: z.iso.datetime({ offset: true }), updated_at: z.iso.datetime({ offset: true }),
 });
 export type AdminCourt = z.infer<typeof courtSchema>;
-const columns = "id, location_id, name, slug, surface, environment, has_lighting, is_active, display_order, created_at, updated_at";
+const columns = "id, location_id, name, slug, surface, environment, has_lighting, is_active, created_at, updated_at";
 
 export async function listAdminCourts(supabase?: Awaited<ReturnType<typeof createClient>>): Promise<AdminCourt[]> {
   const client = supabase ?? await createClient();
   await requireActiveAdmin(client);
   const { data, error } = await client.from("courts").select(columns)
-    .order("display_order").order("name").order("id");
+    .order("name").order("id");
   const parsed = z.array(courtSchema).safeParse(data);
   if (error || !parsed.success) {
     logger.error({ event: "admin.courts_list_failed", code: error?.code }, "Failed to load courts");

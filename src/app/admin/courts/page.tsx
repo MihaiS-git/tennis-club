@@ -1,83 +1,64 @@
 import Link from "next/link";
-import { Fragment } from "react";
+import { AdminPageHeader } from "@/components/admin-page-controls";
+import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
+import { z } from "zod";
 import { listAdminCourtCoverage } from "@/lib/admin/court-coverage";
-import { CoveragePeriods } from "./coverage-periods";
 import { listAdminCourts } from "@/lib/admin/courts";
 import { listAdminLocations } from "@/lib/admin/locations";
-import { courtSurfaceLabels, courtEnvironmentLabels } from "@/lib/admin/courts-validation";
-import { CourtDialog } from "./court-dialog";
+import { CourtItem } from "./court-item";
+import { CourtsToolbar } from "./courts-toolbar";
+import { courtInventorySchema, selectLocationCourts } from "./inventory";
 
-function CourtStatus({ active }: { active: boolean }) {
-  return <span className={`inline-flex rounded-control px-2.5 py-1 text-xs font-semibold ${active
-    ? "bg-success-background text-success" : "bg-danger-background text-danger"}`}>
-    {active ? "Active" : "Inactive"}
-  </span>;
-}
-
-export default async function AdminCourtsPage() {
+export default async function AdminCourtsPage({ searchParams }: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+} = {}) {
+  const params = await searchParams;
+  const options = courtInventorySchema.parse(params ?? {});
   const [courts, locations, periods] = await Promise.all([listAdminCourts(), listAdminLocations(), listAdminCourtCoverage()]);
+  const requested = z.uuid().safeParse(params?.location);
+  const selected = requested.success ? locations.find((location) => location.id === requested.data) ?? locations[0] : locations[0];
+  const locationCourts = selected ? selectLocationCourts(courts, selected.id, options) : [];
+  const locationCourtCount = selected ? courts.filter((court) => court.location_id === selected.id).length : 0;
   const locationChoices = locations.map(({ id, name, is_active }) => ({ id, name, is_active }));
+  const hasFilters = Boolean(options.status || options.surface || options.environment);
+  function sortHref(column: typeof options.sort) {
+    const query = new URLSearchParams();
+    if (selected) query.set("location", selected.id);
+    if (options.status) query.set("status", options.status);
+    if (options.surface) query.set("surface", options.surface);
+    if (options.environment) query.set("environment", options.environment);
+    query.set("sort", column);
+    query.set("dir", options.sort === column && options.dir === "asc" ? "desc" : "asc");
+    return `/admin/courts?${query}`;
+  }
   return <>
-    <header className="mb-8 md:mb-10">
-      <h1 className="font-heading text-4xl font-semibold tracking-tight text-foreground md:text-5xl">Courts</h1>
-      <p className="mt-3 max-w-2xl text-base text-muted-foreground">Manage the club’s court inventory by location, including inactive courts.</p>
-    </header>
-    <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
-      <p className="text-sm text-muted-foreground">{courts.length} {courts.length === 1 ? "court" : "courts"} across {locations.length} {locations.length === 1 ? "location" : "locations"}</p>
-      <CourtDialog locations={locationChoices} />
-    </div>
+    <AdminPageHeader title="Courts" description="Manage the club’s court inventory by location, including inactive courts." />
+    <CourtsToolbar locations={locationChoices} selectedId={selected?.id} />
     {locations.length === 0 && <div className="rounded-card border border-border bg-surface px-6 py-8 text-muted-foreground">
       <Link href="/admin/locations" className="font-semibold text-primary underline">Create a location</Link> before adding courts.
     </div>}
-    <div className="space-y-8">
-      {locations.map((location) => {
-        const locationCourts = courts.filter((court) => court.location_id === location.id);
-        return <section key={location.id} aria-labelledby={`location-${location.id}`}>
-          <header className="mb-4 flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <h2 id={`location-${location.id}`} className="font-heading text-2xl font-semibold text-foreground">{location.name}</h2>
-              <p className="mt-1 text-sm text-muted-foreground">{locationCourts.length} {locationCourts.length === 1 ? "court" : "courts"}{location.is_active ? "" : " · Inactive location"}</p>
-            </div>
-            <CourtDialog locations={locationChoices} locationId={location.id} />
-          </header>
-          {locationCourts.length === 0 ? <div className="rounded-card border border-border bg-surface px-6 py-8 text-muted-foreground">No courts at this location.</div> : <>
-            <div className="space-y-3 lg:hidden">
-              {locationCourts.map((court) => <article key={court.id} className="min-w-0 rounded-card border border-border bg-surface p-5">
-                <p className="break-words font-semibold text-foreground">{court.name}</p>
-                <dl className="mt-4 grid grid-cols-[6rem_minmax(0,1fr)] gap-x-3 gap-y-3 text-sm">
-                  <dt className="text-muted-foreground">Status</dt><dd><CourtStatus active={court.is_active} /></dd>
-                  <dt className="text-muted-foreground">Surface</dt><dd>{courtSurfaceLabels[court.surface]}</dd>
-                  <dt className="text-muted-foreground">Environment</dt><dd>{courtEnvironmentLabels[court.environment]}</dd>
-                  <dt className="text-muted-foreground">Lighting</dt><dd>{court.has_lighting ? "Floodlit" : "No lighting"}</dd>
-                  <dt className="text-muted-foreground">Order</dt><dd>{court.display_order}</dd>
-                </dl>
-                <div className="mt-5 border-t border-border pt-4"><CourtDialog court={court} locations={locationChoices} /></div>
-                {court.environment === "outdoor" && <CoveragePeriods courtId={court.id} periods={periods.filter((period) => period.court_id === court.id)} />}
-              </article>)}
+    {selected && <section aria-label={`${selected.name} courts`}>
+          {locationCourts.length === 0 ? <div className="rounded-card border border-border bg-surface px-6 py-8 text-muted-foreground">{hasFilters && locationCourtCount ? "No courts match these filters at this location." : "No courts at this location."}</div> : <>
+            <div className="space-y-4 lg:hidden">
+              {locationCourts.map((court) => <CourtItem key={court.id} court={court} locations={locationChoices} periods={periods.filter((period) => period.court_id === court.id)} mobile />)}
             </div>
             <div className="hidden overflow-hidden rounded-card border border-border bg-surface lg:block">
-              <table className="w-full table-fixed text-left font-sans text-sm" aria-label={`${location.name} courts`}>
-                <thead className="border-b border-border text-xs font-semibold text-muted-foreground">
-                  <tr>{["Name", "Status", "Surface", "Environment", "Lighting", "Order", "Actions"].map((label) => <th key={label} scope="col" className="px-4 py-4 lg:px-5">{label}</th>)}</tr>
+              <table className="w-full table-fixed text-left font-sans text-sm" aria-label={`${selected.name} courts`}>
+                <thead className="border-b border-border bg-surface-muted text-xs font-semibold text-muted-foreground">
+                  <tr>{(["name", "status", "surface", "environment", "lighting"] as const).map((column) => {
+                    const active = options.sort === column;
+                    const Icon = active ? options.dir === "asc" ? ArrowUp : ArrowDown : ArrowUpDown;
+                    return <th key={column} scope="col" aria-sort={active ? options.dir === "asc" ? "ascending" : "descending" : "none"} className="px-3 py-3">
+                      <Link href={sortHref(column)} scroll={false} className="inline-flex items-center gap-1.5 rounded-control hover:text-primary focus-visible:outline-2 focus-visible:outline-primary">
+                        {column[0].toUpperCase() + column.slice(1)}<Icon aria-hidden="true" size={14} />
+                      </Link>
+                    </th>;
+                  })}</tr>
                 </thead>
-                <tbody className="divide-y divide-border">
-                  {locationCourts.map((court) => <Fragment key={court.id}><tr>
-                    <td className="break-words px-4 py-5 font-semibold text-foreground lg:px-5">{court.name}</td>
-                    <td className="px-4 py-5 lg:px-5"><CourtStatus active={court.is_active} /></td>
-                    <td className="px-4 py-5 lg:px-5">{courtSurfaceLabels[court.surface]}</td>
-                    <td className="px-4 py-5 lg:px-5">{courtEnvironmentLabels[court.environment]}</td>
-                    <td className="px-4 py-5 lg:px-5">{court.has_lighting ? "Floodlit" : "No lighting"}</td>
-                    <td className="px-4 py-5 lg:px-5">{court.display_order}</td>
-                    <td className="px-4 py-5 lg:px-5"><CourtDialog court={court} locations={locationChoices} /></td>
-                  </tr>
-                  {court.environment === "outdoor" && <tr><td colSpan={7} className="px-5 pb-5"><CoveragePeriods courtId={court.id} periods={periods.filter((period) => period.court_id === court.id)} /></td></tr>}
-                  </Fragment>)}
-                </tbody>
+                {locationCourts.map((court) => <CourtItem key={court.id} court={court} locations={locationChoices} periods={periods.filter((period) => period.court_id === court.id)} />)}
               </table>
             </div>
           </>}
-        </section>;
-      })}
-    </div>
+    </section>}
   </>;
 }

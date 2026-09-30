@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AdminPageHeader, AdminToolbar } from "@/components/admin-page-controls";
 import { listAdminLocations } from "@/lib/admin/locations";
 import { listAdminPricingRules } from "@/lib/admin/pricing";
 import { listAdminCourts } from "@/lib/admin/courts";
@@ -16,12 +17,11 @@ export default async function AdminPricingPage({ searchParams }: {
     ? await Promise.all([listAdminPricingRules(selected.id), listAdminCourts()]) : [[], []];
   const courts = allCourts.filter((court) => court.location_id === selected?.id);
   return <>
-    <header className="mb-8">
-      <h1 className="font-heading text-4xl font-semibold tracking-tight text-foreground md:text-5xl">Pricing</h1>
-      <p className="mt-3 text-muted-foreground">Manage hourly pricing for specific courts, operational states, days and dates.</p>
-    </header>
-    {locations.length > 1 ? <PricingLocationSelect locations={locations} selectedId={selected?.id} />
-      : locations.length === 0 ? <p>No locations found. Create a location first.</p> : null}
-    {selected ? <PricingRules key={selected.id} location={selected} courts={courts} rules={rules} /> : locations.length > 0 && <p>Select an existing location.</p>}
+    <AdminPageHeader title="Pricing" description="Manage hourly pricing for specific courts, operational states, days and dates." />
+    {selected ? <PricingRules key={selected.id} location={selected} locations={locations} courts={courts} rules={rules} />
+      : locations.length > 0 ? <>
+        <AdminToolbar primary={<PricingLocationSelect locations={locations} />} />
+        <p>Select an existing location.</p>
+      </> : <p>No locations found. Create a location first.</p>}
   </>;
 }

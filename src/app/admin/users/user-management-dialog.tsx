@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { toast } from "sonner";
+import { ModalDialog } from "@/components/modal-dialog";
 
 import { updateUserRoleAction, updateUserStatusAction } from "./actions";
 import { formatUserDate } from "./date-format";
@@ -26,14 +28,18 @@ const failureMessages = {
   "final-active-admin": "At least one active administrator must remain.",
 } as const;
 
-export function UserManagementDialog({ user, currentAdminId }: { user: ManagedUser; currentAdminId: string }) {
+export function UserManagementDialog({ user, currentAdminId, open: controlledOpen, onOpenChange }: {
+  user: ManagedUser; currentAdminId: string; open?: boolean; onOpenChange?: (open: boolean) => void;
+}) {
   const isOwnAccount = user.id === currentAdminId;
   const titleId = useId();
   const statusId = useId();
   const rolesId = useId();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const pendingRef = useRef(false);
-  const [isOpen, setIsOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const isOpen = controlledOpen ?? internalOpen;
+  const setIsOpen = onOpenChange ?? setInternalOpen;
   const [pending, setPending] = useState(false);
   const [status, setStatus] = useState(user.status);
   const [roles, setRoles] = useState(user.roles);
@@ -42,25 +48,6 @@ export function UserManagementDialog({ user, currentAdminId }: { user: ManagedUs
     status: user.status,
     roles: user.roles.join("|"),
   });
-
-  useLayoutEffect(() => () => {
-    // Activity hides pages without unmounting their open dialogs.
-    if (dialogRef.current?.open) dialogRef.current.close();
-    setIsOpen(false);
-  }, []);
-
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const bodyOverflow = document.body.style.overflow;
-    const rootOverflow = document.documentElement.style.overflow;
-    document.body.style.overflow = "hidden";
-    document.documentElement.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = bodyOverflow;
-      document.documentElement.style.overflow = rootOverflow;
-    };
-  }, [isOpen]);
 
   const incomingRoles = user.roles.join("|");
   if (user.id !== serverState.id || user.status !== serverState.status || incomingRoles !== serverState.roles) {
@@ -117,46 +104,34 @@ export function UserManagementDialog({ user, currentAdminId }: { user: ManagedUs
     }
   }
 
-  return (
-    <>
-      <button
-        type="button"
-        onClick={() => {
-          dialogRef.current?.showModal();
-          setIsOpen(true);
-        }}
-        className="inline-flex min-h-9 items-center justify-center rounded-control border border-border-strong bg-surface px-3 text-sm font-semibold text-primary hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
-      >
-        Manage
-      </button>
-
-      <dialog
+  const dialog = <ModalDialog
         ref={dialogRef}
+        active={isOpen}
         onClose={() => setIsOpen(false)}
         onCancel={() => setIsOpen(false)}
         aria-labelledby={titleId}
         className="fixed inset-0 m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-lg overflow-y-auto rounded-card border border-border bg-surface p-0 text-foreground shadow-floating backdrop:bg-foreground/50"
       >
         <div className="p-5 sm:p-6">
-          <header className="flex items-start justify-between gap-4 border-b border-border pb-5">
-            <div className="min-w-0">
-              <h2 id={titleId} className="font-heading text-xl font-semibold">Manage user</h2>
-              <p className="mt-1 break-all text-sm text-muted-foreground">{user.email}</p>
-              <p className="mt-2 text-xs text-muted-foreground">
-                Last updated <time dateTime={user.updated_at}>{formatUserDate(user.updated_at)}</time>
-              </p>
-            </div>
+          <header className="mb-5 flex items-start justify-between gap-4 border-b border-border pb-4">
+            <h2 id={titleId} className="font-heading text-xl font-semibold">Manage user</h2>
             <button
               type="button"
               aria-label="Close"
               onClick={() => dialogRef.current?.close()}
-              className="shrink-0 rounded-control border border-border-strong px-3 py-1.5 text-sm font-medium text-primary hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
+              className="shrink-0 rounded-control px-2 py-1 text-sm font-medium text-muted-foreground hover:bg-surface-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
             >
               Close
             </button>
           </header>
+          <div className="min-w-0">
+            <p className="break-all text-sm text-foreground">{user.email}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Last updated <time dateTime={user.updated_at}>{formatUserDate(user.updated_at)}</time>
+            </p>
+          </div>
 
-          <section className="border-b border-border py-5" aria-labelledby={statusId}>
+          <section className="mt-5 border-b border-border pb-5" aria-labelledby={statusId}>
             <h3 id={statusId} className="font-heading text-base font-semibold">Account status</h3>
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
               <span className={`inline-flex rounded-control px-2.5 py-1 text-xs font-semibold ${
@@ -211,7 +186,20 @@ export function UserManagementDialog({ user, currentAdminId }: { user: ManagedUs
             </ul>
           </section>
         </div>
-      </dialog>
+      </ModalDialog>;
+
+  return (
+    <>
+      {controlledOpen === undefined && <button
+        type="button"
+        onClick={() => {
+          setIsOpen(true);
+        }}
+        className="inline-flex min-h-9 items-center justify-center rounded-control border border-border-strong bg-surface px-3 text-sm font-semibold text-primary hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
+      >
+        Manage
+      </button>}
+      {controlledOpen === undefined ? dialog : typeof document === "undefined" ? null : createPortal(dialog, document.body)}
     </>
   );
 }

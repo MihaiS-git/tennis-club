@@ -6,7 +6,7 @@ import { listActiveLocationsWithCourts } from "../../../src/lib/courts/public";
 import { cleanupAuthFixtures, localFixtureClient } from "../auth-fixtures";
 import { ensureIntegrationAdminAnchor } from "../admin-anchor";
 
-test("court administration persists edits, moves, status and ordering with real authorization and RLS", async () => {
+test("court administration persists edits, moves and status with real authorization and RLS", async () => {
   const service = localFixtureClient();
   await ensureIntegrationAdminAnchor(service);
   const userIds: string[] = [];
@@ -26,7 +26,7 @@ test("court administration persists edits, moves, status and ordering with real 
     return { client, id: data.user.id };
   }
   const fields = { location_id: locationIds[0], name: "Court One", surface: "clay", environment: "outdoor",
-    has_lighting: false, is_active: true, display_order: 1 };
+    has_lighting: false, is_active: true };
   try {
     assert.strictEqual((await service.from("locations").insert(locationIds.map((id, index) => ({ id,
       name: `Court fixture ${index}`, slug: `court-fixture-${id}`, timezone: "UTC", is_active: index !== 1 })))).error, null);
@@ -47,7 +47,7 @@ test("court administration persists edits, moves, status and ordering with real 
     expect(await saveAdminCourt({ fields: { ...fields, location_id: randomUUID() } }, admin.client)).toEqual({ ok: false, reason: "invalid-location" });
 
     assert.strictEqual((await service.from("courts").update({ updated_at: "2000-01-01T00:00:00Z" }).eq("id", result.id)).error, null);
-    const edited = { ...fields, name: "Renamed", location_id: locationIds[2], surface: "hard", environment: "indoor", has_lighting: true, display_order: 8 };
+    const edited = { ...fields, name: "Renamed", location_id: locationIds[2], surface: "hard", environment: "indoor", has_lighting: true };
     for (const is_active of [false, true]) {
       expect(await saveAdminCourt({ id: result.id, fields: { ...edited, is_active } }, admin.client)).toEqual({ ok: true, id: result.id });
       const saved = (await listAdminCourts(admin.client)).find((row) => row.id === result.id);

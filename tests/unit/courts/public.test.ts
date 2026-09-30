@@ -56,7 +56,7 @@ test("keeps explicit active filters, inner court embedding and deterministic ord
   expect(query.is).toHaveBeenCalledWith("archived_at", null);
   expect(query.order.mock.calls).toEqual([
     ["display_order"], ["name"], ["id"],
-    ["display_order", { referencedTable: "courts" }], ["name", { referencedTable: "courts" }], ["id", { referencedTable: "courts" }],
+    ["name", { referencedTable: "courts" }], ["id", { referencedTable: "courts" }],
   ]);
 });
 
