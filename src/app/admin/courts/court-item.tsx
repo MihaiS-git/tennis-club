@@ -49,7 +49,7 @@ export function CourtItem({ court, locations, periods, mobile }: {
       </dl>
     </article>
     {court.environment === "outdoor" && <div className="rounded-card border border-border bg-surface p-5">
-      <CoveragePeriods courtId={court.id} periods={periods} />
+      <CoveragePeriods courtId={court.id} courtName={court.name} periods={periods} />
     </div>}
     {dialog}
   </>;
@@ -62,7 +62,7 @@ export function CourtItem({ court, locations, periods, mobile }: {
       <td className="px-4 py-5 lg:px-5">{court.has_lighting ? "Floodlit" : "No lighting"}</td>
     </tr>
     {court.environment === "outdoor" && <tr className="bg-surface-muted/40"><td colSpan={5} className="px-5 pb-3">
-      <CoveragePeriods courtId={court.id} periods={periods} />
+      <CoveragePeriods courtId={court.id} courtName={court.name} periods={periods} />
     </td></tr>}
   </tbody>{dialog}</>;
 }

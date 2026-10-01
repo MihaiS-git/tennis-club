@@ -34,10 +34,14 @@ end)`: `07:00–16:00` and `16:00–20:00` are adjacent; 16:00 resolves only to 
 second interval. End time may be `24:00`. Date bounds are inclusive and may be
 absent independently.
 
-Opening hours remain independent. Each save must fit inside one configured interval
-for every selected weekday, or the whole submission fails. Later opening-hours
-edits may leave a pricing definition outside the schedule; consumers must check
-opening hours separately. The current application has no opening-hours exceptions.
+Each pricing save must fit inside one configured opening interval for every selected
+weekday. Changing opening hours also checks the resulting weekly schedule against
+existing pricing that can still apply on or after the location's current local date.
+Historical rules whose inclusive date range can no longer reach their weekday do
+not block a change. A conflict rejects the entire opening-hours mutation and asks
+the admin to update or remove pricing first. Both mutation paths serialize on the
+location row; database triggers protect direct writes and check the final schedule
+after a grouped replacement. The current application has no opening-hours exceptions.
 
 `resolvePricingRule()` consumes supplied atomic rows and a court ID, derived court
 state, calendar date and local minute, returning one matching row or `null`. Monday
@@ -46,21 +50,20 @@ resolver does not infer coverage state or calculate booking totals. Public `/cou
 is unchanged and retains its temporary “From €10/hour”. Future booking integration
 needs its own authorized pricing read and booking/payment policies.
 
-For an existing unreleased local database, the owning migration is edited for a
-clean future history. Apply only a focused transactional local schema/data delta;
-do not reset the database or rewrite migration history. Legacy surface/day rows
-must be mapped to compatible courts and grouped by their original definition; if a
-row has no compatible court, abort the delta and resolve it explicitly.
+Pricing remains in `20260929130000_location_pricing_rules.sql`, after the
+consolidated Auth/RBAC, profiles/avatars, and club-resources migrations. The rewritten
+development migration history requires an explicitly approved local database reset
+before database or integration checks; the reset deletes local data.
 
 Focused checks:
 
 ```bash
 psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres' -v ON_ERROR_STOP=1 -f supabase/tests/database/location_pricing_rules.sql
+psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres' -v ON_ERROR_STOP=1 -f supabase/tests/database/opening_hours_pricing_integrity.sql
 npx vitest run tests/unit/pricing.test.ts tests/unit/admin/pricing.test.ts tests/unit/admin/pricing-actions.test.ts tests/components/admin-pricing.test.tsx tests/components/admin-dashboard.test.tsx
 node --env-file=.env.local ./node_modules/vitest/vitest.mjs run tests/integration/admin/pricing.integration.test.ts --no-file-parallelism
-npx tsc --noEmit -p tsconfig.pricing-check.json
+npm run typecheck
 npx eslint src/lib/pricing src/lib/admin/pricing.ts src/app/admin/pricing src/app/admin/page.tsx src/components/admin-navigation.tsx tests/unit/pricing.test.ts tests/unit/admin/pricing.test.ts tests/unit/admin/pricing-actions.test.ts tests/components/admin-pricing.test.tsx tests/components/admin-dashboard.test.tsx tests/integration/admin/pricing.integration.test.ts
 ```
 
-Apply the focused local schema/data delta before database/integration tests. No reset
-or migration-history manipulation is needed.
+Run database and integration checks after the approved rebuild.

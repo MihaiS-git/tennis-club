@@ -3,15 +3,27 @@
 import { useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Input } from "@/components/input";
+import { Button, DialogCloseButton } from "@/components/button";
+import { ConfirmationDialog } from "@/components/confirmation-dialog";
+import { useEditableFormBaseline } from "@/components/use-editable-form-baseline";
 import { ModalDialog } from "@/components/modal-dialog";
 import type { AdminCourt } from "@/lib/admin/courts";
 import type { AdminLocation } from "@/lib/admin/locations";
-import { courtSurfaces, courtEnvironments, courtSurfaceLabels, courtEnvironmentLabels } from "@/lib/admin/courts-validation";
+import { courtSurfaces, courtEnvironments, courtSurfaceLabels, courtEnvironmentLabels, courtFieldsSchema } from "@/lib/admin/courts-validation";
 import { saveCourtAction } from "./actions";
 
 type LocationChoice = Pick<AdminLocation, "id" | "name" | "is_active">;
 const selectClass = "min-h-11 w-full rounded-control border border-border bg-surface px-3 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-focus/20";
-const buttonClass = "inline-flex min-h-9 items-center justify-center rounded-control border border-border-strong bg-surface px-3 py-2 text-sm font-semibold text-primary hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-60";
+const editableFields = ["location_id", "name", "surface", "environment", "has_lighting", "is_active"];
+function validCourtCreate(form: HTMLFormElement) {
+  const data = new FormData(form);
+  const text = (field: string) => String(data.get(field) ?? "");
+  return courtFieldsSchema.safeParse({
+    location_id: text("location_id"), name: text("name"), surface: text("surface"),
+    environment: text("environment"), has_lighting: text("has_lighting") === "true",
+    is_active: text("is_active") === "true",
+  }).success;
+}
 
 export function CourtDialog({ court, locations, locationId, open: controlledOpen, onOpenChange }: {
   court?: AdminCourt; locations: LocationChoice[]; locationId?: string;
@@ -20,12 +32,16 @@ export function CourtDialog({ court, locations, locationId, open: controlledOpen
   const prefix = useId();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const pendingRef = useRef(false);
+  const saveTriggerRef = useRef<HTMLButtonElement>(null);
+  const pendingSaveFormRef = useRef<HTMLFormElement>(null);
   const [internalOpen, setInternalOpen] = useState(false);
   const open = controlledOpen ?? internalOpen;
   const setOpen = onOpenChange ?? setInternalOpen;
   const [pending, setPending] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState("");
+  const [deactivating, setDeactivating] = useState(false);
+  const { attach, dirty, valid, sync, submitted, commit } = useEditableFormBaseline(editableFields, undefined, validCourtCreate);
 
   function errorProps(field: string) {
     return { "aria-invalid": Boolean(fieldErrors[field]), "aria-describedby": fieldErrors[field] ? `${prefix}-${field}-error` : undefined };
@@ -39,6 +55,7 @@ export function CourtDialog({ court, locations, locationId, open: controlledOpen
     pendingRef.current = true;
     setPending(true); setFieldErrors({}); setFormError("");
     const data = new FormData(form);
+    const saved = submitted(form);
     const text = (field: string) => { const value = data.get(field); return typeof value === "string" ? value : ""; };
     try {
       const result = await saveCourtAction({
@@ -49,6 +66,8 @@ export function CourtDialog({ court, locations, locationId, open: controlledOpen
         },
       });
       if (result.ok) {
+        commit(saved);
+        setDeactivating(false);
         toast.success(court ? "Court updated." : "Court created.");
         dialogRef.current?.close();
       } else if (result.reason === "invalid-input") {
@@ -59,6 +78,7 @@ export function CourtDialog({ court, locations, locationId, open: controlledOpen
           ? court ? "This court’s slug already exists at the selected location. Choose a different location."
             : "A court with this generated slug already exists at the selected location. Use a different name."
           : result.reason === "has-coverage" ? "Remove this court’s coverage periods before changing it to indoor."
+          : result.reason === "has-pricing" ? "This court cannot be changed in that way while pricing rules still depend on it. Update or remove those rules first."
           : result.reason === "invalid-location" ? "This location no longer exists. Select another location."
             : "This court no longer exists.");
       }
@@ -75,9 +95,18 @@ export function CourtDialog({ court, locations, locationId, open: controlledOpen
       {open && <div className="p-5 sm:p-6">
         <header className="mb-5 flex items-start justify-between gap-4 border-b border-border pb-5">
           <h2 id={`${prefix}-title`} className="font-heading text-xl font-semibold">{court ? "Edit court" : "Create court"}</h2>
-          <button type="button" className={buttonClass} disabled={pending} onClick={() => dialogRef.current?.close()}>Close</button>
+          <DialogCloseButton disabled={pending} onClick={() => dialogRef.current?.close()} />
         </header>
-        <form onSubmit={(event) => { event.preventDefault(); void submit(event.currentTarget); }}>
+        <form ref={attach} onInput={sync} onChange={sync} onSubmit={(event) => {
+          event.preventDefault();
+          if (court?.is_active && new FormData(event.currentTarget).get("is_active") === "false") {
+            pendingSaveFormRef.current = event.currentTarget;
+            setFormError("");
+            setDeactivating(true);
+            return;
+          }
+          void submit(event.currentTarget);
+        }}>
           {formError && <p role="alert" className="mb-4 text-sm text-danger">{formError}</p>}
           <fieldset disabled={pending} className="space-y-4">
             <div>
@@ -116,17 +145,24 @@ export function CourtDialog({ court, locations, locationId, open: controlledOpen
                 <option value="true">Active</option><option value="false">Inactive</option>
               </select>{fieldError("is_active")}
             </div>
-            <button type="submit" aria-busy={pending} className="w-full rounded-control bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary-hover disabled:cursor-wait disabled:opacity-60">
-              {pending ? "Saving…" : "Save court"}
-            </button>
+            <div className="flex justify-end border-t border-border pt-4">
+              <Button ref={saveTriggerRef} type="submit" fullWidth={false} disabled={pending || (court ? !dirty : !valid)} aria-busy={pending}>
+                {pending ? "Saving…" : "Save court"}
+              </Button>
+            </div>
           </fieldset>
         </form>
       </div>}
     </ModalDialog>;
   return <>
-    {controlledOpen === undefined && <button type="button" className={buttonClass} disabled={locations.length === 0} onClick={() => {
+    {!court && controlledOpen === undefined && <Button type="button" variant="secondary" size="small" disabled={locations.length === 0} onClick={() => {
       setFieldErrors({}); setFormError(""); setOpen(true);
-    }}>{court ? "Edit court" : "Create court"}</button>}
+    }}>Create court</Button>}
     {dialog}
+    <ConfirmationDialog open={deactivating} title={`Deactivate ${court?.name ?? "court"}?`}
+      message={`${court?.name ?? "This court"} will become unavailable for normal use until reactivated.`}
+      confirmLabel="Deactivate court" pending={pending} error={formError} returnFocusRef={saveTriggerRef}
+      onClose={() => { if (!pendingRef.current) setDeactivating(false); }}
+      onConfirm={() => { if (pendingSaveFormRef.current) void submit(pendingSaveFormRef.current); }} />
   </>;
 }

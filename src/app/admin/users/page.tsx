@@ -9,6 +9,8 @@ import { listAdminUsers } from "@/lib/admin/users";
 import { UserItem } from "./user-item";
 import { UsersToolbar } from "./users-toolbar";
 
+export const instant = false;
+
 export default async function AdminUsersPage({ searchParams }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {

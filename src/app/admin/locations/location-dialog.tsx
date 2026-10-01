@@ -3,8 +3,12 @@
 import { useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Input } from "@/components/input";
+import { Button, DialogCloseButton } from "@/components/button";
+import { ConfirmationDialog } from "@/components/confirmation-dialog";
+import { useEditableFormBaseline } from "@/components/use-editable-form-baseline";
 import { ModalDialog } from "@/components/modal-dialog";
 import type { AdminLocation } from "@/lib/admin/locations";
+import { locationFieldsSchema } from "@/lib/admin/locations-validation";
 import type { OpeningInterval } from "@/lib/admin/opening-hours-validation";
 import {
   CountryCombobox,
@@ -25,8 +29,17 @@ const textFields = [
   ["city", "City", 100],
   ["postal_code", "Postal code", 20],
 ] as const;
-const buttonClass =
-  "inline-flex min-h-9 items-center justify-center rounded-control border border-border-strong bg-surface px-3 py-2 text-sm font-semibold text-primary hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-60";
+const editableFields = ["name", "address_line1", "address_line2", "city", "postal_code", "country_code", "timezone", "currency", "is_active"];
+function validLocationCreate(form: HTMLFormElement) {
+  const data = new FormData(form);
+  const text = (field: string) => String(data.get(field) ?? "");
+  return locationFieldsSchema.safeParse({
+    name: text("name"), address_line1: text("address_line1"), address_line2: text("address_line2"),
+    city: text("city"), postal_code: text("postal_code"), country_code: text("country_code"),
+    timezone: text("timezone"), currency: text("currency"), is_active: text("is_active") === "true",
+    display_order: 0,
+  }).success;
+}
 
 export function LocationDialog({
   location,
@@ -42,6 +55,8 @@ export function LocationDialog({
   const prefix = useId();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const pendingRef = useRef(false);
+  const saveTriggerRef = useRef<HTMLButtonElement>(null);
+  const pendingSaveFormRef = useRef<HTMLFormElement>(null);
   const [internalOpen, setInternalOpen] = useState(false);
   const open = controlledOpen ?? internalOpen;
   const setOpen = onOpenChange ?? setInternalOpen;
@@ -49,6 +64,10 @@ export function LocationDialog({
   const archived = location?.archived_at != null;
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState("");
+  const [deactivating, setDeactivating] = useState(false);
+  const { attach, dirty, valid, sync, submitted, commit } = useEditableFormBaseline(
+    editableFields, (field, value) => field === "country_code" ? value.trim().toUpperCase() : value.trim(), validLocationCreate,
+  );
 
   function errorProps(field: string) {
     return {
@@ -75,6 +94,7 @@ export function LocationDialog({
     setFieldErrors({});
     setFormError("");
     const data = new FormData(form);
+    const saved = submitted(form);
     const text = (field: string) => {
       const value = data.get(field);
       return typeof value === "string" ? value : "";
@@ -96,6 +116,8 @@ export function LocationDialog({
         },
       });
       if (result.ok) {
+        commit(saved);
+        setDeactivating(false);
         toast.success(location ? "Location updated." : "Location created.");
         dialogRef.current?.close();
       } else if (result.reason === "invalid-input") {
@@ -118,23 +140,18 @@ export function LocationDialog({
 
   return (
     <>
-      {controlledOpen === undefined && (
-        <button
+      {!location && controlledOpen === undefined && (
+        <Button
           type="button"
-          aria-label={location ? `Edit location ${location.name}` : undefined}
-          className={
-            location
-              ? "inline-flex max-w-full cursor-pointer items-center rounded-control px-1.5 py-1 text-left font-semibold text-foreground transition-colors hover:bg-surface-muted hover:text-primary focus-visible:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
-              : buttonClass
-          }
+          variant="secondary" size="small"
           onClick={() => {
             setFieldErrors({});
             setFormError("");
             setOpen(true);
           }}
         >
-          {location ? location.name : "Create location"}
-        </button>
+          Create location
+        </Button>
       )}
       <ModalDialog
         ref={dialogRef}
@@ -157,18 +174,20 @@ export function LocationDialog({
               >
                 {location ? "Edit location" : "Create location"}
               </h2>
-              <button
-                type="button"
-                className="rounded-control px-2 py-1 text-sm font-medium text-muted-foreground hover:bg-surface-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-60"
-                disabled={pending}
-                onClick={() => dialogRef.current?.close()}
-              >
-                Close
-              </button>
+              <DialogCloseButton disabled={pending} onClick={() => dialogRef.current?.close()} />
             </header>
             <form
+              ref={attach}
+              onInput={sync}
+              onChange={sync}
               onSubmit={(event) => {
                 event.preventDefault();
+                if (location?.is_active && new FormData(event.currentTarget).get("is_active") === "false") {
+                  pendingSaveFormRef.current = event.currentTarget;
+                  setFormError("");
+                  setDeactivating(true);
+                  return;
+                }
                 void submit(event.currentTarget);
               }}
             >
@@ -222,6 +241,7 @@ export function LocationDialog({
                       id={`${prefix}-country_code`}
                       name="country_code"
                       defaultValue={location?.country_code ?? ""}
+                      onValueChange={() => requestAnimationFrame(sync)}
                       {...errorProps("country_code")}
                     />
                     {fieldError("country_code")}
@@ -237,6 +257,7 @@ export function LocationDialog({
                       id={`${prefix}-timezone`}
                       name="timezone"
                       defaultValue={location?.timezone ?? ""}
+                      onValueChange={() => requestAnimationFrame(sync)}
                       {...errorProps("timezone")}
                     />
                     {fieldError("timezone")}
@@ -272,33 +293,38 @@ export function LocationDialog({
                     {fieldError("is_active")}
                   </div>
                 </div>
-                {!archived && (
-                  <div className="mt-5 flex justify-end border-t border-border pt-4">
-                    <button
-                      type="submit"
-                      aria-busy={pending}
-                      className="w-full rounded-control bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary-hover disabled:cursor-wait disabled:opacity-60 sm:w-auto"
-                    >
-                      {pending ? "Saving…" : "Save location"}
-                    </button>
-                  </div>
-                )}
               </fieldset>
-            </form>
-            {location && (
-              <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-3 border-t border-border pt-4">
-                <OpeningHoursEntry locationId={location.id} locationName={location.name} intervals={intervals} />
-                <LocationArchiveControl
+              <div className={`mt-5 items-center gap-3 border-t border-border pt-4 ${archived ? "flex" : "grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]"}`}>
+                <div className="min-w-0">
+                  {location && !archived && <OpeningHoursEntry locationId={location.id} locationName={location.name} intervals={intervals} />}
+                </div>
+                {location && <LocationArchiveControl
                   id={location.id}
                   name={location.name}
                   archived={location.archived_at !== null}
                   onSuccess={() => dialogRef.current?.close()}
-                />
+                />}
+                <div className="justify-self-end">
+                  {!archived && <Button
+                    ref={saveTriggerRef}
+                    type="submit"
+                    disabled={pending || (location ? !dirty : !valid)}
+                    aria-busy={pending}
+                    fullWidth={false}
+                  >
+                    {pending ? "Saving…" : "Save location"}
+                  </Button>}
+                </div>
               </div>
-            )}
+            </form>
           </div>
         )}
       </ModalDialog>
+      <ConfirmationDialog open={deactivating} title={`Deactivate ${location?.name ?? "location"}?`}
+        message={`${location?.name ?? "This location"} will become unavailable for normal use until reactivated.`}
+        confirmLabel="Deactivate location" pending={pending} error={formError} returnFocusRef={saveTriggerRef}
+        onClose={() => { if (!pendingRef.current) setDeactivating(false); }}
+        onConfirm={() => { if (pendingSaveFormRef.current) void submit(pendingSaveFormRef.current); }} />
     </>
   );
 }

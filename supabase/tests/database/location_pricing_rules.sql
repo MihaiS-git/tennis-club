@@ -13,6 +13,8 @@ insert into public.courts (id, location_id, name, slug, surface, environment) va
 ('c7000000-0000-4000-8000-000000000031', 'c7000000-0000-4000-8000-000000000011', 'Court 1', 'court-1', 'clay', 'outdoor'),
 ('c7000000-0000-4000-8000-000000000032', 'c7000000-0000-4000-8000-000000000011', 'Court 2', 'court-2', 'hard', 'outdoor'),
 ('c7000000-0000-4000-8000-000000000033', 'c7000000-0000-4000-8000-000000000011', 'Court 3', 'court-3', 'hard', 'indoor');
+insert into public.location_opening_hours (location_id, weekday, opens_at_minute, closes_at_minute)
+select 'c7000000-0000-4000-8000-000000000011', day, 420, 1440 from generate_series(0, 6) day;
 
 set local role authenticated;
 set local request.jwt.claims = '{"sub":"c7000000-0000-4000-8000-000000000001","role":"authenticated"}';

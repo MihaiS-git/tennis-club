@@ -127,7 +127,7 @@ create index user_roles_role_code_idx
 -- GENERIC updated_at SUPPORT
 -- ============================================================
 
-create or replace function public.set_updated_at()
+create function public.set_updated_at()
 returns trigger
 language plpgsql
 set search_path = ''
@@ -180,7 +180,7 @@ execute function public.touch_user_updated_at_from_role_change();
 -- AUTH USER → APPLICATION USER PROVISIONING
 -- ============================================================
 
-create or replace function public.handle_auth_user_created()
+create function public.handle_auth_user_created()
 returns trigger
 language plpgsql
 security definer
@@ -224,7 +224,7 @@ execute function public.handle_auth_user_created();
 -- Users/admins must not directly modify public.users.email.
 -- ============================================================
 
-create or replace function public.handle_auth_user_email_updated()
+create function public.handle_auth_user_email_updated()
 returns trigger
 language plpgsql
 security definer
@@ -257,7 +257,7 @@ execute function public.handle_auth_user_email_updated();
 -- CURRENT USER HELPERS
 -- ============================================================
 
-create or replace function public.has_role(required_role text)
+create function public.has_role(required_role text)
 returns boolean
 language sql
 stable
@@ -295,7 +295,7 @@ to authenticated;
 -- The client cannot spoof another administrator's UUID.
 -- ============================================================
 
-create or replace function public.set_role_assigned_by()
+create function public.set_role_assigned_by()
 returns trigger
 language plpgsql
 set search_path = ''
@@ -487,3 +487,72 @@ from public.users u;
 
 revoke all on public.user_role_sort_keys from anon, authenticated;
 grant select on public.user_role_sort_keys to authenticated;
+
+-- Serialize changes that can remove an active administrator. Updating one
+-- guard row makes concurrent transactions wait (or fail serialization at
+-- stronger isolation levels) before checking the resulting administrator set.
+create table public.active_admin_guard (
+  id boolean primary key default true check (id),
+  revision bigint not null default 0
+);
+
+insert into public.active_admin_guard (id) values (true);
+
+alter table public.active_admin_guard enable row level security;
+revoke all on table public.active_admin_guard from public, anon, authenticated, service_role;
+
+create function public.preserve_active_admin()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if tg_relid = 'public.users'::regclass then
+    if not exists (
+      select 1 from public.user_roles
+      where user_id = old.id and role_code = 'admin'
+    ) then
+      return null;
+    end if;
+  end if;
+
+  update public.active_admin_guard
+  set revision = revision + 1
+  where id = true;
+
+  if not exists (
+    select 1
+    from public.users u
+    join public.user_roles ur on ur.user_id = u.id
+    where u.status = 'active'
+      and ur.role_code = 'admin'
+  ) then
+    raise exception 'At least one active administrator must remain.'
+      using errcode = '23514';
+  end if;
+
+  return null;
+end;
+$$;
+
+revoke all on function public.preserve_active_admin() from public;
+
+create trigger users_preserve_active_admin
+after update of status on public.users
+for each row
+when (old.status = 'active' and new.status <> 'active')
+execute function public.preserve_active_admin();
+
+create trigger user_roles_preserve_active_admin_delete
+after delete on public.user_roles
+for each row
+when (old.role_code = 'admin')
+execute function public.preserve_active_admin();
+
+create trigger user_roles_preserve_active_admin_update
+after update of user_id, role_code on public.user_roles
+for each row
+when (old.role_code = 'admin' and
+      (old.user_id is distinct from new.user_id or old.role_code is distinct from new.role_code))
+execute function public.preserve_active_admin();

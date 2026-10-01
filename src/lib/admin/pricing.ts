@@ -3,11 +3,11 @@ import "server-only";
 import { z } from "zod";
 import { requireActiveAdmin } from "./authorization";
 import { courtEnvironments } from "./courts-validation";
-import { openingIntervalSchema, timeToMinute, weekdays } from "./opening-hours-validation";
+import { openingIntervalSchema, timeToMinute } from "./opening-hours-validation";
 import { createClient } from "@/lib/supabase/server";
 import { logger } from "@/lib/logger";
 import { pricingRemovalSchema, pricingMutationSchema, pricingRuleSchema, type PricingMutationResult } from "@/lib/pricing/validation";
-import { fitsOpeningHours, groupPricingRuleSets } from "@/lib/pricing/resolution";
+import { groupPricingRuleSets, pricingOpeningHoursError } from "@/lib/pricing/resolution";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
 const columns = "id, rule_set_id, location_id, court_id, court_state, weekday, starts_at_minute, ends_at_minute, starts_on, ends_on, price_per_hour_minor, created_at, updated_at";
@@ -51,17 +51,15 @@ async function mutatePricing(input: unknown, remove: boolean, supabase?: Client)
       return { ok: false, reason: "invalid-input", fieldErrors: { court_state: "Selected courts must share a valid state: indoor courts use Indoor; outdoor courts use Outdoor or Covered." } };
     }
     const { data, error } = await client.from("location_opening_hours").select("id, location_id, weekday, opens_at_minute, closes_at_minute, created_at, updated_at")
-      .eq("location_id", location_id).in("weekday", rule.weekdays);
+      .eq("location_id", location_id);
     const hours = z.array(openingIntervalSchema).safeParse(data);
     if (error || !hours.success) {
       logger.error({ event: "admin.pricing_hours_read_failed", code: error?.code }, "Failed to validate pricing hours");
       throw new Error("Unable to validate pricing against opening hours.");
     }
     // All selected courts share the location's schedule. Check every target day before any write.
-    const incompatibleDays = rule.weekdays.filter((weekday) => !fitsOpeningHours(hours.data, { location_id, weekday, starts_at_minute, ends_at_minute }));
-    if (incompatibleDays.length) {
-      return { ok: false, reason: "invalid-input", fieldErrors: { ends_at: `Pricing must fit within one configured opening interval for ${incompatibleDays.map((day) => weekdays[day]).join(", ")}. Configure opening hours first if none exist.` } };
-    }
+    const hoursError = pricingOpeningHoursError(hours.data, { location_id, weekdays: rule.weekdays, starts_at_minute, ends_at_minute });
+    if (hoursError) return { ok: false, reason: "invalid-input", fieldErrors: { ends_at: hoursError } };
     result = await client.rpc("save_pricing_rule_set", {
       p_rule_set_id: rule_set_id ?? null, p_location_id: location_id, p_court_ids: rule.court_ids, p_weekdays: rule.weekdays,
       p_court_state: rule.court_state, p_starts_at_minute: starts_at_minute, p_ends_at_minute: ends_at_minute,
@@ -73,6 +71,9 @@ async function mutatePricing(input: unknown, remove: boolean, supabase?: Client)
   }
   const { data, error } = result;
   if (error) {
+    if (error.code === "P0001" && error.message === "pricing_outside_opening_hours") {
+      return { ok: false, reason: "invalid-input", fieldErrors: { ends_at: "Opening hours changed. Choose a time within the current schedule and try again." } };
+    }
     if (error.code === "23P01" || error.code === "23505") return { ok: false, reason: "overlap" };
     if (error.code === "23503") return { ok: false, reason: "not-found" };
     logger.error({ event: "admin.pricing_mutation_failed", actorId: actor.userId, locationId: location_id, code: error.code }, "Failed to change pricing");

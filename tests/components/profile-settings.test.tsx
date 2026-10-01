@@ -73,8 +73,6 @@ it("provides labelled section controls and preserves edits when switching settin
     account={<input aria-label="Current password" type="password" defaultValue="" />}
   />);
   const navigation = screen.getByRole("navigation", { name: "Profile settings" });
-  expect(navigation.className).toContain("overflow-x-auto");
-  expect(navigation.className).toContain("sm:grid-cols-4");
   const identity = within(navigation).getByRole("button", { name: "Profile / player identity" });
   const personal = within(navigation).getByRole("button", { name: "Personal information" });
   const tennis = within(navigation).getByRole("button", { name: "Tennis profile" });

@@ -14,9 +14,9 @@ for (const error of [readiness.error, playerReadiness.error]) {
     throw new Error(`Profile schema inspection failed (${error.code}).`);
   }
 }
-// A missing migration is a validation failure, never a skipped Profile test.
+// Missing profile schema is a validation failure, never a skipped Profile test.
 test(
-  "profile application and RLS boundaries (requires the profile migration history)", async () => {
+  "profile application and RLS boundaries (requires the profile schema)", async () => {
     await ensureIntegrationAdminAnchor(service);
     const ids: string[] = [];
     const password = "profile-integration-password";

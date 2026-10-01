@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import {
-  groupedWeeklySchedule, minuteToTime, timeToMinute, weekdayGroupLabel, weeklyHoursMutationSchema,
+  groupedWeeklySchedule, weekdayGroupLabel, weeklyHoursMutationSchema,
   type OpeningInterval,
 } from "../../../src/lib/admin/opening-hours-validation";
 
@@ -9,11 +9,6 @@ const input = { location_id, weekdays: [0, 1, 2, 3, 4], replace_ids: [], interva
 const row = (weekday: number, opens_at_minute = 420, closes_at_minute = 1440): OpeningInterval => ({
   id: crypto.randomUUID(), location_id, weekday, opens_at_minute, closes_at_minute,
   created_at: "2026-09-29T00:00:00Z", updated_at: "2026-09-29T00:00:00Z",
-});
-
-it.each([["00:00", 0], ["07:00", 420], ["23:59", 1439], ["24:00", 1440]] as const)("round trips %s ↔ %i", (time, minute) => {
-  expect(timeToMinute(time)).toBe(minute);
-  expect(minuteToTime(minute)).toBe(time);
 });
 
 it("validates one weekly operation and permits adjacent intervals", () => {

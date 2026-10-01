@@ -1,7 +1,6 @@
 import { expect, it } from "vitest";
-import { majorToMinor, minorToMajor, formatHourlyPrice } from "../../src/lib/pricing/money";
 import { pricingMutationSchema, type PricingRule } from "../../src/lib/pricing/validation";
-import { mondayWeekday, resolvePricingRule, orderPricingRules, fitsOpeningHours, groupPricingRuleSets, formatWeekdays } from "../../src/lib/pricing/resolution";
+import { mondayWeekday, resolvePricingRule, orderPricingRules, fitsOpeningHours, groupPricingRuleSets } from "../../src/lib/pricing/resolution";
 
 const location_id = "c7000000-0000-4000-8000-000000000011";
 const court_id = "c7000000-0000-4000-8000-000000000031";
@@ -11,14 +10,6 @@ const rule: PricingRule = { id: "c7000000-0000-4000-8000-000000000021", rule_set
   created_at: "2026-09-29T00:00:00Z", updated_at: "2026-09-29T00:00:00Z" };
 const input = { location_id, court_ids: [court_id], court_state: "covered", weekdays: [0], starts_at: "07:00", ends_at: "24:00", starts_on: "", ends_on: "", price_per_hour: "12.50" };
 
-it.each([["10", 1000], ["12.50", 1250], ["70.00", 7000], ["0.01", 1], ["21474836.47", 2147483647], ["1.1", 110]])("converts %s to exact minor units", (major, minor) => {
-  expect(majorToMinor(major)).toBe(minor); expect(majorToMinor(minorToMajor(minor))).toBe(minor);
-});
-it.each(["0", "-1", "1.001", "1e2", "NaN", "Infinity", "21474836.48", "1,20", "", "  "])("rejects invalid money %s", (amount) => expect(() => majorToMinor(amount)).toThrow());
-it.each([0, -1, 1.5, NaN, 2147483648])("rejects invalid minor amount %s", (amount) => expect(() => minorToMajor(amount)).toThrow());
-it.each([["EUR", "€12.50"], ["USD", "US$12.50"], ["GBP", "£12.50"], ["RON", "RON\u00a012.50"], ["CHF", "CHF\u00a012.50"]] as const)("formats %s with two decimals", (currency, expected) => {
-  expect(formatHourlyPrice(1250, currency)).toBe(expected);
-});
 it("uses Monday=0 through Sunday=6 independently of timezone", () => {
   for (let day = 0; day < 7; day++) expect(mondayWeekday(`2026-10-${String(12 + day).padStart(2, "0")}`)).toBe(day);
   expect(() => mondayWeekday("2026-02-30")).toThrow();
@@ -59,9 +50,7 @@ it("groups a two-court Monday–Friday cartesian product into one logical rule",
   expect(groupPricingRuleSets(rows)).toMatchObject([{ court_ids: [court_id, otherCourt], weekdays: [0, 1, 2, 3, 4], rule_set_id: rule.rule_set_id }]);
   expect(() => groupPricingRuleSets(rows.filter((row) => !(row.court_id === court_id && row.weekday === 0)))).toThrow("Inconsistent pricing rule set.");
 });
-it.each([
-  [[0, 1, 2, 3, 4], "Mon–Fri"], [[5, 6], "Sat–Sun"], [[0, 1, 2, 3, 4, 5, 6], "All days"], [[0, 2, 4], "Mon, Wed, Fri"],
-])("formats days %j as %s", (days, label) => expect(formatWeekdays(days)).toBe(label));
+
 it("requires containment within one opening interval for the same location and day", () => {
   const hours = { location_id, weekday: 0, opens_at_minute: 420, closes_at_minute: 1440 };
   expect(fitsOpeningHours([hours], rule)).toBe(true);

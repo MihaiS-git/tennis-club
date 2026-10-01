@@ -1,5 +1,3 @@
-create extension if not exists btree_gist with schema extensions;
-
 -- The parent gives a logical definition stable identity and a lock across replacements.
 create table public.pricing_rule_sets (
   id uuid primary key default gen_random_uuid(),
@@ -48,6 +46,73 @@ create table public.location_pricing_rules (
 
 create index location_pricing_rule_set_idx on public.location_pricing_rules(rule_set_id);
 
+-- Pricing and hours writers take the same location row lock. The deferred check
+-- sees the complete replacement schedule, including split intervals.
+create function public.lock_location_for_hours_change() returns trigger
+language plpgsql security invoker set search_path = '' as $$
+begin
+  perform 1 from public.locations where id = case when tg_op = 'DELETE' then old.location_id else new.location_id end for update;
+  return case when tg_op = 'DELETE' then old else new end;
+end;
+$$;
+create trigger lock_location_for_hours_change
+  before insert or update or delete on public.location_opening_hours
+  for each row execute function public.lock_location_for_hours_change();
+
+create function public.check_hours_cover_pricing() returns trigger
+language plpgsql security invoker set search_path = '' as $$
+declare
+  target_location uuid;
+  conflicts jsonb;
+begin
+  target_location := case when tg_op = 'DELETE' then old.location_id else new.location_id end;
+  select jsonb_agg(to_jsonb(item)) into conflicts from (
+    select distinct p.weekday, p.starts_at_minute, p.ends_at_minute
+    from public.location_pricing_rules p
+    join public.locations l on l.id = p.location_id
+    where p.location_id = target_location
+      -- The date bounds are inclusive. Only rules with a future matching local
+      -- weekday can apply; expired historical definitions do not block edits.
+      and (p.ends_on is null or p.ends_on >=
+        greatest((now() at time zone l.timezone)::date, coalesce(p.starts_on, (now() at time zone l.timezone)::date))
+        + ((p.weekday - (extract(isodow from greatest((now() at time zone l.timezone)::date,
+          coalesce(p.starts_on, (now() at time zone l.timezone)::date)))::integer - 1) + 7) % 7))
+      and not exists (
+        select 1 from public.location_opening_hours h
+        where h.location_id = p.location_id and h.weekday = p.weekday
+          and h.opens_at_minute <= p.starts_at_minute and p.ends_at_minute <= h.closes_at_minute
+      )
+    order by p.weekday, p.starts_at_minute, p.ends_at_minute
+    limit 4
+  ) item;
+  if conflicts is not null then
+    raise exception 'opening_hours_pricing_conflict' using errcode = 'P0001', detail = conflicts::text;
+  end if;
+  return null;
+end;
+$$;
+create constraint trigger check_hours_cover_pricing
+  after insert or update or delete on public.location_opening_hours
+  deferrable initially deferred for each row execute function public.check_hours_cover_pricing();
+
+create function public.check_pricing_fits_hours() returns trigger
+language plpgsql security invoker set search_path = '' as $$
+begin
+  perform 1 from public.locations where id = new.location_id for update;
+  if not exists (
+    select 1 from public.location_opening_hours h
+    where h.location_id = new.location_id and h.weekday = new.weekday
+      and h.opens_at_minute <= new.starts_at_minute and new.ends_at_minute <= h.closes_at_minute
+  ) then
+    raise exception 'pricing_outside_opening_hours' using errcode = 'P0001';
+  end if;
+  return new;
+end;
+$$;
+create trigger check_pricing_fits_hours
+  before insert or update on public.location_pricing_rules
+  for each row execute function public.check_pricing_fits_hours();
+
 alter table public.pricing_rule_sets enable row level security;
 revoke all on public.pricing_rule_sets from anon, authenticated;
 grant select, delete on public.pricing_rule_sets to authenticated;
@@ -86,6 +151,7 @@ begin
   if coalesce(cardinality(p_court_ids), 0) = 0 or coalesce(cardinality(p_weekdays), 0) = 0 then
     raise exception 'Empty pricing applicability' using errcode = '23514';
   end if;
+  perform 1 from public.locations where id = p_location_id for update;
   if p_rule_set_id is null then
     insert into public.pricing_rule_sets(location_id) values (p_location_id) returning id into target_id;
   else

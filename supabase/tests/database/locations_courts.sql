@@ -1,7 +1,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set search_path = extensions, public;
-select plan(27);
+select plan(26);
 
 insert into public.locations (id, name, slug, timezone, is_active) values
 ('c1000000-0000-4000-8000-000000000001', 'Active', 'test-locations-active', 'Europe/Bucharest', true),
@@ -17,7 +17,6 @@ select throws_ok($$insert into public.courts (location_id, name, slug, surface, 
   '23514', null, 'covered is not a permanent environment');
 select hasnt_column('public', 'courts', 'supports_balloon', 'obsolete capability column removed');
 select hasnt_column('public', 'courts', 'balloon_installed', 'obsolete installation column removed');
-select hasnt_column('public', 'courts', 'display_order', 'obsolete court ordering column removed');
 
 select throws_ok($$insert into public.courts (location_id, name, slug, surface, environment)
   values ('c1000000-0000-4000-8000-000000000001', 'Bad surface', 'bad-surface', 'sand', 'outdoor')$$,

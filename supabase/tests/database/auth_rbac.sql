@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set search_path = extensions, public;
 
-select plan(76);
+select plan(78);
 
 insert into auth.users (id, email, aud, role)
 values
@@ -27,6 +27,33 @@ select is(
   0::bigint,
   'successful auth inserts leave no fixture user without a profile'
 );
+-- Recreate the pre-bootstrap state even when local integration fixtures already
+-- contain administrators. Save their original status for this transaction.
+create temp table pgtap_existing_active_admins on commit drop as
+select u.id from public.users u
+where u.status = 'active'
+  and exists (
+    select 1 from public.user_roles ur
+    where ur.user_id = u.id and ur.role_code = 'admin'
+  );
+-- Trusted fixture setup may cross the final-admin boundary; restore the guard
+-- before exercising the behavior under test.
+alter table public.users disable trigger users_preserve_active_admin;
+update public.users set status = 'suspended'
+where id in (select id from pgtap_existing_active_admins);
+alter table public.users enable trigger users_preserve_active_admin;
+select is(
+  (select count(*) from public.users u join public.user_roles ur on ur.user_id = u.id
+   where u.status = 'active' and ur.role_code = 'admin'),
+  0::bigint, 'fixture has no active admin before non-admin suspension');
+update public.users set status = 'suspended'
+  where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001';
+select is((select status from public.users where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001'),
+  'suspended'::public.user_status, 'non-admin can be suspended with zero active admins');
+update public.users set status = 'active'
+  where id = 'a13f15e2-7b5d-4b41-8d4b-4f2135081001';
+update public.users set status = 'active'
+where id in (select id from pgtap_existing_active_admins);
 
 
 select is(

@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { AdminUserListItem } from "@/lib/admin/users";
 import { formatUserDate } from "./date-format";
 import { UserManagementDialog } from "./user-management-dialog";
@@ -36,10 +37,10 @@ export function UserItem({ user, currentAdminId, mobile }: {
     },
   };
   const hover = "cursor-pointer transition-colors hover:bg-surface-muted focus-visible:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-focus";
-  const dialog = <UserManagementDialog user={user} currentAdminId={currentAdminId} open={open} onOpenChange={(nextOpen) => {
+  const dialog = open && createPortal(<UserManagementDialog user={user} currentAdminId={currentAdminId} open={open} onOpenChange={(nextOpen) => {
     setOpen(nextOpen);
     if (!nextOpen) rowRef.current?.focus();
-  }} />;
+  }} />, document.body);
   return mobile ? <>
     <article {...rowProps} role="button" className={`min-w-0 rounded-card border border-border bg-surface p-5 ${hover}`}>
       <p className="break-words font-semibold text-foreground">{user.email}</p>

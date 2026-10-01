@@ -2,32 +2,69 @@
 
 import { useId, useState } from "react";
 import { Input } from "@/components/input";
+import { Button } from "@/components/button";
+import { useEditableFormBaseline } from "@/components/use-editable-form-baseline";
 import type { AdminLocation } from "@/lib/admin/locations";
 import type { AdminCourt } from "@/lib/admin/courts";
 import { courtSurfaceLabels, courtEnvironmentLabels } from "@/lib/admin/courts-validation";
-import { weekdays, minuteToTime } from "@/lib/admin/opening-hours-validation";
-import { courtStates, courtStateLabels, type PricingRuleSet } from "@/lib/pricing/validation";
+import { groupedWeeklySchedule, minuteToTime, timeToMinute, weekdayGroupLabel, weekdays, type OpeningInterval } from "@/lib/admin/opening-hours-validation";
+import { courtStates, courtStateLabels, pricingDefinitionSchema, type PricingRuleSet } from "@/lib/pricing/validation";
 import { minorToMajor } from "@/lib/pricing/money";
+import { pricingOpeningHoursError } from "@/lib/pricing/resolution";
 
-export const pricingButtonClass = "rounded-control border border-border-strong px-3 py-2 text-sm font-semibold text-primary hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-60";
 export type PricingCourt = Pick<AdminCourt, "id" | "location_id" | "name" | "surface" | "environment">;
+const timeSuggestions = Array.from({ length: 48 }, (_, index) => minuteToTime(index * 30));
 
-export function PricingRuleForm({ location, courts, rule, pending, fieldErrors, onSave, onCancel, onRemove }: {
+export function PricingRuleForm({ location, courts, rule, openingHours, pending, fieldErrors, onSave, onRemove }: {
   location: Pick<AdminLocation, "id" | "currency">; courts: PricingCourt[]; rule?: PricingRuleSet;
-  pending: boolean; fieldErrors: Record<string, string>; onSave: (input: unknown) => void; onCancel: () => void;
-  onRemove?: () => void;
+  openingHours: OpeningInterval[];
+  pending: boolean; fieldErrors: Record<string, string>; onSave: (input: unknown) => void;
+  onRemove?: (trigger: HTMLButtonElement) => void;
 }) {
   const prefix = useId();
   const [selectedDays, setSelectedDays] = useState(rule?.weekdays ?? [0]);
   const [selectedCourts, setSelectedCourts] = useState(rule?.court_ids ?? []);
   const [state, setState] = useState(rule?.court_state ?? "outdoor");
+  const [localHoursError, setLocalHoursError] = useState("");
+  const schedule = groupedWeeklySchedule(location.id, openingHours);
+  function parsedDefinition(form: HTMLFormElement) {
+    const data = new FormData(form);
+    return pricingDefinitionSchema.safeParse({
+      location_id: location.id, court_ids: data.getAll("court_ids"),
+      court_state: data.get("court_state"), weekdays: data.getAll("weekdays").map(Number),
+      starts_at: data.get("starts_at"), ends_at: data.get("ends_at"),
+      starts_on: data.get("starts_on"), ends_on: data.get("ends_on"),
+      price_per_hour: data.get("price_per_hour"),
+    });
+  }
+  function hoursError(form: HTMLFormElement) {
+    const parsed = parsedDefinition(form);
+    if (!parsed.success) return null;
+    return pricingOpeningHoursError(openingHours, {
+      location_id: location.id, weekdays: parsed.data.weekdays,
+      starts_at_minute: timeToMinute(parsed.data.starts_at), ends_at_minute: timeToMinute(parsed.data.ends_at),
+    });
+  }
+  const { attach, dirty, valid, sync } = useEditableFormBaseline(
+    ["court_ids", "court_state", "weekdays", "starts_at", "ends_at", "starts_on", "ends_on", "price_per_hour"],
+    (field, value) => {
+      const trimmed = value.trim();
+      return field === "price_per_hour" && /^[0-9]+(?:\.[0-9]{1,2})?$/.test(trimmed)
+        ? Number(trimmed).toFixed(2) : trimmed;
+    },
+    (form) => parsedDefinition(form).success && !hoursError(form),
+  );
   const incompatible = courts.filter((court) => selectedCourts.includes(court.id))
     .some((court) => (court.environment === "indoor") !== (state === "indoor"));
   const stateError = fieldErrors.court_state ?? (incompatible
     ? "Selected courts must share a valid state: indoor courts use Indoor; outdoor courts use Outdoor or Covered." : "");
-  return <form aria-label="Pricing rule"
+  function update(form: HTMLFormElement) { sync(); setLocalHoursError(hoursError(form) ?? ""); }
+  return <form aria-label="Pricing rule" ref={attach} onInput={(event) => update(event.currentTarget)} onChange={(event) => update(event.currentTarget)}
     onSubmit={(event) => {
-      event.preventDefault(); const data = new FormData(event.currentTarget);
+      event.preventDefault();
+      const currentHoursError = hoursError(event.currentTarget);
+      if (currentHoursError) { setLocalHoursError(currentHoursError); return; }
+      const data = new FormData(event.currentTarget);
       onSave({ ...(rule ? { rule_set_id: rule.rule_set_id } : {}), location_id: location.id,
         court_ids: selectedCourts, court_state: state, weekdays: selectedDays,
         starts_at: data.get("starts_at"), ends_at: data.get("ends_at"), starts_on: data.get("starts_on"), ends_on: data.get("ends_on"),
@@ -59,9 +96,9 @@ export function PricingRuleForm({ location, courts, rule, pending, fieldErrors, 
       <fieldset className="sm:col-span-2" aria-invalid={Boolean(fieldErrors.weekdays)} aria-describedby={`${prefix}-days-error`}>
         <legend className="mb-2 text-sm font-medium">Days</legend>
         <div className="mb-3 flex flex-wrap gap-2">
-          <button type="button" className={pricingButtonClass} onClick={() => setSelectedDays([0, 1, 2, 3, 4])}>Monday–Friday</button>
-          <button type="button" className={pricingButtonClass} onClick={() => setSelectedDays([5, 6])}>Saturday–Sunday</button>
-          <button type="button" className={pricingButtonClass} onClick={() => setSelectedDays([0, 1, 2, 3, 4, 5, 6])}>All days</button>
+          <Button type="button" variant="secondary" size="small" onClick={(event) => { const form = event.currentTarget.form; setSelectedDays([0, 1, 2, 3, 4]); requestAnimationFrame(() => { if (form) update(form); }); }}>Monday–Friday</Button>
+          <Button type="button" variant="secondary" size="small" onClick={(event) => { const form = event.currentTarget.form; setSelectedDays([5, 6]); requestAnimationFrame(() => { if (form) update(form); }); }}>Saturday–Sunday</Button>
+          <Button type="button" variant="secondary" size="small" onClick={(event) => { const form = event.currentTarget.form; setSelectedDays([0, 1, 2, 3, 4, 5, 6]); requestAnimationFrame(() => { if (form) update(form); }); }}>All days</Button>
         </div>
         <div className="flex flex-wrap gap-x-4 gap-y-2">
           {weekdays.map((label, day) => <label key={day} className="flex items-center gap-2 text-sm">
@@ -71,6 +108,16 @@ export function PricingRuleForm({ location, courts, rule, pending, fieldErrors, 
         </div>
         <p id={`${prefix}-days-error`} className="mt-1 text-sm text-danger">{fieldErrors.weekdays ?? ""}</p>
       </fieldset>
+      <section aria-label="Opening hours" className="rounded-control border border-border bg-surface-muted p-3 text-sm sm:col-span-2">
+        <h3 className="mb-2 font-semibold">Opening hours</h3>
+        {!openingHours.length && <p>Not configured. Configure this location&apos;s opening hours before saving pricing.</p>}
+        {openingHours.length > 0 && <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
+          {schedule.map((group) => <div key={group.weekdays.join(",")} className="contents">
+            <dt className="font-medium">{weekdayGroupLabel(group.weekdays)}</dt>
+            <dd>{group.intervals.length ? group.intervals.map((interval) => `${minuteToTime(interval.opens_at_minute)}–${minuteToTime(interval.closes_at_minute)}`).join(", ") : "Closed"}</dd>
+          </div>)}
+        </dl>}
+      </section>
       {([
         ["starts_at", "Start time", "text", rule ? minuteToTime(rule.starts_at_minute) : ""],
         ["ends_at", "End time", "text", rule ? minuteToTime(rule.ends_at_minute) : ""],
@@ -80,21 +127,20 @@ export function PricingRuleForm({ location, courts, rule, pending, fieldErrors, 
       ] as const).map(([field, label, type, initial]) => <div key={field}>
         <label htmlFor={`${prefix}-${field}`} className="mb-1 block text-sm font-medium">{label}</label>
         <Input id={`${prefix}-${field}`} name={field} type={type} defaultValue={initial}
+          list={field === "starts_at" || field === "ends_at" ? `${prefix}-${field}-suggestions` : undefined}
           required={field !== "starts_on" && field !== "ends_on"} inputMode={field === "price_per_hour" ? "decimal" : undefined}
           placeholder={field === "price_per_hour" ? "19.00" : type === "text" ? "HH:mm" : undefined}
           pattern={field === "starts_at" ? "([01][0-9]|2[0-3]):[0-5][0-9]" : field === "ends_at" ? "([01][0-9]|2[0-3]):[0-5][0-9]|24:00" : field === "price_per_hour" ? "[0-9]+([.][0-9]{1,2})?" : undefined}
-          aria-invalid={Boolean(fieldErrors[field])} aria-describedby={fieldErrors[field] ? `${prefix}-${field}-error` : undefined} />
-        {fieldErrors[field] && <p id={`${prefix}-${field}-error`} className="mt-1 text-sm text-danger">{fieldErrors[field]}</p>}
+          aria-invalid={Boolean(fieldErrors[field] || (field === "ends_at" && localHoursError))} aria-describedby={fieldErrors[field] || (field === "ends_at" && localHoursError) ? `${prefix}-${field}-error` : undefined} />
+        {(fieldErrors[field] || (field === "ends_at" && localHoursError)) && <p id={`${prefix}-${field}-error`} className="mt-1 text-sm text-danger">{fieldErrors[field] || localHoursError}</p>}
       </div>)}
-      <div className="flex items-end gap-2">
-        <button type="submit" className={pricingButtonClass} disabled={incompatible} aria-busy={pending}>{pending ? "Saving…" : "Save rule"}</button>
-        <button type="button" className={pricingButtonClass} onClick={onCancel}>Cancel</button>
+      <datalist id={`${prefix}-starts_at-suggestions`}>{timeSuggestions.map((time) => <option key={time} value={time} />)}</datalist>
+      <datalist id={`${prefix}-ends_at-suggestions`}>{[...timeSuggestions, "24:00"].map((time) => <option key={time} value={time} />)}</datalist>
+      <div className="flex items-center justify-between gap-4 border-t border-border pt-4 sm:col-span-2">
+        {rule && onRemove ? <Button type="button" variant="destructive" size="small" disabled={pending} onClick={(event) => onRemove(event.currentTarget)}>Remove rule</Button> : <span />}
+        <Button type="submit" fullWidth={false} disabled={pending || incompatible || (rule ? !dirty : !valid)} aria-busy={pending}>{pending ? "Saving…" : "Save rule"}</Button>
       </div>
     </fieldset>
-    {rule && onRemove && <div className="mt-4 border-t border-border pt-4">
-      <button type="button" className="rounded-control border border-danger px-3 py-2 text-sm font-semibold text-danger hover:bg-danger-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-60"
-        disabled={pending} onClick={onRemove}>Remove rule</button>
-    </div>}
     <p className="mt-3 text-sm text-muted-foreground">Times include the start and exclude the end; adjacent intervals are valid. Use HH:mm; end time may be 24:00. Date boundaries are inclusive. Prices accept up to two decimal places.</p>
   </form>;
 }

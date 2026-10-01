@@ -9,6 +9,8 @@ import { CourtItem } from "./court-item";
 import { CourtsToolbar } from "./courts-toolbar";
 import { courtInventorySchema, selectLocationCourts } from "./inventory";
 
+export const instant = false;
+
 export default async function AdminCourtsPage({ searchParams }: {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 } = {}) {

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { OpeningInterval } from "@/lib/admin/opening-hours-validation";
+import { minuteToTime, weekdays, type OpeningInterval } from "@/lib/admin/opening-hours-validation";
 import { courtStates, type PricingRule, type PricingRuleSet } from "./validation";
 
 export function mondayWeekday(date: string): number {
@@ -38,6 +38,45 @@ export function fitsOpeningHours(
 ): boolean {
   return intervals.some((interval) => interval.location_id === rule.location_id && interval.weekday === rule.weekday
     && interval.opens_at_minute <= rule.starts_at_minute && rule.ends_at_minute <= interval.closes_at_minute);
+}
+
+type HoursInterval = Pick<OpeningInterval, "location_id" | "weekday" | "opens_at_minute" | "closes_at_minute">;
+
+function dayNames(days: readonly number[]): string {
+  const sorted = [...days].sort((a, b) => a - b);
+  if (sorted.length > 1 && sorted.every((day, index) => day === sorted[0] + index)) {
+    return `${weekdays[sorted[0]]}–${weekdays[sorted.at(-1)!]}`;
+  }
+  return sorted.map((day) => weekdays[day]).join(", ");
+}
+
+export function pricingOpeningHoursError(
+  intervals: readonly HoursInterval[],
+  input: { location_id: string; weekdays: readonly number[]; starts_at_minute: number; ends_at_minute: number },
+): string | null {
+  const locationHours = intervals.filter((interval) => interval.location_id === input.location_id);
+  if (!locationHours.length) return "Configure this location's opening hours before saving pricing.";
+  const invalid = input.weekdays.filter((weekday) => !fitsOpeningHours(locationHours, { ...input, weekday }));
+  if (!invalid.length) return null;
+  const grouped = new Map<string, { days: number[]; hours: HoursInterval[] }>();
+  for (const day of invalid) {
+    const hours = locationHours.filter((interval) => interval.weekday === day)
+      .sort((a, b) => a.opens_at_minute - b.opens_at_minute);
+    const key = hours.map((interval) => `${interval.opens_at_minute}-${interval.closes_at_minute}`).join(",");
+    const group = grouped.get(key);
+    if (group) group.days.push(day);
+    else grouped.set(key, { days: [day], hours });
+  }
+  const selectedTime = `${minuteToTime(input.starts_at_minute)}–${minuteToTime(input.ends_at_minute)}`;
+  return [...grouped.values()].map(({ days, hours }) => {
+    const label = dayNames(days);
+    if (!hours.length) return `${label} ${days.length === 1 ? "is" : "are"} closed. Remove ${days.length === 1 ? label : "those days"} or change the location's opening hours.`;
+    const schedule = hours.map((interval) => `${minuteToTime(interval.opens_at_minute)}–${minuteToTime(interval.closes_at_minute)}`);
+    const crossesGap = hours.some((interval) => interval.opens_at_minute <= input.starts_at_minute && input.starts_at_minute < interval.closes_at_minute)
+      && hours.some((interval) => interval.opens_at_minute < input.ends_at_minute && input.ends_at_minute <= interval.closes_at_minute);
+    if (crossesGap) return `The selected time ${selectedTime} crosses a closed period. ${label} ${days.length === 1 ? "is" : "are"} open ${schedule.join(" and ")}.`;
+    return `The selected time ${selectedTime} is outside ${label} opening hours (${schedule.join(", ")}).`;
+  }).join(" ");
 }
 
 // Group by persisted identity, never by coincidentally equal display values.

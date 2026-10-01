@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
-import { StrictMode, useRef } from "react";
+import { StrictMode, act, useRef } from "react";
+import { hydrateRoot } from "react-dom/client";
+import { renderToString } from "react-dom/server";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ModalDialog } from "../../src/components/modal-dialog";
@@ -23,6 +25,34 @@ afterEach(() => {
   cleanup();
   document.body.style.overflow = "";
   document.documentElement.style.overflow = "";
+});
+
+it.each([false, true])("hydrates a ModalDialog with active=%s", async (active) => {
+  const ref = { current: null as HTMLDialogElement | null };
+  const element = <ModalDialog ref={ref} active={active} aria-label="Hydrated dialog">Content</ModalDialog>;
+  const browserDocument = document;
+  let html: string;
+  vi.stubGlobal("document", undefined);
+  try {
+    html = renderToString(element);
+  } finally {
+    vi.stubGlobal("document", browserDocument);
+  }
+  const container = document.createElement("div");
+  container.innerHTML = html;
+  document.body.append(container);
+  const hydrationError = vi.spyOn(console, "error").mockImplementation(() => {});
+  let root: ReturnType<typeof hydrateRoot> | undefined;
+  try {
+    await act(async () => { root = hydrateRoot(container, element); });
+    expect(hydrationError).not.toHaveBeenCalled();
+    expect(ref.current?.open).toBe(active);
+  } finally {
+    await act(async () => { root?.unmount(); });
+    hydrationError.mockRestore();
+    container.remove();
+    vi.unstubAllGlobals();
+  }
 });
 
 it("locks both document scrollers while a modal is open and restores their prior values", () => {

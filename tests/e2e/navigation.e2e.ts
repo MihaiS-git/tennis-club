@@ -156,6 +156,7 @@ test("navigation follows the current account and protected routes enforce access
     await expect(page.getByRole("heading", { name: "Profile", exact: true })).toBeVisible();
     await expect(page.getByText("Personal information saved.", { exact: true })).toHaveCount(1);
   } finally {
+    await page.close();
     for (const account of accounts.reverse()) {
       expect((await service.from("users").delete().eq("id", account.id)).error).toBeNull();
       expect((await service.auth.admin.deleteUser(account.id)).error).toBeNull();

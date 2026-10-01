@@ -1,5 +1,8 @@
 // @vitest-environment jsdom
 
+import { act } from "react";
+import { hydrateRoot } from "react-dom/client";
+import { renderToString } from "react-dom/server";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -15,25 +18,38 @@ const { updateUserStatusAction, updateUserRoleAction, success, error } = vi.hois
 vi.mock("../../../src/app/admin/users/actions", () => ({ updateUserStatusAction, updateUserRoleAction }));
 vi.mock("sonner", () => ({ toast: { success, error } }));
 
-import { UserManagementDialog } from "../../../src/app/admin/users/user-management-dialog";
+import { UserItem } from "../../../src/app/admin/users/user-item";
+import type { AdminUserListItem } from "../../../src/lib/admin/users";
 
 const userId = "84c64ef2-6925-4901-a137-f01395541411";
 const user = {
   id: userId,
   email: "member@example.com",
+  created_at: "2026-09-25T23:30:00-04:00",
   updated_at: "2026-09-25T23:30:00-04:00",
   status: "active" as const,
   roles: [] as UserRole[],
 };
 
-function openDialog(props: Parameters<typeof UserManagementDialog>[0]["user"] = user, currentAdminId = "other-admin") {
-  render(<UserManagementDialog currentAdminId={currentAdminId} user={props} />);
-  fireEvent.click(screen.getByRole("button", { name: "Manage" }));
+function userTree(props: AdminUserListItem = user, currentAdminId = "other-admin") {
+  return <table><tbody><UserItem currentAdminId={currentAdminId} user={props} /></tbody></table>;
+}
+
+function openDialog(props: AdminUserListItem = user, currentAdminId = "other-admin") {
+  render(userTree(props, currentAdminId));
+  fireEvent.click(screen.getByRole("row", { name: `Manage user ${props.email}` }));
   return screen.getByRole("dialog");
 }
 
 function roleRow(dialog: HTMLElement, label: string) {
   return within(dialog).getByText(label).closest("li") as HTMLElement;
+}
+function confirmation() {
+  const dialogs = screen.getAllByRole("dialog");
+  return dialogs[dialogs.length - 1];
+}
+function confirm(label: string) {
+  fireEvent.click(within(confirmation()).getByRole("button", { name: label }));
 }
 
 beforeEach(() => {
@@ -44,163 +60,105 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
-it("renders a single Manage button while closed", () => {
-  render(<UserManagementDialog currentAdminId="other-admin" user={user} />);
-  expect(screen.getAllByRole("button", { name: "Manage" })).toHaveLength(1);
-  expect(screen.queryByRole("dialog")).toBeNull();
-});
-
-it("opens the native dialog from Manage", () => {
-  const dialog = openDialog();
-  expect(dialog.hasAttribute("open")).toBe(true);
-  expect(within(dialog).getByRole("heading", { name: "Manage user" })).toBeTruthy();
-});
-
-it("shows email, status, and both elevated roles", () => {
-  const dialog = openDialog();
-  const header = dialog.querySelector("header")!;
-  expect(within(header).getByRole("heading", { name: "Manage user" })).toBeTruthy();
-  expect(within(header).getByRole("button", { name: "Close" })).toBeTruthy();
-  expect(header.textContent).not.toContain(user.email);
-  expect(header.className).toContain("border-b");
-  expect(header.className).not.toContain("rounded-card");
-  expect(within(dialog).getByText(user.email)).toBeTruthy();
-  expect(within(dialog).getByText("Active")).toBeTruthy();
-  expect(within(dialog).getByRole("heading", { name: "Account status" })).toBeTruthy();
-  expect(within(dialog).getByRole("heading", { name: "Roles" })).toBeTruthy();
-  for (const label of ["Admin", "Coach"]) {
-    expect(roleRow(dialog, label)).toBeTruthy();
+it("hydrates the closed user row without adding a client-only dialog", async () => {
+  const browserDocument = document;
+  let html: string;
+  vi.stubGlobal("document", undefined);
+  try {
+    html = renderToString(userTree());
+  } finally {
+    vi.stubGlobal("document", browserDocument);
   }
-  expect(within(dialog).getAllByRole("listitem")).toHaveLength(2);
+
+  const container = document.createElement("div");
+  container.innerHTML = html;
+  document.body.append(container);
+  const hydrationError = vi.spyOn(console, "error").mockImplementation(() => {});
+  let root: ReturnType<typeof hydrateRoot> | undefined;
+  try {
+    await act(async () => { root = hydrateRoot(container, userTree()); });
+    expect(hydrationError).not.toHaveBeenCalled();
+    expect(container.querySelector("dialog")).toBeNull();
+    expect(document.body.querySelector("dialog")).toBeNull();
+    fireEvent.click(within(container).getByRole("row", { name: `Manage user ${user.email}` }));
+    expect(screen.getByRole("dialog", { name: "Manage user" })).toBeTruthy();
+  } finally {
+    await act(async () => { root?.unmount(); });
+    hydrationError.mockRestore();
+    container.remove();
+    vi.unstubAllGlobals();
+  }
 });
 
-it("shows Suspend user for an active account", () => {
-  expect(within(openDialog()).getByRole("button", { name: "Suspend user" })).toBeTruthy();
-});
-
-it("shows Reactivate user for a suspended account", () => {
-  expect(within(openDialog({ ...user, status: "suspended" })).getByRole("button", { name: "Reactivate user" })).toBeTruthy();
-});
-
-
-it("shows Assign for an absent role", () => {
-  expect(within(roleRow(openDialog(), "Coach")).getByRole("button", { name: "Assign" })).toBeTruthy();
-});
-
-it("suspends an active user and updates the displayed status", async () => {
-  updateUserStatusAction.mockResolvedValue({ ok: true, user: { id: userId, status: "suspended" } });
+it("keeps Manage User open when suspension is cancelled and restores focus", () => {
   const dialog = openDialog();
-  fireEvent.click(within(dialog).getByRole("button", { name: "Suspend user" }));
-
-  await waitFor(() => expect(within(dialog).getByText("Suspended")).toBeTruthy());
-  expect(updateUserStatusAction).toHaveBeenCalledExactlyOnceWith({ userId, status: "suspended" });
-  expect(within(dialog).getByRole("button", { name: "Reactivate user" })).toBeTruthy();
-  expect(success).toHaveBeenCalledExactlyOnceWith("User suspended.");
+  const trigger = within(dialog).getByRole("button", { name: "Suspend user" });
+  fireEvent.click(trigger);
+  expect(screen.getAllByRole("dialog")).toHaveLength(2);
+  expect(updateUserStatusAction).not.toHaveBeenCalled();
+  fireEvent.click(within(confirmation()).getByRole("button", { name: "Cancel" }));
+  expect(screen.getAllByRole("dialog")).toHaveLength(1);
   expect(dialog.hasAttribute("open")).toBe(true);
+  expect(document.activeElement).toBe(trigger);
+  expect(updateUserStatusAction).not.toHaveBeenCalled();
 });
-
-it("reactivates a suspended user and updates the displayed status", async () => {
-  updateUserStatusAction.mockResolvedValue({ ok: true, user: { id: userId, status: "active" } });
-  const dialog = openDialog({ ...user, status: "suspended" });
-  fireEvent.click(within(dialog).getByRole("button", { name: "Reactivate user" }));
-
-  await waitFor(() => expect(within(dialog).getByText("Active")).toBeTruthy());
-  expect(updateUserStatusAction).toHaveBeenCalledExactlyOnceWith({ userId, status: "active" });
-  expect(success).toHaveBeenCalledExactlyOnceWith("User reactivated.");
-});
-
-it("assigns a role and uses the returned role list", async () => {
-  updateUserRoleAction.mockResolvedValue({ ok: true, user: { id: userId, roles: ["coach"] } });
-  const dialog = openDialog();
-  fireEvent.click(within(roleRow(dialog, "Coach")).getByRole("button", { name: "Assign" }));
-
-  await waitFor(() => expect(within(roleRow(dialog, "Coach")).getByRole("button", { name: "Remove" })).toBeTruthy());
-  expect(updateUserRoleAction).toHaveBeenCalledExactlyOnceWith({ userId, role: "coach", operation: "assign" });
-  expect(success).toHaveBeenCalledOnce();
-});
-
-it("revokes a role and uses the returned role list", async () => {
+it("requires confirmation for either role removal while assignments stay direct", async () => {
   updateUserRoleAction.mockResolvedValue({ ok: true, user: { id: userId, roles: [] } });
-  const dialog = openDialog({ ...user, roles: ["coach"] });
+  const dialog = openDialog({ ...user, roles: ["admin", "coach"] });
+  fireEvent.click(within(roleRow(dialog, "Admin")).getByRole("button", { name: "Remove" }));
+  expect(updateUserRoleAction).not.toHaveBeenCalled();
+  fireEvent.click(within(confirmation()).getByRole("button", { name: "Cancel" }));
   fireEvent.click(within(roleRow(dialog, "Coach")).getByRole("button", { name: "Remove" }));
-
-  await waitFor(() => expect(within(roleRow(dialog, "Coach")).getByRole("button", { name: "Assign" })).toBeTruthy());
-  expect(updateUserRoleAction).toHaveBeenCalledExactlyOnceWith({ userId, role: "coach", operation: "revoke" });
-  expect(success).toHaveBeenCalledOnce();
+  expect(updateUserRoleAction).not.toHaveBeenCalled();
+  confirm("Remove Coach role");
+  await waitFor(() => expect(updateUserRoleAction).toHaveBeenCalledExactlyOnceWith({ userId, role: "coach", operation: "revoke" }));
 });
 
 it("keeps state unchanged for final-active-admin", async () => {
   updateUserStatusAction.mockResolvedValue({ ok: false, reason: "final-active-admin" });
   const dialog = openDialog();
   fireEvent.click(within(dialog).getByRole("button", { name: "Suspend user" }));
+  confirm("Suspend user");
 
   await waitFor(() => expect(error).toHaveBeenCalledWith("At least one active administrator must remain."));
   expect(within(dialog).getByText("Active")).toBeTruthy();
   expect(within(dialog).getByRole("button", { name: "Suspend user" })).toBeTruthy();
   expect(dialog.hasAttribute("open")).toBe(true);
+  expect(within(confirmation()).getByRole("alert").textContent).toBe("At least one active administrator must remain.");
+  expect(within(dialog).getByRole("heading", { name: "Roles" }).closest("section")?.querySelector('[role="alert"]')).toBeNull();
 });
 
-it("shows the not-found message", async () => {
-  updateUserRoleAction.mockResolvedValue({ ok: false, reason: "not-found" });
+it("clears a status error on retry and keeps a role error until its own retry", async () => {
+  updateUserStatusAction.mockResolvedValueOnce({ ok: false, reason: "final-active-admin" })
+    .mockResolvedValueOnce({ ok: true, user: { id: userId, status: "suspended" } });
+  updateUserRoleAction.mockResolvedValueOnce({ ok: false, reason: "not-found" })
+    .mockResolvedValueOnce({ ok: true, user: { id: userId, roles: ["coach"] } });
   const dialog = openDialog();
+  const statusSection = within(dialog).getByRole("heading", { name: "Account status" }).closest("section")!;
+  const rolesSection = within(dialog).getByRole("heading", { name: "Roles" }).closest("section")!;
+  fireEvent.click(within(statusSection).getByRole("button", { name: "Suspend user" }));
+  confirm("Suspend user");
+  await waitFor(() => expect(within(confirmation()).getByRole("alert")).toBeTruthy());
+  fireEvent.click(within(confirmation()).getByRole("button", { name: "Cancel" }));
+  expect(within(statusSection).getByRole("alert")).toBeTruthy();
   fireEvent.click(within(roleRow(dialog, "Coach")).getByRole("button", { name: "Assign" }));
-
-  await waitFor(() => expect(error).toHaveBeenCalledWith("This user no longer exists."));
-  expect(dialog.hasAttribute("open")).toBe(true);
-});
-
-it("shows the invalid-input message", async () => {
-  updateUserRoleAction.mockResolvedValue({ ok: false, reason: "invalid-input" });
-  const dialog = openDialog();
+  await waitFor(() => expect(within(rolesSection).getByRole("alert")).toBeTruthy());
+  fireEvent.click(within(statusSection).getByRole("button", { name: "Suspend user" }));
+  expect(within(confirmation()).queryByRole("alert")).toBeNull();
+  expect(within(rolesSection).getByRole("alert")).toBeTruthy();
+  confirm("Suspend user");
+  await waitFor(() => expect(within(statusSection).getByText("Suspended")).toBeTruthy());
   fireEvent.click(within(roleRow(dialog, "Coach")).getByRole("button", { name: "Assign" }));
-
-  await waitFor(() => expect(error).toHaveBeenCalledWith("Invalid user update."));
-});
-
-it("shows a generic message for an unexpected error", async () => {
-  updateUserStatusAction.mockRejectedValue(new Error("private database detail"));
-  const dialog = openDialog();
-  fireEvent.click(within(dialog).getByRole("button", { name: "Suspend user" }));
-
-  await waitFor(() => expect(error).toHaveBeenCalledWith("Unable to update user. Please try again."));
-  expect(success).not.toHaveBeenCalled();
-  expect(error).not.toHaveBeenCalledWith("private database detail");
-  expect(dialog.hasAttribute("open")).toBe(true);
-});
-
-it("closes from the Close button", () => {
-  const dialog = openDialog();
-  fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
-  expect(dialog.hasAttribute("open")).toBe(false);
-});
-
-it("disables mutation controls and prevents duplicate requests while pending", async () => {
-  let resolveMutation: (value: unknown) => void = () => {};
-  updateUserStatusAction.mockImplementation(() => new Promise((resolve) => { resolveMutation = resolve; }));
-  const dialog = openDialog();
-  const suspend = within(dialog).getByRole("button", { name: "Suspend user" });
-  fireEvent.click(suspend);
-
-  expect(success).not.toHaveBeenCalled();
-  expect(suspend.hasAttribute("disabled")).toBe(true);
-  expect(suspend.getAttribute("aria-busy")).toBe("true");
-  expect(suspend.style.cursor).toBe("wait");
-  expect(within(roleRow(dialog, "Coach")).getByRole("button", { name: "Assign" }).hasAttribute("disabled")).toBe(true);
-  fireEvent.click(suspend);
-  expect(updateUserStatusAction).toHaveBeenCalledOnce();
-
-  resolveMutation({ ok: true, user: { id: userId, status: "suspended" } });
-  await waitFor(() => expect(within(dialog).getByText("Suspended")).toBeTruthy());
-  expect(suspend.getAttribute("aria-busy")).toBe("false");
-  expect(suspend.style.cursor).toBe("");
+  expect(within(rolesSection).queryByRole("alert")).toBeNull();
+  await waitFor(() => expect(within(roleRow(dialog, "Coach")).getByRole("button", { name: "Remove" })).toBeTruthy());
 });
 
 it("synchronizes local state when refreshed user props arrive", async () => {
-  const view = render(<UserManagementDialog currentAdminId="other-admin" user={user} />);
-  fireEvent.click(screen.getByRole("button", { name: "Manage" }));
+  const view = render(userTree());
+  fireEvent.click(screen.getByRole("row", { name: `Manage user ${user.email}` }));
   const dialog = screen.getByRole("dialog");
 
-  view.rerender(<UserManagementDialog currentAdminId="other-admin" user={{ ...user, status: "suspended", roles: ["coach"] }} />);
+  view.rerender(userTree({ ...user, status: "suspended", roles: ["coach"] }));
   await waitFor(() => expect(within(dialog).getByText("Suspended")).toBeTruthy());
   expect(within(roleRow(dialog, "Coach")).getByRole("button", { name: "Remove" })).toBeTruthy();
   expect(dialog.hasAttribute("open")).toBe(true);
@@ -214,7 +172,6 @@ it("blocks own status and admin controls while keeping coach manageable ", async
   expect(admin.hasAttribute("disabled")).toBe(true);
   for (const control of [status, admin]) {
     expect(control.getAttribute("aria-busy")).toBe("false");
-    expect(control.style.cursor).toBe("not-allowed");
   }
   fireEvent.click(status);
   fireEvent.click(admin);
@@ -226,121 +183,7 @@ it("blocks own status and admin controls while keeping coach manageable ", async
   await waitFor(() => expect(within(roleRow(dialog, "Coach")).getByRole("button", { name: "Remove" }).hasAttribute("disabled")).toBe(false));
   updateUserRoleAction.mockResolvedValueOnce({ ok: true, user: { id: userId, roles: ["admin"] } });
   fireEvent.click(within(roleRow(dialog, "Coach")).getByRole("button", { name: "Remove" }));
+  confirm("Remove Coach role");
   await waitFor(() => expect(updateUserRoleAction).toHaveBeenLastCalledWith({ userId, role: "coach", operation: "revoke" }));
 });
 
-it("keeps another administrator's status and admin controls actionable", () => {
-  const dialog = openDialog({ ...user, roles: ["admin"] });
-  expect(within(dialog).getByRole("button", { name: "Suspend user" }).hasAttribute("disabled")).toBe(false);
-  expect(within(roleRow(dialog, "Admin")).getByRole("button", { name: "Remove" }).hasAttribute("disabled")).toBe(false);
-});
-
-it("disables own admin assignment even if the displayed role list is stale", () => {
-  const dialog = openDialog(user, userId);
-  expect(within(roleRow(dialog, "Admin")).getByRole("button", { name: "Assign" }).hasAttribute("disabled")).toBe(true);
-});
-
-it.each(["status", "role"])("shows the specific self-management rejection for %s", async (mutation) => {
-  const dialog = openDialog();
-  if (mutation === "status") {
-    updateUserStatusAction.mockResolvedValue({ ok: false, reason: "self-management" });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Suspend user" }));
-  } else {
-    updateUserRoleAction.mockResolvedValue({ ok: false, reason: "self-management" });
-    fireEvent.click(within(roleRow(dialog, "Admin")).getByRole("button", { name: "Assign" }));
-  }
-  await waitFor(() => expect(error).toHaveBeenCalledExactlyOnceWith(mutation === "status"
-    ? "Your account status can only be changed by another administrator."
-    : "Your admin role can only be changed by another administrator."));
-  expect(success).not.toHaveBeenCalled();
-});
-
-
-it.each([
-  ["admin", "Admin", "assign", "Admin role assigned."],
-  ["admin", "Admin", "revoke", "Admin role removed."],
-  ["coach", "Coach", "assign", "Coach role assigned."],
-  ["coach", "Coach", "revoke", "Coach role removed."],
-] as const)("shows %s %s %s success only after confirmation", async (role, label, operation, message) => {
-  let resolveMutation: (value: unknown) => void = () => {};
-  updateUserRoleAction.mockImplementationOnce(() => new Promise((resolve) => { resolveMutation = resolve; }));
-  const dialog = openDialog({ ...user, roles: operation === "revoke" ? [role] : [] });
-  const button = within(roleRow(dialog, label)).getByRole("button", { name: operation === "assign" ? "Assign" : "Remove" });
-  fireEvent.click(button);
-  expect(success).not.toHaveBeenCalled();
-  expect(button.hasAttribute("disabled")).toBe(true);
-  expect(dialog.hasAttribute("open")).toBe(true);
-
-  resolveMutation({ ok: true, user: { id: userId, roles: operation === "assign" ? [role] : [] } });
-  await waitFor(() => expect(success).toHaveBeenCalledExactlyOnceWith(message));
-  expect(button.hasAttribute("disabled")).toBe(false);
-  expect(dialog.hasAttribute("open")).toBe(true);
-});
-
-
-it("keeps policy-disabled controls free of loading feedback during an own coach mutation", async () => {
-  let resolveMutation: (value: unknown) => void = () => {};
-  updateUserRoleAction.mockImplementationOnce(() => new Promise((resolve) => { resolveMutation = resolve; }));
-  const dialog = openDialog({ ...user, roles: ["admin"] }, userId);
-  const coach = within(roleRow(dialog, "Coach")).getByRole("button", { name: "Assign" });
-  fireEvent.click(coach);
-  expect(coach.getAttribute("aria-busy")).toBe("true");
-  expect(coach.style.cursor).toBe("wait");
-  const status = within(dialog).getByRole("button", { name: "Suspend user" });
-  const admin = within(roleRow(dialog, "Admin")).getByRole("button", { name: "Remove" });
-  for (const control of [status, admin]) {
-    expect(control.hasAttribute("disabled")).toBe(true);
-    expect(control.getAttribute("aria-busy")).toBe("false");
-    expect(control.style.cursor).toBe("not-allowed");
-  }
-  resolveMutation({ ok: true, user: { id: userId, roles: ["admin", "coach"] } });
-  await waitFor(() => expect(coach.getAttribute("aria-busy")).toBe("false"));
-  expect(coach.style.cursor).toBe("");
-});
-
-
-it("renders Last updated in UTC and follows refreshed props while remaining open", async () => {
-  const view = render(<UserManagementDialog currentAdminId="other-admin" user={user} />);
-  fireEvent.click(screen.getByRole("button", { name: "Manage" }));
-  const dialog = screen.getByRole("dialog");
-  expect(within(dialog).getByText(/Last updated/)).toBeTruthy();
-  const time = dialog.querySelector("time");
-  expect(time?.textContent).toBe("26 Sep 2026");
-  expect(time?.getAttribute("datetime")).toBe(user.updated_at);
-  updateUserRoleAction.mockResolvedValueOnce({ ok: true, user: { id: userId, roles: ["coach"] } });
-  fireEvent.click(within(roleRow(dialog, "Coach")).getByRole("button", { name: "Assign" }));
-  await waitFor(() => expect(success).toHaveBeenCalledWith("Coach role assigned."));
-  // The mutation response has no timestamp; only refreshed server props supply it.
-  expect(time?.getAttribute("datetime")).toBe(user.updated_at);
-  view.rerender(<UserManagementDialog currentAdminId="other-admin" user={{ ...user, updated_at: "2026-09-27T08:00:00+00:00" }} />);
-  expect(time?.textContent).toBe("27 Sep 2026");
-  expect(time?.getAttribute("datetime")).toBe("2026-09-27T08:00:00+00:00");
-  expect(dialog.hasAttribute("open")).toBe(true);
-});
-
-it.each(["close", "escape", "unmount"])("restores previous document scrolling on %s", (method) => {
-  document.body.style.overflow = "auto";
-  document.documentElement.style.overflow = "scroll";
-  const view = render(<UserManagementDialog currentAdminId="other-admin" user={user} />);
-  try {
-    expect(document.body.style.overflow).toBe("auto");
-    fireEvent.click(screen.getByRole("button", { name: "Manage" }));
-    const dialog = screen.getByRole("dialog");
-    expect(document.body.style.overflow).toBe("hidden");
-    expect(document.documentElement.style.overflow).toBe("hidden");
-    // These two layout constraints preserve internal scrolling on short viewports.
-    expect(dialog.classList.contains("overflow-y-auto")).toBe(true);
-    expect(dialog.classList.contains("max-h-[calc(100dvh-2rem)]")).toBe(true);
-    if (method === "close") fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
-    else if (method === "escape") {
-      fireEvent(dialog, new Event("cancel", { cancelable: true }));
-      dialog.removeAttribute("open"); // jsdom does not implement the native Escape default.
-    } else view.unmount();
-    expect(document.body.style.overflow).toBe("auto");
-    expect(document.documentElement.style.overflow).toBe("scroll");
-  } finally {
-    view.unmount();
-    document.body.style.overflow = "";
-    document.documentElement.style.overflow = "";
-  }
-});

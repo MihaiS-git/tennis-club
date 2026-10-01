@@ -1,9 +1,9 @@
 "use client";
 
 import { useId, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
-import { ModalDialog } from "@/components/modal-dialog";
+import { Button } from "@/components/button";
+import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { archiveLocationAction } from "./actions";
 
 export function LocationArchiveControl({
@@ -20,7 +20,6 @@ export function LocationArchiveControl({
   const router = useRouter();
   const errorId = useId();
   const pendingRef = useRef(false);
-  const dialogRef = useRef<HTMLDialogElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [confirming, setConfirming] = useState(false);
   const [pending, setPending] = useState(false);
@@ -36,7 +35,6 @@ export function LocationArchiveControl({
       const result = await archiveLocationAction({ id, archived: !archived });
       if (result.ok) {
         setDone(true);
-        dialogRef.current?.close();
         setConfirming(false);
         onSuccess?.();
         router.refresh();
@@ -57,79 +55,35 @@ export function LocationArchiveControl({
   return (
     <div className="relative inline-block">
       {archived ? (
-        <button
+        <Button
           type="button"
           disabled={pending || done}
           aria-describedby={error ? errorId : undefined}
-          className="text-sm text-muted-foreground underline-offset-2 hover:text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
+          variant="subtle" size="small"
           onClick={() => void mutate()}
         >
           {done ? "Restored" : pending ? "Restoring…" : "Restore"}
-        </button>
+        </Button>
       ) : (
-        <button
+        <Button
           ref={triggerRef}
           type="button"
           disabled={pending || done}
           aria-expanded={confirming}
           aria-label={`Archive ${name}`}
-          className="text-sm text-muted-foreground underline-offset-2 hover:text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
+          variant="destructive" size="small"
           onClick={() => {
             setError("");
             setConfirming(true);
           }}
         >
           {done ? "Archived" : "Archive"}
-        </button>
+        </Button>
       )}
-      {confirming &&
-        !archived &&
-        createPortal(
-          <ModalDialog
-            ref={dialogRef}
-            active={confirming}
-            aria-label={`Archive ${name}`}
-            onCancel={(event) => {
-              if (pending) event.preventDefault();
-            }}
-            onClose={() => {
-              setConfirming(false);
-              triggerRef.current?.focus();
-            }}
-            className="fixed inset-0 m-auto w-[calc(100%-2rem)] max-w-sm rounded-card border border-border bg-surface p-5 text-foreground shadow-floating backdrop:bg-foreground/50"
-          >
-            <p className="text-sm">
-              Archive {name}? It will leave normal management and become
-              inactive.
-            </p>
-            <p
-              id={errorId}
-              role={error ? "alert" : undefined}
-              className="min-h-5 pt-1 text-xs text-danger"
-            >
-              {error}
-            </p>
-            <div className="mt-3 flex justify-end gap-3 text-sm">
-              <button
-                type="button"
-                disabled={pending}
-                className="text-primary hover:underline"
-                onClick={() => dialogRef.current?.close()}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={pending}
-                className="font-semibold text-primary hover:underline"
-                onClick={() => void mutate()}
-              >
-                {pending ? "Archiving…" : "Confirm archive"}
-              </button>
-            </div>
-          </ModalDialog>,
-          document.body,
-        )}
+      <ConfirmationDialog open={confirming && !archived} title={`Archive ${name}`}
+        message={`${name} will become inactive and unavailable in normal management and use.`}
+        confirmLabel={pending ? "Archiving…" : "Archive location"} pending={pending} error={error}
+        onConfirm={() => void mutate()} onClose={() => setConfirming(false)} returnFocusRef={triggerRef} />
       {archived && error && (
         <p
           id={errorId}

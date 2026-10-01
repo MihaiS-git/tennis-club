@@ -49,7 +49,8 @@ export type OpeningHoursMutationResult =
   | { ok: true; intervals: OpeningInterval[] }
   | { ok: false; reason: "invalid-input"; fieldErrors: Record<string, string> }
   | { ok: false; reason: "overlap"; weekdays: number[] }
-  | { ok: false; reason: "not-found" };
+  | { ok: false; reason: "pricing-conflict"; message: string }
+  | { ok: false; reason: "not-found" | "archived" };
 
 export function weeklySchedule(locationId: string, intervals: readonly OpeningInterval[]) {
   return weekdays.map((label, weekday) => ({

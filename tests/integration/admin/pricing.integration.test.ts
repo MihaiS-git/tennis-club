@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test } from "vitest";
 import { listAdminPricingRules, saveAdminPricingRule, removeAdminPricingRule } from "../../../src/lib/admin/pricing";
+import { mutateAdminOpeningHours } from "../../../src/lib/admin/opening-hours";
 import { cleanupAuthFixtures, localFixtureClient } from "../auth-fixtures";
 import { ensureIntegrationAdminAnchor } from "../admin-anchor";
 
@@ -39,6 +40,14 @@ test("multi-court rule-set lifecycle is atomic and scoped to active admins", asy
       starts_at: "07:00", ends_at: "16:00", starts_on: "", ends_on: "", price_per_hour: "12.00" };
     const created = await saveAdminPricingRule(base, admin); assert.ok(created.ok);
     const setId = created.id;
+    const mondayHours = await service.from("location_opening_hours").select("id").eq("location_id", location_id).eq("weekday", 0).single();
+    assert.strictEqual(mondayHours.error, null); assert.ok(mondayHours.data);
+    expect(await mutateAdminOpeningHours({ location_id, weekdays: [0], replace_ids: [mondayHours.data.id],
+      intervals: [{ opens_at: "07:00", closes_at: "15:00" }] }, admin)).toMatchObject({
+      ok: false, reason: "pricing-conflict", message: expect.stringContaining("Monday (07:00–16:00)"),
+    });
+    expect((await service.from("location_opening_hours").select("closes_at_minute").eq("id", mondayHours.data.id).single()).data?.closes_at_minute)
+      .toBe(1440);
     let atomic = await service.from("location_pricing_rules").select("court_id, weekday, starts_at_minute, ends_at_minute").eq("rule_set_id", setId);
     assert.strictEqual(atomic.error, null); expect(atomic.data).toHaveLength(10);
     expect(await listAdminPricingRules(pricingLocationId, admin)).toMatchObject([{ rule_set_id: setId, court_ids: [court1, court2].sort(), weekdays: [0, 1, 2, 3, 4] }]);
@@ -66,12 +75,26 @@ test("multi-court rule-set lifecycle is atomic and scoped to active admins", asy
       .toEqual({ ok: false, reason: "overlap" });
     const afterConflict = await service.from("location_pricing_rules").select("court_id, weekday, starts_at_minute, ends_at_minute").eq("rule_set_id", setId);
     assert.strictEqual(afterConflict.error, null); expect(afterConflict.data).toEqual(beforeConflict);
-    // A missing day rejects the complete edit before the RPC.
-    assert.strictEqual((await service.from("location_opening_hours").delete().eq("location_id", location_id).eq("weekday", 4)).error, null);
-    expect(await saveAdminPricingRule({ ...base, rule_set_id: setId, court_ids: [court1, court3] }, admin))
-      .toMatchObject({ ok: false, fieldErrors: { ends_at: expect.stringContaining("Friday") } });
+    // Existing applicable pricing prevents deleting its opening day.
+    expect((await service.from("location_opening_hours").delete().eq("location_id", location_id).eq("weekday", 0)).error?.message)
+      .toBe("opening_hours_pricing_conflict");
+    expect((await service.from("location_opening_hours").select("weekday").eq("location_id", location_id).eq("weekday", 0)).data).toHaveLength(1);
     const afterHours = await service.from("location_pricing_rules").select("court_id, weekday, starts_at_minute, ends_at_minute").eq("rule_set_id", setId);
     expect(afterHours.data).toEqual(beforeConflict);
+    const sundayHours = await service.from("location_opening_hours").select("id").eq("location_id", location_id).eq("weekday", 6).single();
+    assert.strictEqual(sundayHours.error, null); assert.ok(sundayHours.data);
+    const [hoursRace, pricingRace] = await Promise.all([
+      mutateAdminOpeningHours({ location_id, weekdays: [6], replace_ids: [sundayHours.data.id],
+        intervals: [{ opens_at: "07:00", closes_at: "20:00" }] }, admin),
+      saveAdminPricingRule({ ...base, court_ids: [court3], weekdays: [6], starts_at: "18:00", ends_at: "21:00" }, admin),
+    ]);
+    expect(Number(hoursRace.ok) + Number(pricingRace.ok)).toBe(1);
+    if (!hoursRace.ok) expect(hoursRace.reason).toBe("pricing-conflict");
+    if (!pricingRace.ok) expect(pricingRace).toMatchObject({ reason: "invalid-input", fieldErrors: { ends_at: expect.any(String) } });
+    const sundayClose = (await service.from("location_opening_hours").select("closes_at_minute").eq("location_id", location_id).eq("weekday", 6).single()).data?.closes_at_minute;
+    const sundayPrice = (await service.from("location_pricing_rules").select("id").eq("location_id", location_id)
+      .eq("weekday", 6).eq("court_id", court3).eq("starts_at_minute", 1080)).data ?? [];
+    expect(sundayPrice.length === 0 || sundayClose === 1440).toBe(true);
     await expect(listAdminPricingRules(pricingLocationId, member)).rejects.toThrow();
     await expect(saveAdminPricingRule(base, member)).rejects.toThrow();
     await expect(removeAdminPricingRule({ location_id, rule_set_id: setId }, member)).rejects.toThrow();

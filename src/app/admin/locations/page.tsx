@@ -6,6 +6,8 @@ import { countries } from "@/lib/profile/countries";
 import { LocationDialog } from "./location-dialog";
 import { LocationItem } from "./location-item";
 
+export const instant = false;
+
 export default async function AdminLocationsPage({ searchParams }: {
   searchParams?: Promise<{ view?: string | string[] }>;
 }) {

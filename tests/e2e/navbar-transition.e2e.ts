@@ -235,6 +235,7 @@ test("resolved authenticated navbar stays visible throughout unmatched-route nav
     expect(missingResponse.status()).toBe(404);
     expect(await missingResponse.text()).toContain("This page is out of bounds.");
   } finally {
+    await page.close();
     expect((await service.from("users").delete().eq("id", userId)).error).toBeNull();
     expect((await service.auth.admin.deleteUser(userId)).error).toBeNull();
   }

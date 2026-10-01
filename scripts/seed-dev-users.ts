@@ -21,8 +21,12 @@ export function localSupabaseUrl(value: string | undefined, environment: string 
 export const devUsers = [
   { email: "dev-admin@example.test", roles: ["admin"] },
   { email: "dev-coach@example.test", roles: ["coach"] },
-  { email: "dev-player-001@example.test", roles: [] },
-  { email: "dev-player-002@example.test", roles: [] },
+  ...Array.from({ length: 8 }, (_, index) => ({
+    email: `dev-coach-${String(index + 2).padStart(3, "0")}@example.test`, roles: ["coach"],
+  })),
+  ...Array.from({ length: 90 }, (_, index) => ({
+    email: `dev-player-${String(index + 1).padStart(3, "0")}@example.test`, roles: [],
+  })),
 ];
 
 function localServiceRoleKey() {
@@ -86,7 +90,9 @@ export async function seedDevUsers(service: SupabaseClient) {
     status: z.enum(["active", "suspended"]),
     user_roles: z.array(z.object({ role_code: z.enum(["coach", "admin"]) })),
   })).safeParse(result.data);
-  if (!parsed.success || parsed.data.length !== devUsers.length) throw new Error("Expected four provisioned development accounts.");
+  if (!parsed.success || parsed.data.length !== devUsers.length) {
+    throw new Error(`Expected ${devUsers.length} provisioned development accounts.`);
+  }
   for (const fixture of devUsers) {
     const row = parsed.data.find((user) => user.email === fixture.email);
     const roles = row?.user_roles.map((role) => role.role_code).sort().join(",");
@@ -96,7 +102,11 @@ export async function seedDevUsers(service: SupabaseClient) {
   }
   console.log(JSON.stringify({
     created: created.length, reused, verified: parsed.data.length,
-    roles: { noRoles: 2, coach: 1, admin: 1 },
+    roles: {
+      noRoles: devUsers.filter((user) => user.roles.length === 0).length,
+      coach: devUsers.filter((user) => user.roles.includes("coach")).length,
+      admin: devUsers.filter((user) => user.roles.includes("admin")).length,
+    },
   }, null, 2));
 }
 

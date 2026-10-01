@@ -3,6 +3,7 @@
 import { useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ModalDialog } from "@/components/modal-dialog";
+import { Button, DialogCloseButton } from "@/components/button";
 import type { OpeningInterval } from "@/lib/admin/opening-hours-validation";
 import { OpeningHours } from "./opening-hours";
 
@@ -27,14 +28,14 @@ export function OpeningHoursEntry({
     hoursState.source === intervals ? hoursState.current : intervals;
   return (
     <>
-      <button
+      <Button
         ref={buttonRef}
         type="button"
-        className="text-sm font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
+        variant="subtle" size="small"
         onClick={() => setOpen(true)}
       >
         Manage opening hours
-      </button>
+      </Button>
       {open &&
         createPortal(
           <ModalDialog
@@ -48,21 +49,15 @@ export function OpeningHoursEntry({
             }}
             className="fixed inset-0 m-auto w-[calc(100%-2rem)] max-w-2xl rounded-card border border-border bg-surface p-5 text-foreground shadow-floating backdrop:bg-foreground/50"
           >
-            <div className="mb-4 flex items-center justify-between gap-4">
+            <header className="mb-4 flex items-center justify-between gap-4 border-b border-border pb-4">
               <h2
                 id={`${id}-title`}
                 className="font-heading text-xl font-semibold"
               >
                 {locationName} opening hours
               </h2>
-              <button
-                type="button"
-                className="rounded-control text-sm text-primary underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
-                onClick={() => dialogRef.current?.close()}
-              >
-                Close
-              </button>
-            </div>
+              <DialogCloseButton onClick={() => dialogRef.current?.close()} />
+            </header>
             <OpeningHours
               locationId={locationId}
               intervals={currentIntervals}

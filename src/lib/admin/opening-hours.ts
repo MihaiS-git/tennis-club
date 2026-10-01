@@ -2,11 +2,28 @@ import "server-only";
 
 import { z } from "zod";
 import { requireActiveAdmin } from "./authorization";
-import { weeklyHoursMutationSchema, openingIntervalSchema, timeToMinute, type OpeningHoursMutationResult } from "./opening-hours-validation";
+import { weeklyHoursMutationSchema, openingIntervalSchema, timeToMinute, minuteToTime, weekdays, type OpeningHoursMutationResult } from "./opening-hours-validation";
 import { createClient } from "@/lib/supabase/server";
 import { logger } from "@/lib/logger";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
+const pricingConflictSchema = z.array(z.object({
+  weekday: z.number().int().min(0).max(6),
+  starts_at_minute: z.number().int().min(0).max(1439),
+  ends_at_minute: z.number().int().min(1).max(1440),
+})).min(1).max(4);
+
+function pricingConflictMessage(details: string | undefined): string {
+  const fallback = "These opening hours conflict with existing pricing. Update or remove the conflicting pricing rule before changing the opening hours.";
+  if (!details) return fallback;
+  try {
+    const parsed = pricingConflictSchema.safeParse(JSON.parse(details));
+    if (!parsed.success) return fallback;
+    const examples = parsed.data.slice(0, 3).map((item) =>
+      `${weekdays[item.weekday]} (${minuteToTime(item.starts_at_minute)}–${minuteToTime(item.ends_at_minute)})`);
+    return `These opening hours conflict with existing pricing on ${examples.join(", ")}${parsed.data.length > 3 ? ", and other rules" : ""}. Update or remove the conflicting pricing rule before changing the opening hours.`;
+  } catch { return fallback; }
+}
 
 export async function listAdminOpeningHours(supabase?: Client) {
   const client = supabase ?? await createClient();
@@ -22,9 +39,25 @@ export async function listAdminOpeningHours(supabase?: Client) {
   return parsed.data;
 }
 
+export async function listAdminLocationOpeningHours(locationId: string, supabase?: Client) {
+  const client = supabase ?? await createClient();
+  await requireActiveAdmin(client);
+  z.uuid().parse(locationId);
+  const { data, error } = await client.from("location_opening_hours")
+    .select("id, location_id, weekday, opens_at_minute, closes_at_minute, created_at, updated_at")
+    .eq("location_id", locationId).order("weekday").order("opens_at_minute").order("id");
+  const parsed = z.array(openingIntervalSchema).safeParse(data);
+  if (error || !parsed.success) {
+    logger.error({ event: "admin.opening_hours_list_failed", code: error?.code }, "Failed to load opening hours");
+    throw new Error("Unable to load opening hours.");
+  }
+  return parsed.data;
+}
+
 const rpcResultSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("ok") }),
   z.object({ status: z.literal("not-found") }),
+  z.object({ status: z.literal("archived") }),
   z.object({ status: z.literal("overlap"), weekdays: z.array(z.number().int().min(0).max(6)) }),
 ]);
 
@@ -38,12 +71,22 @@ export async function mutateAdminOpeningHours(input: unknown, supabase?: Client)
     return { ok: false, reason: "invalid-input", fieldErrors };
   }
   const { location_id, weekdays, replace_ids, intervals } = parsed.data;
+  const location = await client.from("locations").select("archived_at").eq("id", location_id).maybeSingle();
+  if (location.error) {
+    logger.error({ event: "admin.opening_hours_location_read_failed", actorId: actor.userId, locationId: location_id, code: location.error.code }, "Failed to load location");
+    throw new Error("Unable to change opening hours.");
+  }
+  if (!location.data) return { ok: false, reason: "not-found" };
+  if (location.data.archived_at !== null) return { ok: false, reason: "archived" };
   const { data, error } = await client.rpc("mutate_location_opening_hours", {
     p_location_id: location_id, p_weekdays: weekdays, p_replace_ids: replace_ids,
     p_opens_at_minutes: intervals.map((interval) => timeToMinute(interval.opens_at)),
     p_closes_at_minutes: intervals.map((interval) => timeToMinute(interval.closes_at)),
   });
   if (error) {
+    if (error.code === "P0001" && error.message === "opening_hours_pricing_conflict") {
+      return { ok: false, reason: "pricing-conflict", message: pricingConflictMessage(error.details) };
+    }
     if (error.code === "23P01") return { ok: false, reason: "overlap", weekdays };
     if (error.code === "23503") return { ok: false, reason: "not-found" };
     if (error.code === "23514") return { ok: false, reason: "invalid-input", fieldErrors: { form: "Check the selected days and times." } };
@@ -53,6 +96,7 @@ export async function mutateAdminOpeningHours(input: unknown, supabase?: Client)
   const result = rpcResultSchema.safeParse(data);
   if (!result.success) throw new Error("Unable to change opening hours.");
   if (result.data.status === "not-found") return { ok: false, reason: "not-found" };
+  if (result.data.status === "archived") return { ok: false, reason: "archived" };
   if (result.data.status === "overlap") return { ok: false, reason: "overlap", weekdays: result.data.weekdays };
   const refreshed = await client.from("location_opening_hours")
     .select("id, location_id, weekday, opens_at_minute, closes_at_minute, created_at, updated_at")

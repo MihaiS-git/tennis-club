@@ -969,7 +969,7 @@ Court 2
 
 ## Local development database tooling
 
-Run `npm run db:dev:reconcile` once against an already-running local Supabase database after editing applied migrations. Its only current statement drops the obsolete `public.courts.display_order` column if present. It does not reset the database or change migration history. Current migration files remain canonical.
+The development schema is defined by four consolidated migrations: Auth/RBAC, player profiles and avatars, club resources, and pricing rules. Replaying rewritten migration history requires an explicitly approved local database reset; it deletes local data. Do not apply the consolidated files to an existing database as incremental migrations.
 
 Run `npm run db:dev:seed` for four confirmed Auth users, two locations, weekly opening hours, six courts, and one outdoor coverage period. The shared development password is `Local-Tennis-Dev-2026!`. `npm run seed:users` remains available to seed only the four users.
 
@@ -977,12 +977,12 @@ The accounts are `dev-admin@example.test` (Admin), `dev-coach@example.test` (Coa
 
 The location slugs are `dev-central-club` and `dev-riverside-club`. Both are active, in București, use `Europe/Bucharest` and RON. Central opens daily 07:00–22:00. Riverside opens Monday–Friday 08:00–12:00 and 14:00–21:00, weekends 08:00–20:00. Central has three outdoor clay courts and one indoor hard court; Riverside has one outdoor clay and one outdoor hard court. Riverside Court 2 is inactive. Central Court 1 has coverage from 2026-10-01 through 2027-03-31.
 
-The scripts require a local HTTP loopback Supabase API on port 54321 and reject `NODE_ENV=production`. The reconciliation runner connects only to local PostgreSQL on port 54322. The seed uses the local Auth Admin API and the service credential from `LOCAL_SUPABASE_SERVICE_ROLE_KEY` or `supabase status -o json`; credentials are never printed. Reruns reuse Auth users by email, locations by slug, courts by location and slug, and hours and coverage by exact values. Existing divergent location or court fixtures cause an error. No cleanup or reset command is provided. Previously seeded `dev-user-001` through `dev-user-060` accounts are left untouched.
+The seed scripts require a local HTTP loopback Supabase API on port 54321 and reject `NODE_ENV=production`. The seed uses the local Auth Admin API and the service credential from `LOCAL_SUPABASE_SERVICE_ROLE_KEY` or `supabase status -o json`; credentials are never printed. Reruns reuse Auth users by email, locations by slug, courts by location and slug, and hours and coverage by exact values. Existing divergent location or court fixtures cause an error. No cleanup or reset command is provided. Previously seeded `dev-user-001` through `dev-user-060` accounts are left untouched.
 
 ## Admin UI
 
 `/admin/courts` groups all courts by physical location, including inactive resources.
-Active administrators create, edit, move, activate/deactivate, and order courts through
+Active administrators create, edit, move, and activate/deactivate courts through
 user-scoped Server Actions. Each court has a clay/hard/grass/carpet surface, an
 outdoor/indoor environment, and a lighting flag. Counts are derived from records.
 Slugs are generated on creation, preserved on edits (including moves), and unique
@@ -1014,11 +1014,11 @@ Location RLS grants active administrators SELECT/INSERT/UPDATE, with no deletion
 access. The database prevents an archived location from being active. Public discovery
 filters for active, unarchived locations with active courts.
 
-Location opening hours appear as a useful weekly summary beside an explicit Edit or
-Set hours action. The compact weekly editor groups weekdays only when their complete
+Location opening hours are managed from Edit Location through an explicit Manage opening hours action. The compact weekly editor groups weekdays only when their complete
 interval sets match. One form selects weekdays, supports multiple intervals, and
 creates, replaces, or removes grouped intervals together. A user-scoped transactional
 RPC commits each multi-day change atomically while RLS remains active.
+Archived locations cannot have opening hours changed through the RPC or direct admin writes; admins can still read their hours. Restoring a location leaves it inactive and allows hours editing again.
 `location_opening_hours` stores local minute-of-day boundaries (0–1440, including
 `24:00`), with Monday = 0 and Sunday = 6. A GiST exclusion constraint prevents
 overlaps for the same location and weekday while allowing adjacent intervals.

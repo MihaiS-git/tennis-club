@@ -2,6 +2,8 @@ import Link from "next/link";
 
 import { requireActiveAdmin } from "@/lib/admin/authorization";
 
+export const instant = false;
+
 const sections = [
   { title: "Locations", description: "Manage physical club locations, address, timezone and currency.", href: "/admin/locations" },
   { title: "Courts", description: "Manage courts, surfaces, lighting and seasonal coverage.", href: "/admin/courts" },

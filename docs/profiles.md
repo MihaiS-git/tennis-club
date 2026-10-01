@@ -60,6 +60,6 @@ Old development `.jpg`/`.png` objects and references are not migrated by this wo
 
 ## Development migrations and validation
 
-Personal fields/security belong to the edited auth/RBAC foundation migration. Player profiles, avatar Storage, and avatar coordination have separate focused migrations. Coordination adds only a lease table and acquisition, release, and persistence RPCs. This is unreleased development schema; released production history must remain immutable.
+Personal fields and account security belong to `20260922140728_auth_rbac_foundation.sql`. The consolidated `20260928100000_player_profiles_avatars.sql` defines player profiles, private avatar Storage, and the lease table with acquisition, release, and persistence RPCs. This is unreleased development schema; released production history must remain immutable.
 
-An edited development migration requires a rebuild before its new behavior can be validated. `supabase db reset` requires explicit approval and deletes local data. After rebuilding, run unit/components/integration and both database suites as documented in `testing.md`. Profile and avatar integration tests exercise real Auth, database, and Storage operations; the avatar endpoint test substitutes only the request-cookie client factory.
+The consolidated migration history requires a local rebuild before its behavior can be validated. `supabase db reset` requires explicit approval and deletes local data; it has not been run as part of consolidation. After rebuilding, run unit/components/integration and database suites as documented in `testing.md`. Profile and avatar integration tests exercise real Auth, database, and Storage operations; the avatar endpoint test substitutes only the request-cookie client factory.

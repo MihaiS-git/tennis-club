@@ -82,6 +82,34 @@ select is(public.mutate_location_opening_hours(
 select is((select count(*) from public.location_opening_hours where location_id = 'c6000000-0000-4000-8000-000000000011'
   and weekday in (4,5)), 0::bigint, 'grouped removal cleared both weekdays');
 
+update public.locations set archived_at = now(), is_active = false
+  where id = 'c6000000-0000-4000-8000-000000000011';
+select ok((select count(*) from public.location_opening_hours
+  where location_id = 'c6000000-0000-4000-8000-000000000011') > 0,
+  'admin can still read archived location hours');
+select throws_ok($$insert into public.location_opening_hours
+  (location_id, weekday, opens_at_minute, closes_at_minute)
+  values ('c6000000-0000-4000-8000-000000000011', 6, 420, 720)$$,
+  '42501', null, 'admin cannot directly insert archived location hours');
+select results_eq($$update public.location_opening_hours set closes_at_minute = 1380
+  where location_id = 'c6000000-0000-4000-8000-000000000011' returning id$$,
+  array[]::uuid[], 'admin cannot directly update archived location hours');
+select results_eq($$delete from public.location_opening_hours
+  where location_id = 'c6000000-0000-4000-8000-000000000011' returning id$$,
+  array[]::uuid[], 'admin cannot directly delete archived location hours');
+select is(public.mutate_location_opening_hours(
+  'c6000000-0000-4000-8000-000000000011', array[6], array[]::uuid[], array[420], array[720])->>'status',
+  'archived', 'archived location rejects weekly mutation');
+select is((select count(*) from public.location_opening_hours where location_id = 'c6000000-0000-4000-8000-000000000011'
+  and weekday = 6), 0::bigint, 'archived rejection leaves hours unchanged');
+update public.locations set archived_at = null
+  where id = 'c6000000-0000-4000-8000-000000000011';
+select is((select is_active from public.locations where id = 'c6000000-0000-4000-8000-000000000011'),
+  false, 'restored location remains inactive');
+select is(public.mutate_location_opening_hours(
+  'c6000000-0000-4000-8000-000000000011', array[6], array[]::uuid[], array[420], array[720])->>'status',
+  'ok', 'restored inactive location accepts weekly mutation');
+
 -- Member, coach and suspended admin share the same denied operations.
 reset role;
 create function pg_temp.test_denied_hours(subject uuid) returns setof text language plpgsql as $$

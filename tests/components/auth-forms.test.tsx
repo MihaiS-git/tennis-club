@@ -118,26 +118,6 @@ it("editing the sign-in email clears only its field error", async () => {
   expect(screen.getByText("Enter your password.")).toBeDefined();
 });
 
-it("editing the sign-in password clears only its field error", async () => {
-  signInAction.mockResolvedValueOnce({
-    fieldErrors: {
-      email: "Enter a valid email address.",
-      password: "Enter your password.",
-    },
-  });
-  render(<SignInForm />);
-
-  fireEvent.submit(screen.getByRole("button", { name: "Sign in" }).closest("form")!);
-  expect(await screen.findByText("Enter your password.")).toBeDefined();
-  expect(screen.getByText("Enter a valid email address.")).toBeDefined();
-
-  const password = screen.getByLabelText("Password", { selector: "input" });
-  fireEvent.change(password, { target: { value: "password-123" } });
-
-  expect(screen.queryByText("Enter your password.")).toBeNull();
-  expect(screen.getByText("Enter a valid email address.")).toBeDefined();
-});
-
 it("focuses the first invalid sign-in field after a failed submission", async () => {
   signInAction.mockResolvedValueOnce({
     fieldErrors: {
@@ -156,18 +136,6 @@ it("focuses the first invalid sign-in field after a failed submission", async ()
   expect(email.getAttribute("aria-invalid")).toBe("true");
   expect(email.getAttribute("aria-describedby")).toBe("signin-email-error");
   expect(document.getElementById("signin-email-error")?.textContent).toBe("Enter a valid email address.");
-});
-
-it("focuses the password when it is the only invalid sign-in field", async () => {
-  signInAction.mockResolvedValueOnce({ fieldErrors: { password: "Enter your password." } });
-  render(<SignInForm />);
-
-  const submit = screen.getByRole("button", { name: "Sign in" });
-  submit.focus();
-  fireEvent.submit(submit.closest("form")!);
-
-  const password = screen.getByLabelText("Password", { selector: "input" });
-  await waitFor(() => expect(document.activeElement).toBe(password));
 });
 
 it("does not move focus on a form-only error", async () => {

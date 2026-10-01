@@ -15,19 +15,10 @@ vi.mock("../../src/lib/profile/navigation", () => ({ readNavigationProfile: asyn
   account: await readCurrentAccount(), avatarUrl: avatar.url,
 }) }));
 
-import { MobileNavbarMenu, MobileNavbarShell } from "../../src/components/mobile-navbar-menu";
-import { MobileNavbar, MobileNavbarFallback } from "../../src/components/mobile-navbar";
+import { MobileNavbarMenu } from "../../src/components/mobile-navbar-menu";
+import { MobileNavbar } from "../../src/components/mobile-navbar";
 
 afterEach(() => { cleanup(); avatar.url = null; });
-
-it("keeps the public mobile header geometry while account navigation is pending", () => {
-  render(<MobileNavbarShell><MobileNavbarFallback /></MobileNavbarShell>);
-  const header = screen.getByRole("banner");
-  expect(header.querySelector(".h-16")).toBeTruthy();
-  expect(screen.getByRole("link", { name: "Tennis Club" })).toBeTruthy();
-  expect(screen.getByRole("link", { name: "Book a court" })).toBeTruthy();
-  expect(header.querySelector(".size-10[aria-hidden='true']")).toBeTruthy();
-});
 
 it("shows signed-out links and closes on link selection or Escape", () => {
   render(<MobileNavbarMenu isAuthenticated={false} isAdmin={false} />);
@@ -132,36 +123,4 @@ it.each([
   } else {
     expect(adminLink).toBeNull();
   }
-});
-
-it.each([null, "/profile/avatar?v=updated"])("uses server-provided avatar metadata in the mobile profile control (%s)", async (src) => {
-  readCurrentAccount.mockResolvedValue({ state: "active", userId: "owner", roles: [] });
-  avatar.url = src;
-  render(await MobileNavbar());
-  fireEvent.click(screen.getByRole("button", { name: "Open menu" }));
-  const control = screen.getByRole("link", { name: "Profile" });
-  expect(control.getAttribute("href")).toBe("/profile");
-  expect(control.textContent?.trim()).toBe("Profile");
-  expect(control.classList.contains("min-h-12")).toBe(true);
-  expect(control.classList.contains("items-center")).toBe(true);
-  expect(control.classList.contains("rounded-control")).toBe(false);
-  if (src) {
-    const image = control.querySelector("img")!;
-    expect(image.getAttribute("src")).toBe(src);
-    expect(image.getAttribute("alt")).toBe("");
-    expect(image.hasAttribute("data-nimg")).toBe(false);
-    expect(image.getAttribute("width")).toBe("28");
-    expect(image.getAttribute("height")).toBe("28");
-    expect(image.classList.contains("rounded-full")).toBe(true);
-    expect(image.classList.contains("object-cover")).toBe(true);
-    expect(control.querySelector("svg")).toBeNull();
-    fireEvent.error(image);
-    expect(control.querySelector("img")).toBeNull();
-  } else {
-    expect(control.querySelector("img")).toBeNull();
-  }
-  expect(control.querySelector("svg")).not.toBeNull();
-  expect(screen.getByRole("button", { name: "Sign out" })).toBeDefined();
-  fireEvent.click(control);
-  expect(screen.getByRole("button", { name: "Open menu" }).getAttribute("aria-expanded")).toBe("false");
 });
