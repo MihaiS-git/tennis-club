@@ -12,6 +12,7 @@ export async function MobileNavbar() {
     <MobileNavbarControls
       isAuthenticated={account.state !== "unauthenticated"}
       isAdmin={account.state === "active" && account.roles.includes("admin")}
+      canReserve={account.state === "active" && account.roles.some((role) => role === "admin" || role === "coach")}
       avatarUrl={avatarUrl}
     />
   );

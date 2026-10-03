@@ -69,7 +69,9 @@ select throws_ok($$select public.save_pricing_rule_set(null, 'c7000000-0000-4000
 select is((select count(*) from public.location_pricing_rules where location_id='c7000000-0000-4000-8000-000000000011'), 0::bigint, 'member sees no pricing');
 reset role;
 set local role anon;
-select throws_ok('select * from public.location_pricing_rules', '42501', null, 'anonymous read denied');
+select is((select count(*) from public.location_pricing_rules where location_id =
+  'c7000000-0000-4000-8000-000000000011'), 0::bigint,
+  'anonymous pricing read excludes unpublished locations');
 select throws_ok($$select public.save_pricing_rule_set(null, 'c7000000-0000-4000-8000-000000000011',
  array['c7000000-0000-4000-8000-000000000031']::uuid[], array[6], 'outdoor', 420, 960, null, null, 1200, now())$$,
  '42501', null, 'anonymous RPC denied');

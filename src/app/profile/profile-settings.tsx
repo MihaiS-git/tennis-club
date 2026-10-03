@@ -17,7 +17,7 @@ export function ProfileSettings({ identity, personal, tennis, account }: {
   const [visit, setVisit] = useState(0);
   const leaveVisit = useCallback(() => setVisit((current) => current + 1), []);
   useLayoutEffect(() => () => {
-    // Activity hides this subtree on browser history and router departures.
+    // Browser history can hide this subtree without discarding its draft state.
     leaveVisit();
   }, [leaveVisit]);
   return <ProfileUnsavedChanges onDeparture={leaveVisit}>

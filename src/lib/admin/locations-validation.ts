@@ -3,7 +3,7 @@ import { isCountryCode } from "@/lib/profile/countries";
 
 export const locationCurrencies = ["EUR", "USD", "GBP", "RON", "CHF"] as const;
 const timezones = new Set(typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : []);
-function isIanaTimezone(value: string) {
+export function isIanaTimezone(value: string) {
   try {
     const canonical = new Intl.DateTimeFormat("en", { timeZone: value }).resolvedOptions().timeZone;
     return (value === "UTC" || value.includes("/")) && (canonical === "UTC" || timezones.has(canonical));
@@ -31,6 +31,7 @@ export const locationFieldsSchema = z.strictObject({
   timezone: z.string().trim().refine(isIanaTimezone, "Enter an IANA timezone, such as Europe/Bucharest."),
   currency: z.enum(locationCurrencies, "Select a supported currency."),
   is_active: z.boolean(),
+  is_public: z.boolean(),
   display_order: z.number().int("Enter a whole number.").min(-2147483648).max(2147483647),
 });
 
@@ -45,4 +46,5 @@ export type LocationFormValues = z.input<typeof locationFieldsSchema>;
 export type LocationMutationResult =
   | { ok: true; id: string }
   | { ok: false; reason: "invalid-input"; fieldErrors: Record<string, string> }
-  | { ok: false; reason: "duplicate-slug" | "not-found" };
+  | { ok: false; reason: "duplicate-slug" | "not-found" }
+  | { ok: false; reason: "not-ready"; message: string };

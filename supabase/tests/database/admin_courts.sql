@@ -13,9 +13,9 @@ insert into public.user_roles (user_id, role_code) values
 ('c4000000-0000-4000-8000-000000000003', 'admin'),
 ('c4000000-0000-4000-8000-000000000004', 'coach');
 update public.users set status = 'suspended' where id = 'c4000000-0000-4000-8000-000000000003';
-insert into public.locations (id, name, slug, timezone, is_active) values
-('c4000000-0000-4000-8000-000000000011', 'Active', 'admin-courts-active', 'UTC', true),
-('c4000000-0000-4000-8000-000000000012', 'Inactive', 'admin-courts-inactive', 'UTC', false);
+insert into public.locations (id, name, slug, timezone, is_active, is_public) values
+('c4000000-0000-4000-8000-000000000011', 'Active', 'admin-courts-active', 'UTC', true, true),
+('c4000000-0000-4000-8000-000000000012', 'Inactive', 'admin-courts-inactive', 'UTC', false, false);
 insert into public.courts (id, location_id, name, slug, surface, environment, is_active, updated_at) values
 ('c4000000-0000-4000-8000-000000000021', 'c4000000-0000-4000-8000-000000000011', 'Active court', 'one', 'clay', 'outdoor', true, '2000-01-01'),
 ('c4000000-0000-4000-8000-000000000022', 'c4000000-0000-4000-8000-000000000011', 'Inactive court', 'two', 'hard', 'indoor', false, '2000-01-01'),

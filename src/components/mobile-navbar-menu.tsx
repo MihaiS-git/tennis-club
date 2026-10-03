@@ -28,8 +28,8 @@ export function MobileNavbarMenu(props: Parameters<typeof MobileNavbarControls>[
   return <MobileNavbarShell><MobileNavbarControls {...props} /></MobileNavbarShell>;
 }
 
-export function MobileNavbarControls({ isAuthenticated, isAdmin, avatarUrl = null }: {
-  isAuthenticated: boolean; isAdmin: boolean; avatarUrl?: string | null;
+export function MobileNavbarControls({ isAuthenticated, isAdmin, canReserve, avatarUrl = null }: {
+  isAuthenticated: boolean; isAdmin: boolean; canReserve: boolean; avatarUrl?: string | null;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const menuId = useId();
@@ -160,14 +160,16 @@ export function MobileNavbarControls({ isAuthenticated, isAdmin, avatarUrl = nul
               Admin
             </Link>
           )}
+          {canReserve && <Link onClick={closeMenu} href="/reservations" className="flex min-h-12 items-center text-sm font-medium text-foreground hover:text-accent">Reservations</Link>}
 
           <div className="mt-2 border-t border-border pt-2">
             {isAuthenticated ? (
               <>
-                <Link onClick={closeMenu} href="/profile" className="flex min-h-12 items-center gap-2 text-sm font-medium text-primary hover:text-accent">
+                <Link onClick={closeMenu} href="/my-activity" className="flex min-h-12 items-center gap-2 text-sm font-medium text-primary hover:text-accent">
                   <ProfileNavigationAvatar src={avatarUrl} />
-                  Profile
+                  My activity
                 </Link>
+                <Link onClick={closeMenu} href="/profile" className="flex min-h-12 items-center text-sm font-medium text-primary hover:text-accent">Profile & settings</Link>
                 <ProfileDepartureForm action={signOutAction} onSubmit={closeMenu}>
                   <button type="submit" className="flex min-h-12 w-full items-center text-left text-sm font-medium text-primary hover:text-accent">
                     Sign out

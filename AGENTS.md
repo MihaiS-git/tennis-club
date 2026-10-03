@@ -338,7 +338,8 @@ Use it only when genuinely required, for example:
 - trusted server-side synchronization;
 - narrowly scoped system operations.
 
-Introduce `SUPABASE_SECRET_KEY` only when a privileged workflow actually needs it.
+`SUPABASE_SECRET_KEY` is now required for the server-only customer booking writer.
+Use that client only to call the service-role-only atomic booking creation RPC.
 
 Never use the privileged client merely because the code runs on the server.
 
@@ -480,6 +481,74 @@ Do not turn PostgreSQL functions into a second application/business-logic layer.
 ---
 
 ## Court pricing rule sets
+
+Public location discovery for `/book` and `/courts` uses `listPublicLocationsWithCourts()` and the shared TypeScript eligibility rule in `src/lib/locations/publication.ts`. `locations.is_public` defaults to false and records explicit Admin publication intent; readiness is derived from valid location details, opening hours, active courts, and current or future base-state pricing for each active court. Admin enabling validates readiness server-side. Public RLS SELECT requires publication as defense-in-depth.
+
+The public `/book` page reads opening hours, coverage periods, and pricing
+rules for active public resources only after a valid location-local date is selected,
+through user-scoped server Supabase access. Without a date it reads only the
+locations, courts, and minimal opening-hours and pricing fields needed to derive
+public eligibility for the controls.
+Public RLS SELECT policies permit those reads; configuration writes remain
+admin-only. Calendar availability is informational until bookings are implemented.
+It also reads only reservation occupancy columns for the selected date and
+active courts at that location. Only active reservation rows block their half-open
+intervals; reservation identity, reason, creator, canceller, status, and timestamps are not publicly readable.
+
+Internal `/reservations` is a separate direct court-reservation workflow for active
+Admins and Coaches. It lists structurally ready locations without requiring publication.
+The user-scoped Server Action validates location-local
+time, a single opening-hours interval, 30-minute alignment, at least 60 minutes,
+and a required trimmed reason of at most 255 characters. RLS permits staff INSERT
+and the partial GiST exclusion constraint rejects concurrent active overlaps. Public `/book`
+continues to read occupancy alone and never reads reservation reasons.
+Customer booking persistence uses `public.bookings` for required historical contact
+and server-calculated price/currency snapshots, with one unique reference to its
+physical `court_reservations` row. The server-only `createCustomerBooking` operation
+accepts only customer intent, resolves active account identity and public eligibility
+through user-scoped reads, and reuses the `/book` calendar pricing calculation.
+Guests have a null account link; suspended authenticated users are rejected. A
+service-role-only RPC inserts both rows atomically, leaving GiST authoritative for
+overlaps. Browser roles cannot read or insert bookings or invoke the RPC. `/book`
+uses a focused customer-details dialog and Server Action. Guests can confirm without
+an account; active signed-in users receive editable contact defaults from Profile.
+Contact edits affect only the booking snapshot. Availability conflicts clear the
+selected interval, retain contact values, and refresh public occupancy. Success
+shows the server-confirmed price. Customer payments, holds and cancellation are not present.
+Direct reservations store the authenticated creator in nullable
+`court_reservations.created_by_user_id` (historical rows stay null). `/reservations`
+reads occupancy for Admins and Coaches and creates new direct reservations. Active
+Admins also read active direct-reservation identity, reason, and creator display name
+through an Admin-only RPC for a whole-reservation details dialog. A distinct
+Admin-only conditional cancellation RPC changes an active row to cancelled,
+records the authenticated Admin as canceller, and preserves its creator and details.
+The personal cancellation RPC remains owner-only. Coaches receive generic
+occupied cells only; public `/book` remains occupancy-only.
+Admin Edit on `/reservations` currently uses the shared reservation edit form and a
+separate Admin-only availability read for the active reservation's fixed location.
+It excludes the edited row from occupancy and includes other active reservations.
+Admin Save uses a separate Admin-only same-row edit RPC with a row lock, an
+`updated_at` stale token, fixed-location enforcement, and the active-row GiST
+constraint. It preserves the creator and lifecycle fields and permits only
+reason changes once an interval starts. The owner-only edit read and mutation
+remain separate. `/profile` contains identity and settings;
+`/my-activity` is the compact personal activity overview, and `/my-activity/bookings`
+contains current/upcoming personal booking/reservation management. `/my-activity/bookings/history`
+is a server-paginated archive of the current staff user's cancelled and elapsed court reservations.
+The personal reservation reads remain bound to `auth.uid()` and use location-local time for lifecycle classification.
+Active Admins and Coaches can cancel
+only their own active Upcoming reservations after explicit confirmation. Server authorization and database checks
+require ownership, an active, unarchived location and active court. Cancellation atomically
+sets status to `cancelled`, `cancelled_at`, and the authenticated
+`cancelled_by_user_id`; the original row and creator remain. Cancelled rows free
+occupancy and remain stored for future history. No pricing or refund is involved.
+`/my-activity/bookings` also edits the same owned active row: future reservations may change date,
+court within the existing location, time and reason through the shared direct-reservation timetable;
+in-progress reservations may change reason only. The personal edit availability read excludes
+the edited row from occupancy and returns no other reservation metadata. The personal
+edit RPC locks the row, compares its `updated_at` token, and rejects a different location.
+TypeScript reuses direct-creation validation for the fixed location, court, local time and opening
+hours; PostgreSQL keeps the active-row GiST overlap constraint authoritative.
 
 Admin pricing definitions apply to selected courts, not surfaces. One definition has
 one stable `rule_set_id` and expands to one atomic `location_pricing_rules` row per

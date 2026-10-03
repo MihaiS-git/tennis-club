@@ -113,7 +113,7 @@ export default function Home() {
               <div className="inline lg:block">
                 <dt className="sr-only lg:not-sr-only lg:text-xs lg:text-muted-foreground">Location</dt>
                 <dd className="inline font-semibold lg:mt-1 lg:block lg:whitespace-nowrap">
-                  Central Club <span aria-hidden="true" className="lg:hidden">·</span>
+                  Club courts <span aria-hidden="true" className="lg:hidden">·</span>
                 </dd>
               </div>{" "}
               <div className="inline lg:block">
@@ -414,7 +414,7 @@ export default function Home() {
               Play in the heart of Cluj-Napoca.
             </h2>
             <p className="mt-6 max-w-xl font-sans text-base leading-7 text-ivory md:text-lg md:leading-8">
-              Central Club is set in Parcul Central Simion Bărnuțiu, with clay courts, coaching and club activity in one of Cluj-Napoca’s most accessible central locations.
+              Visit us in Parcul Central Simion Bărnuțiu for courts, coaching and club activity in one of Cluj-Napoca’s most accessible central locations.
             </p>
             <div className="mt-12 border-t border-ivory/30 pb-6 pt-5">
               <h3 className="font-sans text-xs font-semibold uppercase tracking-[0.16em] text-ivory">Location</h3>
@@ -437,7 +437,7 @@ export default function Home() {
             {mapUrl ? (
               <iframe
                 src={mapUrl}
-                title="Map showing Central Club in Parcul Central Simion Bărnuțiu, Cluj-Napoca"
+                title="Map showing the club in Parcul Central Simion Bărnuțiu, Cluj-Napoca"
                 loading="lazy"
                 referrerPolicy="no-referrer-when-downgrade"
                 allowFullScreen

@@ -168,7 +168,7 @@ it("preserves dirty drafts through internal sections and same-profile links", ()
   section("Tennis profile"); change("Sportya level", "7");
   const selector = screen.getByRole("navigation", { name: "Profile settings" });
   expect(within(selector).getAllByRole("img", { name: "Unsaved changes" })).toHaveLength(2);
-  section("Account & security"); section("Personal information");
+  section("Account & security"); section("Profile / player identity"); section("Personal information");
   expect(within(selector).getAllByRole("img", { name: "Unsaved changes" })).toHaveLength(2);
   expect((screen.getByLabelText("First name") as HTMLInputElement).value).toBe("Mike");
   section("Tennis profile");

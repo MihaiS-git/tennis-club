@@ -1,0 +1,222 @@
+// @vitest-environment jsdom
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { PersonalActivity } from "@/app/my-activity/bookings/personal-activity";
+import { localMinute, localToday } from "@/lib/courts/local-time";
+
+const { load, cancel, edit, availability } = vi.hoisted(() => ({ load: vi.fn(), cancel: vi.fn(), edit: vi.fn(), availability: vi.fn() }));
+vi.mock("@/app/my-activity/bookings/actions", () => ({ loadPersonalActivityAction: load, cancelOwnReservationAction: cancel,
+  editOwnReservationAction: edit, loadReservationEditDayAction: availability }));
+
+beforeEach(() => {
+  load.mockReset();
+  cancel.mockReset();
+  edit.mockReset();
+  availability.mockReset();
+  HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new Event("close")); };
+});
+afterEach(cleanup);
+
+it("gives ordinary players an empty state after requesting personal activity", async () => {
+  load.mockResolvedValue({ bookings: [], upcoming: [] });
+  render(<PersonalActivity staff={false} />);
+  expect(await screen.findByText("No upcoming bookings or reservations.")).toBeDefined();
+  expect(load).toHaveBeenCalledOnce();
+});
+
+it("shows an owner's booking snapshot in read-only details and sorts it with direct reservations", async () => {
+  const booking = { id: "booking", booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 690,
+    location_name: "RIVUS", location_timezone: "Europe/Bucharest", court_name: "Court 2",
+    customer_name: "Historical Name", customer_email: "old@example.test", customer_phone: "+40 123",
+    total_amount_minor: 9000, currency: "RON" };
+  const reservation = { id: "reservation", court_id: "court", location_id: "location", updated_at: "2026-10-01T12:00:00Z",
+    booking_date: "2099-10-15", starts_at_minute: 540, ends_at_minute: 660, reason: "Training", status: "active",
+    created_by_user_id: "owner", creator_name: "Owner", cancelled_at: null, cancelled_by_name: null,
+    location_name: "RIVUS", location_timezone: "UTC", court_name: "Court 1" };
+  load.mockResolvedValue({ bookings: [booking], upcoming: [reservation] });
+  render(<PersonalActivity staff userId="owner" />);
+  const upcoming = await screen.findByRole("region", { name: "Upcoming" });
+  const buttons = within(upcoming).getAllByRole("button");
+  expect(buttons).toHaveLength(2);
+  expect(buttons[0].textContent).toContain("Booking");
+  expect(buttons[1].textContent).toContain("Reservation");
+  expect(buttons[0].textContent).toContain("RON");
+  expect(buttons[0].textContent).not.toContain("old@example.test");
+  fireEvent.click(buttons[0]);
+  const dialog = screen.getByRole("dialog", { name: "Booking" });
+  expect(within(dialog).getByText("Historical Name")).toBeDefined();
+  expect(within(dialog).getByText("old@example.test")).toBeDefined();
+  expect(within(dialog).getByText("+40 123")).toBeDefined();
+  expect(within(dialog).getByText(/RON\s*90\.00/)).toBeDefined();
+  expect(within(dialog).getByText("Confirmed")).toBeDefined();
+  expect(within(dialog).queryByRole("button", { name: /edit|cancel|pay/i })).toBeNull();
+});
+
+it("shows a normal player's own booking without a direct reservation", async () => {
+  load.mockResolvedValue({ bookings: [{ id: "booking", booking_date: "2099-10-15", starts_at_minute: 600,
+    ends_at_minute: 660, location_name: "RIVUS", location_timezone: "UTC", court_name: "Court 2",
+    customer_name: "Owner", customer_email: "owner@example.test", customer_phone: "123",
+    total_amount_minor: 5000, currency: "RON" }], upcoming: [] });
+  render(<PersonalActivity staff={false} />);
+  const upcoming = await screen.findByRole("region", { name: "Upcoming" });
+  expect(within(upcoming).getByText("Booking")).toBeDefined();
+  expect(within(upcoming).queryByText("Reservation")).toBeNull();
+});
+
+it("loads on the bookings page and offers cancellation only for the owner's Upcoming reservation", async () => {
+  const active = { id: "one", court_id: "court", location_id: "location", updated_at: "2026-10-01T12:00:00Z", booking_date: "2026-10-12", starts_at_minute: 840, ends_at_minute: 960,
+    reason: "Course with Andrej", status: "active", created_by_user_id: "owner", creator_name: "Andrej",
+    cancelled_at: null, cancelled_by_name: null, location_name: "RIVUS", location_timezone: "Europe/Bucharest", court_name: "Court 2" };
+  const cancelled = { ...active, id: "two", booking_date: "2026-10-08", status: "cancelled", reason: null,
+    cancelled_at: "2026-10-08T12:00:00Z", cancelled_by_name: null };
+  const elapsed = { ...active, id: "three", booking_date: "2026-10-01" };
+  load.mockResolvedValue({ bookings: [], upcoming: [active], history: [cancelled, elapsed] });
+  render(<PersonalActivity staff userId="owner" />);
+  const upcoming = await screen.findByRole("region", { name: "Upcoming" });
+  expect(within(upcoming).getByText("Course with Andrej")).toBeDefined();
+  expect(screen.queryByText("Cancelled")).toBeNull();
+  expect(screen.queryByText("Past")).toBeNull();
+  fireEvent.click(within(upcoming).getByRole("button"));
+  const dialog = screen.getByRole("dialog", { name: "Reservation details" });
+  expect(within(dialog).getByText("Course with Andrej")).toBeDefined();
+  expect(within(dialog).getByText("Andrej")).toBeDefined();
+  expect(within(dialog).getByText("120 min")).toBeDefined();
+  expect(within(dialog).getByRole("button", { name: "Edit reservation" })).toBeDefined();
+  expect(within(dialog).getByRole("button", { name: "Cancel reservation" })).toBeDefined();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+  expect(screen.queryByRole("region", { name: "History" })).toBeNull();
+  expect(load).toHaveBeenCalledOnce();
+});
+
+it("confirms cancellation, refreshes Upcoming, and keeps the activity section mounted", async () => {
+  const active = { id: "one", court_id: "court", location_id: "location", updated_at: "2026-10-01T12:00:00Z", booking_date: "2026-10-12", starts_at_minute: 840, ends_at_minute: 960,
+    reason: "Practice", status: "active", created_by_user_id: "owner", creator_name: "Alex",
+    cancelled_at: null, cancelled_by_name: null, location_name: "RIVUS", location_timezone: "Europe/Bucharest", court_name: "Court 2" };
+  load.mockResolvedValueOnce({ bookings: [], upcoming: [active], history: [] }).mockResolvedValueOnce({ bookings: [], upcoming: [], history: [{ ...active,
+    status: "cancelled", cancelled_at: "2026-10-02T12:00:00Z", cancelled_by_name: "Alex" }] });
+  cancel.mockResolvedValue({ ok: true });
+  render(<PersonalActivity staff userId="owner" />);
+  fireEvent.click(within(await screen.findByRole("region", { name: "Upcoming" })).getByRole("button"));
+  fireEvent.click(within(screen.getByRole("dialog", { name: "Reservation details" })).getByRole("button", { name: "Cancel reservation" }));
+  const confirmation = screen.getByRole("dialog", { name: "Cancel reservation?" });
+  expect(within(confirmation).getByText(/This will free the court/)).toBeDefined();
+  expect(within(confirmation).getByRole("button", { name: "Keep reservation" })).toBeDefined();
+  expect(cancel).not.toHaveBeenCalled();
+  fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel reservation" }));
+  await waitFor(() => expect(cancel).toHaveBeenCalledWith("one"));
+  await waitFor(() => expect(screen.getByText("No upcoming bookings or reservations.")).toBeDefined());
+  expect(within(screen.getByRole("region", { name: "Upcoming" })).queryByRole("button")).toBeNull();
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.getByRole("status").textContent).toBe("Reservation cancelled.");
+});
+
+it("does not offer cancellation when a reservation has a different creator", async () => {
+  load.mockResolvedValue({ bookings: [], upcoming: [{ id: "one", court_id: "court", location_id: "location", updated_at: "2026-10-01T12:00:00Z", booking_date: "2026-10-12", starts_at_minute: 840, ends_at_minute: 960,
+    reason: "Practice", status: "active", created_by_user_id: "another", creator_name: "Another",
+    cancelled_at: null, cancelled_by_name: null, location_name: "RIVUS", location_timezone: "Europe/Bucharest", court_name: "Court 2" }], history: [] });
+  render(<PersonalActivity staff userId="owner" />);
+  fireEvent.click(within(await screen.findByRole("region", { name: "Upcoming" })).getByRole("button"));
+  expect(within(screen.getByRole("dialog", { name: "Reservation details" })).queryByRole("button", { name: "Cancel reservation" })).toBeNull();
+  expect(within(screen.getByRole("dialog", { name: "Reservation details" })).queryByRole("button", { name: "Edit reservation" })).toBeNull();
+});
+
+it("edits a future reservation in the details dialog and shows refreshed details", async () => {
+  const reservationId = "11111111-1111-4111-8111-111111111111";
+  const locationId = "22222222-2222-4222-8222-222222222222";
+  const courtA = "33333333-3333-4333-8333-333333333333";
+  const courtB = "44444444-4444-4444-8444-444444444444";
+  const active = { id: reservationId, court_id: courtA, location_id: locationId, updated_at: "2026-10-01T12:00:00Z",
+    booking_date: "2099-10-15", starts_at_minute: 840, ends_at_minute: 960, reason: "Practice", status: "active",
+    created_by_user_id: "owner", creator_name: "Alex", cancelled_at: null, cancelled_by_name: null,
+    location_name: "RIVUS", location_timezone: "Europe/Bucharest", court_name: "Court 2" };
+  load.mockResolvedValueOnce({ bookings: [], upcoming: [active], history: [] }).mockResolvedValueOnce({ bookings: [], upcoming: [{ ...active,
+    court_id: courtB, court_name: "Court 3", reason: "Training", updated_at: "2026-10-01T12:01:00Z" }], history: [] });
+  availability.mockResolvedValue({ date: active.booking_date, location: { id: locationId, name: "RIVUS", timezone: "Europe/Bucharest" },
+    day: { times: [840, 870, 900, 930, 960, 990], courts: [
+      { court: { id: courtA, name: "Court 2" }, cells: Array(6).fill("available") },
+      { court: { id: courtB, name: "Court 3" }, cells: Array(6).fill("available") },
+    ] } });
+  edit.mockResolvedValue({ ok: true });
+  render(<PersonalActivity staff userId="owner" />);
+  fireEvent.click(within(await screen.findByRole("region", { name: "Upcoming" })).getByRole("button"));
+  fireEvent.click(within(screen.getByRole("dialog", { name: "Reservation details" })).getByRole("button", { name: "Edit reservation" }));
+  const dialog = screen.getByRole("dialog", { name: "Edit reservation" });
+  expect(within(dialog).getByText("RIVUS")).toBeDefined();
+  expect(within(dialog).queryByRole("combobox")).toBeNull();
+  expect(within(dialog).queryByLabelText("Location")).toBeNull();
+  expect(within(dialog).queryByLabelText("From")).toBeNull();
+  expect(within(dialog).queryByLabelText("To")).toBeNull();
+  await within(dialog).findByRole("region", { name: "Court 3 timetable" });
+  expect(within(dialog).getByText("Current reservation")).toBeDefined();
+  expect(within(dialog).getAllByRole("button", { name: /Court 2.*selected/ })).toHaveLength(4);
+  fireEvent.click(within(dialog).getByRole("button", { name: /Court 3 2099-10-15 14:00–14:30/ }));
+  fireEvent.click(within(dialog).getByRole("button", { name: /Court 3 2099-10-15 15:30–16:00/ }));
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Reason" }), { target: { value: "   " } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+  expect(edit).not.toHaveBeenCalled();
+  expect(within(dialog).getByText("Enter a reason.")).toBeDefined();
+  expect(within(dialog).getByText("Court 3 · 14:00–16:00 · 120 min")).toBeDefined();
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Reason" }), { target: { value: "Training" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+  await waitFor(() => expect(edit).toHaveBeenCalledWith({ kind: "schedule", id: reservationId, expectedUpdatedAt: active.updated_at,
+    schedule: { courtId: courtB, date: "2099-10-15", startMinute: 840, endMinute: 960, reason: "Training" } }));
+  const updated = await screen.findByRole("dialog", { name: "Reservation details" });
+  expect(within(updated).getByText("Court 3")).toBeDefined();
+  expect(within(updated).getByText("Training")).toBeDefined();
+  expect(screen.getByRole("status").textContent).toBe("Reservation updated.");
+  expect(screen.getByRole("region", { name: "Upcoming" })).toBeDefined();
+});
+
+it("shows an in-progress reservation's schedule read-only and edits only its reason", async () => {
+  const reservationId = "11111111-1111-4111-8111-111111111111";
+  const now = new Date();
+  const zone = ["UTC", "America/Los_Angeles", "Pacific/Honolulu", "Asia/Tokyo", "Europe/Bucharest"]
+    .find((item) => localMinute(item, now) >= 120 && localMinute(item, now) <= 1320)!;
+  const start = Math.floor(localMinute(zone, now) / 30) * 30 - 30;
+  const active = { id: reservationId, court_id: "33333333-3333-4333-8333-333333333333",
+    location_id: "22222222-2222-4222-8222-222222222222", updated_at: "2026-10-01T12:00:00Z",
+    booking_date: localToday(zone, now), starts_at_minute: start, ends_at_minute: start + 90,
+    reason: "Practice", status: "active", created_by_user_id: "owner", creator_name: "Alex",
+    cancelled_at: null, cancelled_by_name: null, location_name: "RIVUS", location_timezone: zone, court_name: "Court 2" };
+  load.mockResolvedValueOnce({ bookings: [], upcoming: [active], history: [] }).mockResolvedValueOnce({ bookings: [], upcoming: [{ ...active,
+    reason: "Training", updated_at: "2026-10-01T12:01:00Z" }], history: [] });
+  edit.mockResolvedValue({ ok: true });
+  render(<PersonalActivity staff userId="owner" />);
+  fireEvent.click(within(await screen.findByRole("region", { name: "Upcoming" })).getByRole("button"));
+  fireEvent.click(within(screen.getByRole("dialog", { name: "Reservation details" })).getByRole("button", { name: "Edit reservation" }));
+  const dialog = screen.getByRole("dialog", { name: "Edit reservation" });
+  expect(within(dialog).getByText(/cannot be changed/)).toBeDefined();
+  expect(within(dialog).queryByRole("combobox")).toBeNull();
+  expect(within(dialog).queryByLabelText("Date")).toBeNull();
+  expect(availability).not.toHaveBeenCalled();
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Reason" }), { target: { value: "Training" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+  await waitFor(() => expect(edit).toHaveBeenCalledWith({ kind: "reason", id: reservationId, expectedUpdatedAt: active.updated_at, reason: "Training" }));
+});
+
+it("refreshes changed details after a stale edit instead of overwriting them", async () => {
+  const active = { id: "11111111-1111-4111-8111-111111111111", court_id: "33333333-3333-4333-8333-333333333333",
+    location_id: "22222222-2222-4222-8222-222222222222", updated_at: "2026-10-01T12:00:00Z",
+    booking_date: "2099-10-15", starts_at_minute: 840, ends_at_minute: 960, reason: "Practice", status: "active",
+    created_by_user_id: "owner", creator_name: "Alex", cancelled_at: null, cancelled_by_name: null,
+    location_name: "RIVUS", location_timezone: "Europe/Bucharest", court_name: "Court 2" };
+  load.mockResolvedValueOnce({ bookings: [], upcoming: [active], history: [] }).mockResolvedValueOnce({ bookings: [], upcoming: [{ ...active,
+    reason: "Newer update", updated_at: "2026-10-01T12:01:00Z" }], history: [] });
+  availability.mockResolvedValue({ date: active.booking_date,
+    location: { id: active.location_id, name: "RIVUS", timezone: "Europe/Bucharest" },
+    day: { times: [840, 870, 900, 930], courts: [{ court: { id: active.court_id, name: "Court 2" },
+      cells: ["available", "available", "available", "available"] }] } });
+  edit.mockResolvedValue({ ok: false, stale: true, message: "This reservation has changed since you opened it." });
+  render(<PersonalActivity staff userId="owner" />);
+  fireEvent.click(within(await screen.findByRole("region", { name: "Upcoming" })).getByRole("button"));
+  fireEvent.click(within(screen.getByRole("dialog", { name: "Reservation details" })).getByRole("button", { name: "Edit reservation" }));
+  const form = screen.getByRole("dialog", { name: "Edit reservation" });
+  await within(form).findByText("Current reservation");
+  fireEvent.click(within(form).getByRole("button", { name: "Save changes" }));
+  await waitFor(() => expect(edit).toHaveBeenCalledWith({ kind: "reason", id: active.id,
+    expectedUpdatedAt: active.updated_at, reason: "Practice" }));
+  const details = await screen.findByRole("dialog", { name: "Reservation details" });
+  expect(within(details).getByText("Newer update")).toBeDefined();
+  expect(within(details).getByRole("alert").textContent).toContain("changed since you opened it");
+});

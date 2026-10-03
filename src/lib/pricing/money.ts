@@ -22,6 +22,10 @@ export function minorToMajor(amount: number): string {
 }
 
 export function formatHourlyPrice(amount: number, currency: LocationCurrency): string {
+  return formatMoney(amount, currency);
+}
+
+export function formatMoney(amount: number, currency: LocationCurrency): string {
   minorAmountSchema.parse(amount);
   z.enum(locationCurrencies).parse(currency);
   return new Intl.NumberFormat("en-GB", { style: "currency", currency, minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount / 100);

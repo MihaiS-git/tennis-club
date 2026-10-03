@@ -1,9 +1,8 @@
-import { ProfileDepartureLink as Link, ProfileDepartureForm } from "./profile-departure-navigation";
+import { ProfileDepartureLink as Link } from "./profile-departure-navigation";
 import { Suspense } from "react";
 
-import { signOutAction } from "@/app/account/actions";
 import { readNavigationProfile } from "@/lib/profile/navigation";
-import { ProfileNavigationAvatar } from "./profile-navigation-avatar";
+import { AccountMenu } from "./account-menu";
 
 async function AccountNavigationLink({ admin = false }: { admin?: boolean }) {
   const { account } = await readNavigationProfile();
@@ -19,6 +18,12 @@ async function AccountNavigationLink({ admin = false }: { admin?: boolean }) {
   );
 }
 
+async function ReservationNavigationLink() {
+  const { account } = await readNavigationProfile();
+  if (account.state !== "active" || !account.roles.some((role) => role === "admin" || role === "coach")) return null;
+  return <Link className="text-sm font-medium text-foreground hover:text-accent" href="/reservations">Reservations</Link>;
+}
+
 async function AccountControls({ authenticated }: { authenticated: boolean }) {
   const { account, avatarUrl } = await readNavigationProfile();
   const isAuthenticated = account.state !== "unauthenticated";
@@ -26,16 +31,7 @@ async function AccountControls({ authenticated }: { authenticated: boolean }) {
 
   if (!authenticated) return <Link className="text-sm font-medium text-primary hover:text-accent" href="/login">Sign in</Link>;
 
-  return (
-    <>
-      <ProfileNavigationAvatar src={avatarUrl} desktop />
-      <ProfileDepartureForm action={signOutAction}>
-        <button type="submit" className="whitespace-nowrap rounded-control px-1 py-2 text-sm font-medium text-primary hover:text-accent">
-          Sign out
-        </button>
-      </ProfileDepartureForm>
-    </>
-  );
+  return <AccountMenu avatarUrl={avatarUrl} />;
 }
 
 export function DesktopNavbar() {
@@ -68,6 +64,7 @@ export function DesktopNavbar() {
           <Suspense fallback={<span aria-hidden="true" className="h-5 w-10 rounded-control bg-surface-muted" />}>
             <AccountNavigationLink admin />
           </Suspense>
+          <Suspense fallback={null}><ReservationNavigationLink /></Suspense>
         </nav>
 
         <div className="flex items-center justify-end gap-2 xl:gap-4">

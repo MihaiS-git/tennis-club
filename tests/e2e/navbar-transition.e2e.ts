@@ -32,8 +32,7 @@ test("resolved authenticated navbar stays visible throughout unmatched-route nav
     await expect(page.getByRole("heading", { name: "Play more tennis." })).toBeVisible();
     const navigation = page.getByRole("navigation", { name: "Main navigation" });
     await expect(navigation.getByRole("link", { name: "Matches", exact: true })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Your profile" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Account menu" })).toBeVisible();
     // Wait for all initial boundaries (including ones that resolve to null).
     await expect(page.locator('header:visible span[aria-hidden="true"]')).toHaveCount(0);
     await page.evaluate(() => document.fonts.ready);
@@ -62,7 +61,7 @@ test("resolved authenticated navbar stays visible throughout unmatched-route nav
           result.failures.push("Visible loading placeholder replaced navbar content");
         }
         const authenticated = Array.from(header.querySelectorAll("button"))
-          .some((button) => button.textContent?.trim() === "Sign out" && visible(button));
+          .some((button) => button.getAttribute("aria-label") === "Account menu" && visible(button));
         if (!authenticated && !result.failures.includes("Resolved authenticated navbar content disappeared")) {
           result.failures.push("Resolved authenticated navbar content disappeared");
         }
@@ -126,7 +125,7 @@ test("resolved authenticated navbar stays visible throughout unmatched-route nav
       if (!header) throw new Error("Resolved navbar missing before observation");
       const body = document.body;
       const html = document.documentElement;
-      const controls = Array.from(header.querySelectorAll("a, button"));
+      const controls = Array.from(header.querySelectorAll("a, button")).filter(visible);
       const brand = header.querySelector('a[href="/"]');
       const container = brand?.parentElement;
       if (!brand || !container) throw new Error("Navbar brand/container missing before observation");
@@ -193,7 +192,7 @@ test("resolved authenticated navbar stays visible throughout unmatched-route nav
       const currentNavbarResolved = () => {
         const current = Array.from(document.querySelectorAll("header")).find(visible);
         return current && !Array.from(current.querySelectorAll('span[aria-hidden="true"]')).some(visible)
-          && Array.from(current.querySelectorAll("button")).some((button) => button.textContent?.trim() === "Sign out" && visible(button));
+          && Array.from(current.querySelectorAll("button")).some((button) => button.getAttribute("aria-label") === "Account menu" && visible(button));
       };
       check();
       requestAnimationFrame(sample);

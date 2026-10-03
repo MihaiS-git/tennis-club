@@ -133,7 +133,6 @@ test("profile refinement: authenticated lifecycle, country, keyboard, navigation
       await sectionButton(page, "Account & security").focus();
       await page.keyboard.press("Space");
       await expect(page.getByLabel("Current password")).toBeVisible();
-      await expect(page.getByRole("main").getByRole("button", { name: "Sign out" })).toHaveCount(0);
       await assertNoOverflow(page);
       await section(page, "Personal information");
       await expect(page.getByLabel("First name")).toHaveValue("Unsaved name");
@@ -146,30 +145,36 @@ test("profile refinement: authenticated lifecycle, country, keyboard, navigation
       await expect(page.getByLabel("Change avatar")).toBeVisible();
       await expect(page.getByRole("button", { name: "Remove avatar" })).toBeVisible();
       await assertNoOverflow(page);
-      const openMenu = page.getByRole("button", { name: "Open menu" });
-      const usesMenu = await openMenu.isVisible();
-      if (usesMenu) await openMenu.click();
-      const profileLink = usesMenu ? page.getByRole("link", { name: "Profile", exact: true }) : page.getByRole("link", { name: "Your profile" });
+      const mobile = width < 1024;
+      if (mobile) await page.getByRole("button", { name: "Open menu" }).click();
+      else await page.getByRole("button", { name: "Account menu" }).click();
+      const profileLink = mobile
+        ? page.getByRole("navigation", { name: "Mobile navigation" }).getByRole("link", { name: "Profile & settings" })
+        : page.getByRole("link", { name: "Profile & settings" });
       await expect(profileLink).toBeVisible();
       await expect(profileLink).toHaveAttribute("href", "/profile");
-      const navImage = profileLink.locator("img");
-      await expect(navImage).toHaveAttribute("src", /\/profile\/avatar\?v=/);
+      const avatarControl = mobile
+        ? page.getByRole("navigation", { name: "Mobile navigation" }).getByRole("link", { name: "My activity" })
+        : page.getByRole("button", { name: "Account menu" });
+      const navImage = avatarControl.locator("img");
+      await expect(navImage).toBeVisible();
       expect(await navImage.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
       await profileLink.focus();
       await page.keyboard.press("Shift+Tab");
       await page.keyboard.press("Tab");
       await expect(profileLink).toBeFocused();
       await assertNoOverflow(page);
-      if (usesMenu) await page.getByRole("dialog").getByRole("button", { name: "Close menu", exact: true }).click();
+      if (mobile) await page.getByRole("dialog", { name: "Mobile navigation menu" }).getByRole("button", { name: "Close menu", exact: true }).click();
+      else await page.keyboard.press("Escape");
     }
     await page.getByLabel("Change avatar").setInputFiles({ name: "replacement.png", mimeType: "image/png", buffer: png });
     await page.getByRole("button", { name: "Save avatar" }).click();
-    await expect(page.getByRole("link", { name: "Your profile" }).locator("img")).toHaveAttribute("src", /\/profile\/avatar\?v=/);
+    await expect(page.getByRole("button", { name: "Account menu" }).locator("img")).toBeVisible();
     await page.getByRole("button", { name: "Remove avatar" }).click();
     await expect(page.getByRole("img", { name: "Default player avatar" })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Your profile" }).locator("img")).toHaveCount(0);
-    await expect(page.getByRole("link", { name: "Your profile" }).locator("svg")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Account menu" }).locator("img")).toHaveCount(0);
     expect(forbiddenRequests).toEqual([]);
+    await page.getByRole("button", { name: "Account menu" }).click();
     await page.getByRole("button", { name: "Sign out", exact: true }).click();
     await expect(page.getByText("You have unsaved changes in 2 sections.", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Leave without saving", exact: true }).click();

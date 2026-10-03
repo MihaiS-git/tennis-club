@@ -1,7 +1,7 @@
-import { listActiveLocationsWithCourts } from "@/lib/courts/public";
+import { listPublicLocationsWithCourts } from "@/lib/courts/public";
 
 export async function CourtsDiscovery() {
-  const locations = await listActiveLocationsWithCourts();
+  const locations = await listPublicLocationsWithCourts();
   const courtCount = locations.reduce((total, location) => total + location.courts.length, 0);
 
   if (courtCount === 0) {

@@ -4,6 +4,8 @@ import { z } from "zod";
 
 import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
+import { locationCurrencies } from "@/lib/admin/locations-validation";
+import { isPubliclyEligible, publicationToday } from "@/lib/locations/publication";
 
 const courtSchema = z.object({
   id: z.uuid(),
@@ -12,6 +14,8 @@ const courtSchema = z.object({
   surface: z.enum(["clay", "hard", "grass", "carpet"]),
   environment: z.enum(["outdoor", "indoor"]),
   has_lighting: z.boolean(),
+  is_active: z.boolean(),
+  location_pricing_rules: z.array(z.object({ court_state: z.enum(["indoor", "outdoor", "covered"]), ends_on: z.iso.date().nullable() })),
 });
 const locationSchema = z.object({
   id: z.uuid(),
@@ -23,21 +27,26 @@ const locationSchema = z.object({
   postal_code: z.string().nullable(),
   country_code: z.string().nullable(),
   timezone: z.string(),
+  currency: z.enum(locationCurrencies),
+  is_active: z.boolean(),
+  is_public: z.boolean(),
+  archived_at: z.iso.datetime({ offset: true }).nullable(),
+  location_opening_hours: z.array(z.object({ id: z.uuid() })),
   courts: z.array(courtSchema),
 });
 
-export type PublicCourt = z.infer<typeof courtSchema>;
-export type PublicLocation = z.infer<typeof locationSchema>;
+export type PublicCourt = Omit<z.infer<typeof courtSchema>, "location_pricing_rules" | "is_active">;
+export type PublicLocation = Omit<z.infer<typeof locationSchema>, "is_active" | "is_public" | "archived_at" | "location_opening_hours" | "courts"> & { courts: PublicCourt[] };
 
-export async function listActiveLocationsWithCourts(
+export async function listPublicLocationsWithCourts(
   supabase?: Awaited<ReturnType<typeof createClient>>,
 ): Promise<PublicLocation[]> {
   const client = supabase ?? await createClient();
-  // Inner embedding excludes locations that have no active courts.
   const { data, error } = await client.from("locations")
-    .select("id, name, slug, address_line1, address_line2, city, postal_code, country_code, timezone, courts!inner(id, name, slug, surface, environment, has_lighting)")
+    .select("id, name, slug, address_line1, address_line2, city, postal_code, country_code, timezone, currency, is_active, is_public, archived_at, location_opening_hours(id), courts(id, name, slug, surface, environment, has_lighting, is_active, location_pricing_rules(court_state, ends_on))")
     .eq("is_active", true)
     .is("archived_at", null)
+    .eq("is_public", true)
     .eq("courts.is_active", true)
     .order("display_order")
     .order("name")
@@ -50,5 +59,15 @@ export async function listActiveLocationsWithCourts(
     logger.error({ event: "courts.public_read_failed", code: error?.code }, "Failed to load public courts");
     throw new Error("Unable to load courts.");
   }
-  return parsed.data;
+  return parsed.data.filter((location) => isPubliclyEligible(location, publicationToday(location.timezone)))
+    .map((location) => ({
+      id: location.id, name: location.name, slug: location.slug,
+      address_line1: location.address_line1, address_line2: location.address_line2,
+      city: location.city, postal_code: location.postal_code, country_code: location.country_code,
+      timezone: location.timezone, currency: location.currency,
+      courts: location.courts.map((court) => ({
+        id: court.id, name: court.name, slug: court.slug, surface: court.surface,
+        environment: court.environment, has_lighting: court.has_lighting,
+      })),
+    }));
 }

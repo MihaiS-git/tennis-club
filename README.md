@@ -258,7 +258,8 @@ Use it only for trusted system operations such as:
 - controlled server-side synchronization;
 - narrowly scoped system operations that genuinely require elevated access.
 
-Introduce `SUPABASE_SECRET_KEY` only when such an operation is implemented.
+`SUPABASE_SECRET_KEY` is used only by the server-side customer booking writer. It
+calls one service-role-only RPC after user-scoped validation and pricing reads.
 
 Never expose the secret key to:
 
@@ -329,7 +330,7 @@ When TanStack Query is introduced, update both `README.md` and `AGENTS.md` toget
 
 A court belongs to exactly one location.
 
-`locations` represent physical locations of the same club; `courts` belong to those locations. This foundation supports one initial location and later multiple locations, not multi-tenancy. Active locations and their active courts may be discovered without authentication through the server-only `listActiveLocationsWithCourts()` read model. Public SELECT policies hide inactive locations and courts, including active courts at inactive locations; active administrators have separate resource-management policies. No browser database client or public mutation access is introduced.
+`locations` represent physical locations of the same club; `courts` belong to those locations. This foundation supports one initial location and later multiple locations, not multi-tenancy. `is_public` is the administrator's explicit intent to publish a location and defaults to false for both existing and new rows. Public `/book` and `/courts` use the server-only `listPublicLocationsWithCourts()` read model. It returns only active, unarchived, published locations with valid name, slug, timezone and currency, opening hours, an active court, and current or future base-state pricing for every active court. The rule is derived in `src/lib/locations/publication.ts`; no readiness flag is stored. Public SELECT policies hide private locations and their courts; active administrators retain separate management access. No browser database client or public mutation access is introduced.
 
 A coach may work at multiple locations.
 
@@ -721,9 +722,11 @@ AI-based partner matching is not required initially.
 
 `public.users` stores application identity/status and optional personal/contact information. `public.player_profiles` stores tennis information independently of RBAC. A player profile is created on the first tennis save, not at signup. Future `coach_profiles` will be a sibling domain entity; users may have either, both, or neither.
 
-`/profile` has separate personal and tennis saves, plus player-avatar upload/removal. JPEG, PNG, and WebP avatar uploads (maximum 5 MiB) are decoded and normalized server-side with Sharp into metadata-free WebP images fitting within 512 × 512 without enlargement or cropping. Source dimensions are limited to 12,000 pixels per side and 40 million pixels. Only `<user-id>/avatar.webp` is stored in the private bucket and served through the authenticated avatar endpoint. `/profile` also includes account/email information, roles, password change, and sign out; `/account` redirects to `/profile`. Tennis information is readable only by active authenticated users, never anonymously. See [Profile implementation](docs/profiles.md).
+`/profile` is for identity and settings: separate personal and tennis saves, player-avatar upload/removal, account/email information, roles, and password change. JPEG, PNG, and WebP avatar uploads (maximum 5 MiB) are decoded and normalized server-side with Sharp into metadata-free WebP images fitting within 512 × 512 without enlargement or cropping. Source dimensions are limited to 12,000 pixels per side and 40 million pixels. Only `<user-id>/avatar.webp` is stored in the private bucket and served through the authenticated avatar endpoint. `/account` redirects to `/profile`. Tennis information is readable only by active authenticated users, never anonymously. See [Profile implementation](docs/profiles.md).
 
 Personal and tennis forms independently compare editable values against their last successful save. Explicit shared navigation links and sign-out submissions warn through Sonner when leaving a dirty Profile visit; internal section switches preserve drafts. Reload/close/document departures use native `beforeunload` protection while dirty. Same-document browser back/forward has no supported App Router blocker and retains the existing fresh-visit behavior without a warning. See [Profile visit protection and browser limitations](docs/profiles.md#unsaved-changes-and-visit-lifecycle).
+
+`/my-activity` is a compact personal activity overview; `/my-activity/bookings` shows current and upcoming personal court activity, and `/my-activity/bookings/history` shows a server-paginated direct-reservation archive (20 rows per page). The authenticated account menu links to My activity and Profile & settings and provides Sign out. The bookings page combines the current account's confirmed customer bookings with an Admin's or Coach's own active direct reservations. Both types require an active physical interval that has not ended in the location's timezone. Customer booking details show stored contact and price snapshots without edit or cancel actions. A narrow authenticated RPC binds customer booking reads to `auth.uid()`; guest and other users' bookings are excluded without granting table SELECT. The history page still reads only that staff user's cancelled or elapsed direct reservations. Cancelled records sort by cancellation time and elapsed records by interval end, newest first, with reservation ID as the final tie-breaker. A direct-reservation details dialog lets the owner edit or cancel an active Upcoming reservation; archive details are read-only. Future direct reservations keep their location fixed and use the direct-reservation timetable to choose a date, active court at that location, and interval; a server read excludes the edited row from occupancy while preserving other booked cells. In-progress direct reservations can change only reason. Editing updates the same row through a personal RPC that locks the row, verifies ownership, `updated_at`, and the unchanged location, and leaves the original intact on a stale edit or GiST conflict. A role-checked database function binds direct-reservation reads to `auth.uid()` and keeps private reservation metadata out of public occupancy reads.
 
 Avatar upload and removal share one UI pending state. A user-scoped database lease serializes each owner's Storage, persistence, and compensation workflow across server instances. Token-checked RPCs acquire/release the lease and persist the avatar path; bounded HTTP requests stop stale workers before abandoned leases can be reclaimed. See [Avatar workflow](docs/profiles.md#avatar-workflow).
 
@@ -969,7 +972,7 @@ Court 2
 
 ## Local development database tooling
 
-The development schema is defined by four consolidated migrations: Auth/RBAC, player profiles and avatars, club resources, and pricing rules. Replaying rewritten migration history requires an explicitly approved local database reset; it deletes local data. Do not apply the consolidated files to an existing database as incremental migrations.
+The development schema starts with four consolidated migrations for Auth/RBAC, player profiles and avatars, club resources, and pricing rules, followed by focused booking-read, reservation, and publication migrations. Replaying rewritten migration history requires an explicitly approved local database reset; it deletes local data. Do not apply the consolidated files to an existing database as incremental migrations.
 
 Run `npm run db:dev:seed` for four confirmed Auth users, two locations, weekly opening hours, six courts, and one outdoor coverage period. The shared development password is `Local-Tennis-Dev-2026!`. `npm run seed:users` remains available to seed only the four users.
 
@@ -989,20 +992,20 @@ Slugs are generated on creation, preserved on edits (including moves), and uniqu
 within the selected location. Court RLS grants the required SELECT/INSERT/UPDATE
 access with no hard deletion. Temporary balloon capability/installation flags have
 been removed. Outdoor courts have exact, inclusive calendar-date coverage periods
-managed within `/admin/courts` (add, edit, remove). `court_coverage_periods` is
-admin-only, including reads; future schedules are not public. A GiST exclusion
+managed within `/admin/courts` (add, edit, remove). Coverage periods for active
+public courts are readable for the public calendar; writes remain admin-only. A GiST exclusion
 constraint prevents overlaps for the same court. A generated outdoor discriminator
 and composite foreign key reject indoor coverage and prevent changing a court to
 indoor until its periods are removed, including concurrent writes. `updated_at`
 is application-controlled; configuration intervals may be hard deleted.
 `getCourtStateForDate(environment, periods, date)` in `src/lib/courts/state.ts`
 returns indoor, outdoor, or covered from inclusive date intervals, with no seasonal
-inference. Callers supply a calendar date explicitly. Public `/courts` remains
-unchanged to preserve its existing read model.
+inference. Callers supply a calendar date explicitly. Public `/courts` uses the
+shared publication and readiness read model.
 
 `/admin/locations` shows current locations in a compact table. Clicking or keyboard
 activating a row opens the full Location form for name, address, city, postal code,
-country, timezone, currency, and status. The same interaction applies to the mobile
+country, timezone, currency, status, and Public booking. The same interaction applies to the mobile
 item. Archive and Restore are inside that dialog, including in the archived view.
 Archiving sets `archived_at` and deactivates the location;
 restoring clears the archive timestamp but leaves it inactive until explicitly activated.
@@ -1012,7 +1015,7 @@ default EUR). Slugs are generated from names on creation and preserved on edits;
 collisions require a different name. Location counts are derived from records.
 Location RLS grants active administrators SELECT/INSERT/UPDATE, with no deletion
 access. The database prevents an archived location from being active. Public discovery
-filters for active, unarchived locations with active courts.
+requires explicit publication and derived configuration readiness. Enabling Public booking is checked server-side and returns a useful missing-configuration error; disabling it retains all Admin configuration.
 
 Location opening hours are managed from Edit Location through an explicit Manage opening hours action. The compact weekly editor groups weekdays only when their complete
 interval sets match. One form selects weekdays, supports multiple intervals, and
@@ -1038,8 +1041,79 @@ date/time applicability and permits adjacent intervals. Next.js validates every
 selected court and weekday against environment and configured opening hours before
 calling the RPC. RLS remains active. Later opening-hours edits do not rewrite
 pricing; consumers must still check opening hours independently. The resolver uses
-court, derived state, date, weekday and local minute. Public `/courts` remains
-unchanged. See [Pricing](docs/pricing.md).
+court, derived state, date, weekday and local minute. Public `/courts` discovers
+only eligible locations and courts. See [Pricing](docs/pricing.md).
+
+Public `/book` loads only eligible locations and courts for its controls, reading only the small opening-hours and pricing fields needed to check readiness without a date. It does not
+load a calendar day's opening hours, coverage, pricing, or reservations until a valid location-local
+date is selected in the URL. For that date it reads the selected location's opening
+hours, coverage and applicable pricing for all active courts, and only that date's
+reservation occupancy. Each court has one compact 30-minute timetable with hourly
+prices in available cells. Closed gaps, booked, no-pricing, and past cells remain
+unavailable. Visitors select a minimum 60-minute interval within one court and can
+adjust it in 30-minute steps. The selected-interval Total uses integer minor units
+and rounds once after adding each cell's hourly rate. Selection exists only in
+browser state until Continue opens a customer-details dialog. Guests enter name,
+email, and phone; active signed-in accounts receive available profile contact
+values as editable defaults. Confirm calls a Server Action with only contact and
+interval intent. It never changes the Profile. The action delegates to the booking
+service, which recalculates price and creates the booking atomically. Availability
+conflicts clear the selected interval and refresh the timetable while preserving
+contact values. Success shows the server-confirmed total and refreshes occupancy.
+There is no browser Supabase client.
+
+The reservation persistence foundation is `court_reservations`: one court,
+location-local date, and half-open minute interval per row. PostgreSQL requires
+at least 60 minutes with start and end on 30-minute boundaries, within one local
+calendar day, and uses a partial GiST exclusion constraint to reject overlapping
+active intervals for the same court/date. An optional `reason` (up to 255 characters)
+describes direct reservations; customer bookings have their own commercial record.
+Reservations have `active` or `cancelled` status; only active rows block occupancy. Active Admins
+and Coaches can create direct reservations at `/reservations` for active courts at
+structurally ready locations, including unpublished locations.
+The Server Action checks the account, resources, location-local time, opening hours,
+duration and required trimmed reason before a user-scoped insert. The GiST
+constraint resolves concurrent overlaps; the UI shows a contextual conflict error.
+Customer booking persistence is available through `/book`. `bookings` stores one unique reservation reference, an optional
+application account ID, required contact snapshot, confirmed/cancelled status, and
+an integer price/currency snapshot. Guests have no account link; active authenticated
+users are resolved server-side, including Admins and Coaches. The service reuses the
+public location and calendar pricing rules and validates the entire interval before
+calling a service-role-only RPC. The RPC inserts the active physical reservation and
+confirmed booking in one transaction. GiST overlap errors roll back both rows and
+return a safe availability message. Browser roles have no booking table read/write
+grants or RPC access; public occupancy remains limited to court and interval fields.
+This foundation has no payment or hold state.
+Direct reservations have no price or payment flow. RLS permits only active Admins
+and Coaches to insert rows with a reason and their own authenticated user ID as
+creator. Existing rows can have a null creator. `/reservations` reads active occupancy
+for all staff; active Admins additionally receive a narrow Admin-only RPC projection
+of active reservation identity, reason, and creator display name. Admin occupied
+cells open one details dialog for the whole reservation. After explicit confirmation,
+an active Admin may cancel any active direct reservation through a dedicated
+Admin-only RPC. Its conditional lifecycle update records the Admin as canceller,
+preserves the creator and reservation row, and releases occupancy. A missing or
+already-cancelled row returns a safe result. Coaches see generic booked cells and
+receive no operational details or Admin management IDs or actions.
+The Admin details dialog also opens a shared reservation edit form. Its Admin-only
+availability read resolves the active reservation's fixed location, reads active
+courts and opening hours there, and excludes that reservation from occupancy while
+leaving other active reservations blocked. Future reservations can preview another
+date, court, time, and reason; in-progress reservations can save reason only. A
+dedicated Admin-only RPC locks and updates the same row, checks its `updated_at`
+token and fixed location, and leaves it unchanged on a stale edit or GiST conflict.
+The creator and lifecycle fields remain intact. The personal owner-only edit
+mutation remains separate.
+On `/my-activity/bookings`, active Admins and Coaches can cancel only their own active Upcoming
+reservations after explicit confirmation. The Server Action rechecks staff authorization,
+and the atomic database update requires ownership and an active court and location.
+A missing, elapsed, or already-cancelled row returns a safe error. Cancellation preserves the row, creator,
+and original details while recording the authenticated canceller and time; it releases
+the occupied interval. The public `/book` server read can select only court ID, booking
+date, and start/end minutes for active public courts for the selected date;
+reservation identity, reason, creator, canceller, and timestamps remain private. Anonymous users and
+ordinary authenticated users cannot insert or cancel reservations. Every active reservation row marks
+overlapping 30-minute cells booked on `/book`, which remains read-only.
 
 `/admin/users` uses server-side queries with RLS-enforced access. Search, filtering,
 sorting, and pagination are URL-driven and applied before pagination. Interactive

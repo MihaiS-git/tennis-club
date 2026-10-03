@@ -1,0 +1,181 @@
+"use client";
+
+import { useId, useRef, useState, useTransition } from "react";
+import { createPortal } from "react-dom";
+import { useRouter } from "next/navigation";
+import { minuteToTime } from "@/lib/admin/opening-hours-validation";
+import { ConfirmationDialog } from "@/components/confirmation-dialog";
+import { ModalDialog } from "@/components/modal-dialog";
+import { ReservationEditForm } from "@/components/reservation-edit-form";
+import { ReservationDetailFieldsView, ReservationScheduleFieldsView, reservationDateLabel } from "@/components/reservation-details";
+import { formatMoney } from "@/lib/pricing/money";
+import { ReservationTimetable, type ReservationTimetableDay } from "@/components/reservation-timetable";
+import { reservationEditInput, reservationEditSchema, selectReservationCell, type ReservationCell, type ReservationSelection } from "@/lib/reservations/domain";
+import { isReservationInProgress, isReservationUpcoming } from "@/lib/reservations/personal";
+import type { AdminOperationalOccupancy, AdminReservation, InternalLocation } from "@/lib/reservations/service";
+import { cancelAdminReservationAction, editAdminReservationAction, loadAdminReservationEditDayAction, reserveCourtAction } from "./actions";
+
+export function ReservationCalendar({ day, date, location, adminOccupancy = [] }: {
+  day: ReservationTimetableDay;
+  date: string; location: InternalLocation; adminOccupancy?: AdminOperationalOccupancy[];
+}) {
+  const router = useRouter();
+  const [selection, setSelection] = useState<ReservationSelection | null>(null);
+  const [reason, setReason] = useState("");
+  const [message, setMessage] = useState("");
+  const [success, setSuccess] = useState(false);
+  const [pending, startTransition] = useTransition();
+  const [selectedOccupancyId, setSelectedOccupancyId] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [editToken, setEditToken] = useState<string | null>(null);
+  const [editError, setEditError] = useState("");
+  const [updatedReservation, setUpdatedReservation] = useState<AdminReservation | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [cancelPending, setCancelPending] = useState(false);
+  const [cancelError, setCancelError] = useState("");
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const returnFocusRef = useRef<HTMLButtonElement | null>(null);
+  const cancelButtonRef = useRef<HTMLButtonElement>(null);
+  const titleId = useId();
+  const selectedOccupancy = adminOccupancy.find((item) => item.id === selectedOccupancyId);
+  const selectedReservation = selectedOccupancy?.kind === "reservation"
+    ? updatedReservation?.id === selectedOccupancy.id ? updatedReservation : selectedOccupancy : null;
+  const selectedBooking = selectedOccupancy?.kind === "booking" ? selectedOccupancy : null;
+  const selectedCourtName = location.courts.find((court) => court.id === selectedOccupancy?.court_id)?.name ?? "Court";
+  const editInProgress = selectedReservation ? isReservationInProgress({ ...selectedReservation,
+    location_timezone: location.timezone }, new Date()) : false;
+  const selectedCourt = day.courts.find((item) => item.court.id === selection?.courtId)?.court;
+  function choose(courtId: string, cells: ReservationCell[], row: number) {
+    setSelection((current) => selectReservationCell({ courtId, times: day.times, cells }, current, row));
+    setMessage(""); setSuccess(false);
+  }
+  function submit() {
+    if (!selection || !reason.trim()) { setMessage("Enter a reason."); return; }
+    startTransition(async () => {
+      const result = await reserveCourtAction({ locationId: location.id, courtId: selection.courtId, date,
+        startMinute: selection.startMinute, endMinute: selection.endMinute, reason });
+      if (result.ok) { setSelection(null); setReason(""); setMessage("Court reserved."); setSuccess(true); }
+      else { setMessage(result.message); setSuccess(false); }
+    });
+  }
+  async function cancelReservation() {
+    if (!selectedReservation || cancelPending) return;
+    setCancelPending(true);
+    setCancelError("");
+    try {
+      const result = await cancelAdminReservationAction(selectedReservation.id);
+      if (!result.ok) { setCancelError(result.message); return; }
+      setConfirming(false);
+      dialogRef.current?.close();
+      setSelectedOccupancyId(null);
+      setSelection(null);
+      setMessage("Reservation cancelled.");
+      setSuccess(true);
+      router.refresh();
+    } catch {
+      setCancelError("Unable to cancel this reservation. Try again.");
+    } finally { setCancelPending(false); }
+  }
+  async function openEdit() {
+    if (!selectedReservation) return;
+    setEditing(true); setEditToken(null); setEditError("");
+    try {
+      const result = await loadAdminReservationEditDayAction(selectedReservation.id, selectedReservation.booking_date);
+      setEditToken(result.reservation.updated_at);
+    } catch { setEditError("Unable to load the current reservation. Try again."); }
+  }
+  return <>
+    {day.times.length === 0 ? <p className="mt-5 rounded-card border border-border bg-surface p-5 text-muted-foreground">{location.name} is closed on {date}.</p>
+      : <ReservationTimetable day={day} date={date} selection={selection} onChoose={choose} disabled={pending}
+          occupiedIntervals={adminOccupancy.map((item) => ({ id: item.id, courtId: item.court_id,
+            startsAtMinute: item.starts_at_minute, endsAtMinute: item.ends_at_minute,
+            label: item.kind === "booking" ? `Booking · ${item.customer_name}` : `Reservation · ${item.creator_name || "Unknown creator"}` }))}
+          onOccupiedClick={adminOccupancy.length ? (id) => {
+            returnFocusRef.current = document.activeElement instanceof HTMLButtonElement ? document.activeElement : null;
+            setEditing(false);
+            setUpdatedReservation(null);
+            setSelectedOccupancyId(id);
+          } : undefined} />}
+    {selection && selectedCourt && <section aria-label="Selected reservation" className="mt-4 rounded-card border border-border bg-surface p-4">
+      <h2 className="font-heading text-lg font-semibold text-primary">Reserve court</h2>
+      <p className="mt-1 text-sm text-foreground">{location.name} · {selectedCourt.name} · {date} · {minuteToTime(selection.startMinute)}–{minuteToTime(selection.endMinute)} · {selection.endMinute - selection.startMinute} min</p>
+      <label className="mt-3 flex max-w-xl flex-col gap-1 text-sm font-semibold text-primary">Reason
+        <input value={reason} onChange={(event) => setReason(event.target.value)} maxLength={255} required
+          className="min-h-10 rounded-control border border-border-strong bg-background px-3 font-normal text-foreground" />
+      </label>
+      <div className="mt-3 flex gap-2"><button type="button" disabled={pending || !reason.trim()} onClick={submit}
+        className="min-h-10 rounded-control bg-primary px-5 text-sm font-semibold text-primary-foreground disabled:opacity-50">{pending ? "Reserving…" : "Reserve court"}</button>
+        <button type="button" onClick={() => { setSelection(null); setMessage(""); }} className="min-h-10 rounded-control border border-border-strong px-3 text-sm font-semibold text-primary">Clear selection</button></div>
+    </section>}
+    <p role={success ? "status" : "alert"} className={`mt-2 min-h-5 text-sm ${success ? "text-success" : "text-danger"}`}>{message}</p>
+    {selectedOccupancy && typeof document !== "undefined" && createPortal(
+      <ModalDialog ref={dialogRef} active aria-labelledby={titleId}
+        onCancel={(event) => { if (cancelPending) event.preventDefault(); }}
+        onClose={() => { setSelectedOccupancyId(null); setEditing(false); setEditToken(null);
+          setUpdatedReservation(null); setConfirming(false); returnFocusRef.current?.focus(); }}
+        className={`fixed inset-0 m-auto w-[calc(100%-2rem)] rounded-card border border-border bg-surface p-5 text-foreground shadow-floating backdrop:bg-foreground/50 ${editing && !editInProgress ? "max-w-6xl" : "max-w-md"}`}>
+        <h2 id={titleId} className="font-heading text-lg font-semibold">{selectedBooking ? "Booking details" : editing ? "Edit reservation" : "Reservation details"}</h2>
+        {selectedBooking ? <>
+          <dl className="mt-4 grid grid-cols-[7rem_1fr] gap-x-3 gap-y-2 text-sm">
+            <dt className="text-muted-foreground">Customer</dt><dd className="break-words">{selectedBooking.customer_name}</dd>
+            <dt className="text-muted-foreground">Email</dt><dd className="break-all">{selectedBooking.customer_email}</dd>
+            <dt className="text-muted-foreground">Phone</dt><dd className="break-words">{selectedBooking.customer_phone}</dd>
+            <ReservationScheduleFieldsView reservation={{ ...selectedBooking, location_name: location.name,
+              location_timezone: location.timezone, court_name: selectedCourtName }} />
+            <dt className="text-muted-foreground">Total</dt><dd>{formatMoney(selectedBooking.total_amount_minor, selectedBooking.currency)} · {selectedBooking.currency}</dd>
+            <dt className="text-muted-foreground">Status</dt><dd>Confirmed</dd>
+          </dl>
+          <div className="mt-5 flex justify-end"><button type="button" onClick={() => dialogRef.current?.close()}
+            className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button></div>
+        </> : selectedReservation && editing && !editToken ? <div className="mt-4 text-sm" role={editError ? "alert" : "status"}>
+          {editError || "Loading reservation…"}
+          {editError && <button type="button" className="ml-2 font-semibold underline" onClick={openEdit}>Retry</button>}
+        </div> : selectedReservation && editing ? <ReservationEditForm key={selectedReservation.id} reservation={{ ...selectedReservation,
+          location_name: location.name, location_timezone: location.timezone, court_name: selectedCourtName }}
+          inProgress={editInProgress} loadAvailability={loadAdminReservationEditDayAction}
+          onCancel={() => setEditing(false)}
+          onSave={async ({ date: targetDate, selection: targetSelection, reason: targetReason, inProgress }) => {
+            if (!editToken) return { ok: false, message: "Reload this reservation before saving." };
+            const input = reservationEditInput({ id: selectedReservation.id, expectedUpdatedAt: editToken,
+              courtId: selectedReservation.court_id, bookingDate: selectedReservation.booking_date,
+              startMinute: selectedReservation.starts_at_minute, endMinute: selectedReservation.ends_at_minute,
+              date: targetDate, selection: targetSelection, reason: targetReason, reasonOnly: inProgress });
+            const parsed = reservationEditSchema.safeParse(input);
+            if (!parsed.success) {
+              const fieldErrors: Record<string, string> = {};
+              for (const issue of parsed.error.issues) fieldErrors[String(issue.path.at(-1) ?? "form")] ??= issue.message;
+              return { ok: false, message: "Check the highlighted fields.", fieldErrors };
+            }
+            const result = await editAdminReservationAction(parsed.data);
+            if (result.ok) setUpdatedReservation({ ...selectedReservation, ...result.reservation });
+            return result;
+          }}
+          onSaved={async () => { setEditing(false); setEditToken(null); setMessage("Reservation updated.");
+            setSuccess(true); router.refresh(); }}
+          onStale={async () => { setEditing(false); setEditToken(null); setUpdatedReservation(null);
+            setMessage("This reservation has changed since you opened it. Refresh and try again.");
+            setSuccess(false); router.refresh(); }} /> : selectedReservation ? <>
+        <dl className="mt-4 grid grid-cols-[7rem_1fr] gap-x-3 gap-y-2 text-sm">
+          <ReservationDetailFieldsView reservation={{ ...selectedReservation, location_name: location.name,
+            location_timezone: location.timezone,
+            court_name: selectedCourtName }} />
+          <dt className="text-muted-foreground">Created by</dt><dd>{selectedReservation.creator_name || "Unknown creator"}</dd>
+          <dt className="text-muted-foreground">Status</dt><dd>Active</dd>
+        </dl>
+        <div className="mt-5 flex justify-end gap-2">
+          {isReservationUpcoming({ ...selectedReservation, status: "active", location_timezone: location.timezone }, new Date())
+            && <button type="button" disabled={cancelPending} onClick={openEdit}
+              className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold text-primary">Edit reservation</button>}
+          <button ref={cancelButtonRef} type="button" disabled={cancelPending}
+            onClick={() => { setCancelError(""); setConfirming(true); }}
+            className="min-h-10 rounded-control border border-danger px-4 text-sm font-semibold text-danger">Cancel reservation</button>
+          <button type="button" disabled={cancelPending} onClick={() => dialogRef.current?.close()}
+          className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button></div>
+        </> : null}
+      </ModalDialog>, document.body)}
+    <ConfirmationDialog open={confirming && !!selectedReservation} title="Cancel reservation?"
+      message={selectedReservation ? `${location.name} · ${location.courts.find((court) => court.id === selectedReservation.court_id)?.name ?? "Court"}\n${reservationDateLabel(selectedReservation.booking_date)} · ${minuteToTime(selectedReservation.starts_at_minute)}–${minuteToTime(selectedReservation.ends_at_minute)}\nCreated by\n${selectedReservation.creator_name || "Unknown creator"}\n\nThis will free the court for other bookings and reservations.` : ""}
+      confirmLabel="Cancel reservation" cancelLabel="Keep reservation" pending={cancelPending} error={cancelError}
+      onConfirm={cancelReservation} onClose={() => { if (!cancelPending) setConfirming(false); }} returnFocusRef={cancelButtonRef} />
+  </>;
+}

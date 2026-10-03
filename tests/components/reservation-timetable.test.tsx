@@ -1,0 +1,34 @@
+// @vitest-environment jsdom
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, expect, it, vi } from "vitest";
+import { ReservationTimetable } from "@/components/reservation-timetable";
+
+afterEach(cleanup);
+
+it("maps each occupied half-hour cell to the same reservation without invoking creation", () => {
+  const onChoose = vi.fn();
+  const onOccupiedClick = vi.fn();
+  render(<ReservationTimetable date="2099-10-15" selection={null} onChoose={onChoose} onOccupiedClick={onOccupiedClick}
+    day={{ times: [750, 780, 810, 840, 870], courts: [{ court: { id: "court", name: "Court 1" },
+      cells: ["booked", "booked", "booked", "available", "available"] }] }}
+    occupiedIntervals={[{ id: "reservation", courtId: "court", startsAtMinute: 750, endsAtMinute: 840,
+      label: "Reservation · Mihai S" }]} />);
+  expect(screen.getAllByText("Reservation · Mihai S")).toHaveLength(1);
+  for (const time of ["12:30", "13:00", "13:30"]) {
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(`Court 1 2099-10-15 ${time}.*Reservation · Mihai S`) }));
+  }
+  expect(onOccupiedClick.mock.calls).toEqual([["reservation"], ["reservation"], ["reservation"]]);
+  expect(onChoose).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: /Court 1 2099-10-15 14:00–14:30, Available/ }));
+  expect(onChoose).toHaveBeenCalledOnce();
+});
+
+it("keeps generic occupied cells inert when no occupied interaction is provided", () => {
+  const onChoose = vi.fn();
+  render(<ReservationTimetable date="2099-10-15" selection={null} onChoose={onChoose}
+    day={{ times: [750, 780], courts: [{ court: { id: "court", name: "Court 1" },
+      cells: ["booked", "booked"] }] }} />);
+  expect(screen.getAllByText("Booked")).toHaveLength(2);
+  expect(screen.queryByRole("button")).toBeNull();
+  expect(onChoose).not.toHaveBeenCalled();
+});

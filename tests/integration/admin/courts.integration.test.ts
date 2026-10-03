@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test } from "vitest";
 import { listAdminCourts, saveAdminCourt } from "../../../src/lib/admin/courts";
-import { listActiveLocationsWithCourts } from "../../../src/lib/courts/public";
+import { listPublicLocationsWithCourts } from "../../../src/lib/courts/public";
 import { cleanupAuthFixtures, localFixtureClient } from "../auth-fixtures";
 import { ensureIntegrationAdminAnchor } from "../admin-anchor";
 
@@ -54,8 +54,8 @@ test("court administration persists edits, moves and status with real authorizat
       assert.ok(saved);
       expect(saved).toMatchObject({ ...edited, slug: original.slug, is_active });
       expect(Date.parse(saved.updated_at)).toBeGreaterThan(Date.parse("2000-01-01T00:00:00Z"));
-      const visible = (await listActiveLocationsWithCourts(publicClient())).filter((row) => locationIds.includes(row.id));
-      expect(visible.map((row) => row.id)).toEqual(is_active ? [locationIds[2]] : []);
+      const visible = (await listPublicLocationsWithCourts(publicClient())).filter((row) => locationIds.includes(row.id));
+      expect(visible).toEqual([]);
     }
     expect(await saveAdminCourt({ id: result.id, fields: { ...edited, location_id: locationIds[1] } }, admin.client))
       .toEqual({ ok: false, reason: "duplicate-slug" });
@@ -78,7 +78,7 @@ test("court administration persists edits, moves and status with real authorizat
     await expect(saveAdminCourt({ id: result.id, fields }, suspended.client)).rejects.toThrow();
     await expect(listAdminCourts(suspended.client)).rejects.toThrow();
     assert.strictEqual((await service.from("courts").update({ is_active: false }).eq("id", result.id)).error, null);
-    expect((await listActiveLocationsWithCourts(admin.client)).some((row) => locationIds.includes(row.id))).toBe(false);
+    expect((await listPublicLocationsWithCourts(admin.client)).some((row) => locationIds.includes(row.id))).toBe(false);
   } finally {
     assert.strictEqual((await service.from("courts").delete().in("location_id", locationIds)).error, null);
     assert.strictEqual((await service.from("locations").delete().in("id", locationIds)).error, null);

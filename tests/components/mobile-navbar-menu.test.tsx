@@ -21,7 +21,7 @@ import { MobileNavbar } from "../../src/components/mobile-navbar";
 afterEach(() => { cleanup(); avatar.url = null; });
 
 it("shows signed-out links and closes on link selection or Escape", () => {
-  render(<MobileNavbarMenu isAuthenticated={false} isAdmin={false} />);
+  render(<MobileNavbarMenu isAuthenticated={false} isAdmin={false} canReserve={false} />);
 
   const trigger = screen.getByRole("button", { name: "Open menu" });
   expect(trigger.getAttribute("aria-expanded")).toBe("false");
@@ -52,23 +52,24 @@ it("shows signed-out links and closes on link selection or Escape", () => {
   expect(document.activeElement).toBe(trigger);
 });
 
-it("shows Matches, Profile, and direct Sign out for authenticated users", () => {
-  render(<MobileNavbarMenu isAuthenticated isAdmin={false} />);
+it("shows Matches and personal account destinations for authenticated users", () => {
+  render(<MobileNavbarMenu isAuthenticated isAdmin={false} canReserve={false} />);
   fireEvent.click(screen.getByRole("button", { name: "Open menu" }));
 
   const drawer = screen.getByRole("dialog", { name: "Mobile navigation menu" });
   const navigation = within(drawer).getByRole("navigation", { name: "Mobile navigation" });
   expect(within(navigation).getAllByRole("link").map((link) => link.textContent)).toEqual([
-    "Courts", "Coaching", "Matches", "Rankings", "Club", "Profile",
+    "Courts", "Coaching", "Matches", "Rankings", "Club", "My activity", "Profile & settings",
   ]);
-  expect(within(navigation).getByRole("link", { name: "Profile" }).getAttribute("href")).toBe("/profile");
+  expect(within(navigation).getByRole("link", { name: "My activity" }).getAttribute("href")).toBe("/my-activity");
+  expect(within(navigation).getByRole("link", { name: "Profile & settings" }).getAttribute("href")).toBe("/profile");
   expect(within(navigation).queryByRole("link", { name: "Account" })).toBeNull();
   expect(within(navigation).getByRole("button", { name: "Sign out" })).toBeDefined();
   expect(within(navigation).queryByText("Sign in")).toBeNull();
 });
 
 it("closes on backdrop or drawer close button and restores focus", () => {
-  render(<MobileNavbarMenu isAuthenticated={false} isAdmin={false} />);
+  render(<MobileNavbarMenu isAuthenticated={false} isAdmin={false} canReserve={false} />);
   const trigger = screen.getByRole("button", { name: "Open menu" });
 
   fireEvent.click(trigger);
@@ -83,7 +84,7 @@ it("closes on backdrop or drawer close button and restores focus", () => {
 });
 
 it("keeps keyboard focus inside the open drawer", () => {
-  render(<MobileNavbarMenu isAuthenticated={false} isAdmin={false} />);
+  render(<MobileNavbarMenu isAuthenticated={false} isAdmin={false} canReserve={false} />);
   fireEvent.click(screen.getByRole("button", { name: "Open menu" }));
 
   const drawer = screen.getByRole("dialog", { name: "Mobile navigation menu" });
@@ -117,10 +118,12 @@ it.each([
   const adminLink = within(navigation).queryByRole("link", { name: "Admin" });
   if (showsAdmin) {
     expect(links.map((link) => link.textContent)).toEqual([
-      "Courts", "Coaching", "Matches", "Rankings", "Club", "Admin", "Profile",
+      "Courts", "Coaching", "Matches", "Rankings", "Club", "Admin", "Reservations", "My activity", "Profile & settings",
     ]);
     expect(adminLink?.getAttribute("href")).toBe("/admin");
   } else {
     expect(adminLink).toBeNull();
   }
+  const reservations = within(navigation).queryByRole("link", { name: "Reservations" });
+  expect(reservations?.getAttribute("href") ?? null).toBe(account.state === "active" && account.roles.some((role) => role === "admin" || role === "coach") ? "/reservations" : null);
 });

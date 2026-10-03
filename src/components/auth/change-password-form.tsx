@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect } from "react";
+import { useActionState, useLayoutEffect } from "react";
 
 import { changePasswordAction } from "@/app/account/actions";
 import { FormMessage } from "@/components/auth-form";
@@ -15,7 +15,7 @@ export function ChangePasswordForm() {
   const [state, action] = useActionState(changePasswordAction, initialAuthActionState);
   const { formRef, clearErrors, fieldError, formError } = useActionErrors(state);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!state.success) return;
     for (const name of ["currentPassword", "password", "confirmPassword"]) {
       const input = formRef.current?.elements.namedItem(name);

@@ -18,7 +18,7 @@ import { LocationArchiveControl } from "../../src/app/admin/locations/location-a
 
 const location: AdminLocation = { id: "a1000000-0000-4000-8000-000000000001", name: "Central Club", slug: "central-club",
   address_line1: "Street 1", address_line2: null, city: "Cluj", postal_code: "400000", country_code: "RO",
-  timezone: "Europe/Bucharest", currency: "RON", is_active: false, archived_at: null, display_order: 2,
+  timezone: "Europe/Bucharest", currency: "RON", is_active: false, is_public: false, archived_at: null, display_order: 2,
   created_at: "2026-09-29T10:00:00Z", updated_at: "2026-09-29T10:00:00Z" };
 
 beforeEach(() => {
@@ -51,6 +51,18 @@ it("enables location Save only while normalized fields differ, including after a
   expect(save.disabled).toBe(false);
   fireEvent.change(name, { target: { value: "Central Club" } });
   expect(save.disabled).toBe(true);
+});
+
+it("keeps publication enabled in the form after server readiness rejects it", async () => {
+  saveLocationAction.mockResolvedValue({ ok: false, reason: "not-ready",
+    message: "This location cannot be published yet. Configure pricing for every active court." });
+  openEditLocation();
+  const publication = screen.getByLabelText("Public booking") as HTMLSelectElement;
+  fireEvent.change(publication, { target: { value: "true" } });
+  fireEvent.submit(screen.getByRole("button", { name: "Save location" }).closest("form")!);
+  await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Configure pricing"));
+  expect(publication.value).toBe("true");
+  expect(saveLocationAction.mock.calls[0][0].fields.is_public).toBe(true);
 });
 
 it("confirms an active location deactivation without losing other edits on Cancel", async () => {
@@ -161,4 +173,3 @@ it("keeps archive confirmation open with contextual safe feedback on failure", a
   expect(screen.getByRole("dialog", { name: "Archive Central Club" })).toBeTruthy();
   expect(screen.getByRole("alert").textContent).not.toContain("private database error");
 });
-

@@ -73,6 +73,7 @@ it("provides labelled section controls and preserves edits when switching settin
     account={<input aria-label="Current password" type="password" defaultValue="" />}
   />);
   const navigation = screen.getByRole("navigation", { name: "Profile settings" });
+  expect(within(navigation).queryByRole("button", { name: "Bookings & reservations" })).toBeNull();
   const identity = within(navigation).getByRole("button", { name: "Profile / player identity" });
   const personal = within(navigation).getByRole("button", { name: "Personal information" });
   const tennis = within(navigation).getByRole("button", { name: "Tennis profile" });
@@ -80,6 +81,7 @@ it("provides labelled section controls and preserves edits when switching settin
   expect(identity.getAttribute("aria-pressed")).toBe("true");
   expect(screen.getAllByRole("region")).toHaveLength(1);
   expect(screen.getByRole("region", { name: "Player identity" })).toBeDefined();
+  expect(within(navigation).getAllByRole("button")).toHaveLength(4);
   for (const control of [identity, personal, tennis, account]) {
     const section = document.getElementById(control.getAttribute("aria-controls")!);
     expect(section).not.toBeNull();

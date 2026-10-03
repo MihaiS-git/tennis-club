@@ -1,12 +1,12 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set search_path = extensions, public;
-select plan(26);
+select plan(30);
 
-insert into public.locations (id, name, slug, timezone, is_active) values
-('c1000000-0000-4000-8000-000000000001', 'Active', 'test-locations-active', 'Europe/Bucharest', true),
-('c1000000-0000-4000-8000-000000000002', 'Other', 'test-locations-other', 'Europe/Bucharest', true),
-('c1000000-0000-4000-8000-000000000003', 'Inactive', 'test-locations-inactive', 'Europe/Bucharest', false);
+insert into public.locations (id, name, slug, timezone, is_active, is_public) values
+('c1000000-0000-4000-8000-000000000001', 'Active', 'test-locations-active', 'Europe/Bucharest', true, true),
+('c1000000-0000-4000-8000-000000000002', 'Other', 'test-locations-other', 'Europe/Bucharest', true, true),
+('c1000000-0000-4000-8000-000000000003', 'Inactive', 'test-locations-inactive', 'Europe/Bucharest', false, true);
 insert into public.courts (location_id, name, slug, surface, environment, is_active) values
 ('c1000000-0000-4000-8000-000000000001', 'Active court', 'shared', 'clay', 'outdoor', true),
 ('c1000000-0000-4000-8000-000000000001', 'Inactive court', 'inactive', 'hard', 'indoor', false),
@@ -41,6 +41,14 @@ select is((select count(*) from pg_trigger where tgrelid in
   0::bigint, 'no automatic update timestamp triggers');
 select ok((select relrowsecurity from pg_class where oid = 'public.locations'::regclass), 'location RLS enabled');
 select ok((select relrowsecurity from pg_class where oid = 'public.courts'::regclass), 'court RLS enabled');
+select is((select is_public from public.locations where slug = 'test-locations-active'), true,
+  'explicit publication persists');
+insert into public.locations (id, name, slug, timezone) values
+('c1000000-0000-4000-8000-000000000004', 'Private', 'test-locations-private', 'Europe/Bucharest');
+insert into public.courts (location_id, name, slug, surface, environment) values
+('c1000000-0000-4000-8000-000000000004', 'Private court', 'private', 'clay', 'outdoor');
+select is((select is_public from public.locations where slug = 'test-locations-private'), false,
+  'new locations default private');
 
 set local role anon;
 select is((select count(*) from public.locations where id in
@@ -49,6 +57,10 @@ select is((select count(*) from public.locations where id in
 select is((select count(*) from public.courts where location_id in
   ('c1000000-0000-4000-8000-000000000001', 'c1000000-0000-4000-8000-000000000002', 'c1000000-0000-4000-8000-000000000003')),
   2::bigint, 'anonymous reads only active courts at active locations');
+select is((select count(*) from public.locations where slug = 'test-locations-private'), 0::bigint,
+  'anonymous cannot read a private active location');
+select is((select count(*) from public.courts where location_id = 'c1000000-0000-4000-8000-000000000004'), 0::bigint,
+  'anonymous cannot read courts at a private location');
 select throws_ok($$insert into public.locations (name, slug, timezone) values ('Spoof', 'spoof', 'UTC')$$,
   '42501', null, 'anonymous cannot insert locations');
 select throws_ok($$update public.locations set name = 'Spoof'$$, '42501', null, 'anonymous cannot update locations');

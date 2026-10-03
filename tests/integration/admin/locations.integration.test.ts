@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test } from "vitest";
 import { listAdminLocations, saveAdminLocation, setAdminLocationArchived } from "../../../src/lib/admin/locations";
-import { listActiveLocationsWithCourts } from "../../../src/lib/courts/public";
+import { listPublicLocationsWithCourts } from "../../../src/lib/courts/public";
 import { cleanupAuthFixtures, localFixtureClient } from "../auth-fixtures";
 import { ensureIntegrationAdminAnchor } from "../admin-anchor";
 
@@ -26,7 +26,7 @@ test("admin location workflow uses real authorization, RLS and persistence", asy
     return { client, id: data.user.id };
   }
   const fields = { name: `Location ${randomUUID()}`, address_line1: "Street 1", address_line2: "", city: "Cluj",
-    postal_code: "400000", country_code: "RO", timezone: "Europe/Bucharest", currency: "EUR", is_active: true, display_order: 1 };
+    postal_code: "400000", country_code: "RO", timezone: "Europe/Bucharest", currency: "EUR", is_active: true, is_public: false, display_order: 1 };
   try {
     const admin = await account("admin");
     const member = await account();
@@ -49,7 +49,7 @@ test("admin location workflow uses real authorization, RLS and persistence", asy
       expect(saved).toMatchObject({ name: "Renamed location", slug: original.slug, currency: "RON", display_order: 4, is_active });
       expect(Date.parse(saved!.updated_at)).toBeGreaterThan(Date.parse("2000-01-01T00:00:00Z"));
       const visible = await publicClient().from("locations").select("id").eq("id", result.id);
-      expect(visible.error).toBeNull(); expect(visible.data).toEqual(is_active ? [{ id: result.id }] : []);
+      expect(visible.error).toBeNull(); expect(visible.data).toEqual([]);
     }
 
     for (const session of [member.client, coach.client, publicClient()]) {
@@ -63,12 +63,26 @@ test("admin location workflow uses real authorization, RLS and persistence", asy
     await expect(saveAdminLocation({ id: result.id, fields }, suspended.client)).rejects.toThrow();
 
     // Public discovery still requires an active court, even for an active admin.
-    expect((await listActiveLocationsWithCourts(admin.client)).some((row) => row.id === result.id)).toBe(false);
+    expect((await listPublicLocationsWithCourts(admin.client)).some((row) => row.id === result.id)).toBe(false);
+    expect(await saveAdminLocation({ id: result.id, fields: { ...fields, is_public: true } }, admin.client))
+      .toMatchObject({ ok: false, reason: "not-ready", message: expect.stringContaining("opening hours") });
     const court = await service.from("courts").insert({ location_id: result.id, name: "Public fixture court",
-      slug: "public-fixture", surface: "clay", environment: "outdoor" });
+      slug: "public-fixture", surface: "clay", environment: "outdoor" }).select("id").single();
     assert.strictEqual(court.error, null);
-    expect((await listActiveLocationsWithCourts(publicClient())).some((row) => row.id === result.id)).toBe(true);
-    expect(await saveAdminLocation({ id: result.id, fields: { ...fields, currency: "GBP" } }, admin.client)).toEqual({ ok: true, id: result.id });
+    expect((await service.from("location_opening_hours").insert({ location_id: result.id, weekday: 0,
+      opens_at_minute: 480, closes_at_minute: 1200 })).error).toBeNull();
+    expect(await saveAdminLocation({ id: result.id, fields: { ...fields, is_public: true } }, admin.client))
+      .toMatchObject({ ok: false, reason: "not-ready", message: expect.stringContaining("pricing") });
+    const ruleSet = await service.from("pricing_rule_sets").insert({ location_id: result.id }).select("id").single();
+    assert.strictEqual(ruleSet.error, null);
+    expect((await service.from("location_pricing_rules").insert({ location_id: result.id, rule_set_id: ruleSet.data!.id,
+      court_id: court.data!.id, court_state: "outdoor", weekday: 0, starts_at_minute: 480,
+      ends_at_minute: 1200, price_per_hour_minor: 5000 })).error).toBeNull();
+    expect(await saveAdminLocation({ id: result.id, fields: { ...fields, is_public: true } }, admin.client)).toEqual({ ok: true, id: result.id });
+    expect((await listPublicLocationsWithCourts(publicClient())).some((row) => row.id === result.id)).toBe(true);
+    expect(await saveAdminLocation({ id: result.id, fields: { ...fields, is_public: false } }, admin.client)).toEqual({ ok: true, id: result.id });
+    expect((await listPublicLocationsWithCourts(publicClient())).some((row) => row.id === result.id)).toBe(false);
+    expect(await saveAdminLocation({ id: result.id, fields: { ...fields, is_public: true, currency: "GBP" } }, admin.client)).toEqual({ ok: true, id: result.id });
     expect((await listAdminLocations(admin.client)).find((row) => row.id === result.id)?.currency).toBe("GBP");
     expect(await setAdminLocationArchived({ id: result.id, archived: true }, admin.client)).toEqual({ ok: true, id: result.id });
     expect((await listAdminLocations(admin.client)).some((row) => row.id === result.id)).toBe(false);
@@ -77,7 +91,7 @@ test("admin location workflow uses real authorization, RLS and persistence", asy
       .toMatchObject({ id: result.id, is_active: false, archived_at: expect.any(String) });
     expect((await publicClient().from("locations").select("id").eq("id", result.id)).data).toEqual([]);
     expect((await publicClient().from("courts").select("id").eq("location_id", result.id)).data).toEqual([]);
-    expect((await listActiveLocationsWithCourts(publicClient())).some((row) => row.id === result.id)).toBe(false);
+    expect((await listPublicLocationsWithCourts(publicClient())).some((row) => row.id === result.id)).toBe(false);
     expect(await setAdminLocationArchived({ id: result.id, archived: false }, admin.client)).toEqual({ ok: true, id: result.id });
     expect((await listAdminLocations(admin.client)).find((row) => row.id === result.id)).toMatchObject({ is_active: false, archived_at: null });
     expect((await listAdminLocations(admin.client, "archived")).some((row) => row.id === result.id)).toBe(false);
@@ -86,10 +100,13 @@ test("admin location workflow uses real authorization, RLS and persistence", asy
     }
     expect(await saveAdminLocation({ id: result.id, fields: { ...fields, is_active: false } }, admin.client)).toEqual({ ok: true, id: result.id });
     for (const session of [publicClient(), admin.client]) {
-      expect((await listActiveLocationsWithCourts(session)).some((row) => row.id === result.id)).toBe(false);
+      expect((await listPublicLocationsWithCourts(session)).some((row) => row.id === result.id)).toBe(false);
     }
   } finally {
     if (locationIds.length) {
+      assert.strictEqual((await service.from("location_pricing_rules").delete().in("location_id", locationIds)).error, null);
+      assert.strictEqual((await service.from("pricing_rule_sets").delete().in("location_id", locationIds)).error, null);
+      assert.strictEqual((await service.from("location_opening_hours").delete().in("location_id", locationIds)).error, null);
       assert.strictEqual((await service.from("courts").delete().in("location_id", locationIds)).error, null);
       assert.strictEqual((await service.from("locations").delete().in("id", locationIds)).error, null);
     }

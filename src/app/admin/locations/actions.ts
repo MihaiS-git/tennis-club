@@ -6,6 +6,7 @@ import { saveAdminLocation, setAdminLocationArchived } from "@/lib/admin/locatio
 function revalidateLocations() {
   revalidatePath("/admin/locations");
   revalidatePath("/courts");
+  revalidatePath("/book");
 }
 
 export async function saveLocationAction(input: unknown) {

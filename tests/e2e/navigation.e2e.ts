@@ -34,7 +34,7 @@ test("navigation follows the current account and protected routes enforce access
     await target.getByLabel("Password", { exact: true }).fill(password);
     await target.getByRole("button", { name: "Sign in", exact: true }).click();
     await expect(target).toHaveURL(/\/$/);
-    await expect(target.getByRole("link", { name: "Your profile" })).toBeVisible();
+    await expect(target.getByRole("button", { name: "Account menu" })).toBeVisible();
   }
   try {
     for (const label of ["member", "admin"]) {
@@ -55,13 +55,19 @@ test("navigation follows the current account and protected routes enforce access
       await expect(page).toHaveURL(/\/login(?:\?|$)/);
     }
     await signIn(page, accounts[0].email);
+    await page.getByRole("button", { name: "Account menu" }).click();
+    await expect(page.getByRole("link", { name: "My activity" })).toHaveAttribute("href", "/my-activity");
+    await expect(page.getByRole("link", { name: "Profile & settings" })).toHaveAttribute("href", "/profile");
+    await page.getByRole("link", { name: "My activity" }).click();
+    await expect(page).toHaveURL(/\/my-activity$/);
     await expect(navigation.getByRole("link", { name: "Matches" })).toBeVisible();
     await expect(navigation.getByRole("link", { name: "Admin" })).toHaveCount(0);
     await page.goto("/admin/users");
     await expect(page.getByRole("heading", { name: /404|not found/i })).toBeVisible();
+    await page.getByRole("button", { name: "Account menu" }).click();
     await page.getByRole("button", { name: "Sign out", exact: true }).click();
     await expect(page).toHaveURL(/\/login$/);
-    await expect(page.getByRole("link", { name: "Your profile" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Account menu" })).toHaveCount(0);
     await signIn(page, accounts[1].email);
     await expect(navigation.getByRole("link", { name: "Admin" })).toBeVisible();
     await expect(navigation.getByRole("link", { name: "Users" })).toHaveCount(0);
@@ -83,11 +89,13 @@ test("navigation follows the current account and protected routes enforce access
     await adminNavigation.getByRole("link", { name: "Users" }).click();
     await expect(page.getByRole("heading", { name: "Users", exact: true })).toBeVisible();
     await expect(page.getByRole("dialog")).toHaveCount(0);
+    await page.getByRole("button", { name: "Account menu" }).click();
     await page.getByRole("button", { name: "Sign out", exact: true }).click();
     await expect(page).toHaveURL(/\/login$/);
     await signIn(page, accounts[0].email);
     await expect(navigation.getByRole("link", { name: "Admin" })).toHaveCount(0);
-    await page.getByRole("link", { name: "Your profile" }).click();
+    await page.getByRole("button", { name: "Account menu" }).click();
+    await page.getByRole("link", { name: "Profile & settings" }).click();
     await page.getByRole("navigation", { name: "Profile settings" }).getByRole("button", { name: "Account & security" }).click();
     await expect(page.getByText(accounts[0].email, { exact: true })).toBeVisible();
     await expect(page.getByText(accounts[1].email, { exact: true })).toHaveCount(0);
@@ -106,7 +114,8 @@ test("navigation follows the current account and protected routes enforce access
     await expect(page.getByText("You have unsaved changes in Personal information.", { exact: true })).toHaveCount(1);
     await page.getByRole("button", { name: "Leave without saving", exact: true }).click();
     await expect(page).toHaveURL(/\/courts$/);
-    await page.getByRole("link", { name: "Your profile" }).click();
+    await page.getByRole("button", { name: "Account menu" }).click();
+    await page.getByRole("link", { name: "Profile & settings" }).click();
     await page.getByRole("navigation", { name: "Profile settings" }).getByRole("button", { name: "Personal information" }).click();
     await expect(page.getByLabel("First name", { exact: true })).toHaveValue("");
     // All shared link entry points guard the active Profile visit.

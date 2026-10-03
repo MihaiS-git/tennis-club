@@ -29,7 +29,7 @@ const textFields = [
   ["city", "City", 100],
   ["postal_code", "Postal code", 20],
 ] as const;
-const editableFields = ["name", "address_line1", "address_line2", "city", "postal_code", "country_code", "timezone", "currency", "is_active"];
+const editableFields = ["name", "address_line1", "address_line2", "city", "postal_code", "country_code", "timezone", "currency", "is_active", "is_public"];
 function validLocationCreate(form: HTMLFormElement) {
   const data = new FormData(form);
   const text = (field: string) => String(data.get(field) ?? "");
@@ -37,6 +37,7 @@ function validLocationCreate(form: HTMLFormElement) {
     name: text("name"), address_line1: text("address_line1"), address_line2: text("address_line2"),
     city: text("city"), postal_code: text("postal_code"), country_code: text("country_code"),
     timezone: text("timezone"), currency: text("currency"), is_active: text("is_active") === "true",
+    is_public: text("is_public") === "true",
     display_order: 0,
   }).success;
 }
@@ -112,6 +113,7 @@ export function LocationDialog({
           timezone: text("timezone"),
           currency: text("currency"),
           is_active: text("is_active") === "true",
+          is_public: text("is_public") === "true",
           display_order: location?.display_order ?? 0,
         },
       });
@@ -123,6 +125,8 @@ export function LocationDialog({
       } else if (result.reason === "invalid-input") {
         setFieldErrors(result.fieldErrors);
         setFormError("Check the location details below.");
+      } else if (result.reason === "not-ready") {
+        setFormError(result.message);
       } else {
         setFormError(
           result.reason === "duplicate-slug"
@@ -291,6 +295,16 @@ export function LocationDialog({
                       {...errorProps("is_active")}
                     />
                     {fieldError("is_active")}
+                  </div>
+                  <div>
+                    <label htmlFor={`${prefix}-is_public`} className="mb-1.5 block text-sm font-medium">Public booking</label>
+                    <select id={`${prefix}-is_public`} name="is_public" defaultValue={String(location?.is_public ?? false)}
+                      className="min-h-10 w-full rounded-control border border-border-strong bg-surface px-3 text-sm text-foreground"
+                      {...errorProps("is_public")}>
+                      <option value="false">Disabled</option>
+                      <option value="true">Enabled</option>
+                    </select>
+                    {fieldError("is_public")}
                   </div>
                 </div>
               </fieldset>
