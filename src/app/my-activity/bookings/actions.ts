@@ -1,7 +1,7 @@
 "use server";
 
 import { logger } from "@/lib/logger";
-import { revalidatePath } from "next/cache";
+import { revalidateCourtActivity } from "@/lib/reservations/revalidation";
 import { cancelOwnCustomerBooking } from "@/lib/bookings/self-cancellation-service";
 import { listOwnUpcomingCustomerBookings } from "@/lib/bookings/personal-service";
 import { cancelOwnDirectReservation, editOwnDirectReservation, getOwnReservationEditDay, listPersonalReservations } from "@/lib/reservations/personal-service";
@@ -16,8 +16,7 @@ export async function loadPersonalActivityAction() {
 export async function cancelOwnReservationAction(id: unknown) {
   const result = await cancelOwnDirectReservation(id);
   if (result.ok) {
-    revalidatePath("/reservations");
-    revalidatePath("/book");
+    revalidateCourtActivity("cancel");
   }
   return result;
 }
@@ -29,8 +28,7 @@ export async function loadReservationEditDayAction(reservationId: unknown, date:
 export async function editOwnReservationAction(input: unknown) {
   const result = await editOwnDirectReservation(input);
   if (result.ok) {
-    revalidatePath("/reservations");
-    revalidatePath("/book");
+    revalidateCourtActivity("edit");
   }
   return result;
 }
@@ -39,10 +37,7 @@ export async function cancelOwnCustomerBookingAction(id: unknown) {
   try {
     const result = await cancelOwnCustomerBooking(id);
     if (result.ok) {
-      revalidatePath("/my-activity/bookings");
-      revalidatePath("/my-activity/bookings/history");
-      revalidatePath("/reservations");
-      revalidatePath("/book");
+      revalidateCourtActivity("cancel");
     }
     return result;
   } catch {

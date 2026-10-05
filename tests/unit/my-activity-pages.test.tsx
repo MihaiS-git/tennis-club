@@ -1,10 +1,11 @@
 import { expect, it, vi } from "vitest";
 
-const { context, redirect, reservations, history } = vi.hoisted(() => ({ context: vi.fn(), redirect: vi.fn(() => { throw new Error("redirect"); }), reservations: vi.fn(), history: vi.fn() }));
+const { context, redirect, reservations, bookings, history } = vi.hoisted(() => ({ context: vi.fn(), redirect: vi.fn(() => { throw new Error("redirect"); }), reservations: vi.fn(), bookings: vi.fn(), history: vi.fn() }));
 vi.mock("@/lib/profile/profile", () => ({ profileContext: context }));
 vi.mock("next/navigation", () => ({ redirect }));
 vi.mock("@/lib/reservations/personal-service", () => ({ listPersonalReservations: reservations }));
 vi.mock("@/lib/bookings/history-service", () => ({ listOwnCourtHistory: history }));
+vi.mock("@/lib/bookings/personal-service", () => ({ listOwnUpcomingCustomerBookings: bookings }));
 
 import { MyActivityContent } from "@/app/my-activity/page";
 import { MyBookingsContent } from "@/app/my-activity/bookings/page";
@@ -44,11 +45,35 @@ it.each([
   [[], false], [["admin"], true], [["coach"], true],
 ])("passes only the current %j account to the bookings page", async (roles, staff) => {
   context.mockResolvedValue({ account: { ...account, roles } });
+  reservations.mockResolvedValue({ upcoming: [] });
+  bookings.mockResolvedValue([]);
   const content = await MyBookingsContent();
   const activity = content.props.children.props.children[2].props.children;
   expect(activity.type).toBe(PersonalActivity);
-  expect(activity.props).toEqual({ staff, userId: "owner" });
+  expect(activity.props).toEqual({ staff, userId: "owner", initialActivity: { upcoming: [], bookings: [] }, initialError: "" });
   expect(content.props.children.props.children[3].props.children[2].props.href).toBe("/my-activity/bookings/history");
+});
+
+it("supplies fresh user-scoped activity on every server render", async () => {
+  const client = {};
+  context.mockResolvedValue({ account, client });
+  reservations.mockResolvedValue({ upcoming: [] });
+  bookings.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: "new-booking" }]);
+  const first = await MyBookingsContent();
+  const second = await MyBookingsContent();
+  expect(first.props.children.props.children[2].props.children.props.initialActivity.bookings).toEqual([]);
+  expect(second.props.children.props.children[2].props.children.props.initialActivity.bookings).toEqual([{ id: "new-booking" }]);
+  expect(reservations).toHaveBeenCalledWith(client);
+  expect(bookings).toHaveBeenCalledWith(client);
+});
+
+it("preserves the safe inline retry error when the initial server read fails", async () => {
+  context.mockResolvedValue({ account });
+  reservations.mockRejectedValueOnce(new Error("Private database error"));
+  const content = await MyBookingsContent();
+  const activity = content.props.children.props.children[2].props.children;
+  expect(activity.props.initialActivity).toBeNull();
+  expect(activity.props.initialError).toBe("Unable to load your court activity. Try again.");
 });
 
 it.each([undefined, "", "bad", "0", "-2", "1.5", "1000001", ["2", "3"]])("normalizes invalid history page %j", (value) => {

@@ -1,13 +1,12 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { revalidateCourtActivity } from "@/lib/reservations/revalidation";
 import { cancelCustomerBookingAsAdmin, cancelDirectReservationAsAdmin, createDirectReservation, editDirectReservationAsAdmin, getAdminReservationEditDay } from "@/lib/reservations/service";
 
 export async function reserveCourtAction(input: unknown) {
   const result = await createDirectReservation(input);
   if (result.ok) {
-    revalidatePath("/reservations");
-    revalidatePath("/book");
+    revalidateCourtActivity("create");
   }
   return result;
 }
@@ -15,8 +14,7 @@ export async function reserveCourtAction(input: unknown) {
 export async function cancelAdminReservationAction(id: unknown) {
   const result = await cancelDirectReservationAsAdmin(id);
   if (result.ok) {
-    revalidatePath("/reservations");
-    revalidatePath("/book");
+    revalidateCourtActivity("cancel");
   }
   return result;
 }
@@ -24,10 +22,7 @@ export async function cancelAdminReservationAction(id: unknown) {
 export async function cancelAdminCustomerBookingAction(id: unknown) {
   const result = await cancelCustomerBookingAsAdmin(id);
   if (result.ok) {
-    revalidatePath("/reservations");
-    revalidatePath("/book");
-    revalidatePath("/my-activity/bookings");
-    revalidatePath("/my-activity/bookings/history");
+    revalidateCourtActivity("cancel");
   }
   return result;
 }
@@ -39,8 +34,7 @@ export async function loadAdminReservationEditDayAction(reservationId: unknown, 
 export async function editAdminReservationAction(input: unknown) {
   const result = await editDirectReservationAsAdmin(input);
   if (result.ok) {
-    revalidatePath("/reservations");
-    revalidatePath("/book");
+    revalidateCourtActivity("edit");
   }
   return result;
 }

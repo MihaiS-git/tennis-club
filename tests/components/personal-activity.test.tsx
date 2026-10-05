@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type { ComponentProps } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { PersonalActivity } from "@/app/my-activity/bookings/personal-activity";
@@ -9,6 +10,10 @@ import type { PersonalReservation } from "@/lib/reservations/personal";
 const { load, cancel, cancelBooking, edit, availability } = vi.hoisted(() => ({ load: vi.fn(), cancel: vi.fn(), cancelBooking: vi.fn(), edit: vi.fn(), availability: vi.fn() }));
 vi.mock("@/app/my-activity/bookings/actions", () => ({ loadPersonalActivityAction: load, cancelOwnReservationAction: cancel, cancelOwnCustomerBookingAction: cancelBooking,
   editOwnReservationAction: edit, loadReservationEditDayAction: availability }));
+
+async function renderWithServerActivity(props: Omit<ComponentProps<typeof PersonalActivity>, "initialActivity" | "initialError">) {
+  return render(<PersonalActivity {...props} initialActivity={await load()} initialError="" />);
+}
 
 beforeEach(() => {
   load.mockReset();
@@ -21,9 +26,9 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-it("gives ordinary players an empty state after requesting personal activity", async () => {
+it("gives ordinary players an empty state from the server activity snapshot", async () => {
   load.mockResolvedValue({ bookings: [], upcoming: [] });
-  render(<PersonalActivity staff={false} />);
+  await renderWithServerActivity({ staff: false });
   expect(await screen.findByText("No upcoming bookings or reservations.")).toBeDefined();
   expect(load).toHaveBeenCalledOnce();
 });
@@ -47,7 +52,7 @@ it.each([false, true])("renders every owned row and opens each detail dialog (st
   const bookings = [booking("booking-b", 600), booking("booking-a", 600), booking("booking-first", 600, "Europe/Bucharest")];
   const upcoming = staff ? [reservation("reservation-last", 660), reservation("reservation-middle", 540)] : [];
   load.mockResolvedValue({ bookings, upcoming });
-  render(<PersonalActivity staff={staff} userId="owner" />);
+  await renderWithServerActivity({ staff, userId: "owner" });
   const region = await screen.findByRole("region", { name: "Upcoming" });
   const buttons = within(region).getAllByRole("button");
   const ordered = staff ? [bookings[2], upcoming[1], bookings[1], bookings[0], upcoming[0]]
@@ -86,7 +91,7 @@ it("places an in-progress booking before future bookings", async () => {
     court_name: "Current court", customer_name: "Owner", customer_email: "owner@example.test",
     customer_phone: "123", cancellation_notice_minutes: 120, total_amount_minor: 5000, currency: "RON" };
   load.mockResolvedValue({ bookings: [{ ...current, id: "future", starts_at_instant: "2099-10-15T10:00:00Z", booking_date: "2099-10-15", court_name: "Future court" }, current], upcoming: [] });
-  render(<PersonalActivity staff={false} />);
+  await renderWithServerActivity({ staff: false });
   const rows = within(await screen.findByRole("region", { name: "Upcoming" })).getAllByRole("button");
   expect(rows).toHaveLength(2);
   expect(rows[0].textContent).toContain("Current court");
@@ -103,7 +108,7 @@ it("shows an owner's booking snapshot in details and sorts it with direct reserv
     created_by_user_id: "owner", creator_name: "Owner", cancelled_at: null, cancelled_by_name: null,
     location_name: "RIVUS", location_timezone: "UTC", court_name: "Court 1" };
   load.mockResolvedValue({ bookings: [booking], upcoming: [reservation] });
-  render(<PersonalActivity staff userId="owner" />);
+  await renderWithServerActivity({ staff: true, userId: "owner" });
   const upcoming = await screen.findByRole("region", { name: "Upcoming" });
   const buttons = within(upcoming).getAllByRole("button");
   expect(buttons).toHaveLength(2);
@@ -127,7 +132,7 @@ it("shows a normal player's own booking without a direct reservation", async () 
     ends_at_minute: 660, location_name: "RIVUS", location_timezone: "UTC", court_name: "Court 2",
     customer_name: "Owner", customer_email: "owner@example.test", customer_phone: "123",
     cancellation_notice_minutes: 120, total_amount_minor: 5000, currency: "RON" }], upcoming: [] });
-  render(<PersonalActivity staff={false} />);
+  await renderWithServerActivity({ staff: false });
   const upcoming = await screen.findByRole("region", { name: "Upcoming" });
   expect(within(upcoming).getByText("Booking")).toBeDefined();
   expect(within(upcoming).queryByText("Reservation")).toBeNull();
@@ -141,7 +146,7 @@ it("loads on the bookings page and offers cancellation only for the owner's Upco
     cancelled_at: "2026-10-08T12:00:00Z", cancelled_by_name: null };
   const elapsed = { ...active, id: "three", booking_date: "2026-10-01" };
   load.mockResolvedValue({ bookings: [], upcoming: [active], history: [cancelled, elapsed] });
-  render(<PersonalActivity staff userId="owner" />);
+  await renderWithServerActivity({ staff: true, userId: "owner" });
   const upcoming = await screen.findByRole("region", { name: "Upcoming" });
   expect(within(upcoming).getByText("Course with Andrej")).toBeDefined();
   expect(screen.queryByText("Cancelled")).toBeNull();
@@ -165,7 +170,7 @@ it("confirms cancellation, refreshes Upcoming, and keeps the activity section mo
   load.mockResolvedValueOnce({ bookings: [], upcoming: [active], history: [] }).mockResolvedValueOnce({ bookings: [], upcoming: [], history: [{ ...active,
     status: "cancelled", cancelled_at: "2026-10-02T12:00:00Z", cancelled_by_name: "Alex" }] });
   cancel.mockResolvedValue({ ok: true });
-  render(<PersonalActivity staff userId="owner" />);
+  await renderWithServerActivity({ staff: true, userId: "owner" });
   fireEvent.click(within(await screen.findByRole("region", { name: "Upcoming" })).getByRole("button"));
   fireEvent.click(within(screen.getByRole("dialog", { name: "Reservation details" })).getByRole("button", { name: "Cancel reservation" }));
   const confirmation = screen.getByRole("dialog", { name: "Cancel reservation?" });
@@ -184,7 +189,7 @@ it("does not offer cancellation when a reservation has a different creator", asy
   load.mockResolvedValue({ bookings: [], upcoming: [{ id: "one", court_id: "court", location_id: "location", updated_at: "2026-10-01T12:00:00Z", booking_date: "2026-10-12", starts_at_minute: 840, ends_at_minute: 960,
     reason: "Practice", status: "active", created_by_user_id: "another", creator_name: "Another",
     cancelled_at: null, cancelled_by_name: null, location_name: "RIVUS", location_timezone: "Europe/Bucharest", court_name: "Court 2" }], history: [] });
-  render(<PersonalActivity staff userId="owner" />);
+  await renderWithServerActivity({ staff: true, userId: "owner" });
   fireEvent.click(within(await screen.findByRole("region", { name: "Upcoming" })).getByRole("button"));
   expect(within(screen.getByRole("dialog", { name: "Reservation details" })).queryByRole("button", { name: "Cancel reservation" })).toBeNull();
   expect(within(screen.getByRole("dialog", { name: "Reservation details" })).queryByRole("button", { name: "Edit reservation" })).toBeNull();
@@ -207,7 +212,7 @@ it("edits a future reservation in the details dialog and shows refreshed details
       { court: { id: courtB, name: "Court 3" }, cells: Array(6).fill("available") },
     ] } });
   edit.mockResolvedValue({ ok: true });
-  render(<PersonalActivity staff userId="owner" />);
+  await renderWithServerActivity({ staff: true, userId: "owner" });
   fireEvent.click(within(await screen.findByRole("region", { name: "Upcoming" })).getByRole("button"));
   fireEvent.click(within(screen.getByRole("dialog", { name: "Reservation details" })).getByRole("button", { name: "Edit reservation" }));
   const dialog = screen.getByRole("dialog", { name: "Edit reservation" });
@@ -251,7 +256,7 @@ it("shows an in-progress reservation's schedule read-only and edits only its rea
   load.mockResolvedValueOnce({ bookings: [], upcoming: [active], history: [] }).mockResolvedValueOnce({ bookings: [], upcoming: [{ ...active,
     reason: "Training", updated_at: "2026-10-01T12:01:00Z" }], history: [] });
   edit.mockResolvedValue({ ok: true });
-  render(<PersonalActivity staff userId="owner" />);
+  await renderWithServerActivity({ staff: true, userId: "owner" });
   fireEvent.click(within(await screen.findByRole("region", { name: "Upcoming" })).getByRole("button"));
   fireEvent.click(within(screen.getByRole("dialog", { name: "Reservation details" })).getByRole("button", { name: "Edit reservation" }));
   const dialog = screen.getByRole("dialog", { name: "Edit reservation" });
@@ -277,7 +282,7 @@ it("refreshes changed details after a stale edit instead of overwriting them", a
     day: { times: [840, 870, 900, 930], courts: [{ court: { id: active.court_id, name: "Court 2" },
       cells: ["available", "available", "available", "available"] }] } });
   edit.mockResolvedValue({ ok: false, stale: true, message: "This reservation has changed since you opened it." });
-  render(<PersonalActivity staff userId="owner" />);
+  await renderWithServerActivity({ staff: true, userId: "owner" });
   fireEvent.click(within(await screen.findByRole("region", { name: "Upcoming" })).getByRole("button"));
   fireEvent.click(within(screen.getByRole("dialog", { name: "Reservation details" })).getByRole("button", { name: "Edit reservation" }));
   const form = screen.getByRole("dialog", { name: "Edit reservation" });
@@ -298,11 +303,38 @@ const cancellableBooking: PersonalCustomerBooking = {
   cancellation_notice_minutes: 1440, total_amount_minor: 5000, currency: "RON",
 };
 
+it("adopts revalidated server snapshots while mounted and preserves an open dialog", () => {
+  const { rerender } = render(<PersonalActivity staff={false} userId="owner"
+    initialActivity={{ bookings: [], upcoming: [] }} initialError="" />);
+  expect(screen.getByText("No upcoming bookings or reservations.")).toBeDefined();
+  rerender(<PersonalActivity staff={false} userId="owner"
+    initialActivity={{ bookings: [cancellableBooking], upcoming: [] }} initialError="" />);
+  fireEvent.click(within(screen.getByRole("region", { name: "Upcoming" })).getByRole("button"));
+  const dialog = screen.getByRole("dialog", { name: "Booking" });
+  rerender(<PersonalActivity staff={false} userId="owner"
+    initialActivity={{ bookings: [cancellableBooking, { ...cancellableBooking, id: "new", court_name: "New court" }], upcoming: [] }}
+    initialError="" />);
+  expect(within(screen.getByRole("region", { name: "Upcoming" })).getAllByRole("button")).toHaveLength(2);
+  expect(screen.getByRole("dialog", { name: "Booking" })).toBe(dialog);
+  expect(load).not.toHaveBeenCalled();
+});
+
+it("retains inline retry after an initial server read error", async () => {
+  load.mockResolvedValue({ bookings: [], upcoming: [] });
+  render(<PersonalActivity staff={false} initialActivity={null}
+    initialError="Unable to load your court activity. Try again." />);
+  expect(screen.getByRole("alert").textContent).toContain("Unable to load");
+  expect(load).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  expect(await screen.findByText("No upcoming bookings or reservations.")).toBeDefined();
+  expect(load).toHaveBeenCalledOnce();
+});
+
 it("confirms customer self-cancellation, preserves the page, and refreshes Upcoming", async () => {
   load.mockResolvedValueOnce({ bookings: [cancellableBooking], upcoming: [] })
     .mockResolvedValueOnce({ bookings: [], upcoming: [] });
   cancelBooking.mockResolvedValue({ ok: true });
-  render(<PersonalActivity staff={false} userId="owner" />);
+  await renderWithServerActivity({ staff: false, userId: "owner" });
   fireEvent.click(within(await screen.findByRole("region", { name: "Upcoming" })).getByRole("button"));
   fireEvent.click(within(screen.getByRole("dialog", { name: "Booking" })).getByRole("button", { name: "Cancel booking" }));
   expect(cancelBooking).not.toHaveBeenCalled();
@@ -319,7 +351,7 @@ it("confirms customer self-cancellation, preserves the page, and refreshes Upcom
 it.each([false, true])("keeps in-progress customer details readable without cancellation (staff=%s)", async (staff) => {
   load.mockResolvedValue({ bookings: [{ ...cancellableBooking,
     starts_at_instant: new Date(Date.now() - 60_000).toISOString() }], upcoming: [] });
-  render(<PersonalActivity staff={staff} userId="owner" />);
+  await renderWithServerActivity({ staff, userId: "owner" });
   fireEvent.click(within(await screen.findByRole("region", { name: "Upcoming" })).getByRole("button"));
   const dialog = screen.getByRole("dialog", { name: "Booking" });
   expect(within(dialog).queryByRole("button", { name: "Cancel booking" })).toBeNull();
@@ -330,7 +362,7 @@ it.each([false, true])("keeps in-progress customer details readable without canc
 it.each([false, true])("applies snapshot notice only to ordinary owners (staff=%s)", async (staff) => {
   load.mockResolvedValue({ bookings: [{ ...cancellableBooking,
     starts_at_instant: new Date(Date.now() + 60 * 60_000).toISOString() }], upcoming: [] });
-  render(<PersonalActivity staff={staff} userId="owner" />);
+  await renderWithServerActivity({ staff, userId: "owner" });
   fireEvent.click(within(await screen.findByRole("region", { name: "Upcoming" })).getByRole("button"));
   const dialog = screen.getByRole("dialog", { name: "Booking" });
   if (staff) expect(within(dialog).getByRole("button", { name: "Cancel booking" })).toBeDefined();
@@ -344,7 +376,7 @@ it("keeps a stale cancellation error beside the confirmation and prevents duplic
   load.mockResolvedValue({ bookings: [cancellableBooking], upcoming: [] });
   let resolve!: (value: { ok: false; message: string }) => void;
   cancelBooking.mockImplementation(() => new Promise((done) => { resolve = done; }));
-  render(<PersonalActivity staff={false} userId="owner" />);
+  await renderWithServerActivity({ staff: false, userId: "owner" });
   fireEvent.click(within(await screen.findByRole("region", { name: "Upcoming" })).getByRole("button"));
   fireEvent.click(within(screen.getByRole("dialog", { name: "Booking" })).getByRole("button", { name: "Cancel booking" }));
   const confirmation = screen.getByRole("dialog", { name: "Cancel booking?" });

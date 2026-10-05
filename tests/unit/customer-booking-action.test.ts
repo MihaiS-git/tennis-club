@@ -18,26 +18,50 @@ it("validates with the booking schema and sends only customer intent to the serv
   expect(create).not.toHaveBeenCalled();
   expect(await confirmCustomerBookingAction({ ...intent, customerEmail: "wrong" }))
     .toMatchObject({ ok: false, fieldErrors: { customerEmail: expect.any(String) } });
+  expect(revalidate).not.toHaveBeenCalled();
   create.mockResolvedValue({ ok: true, bookingId: "id", reservationId: "id", totalAmountMinor: 5000, currency: "RON" });
   expect(await confirmCustomerBookingAction(intent)).toEqual({ ok: true, totalAmountMinor: 5000, currency: "RON" });
   expect(create).toHaveBeenCalledWith({ ...intent, customerName: "Guest",
     customerEmail: "guest@example.test", customerPhone: "123" });
-  expect(revalidate).toHaveBeenCalledWith("/book");
+  expect(revalidate.mock.calls).toEqual([
+    ["/book"], ["/reservations"], ["/my-activity/bookings"],
+  ]);
 });
 
 it("returns service authorization and availability failures without creating a guest fallback", async () => {
   create.mockResolvedValueOnce({ ok: false, message: "This account cannot create a booking." });
   expect(await confirmCustomerBookingAction(intent)).toEqual({ ok: false,
     message: "This account cannot create a booking.", availabilityChanged: undefined });
+  expect(revalidate).not.toHaveBeenCalled();
   create.mockResolvedValueOnce({ ok: false, availabilityChanged: true,
     message: "That court is no longer available for the selected time." });
   expect(await confirmCustomerBookingAction(intent)).toMatchObject({ ok: false, availabilityChanged: true });
-  expect(revalidate).toHaveBeenCalledOnce();
+  // A detected conflict refreshes occupancy only, never the successful-mutation surfaces.
+  expect(revalidate.mock.calls).toEqual([["/book"]]);
 });
 
 it("passes through authoritative price changes without refreshing availability", async () => {
   create.mockResolvedValue({ ok: false, reason: "price_changed", totalAmountMinor: 6000, currency: "EUR" });
   expect(await confirmCustomerBookingAction(intent)).toEqual({ ok: false, reason: "price_changed",
     totalAmountMinor: 6000, currency: "EUR" });
+  expect(revalidate).not.toHaveBeenCalled();
+});
+
+it("waits for successful persistence before invalidating affected reads", async () => {
+  let finish!: (value: unknown) => void;
+  create.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+  const pending = confirmCustomerBookingAction(intent);
+  expect(revalidate).not.toHaveBeenCalled();
+  finish({ ok: true, totalAmountMinor: 5000, currency: "RON" });
+  await pending;
+  expect(revalidate.mock.calls).toEqual([
+    ["/book"], ["/reservations"], ["/my-activity/bookings"],
+  ]);
+});
+
+it("returns the existing safe error without invalidating when persistence throws", async () => {
+  create.mockRejectedValue(new Error("private database detail"));
+  expect(await confirmCustomerBookingAction(intent)).toEqual({ ok: false,
+    message: "Unable to confirm the booking. Please try again." });
   expect(revalidate).not.toHaveBeenCalled();
 });

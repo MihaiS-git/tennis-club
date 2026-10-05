@@ -61,9 +61,19 @@ export function ReservationDetails({ reservation: selected }: { reservation: Per
   </dl>;
 }
 
-export function PersonalActivity({ staff, userId }: { staff: boolean; userId?: string }) {
-  const [activity, setActivity] = useState<Activity | null>(null);
-  const [error, setError] = useState("");
+export function PersonalActivity({ staff, userId, initialActivity, initialError }: {
+  staff: boolean; userId?: string; initialActivity: Activity | null; initialError: string;
+}) {
+  const [activity, setActivity] = useState(initialActivity);
+  const [error, setError] = useState(initialError);
+  const [serverSnapshot, setServerSnapshot] = useState({ initialActivity, initialError });
+  // Next.js preserves this component across navigation. Adopt revalidated server reads
+  // without remounting its dialogs or discarding their pending/submitted state.
+  if (serverSnapshot.initialActivity !== initialActivity || serverSnapshot.initialError !== initialError) {
+    setServerSnapshot({ initialActivity, initialError });
+    setActivity(initialActivity);
+    setError(initialError);
+  }
   const [selected, setSelected] = useState<PersonalReservation | null>(null);
   const [selectedBooking, setSelectedBooking] = useState<PersonalCustomerBooking | null>(null);
   const [editing, setEditing] = useState(false);

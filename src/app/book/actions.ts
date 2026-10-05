@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { revalidateCourtActivity } from "@/lib/reservations/revalidation";
 import { fieldValidationErrors } from "@/lib/auth/validation";
 import { customerBookingInputSchema } from "@/lib/bookings/domain";
 import { createCustomerBooking } from "@/lib/bookings/service";
@@ -26,6 +27,6 @@ export async function confirmCustomerBookingAction(input: unknown): Promise<Conf
     if (result.availabilityChanged) revalidatePath("/book");
     return { ok: false, message: result.message, availabilityChanged: result.availabilityChanged };
   }
-  revalidatePath("/book");
+  revalidateCourtActivity("create");
   return { ok: true, totalAmountMinor: result.totalAmountMinor, currency: result.currency };
 }
