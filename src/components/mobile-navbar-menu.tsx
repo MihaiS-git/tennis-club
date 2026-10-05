@@ -165,7 +165,7 @@ export function MobileNavbarControls({ isAuthenticated, isAdmin, canReserve, ava
           <div className="mt-2 border-t border-border pt-2">
             {isAuthenticated ? (
               <>
-                <Link onClick={closeMenu} href="/my-activity" className="flex min-h-12 items-center gap-2 text-sm font-medium text-primary hover:text-accent">
+                <Link onClick={closeMenu} href="/my-activity/bookings" className="flex min-h-12 items-center gap-2 text-sm font-medium text-primary hover:text-accent">
                   <ProfileNavigationAvatar src={avatarUrl} />
                   My activity
                 </Link>

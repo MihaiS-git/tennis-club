@@ -258,8 +258,9 @@ Use it only for trusted system operations such as:
 - controlled server-side synchronization;
 - narrowly scoped system operations that genuinely require elevated access.
 
-`SUPABASE_SECRET_KEY` is used only by the server-side customer booking writer. It
-calls one service-role-only RPC after user-scoped validation and pricing reads.
+`SUPABASE_SECRET_KEY` is used by the server-side customer booking writer and the
+booking email outbox worker. The writer calls the atomic creation RPC after
+user-scoped validation; the worker calls service-role-only delivery RPCs.
 
 Never expose the secret key to:
 
@@ -549,6 +550,23 @@ lower price
 
 The booking can retain its existing identity while its scheduled resources change.
 
+Customer self-rescheduling from `/my-activity/bookings` uses the shared Admin booking
+edit timetable, availability loader, price confirmation form, and same-row transactional
+reschedule implementation. Dedicated owner RPCs and a server-only service require an
+active account and strictly `bookings.account_user_id = auth.uid()`. Ordinary owners
+must remain within the booking's snapshotted cancellation-notice window (inclusive
+cutoff); current Admin/Coach owners bypass notice only. Every owner must be before
+booking start. The fixed location, both IDs, owner/contact/policy snapshots and creation
+timestamps are preserved. Both stale tokens, server pricing with explicit changed-price
+acknowledgement/reconfirmation, and the active-row GiST constraint remain authoritative.
+Owner-scoped availability excludes its own reservation and returns only active courts,
+opening hours and occupancy for its fixed location, independent of public publication.
+Shared internal RPC helpers are not executable by browser database roles; Admin RPCs
+retain their separate role boundary. Success calls `revalidateCourtActivity("edit")`
+for `/book`, `/reservations`, and `/my-activity/bookings`. Payments, refunds and
+guest self-management are not implemented. Booking lifecycle emails use the durable
+outbox described in [Booking notifications](docs/booking-notifications.md).
+
 ---
 
 ## Cancellation and refunds
@@ -749,7 +767,11 @@ AI-based partner matching is not required initially.
 
 Personal and tennis forms independently compare editable values against their last successful save. Explicit shared navigation links and sign-out submissions warn through Sonner when leaving a dirty Profile visit; internal section switches preserve drafts. Reload/close/document departures use native `beforeunload` protection while dirty. Same-document browser back/forward has no supported App Router blocker and retains the existing fresh-visit behavior without a warning. See [Profile visit protection and browser limitations](docs/profiles.md#unsaved-changes-and-visit-lifecycle).
 
-`/my-activity` is a compact personal activity overview; `/my-activity/bookings` shows current and upcoming personal court activity, and `/my-activity/bookings/history` shows a server-paginated direct-reservation archive (20 rows per page). The authenticated account menu links to My activity and Profile & settings and provides Sign out. The bookings page combines the current account's confirmed customer bookings with an Admin's or Coach's own active direct reservations. Both types require an active physical interval that has not ended in the location's timezone. Customer booking details show stored contact and price snapshots without edit or cancel actions. A narrow authenticated RPC binds customer booking reads to `auth.uid()`; guest and other users' bookings are excluded without granting table SELECT. The history page still reads only that staff user's cancelled or elapsed direct reservations. Cancelled records sort by cancellation time and elapsed records by interval end, newest first, with reservation ID as the final tie-breaker. A direct-reservation details dialog lets the owner edit or cancel an active Upcoming reservation; archive details are read-only. Future direct reservations keep their location fixed and use the direct-reservation timetable to choose a date, active court at that location, and interval; a server read excludes the edited row from occupancy while preserving other booked cells. In-progress direct reservations can change only reason. Editing updates the same row through a personal RPC that locks the row, verifies ownership, `updated_at`, and the unchanged location, and leaves the original intact on a stale edit or GiST conflict. A role-checked database function binds direct-reservation reads to `auth.uid()` and keeps private reservation metadata out of public occupancy reads.
+`/my-activity` redirects to `/my-activity/bookings`, which contains current and upcoming personal court activity. `/my-activity/history` contains completed/cancelled owned bookings and staff-owned direct reservations. The retired `/my-activity/bookings/history` URL redirects with its search parameters. Both pages preserve the My Activity heading and reuse Admin's submenu component, active styling and mobile overflow behavior. Avatar and mobile menus link directly to Bookings.
+
+Both lists use the user-scoped, read-only `list_own_court_activity` RPC. It combines owned bookings and staff-owned direct reservations, applies type/location/court/date filters (plus History status), sorts globally, and then returns 20 rows per page. Date/time defaults to ascending for Bookings and descending for History; kind/ID tie-breakers make ordering deterministic. Location, court, type, duration and History status are also sortable. URL controls reset page 1 when changed; pagination preserves the query. Controls derive location/court choices from the full owner-scoped eligible dataset, with courts narrowed to the selected location. Bookings require an active physical interval that has not ended in the location's timezone. Details preserve contact and price snapshots; guest and other users' bookings remain excluded without granting booking-table SELECT. Existing cancellation/rescheduling services, mutation RPCs and lifecycle rules remain unchanged.
+
+A direct-reservation details dialog lets the owner edit or cancel an active Upcoming reservation; archive details are read-only. Future direct reservations keep their location fixed and use the direct-reservation timetable to choose a date, active court at that location, and interval; a server read excludes the edited row from occupancy while preserving other booked cells. In-progress direct reservations can change only reason. Editing updates the same row through a personal RPC that locks the row, verifies ownership, `updated_at`, and the unchanged location, and leaves the original intact on a stale edit or GiST conflict. A role-checked database function binds direct-reservation reads to `auth.uid()` and keeps private reservation metadata out of public occupancy reads.
 
 Avatar upload and removal share one UI pending state. A user-scoped database lease serializes each owner's Storage, persistence, and compensation workflow across server instances. Token-checked RPCs acquire/release the lease and persist the avatar path; bounded HTTP requests stop stale workers before abandoned leases can be reclaimed. See [Avatar workflow](docs/profiles.md#avatar-workflow).
 
@@ -1127,6 +1149,22 @@ dedicated Admin-only RPC locks and updates the same row, checks its `updated_at`
 token and fixed location, and leaves it unchanged on a stale edit or GiST conflict.
 The creator and lifecycle fields remain intact. The personal owner-only edit
 mutation remains separate.
+
+Admins can reschedule future confirmed customer bookings from the booking details
+dialog on `/reservations`. The booking-specific timetable keeps the location fixed,
+preselects the current interval and excludes its own reservation from occupancy.
+Contact snapshots remain read-only. A dedicated user-scoped Admin RPC locks the
+booking and reservation, checks both stale tokens, validates the target and updates
+the same rows. Its quote/save calculation matches public calendar slot pricing and
+aggregate rounding. This narrow transactional pricing exception prevents changes to
+pricing or coverage between calculation and persistence; short configuration locks
+protect that check. Changed totals require explicit acknowledgement; a changed save
+quote returns `price_changed` without writing. Rescheduling preserves identity,
+contact and cancellation-policy snapshots, and invalidates `/book`, `/reservations`
+and `/my-activity/bookings`, without invalidating History. The owner-scoped
+self-rescheduling workflow above reuses this implementation. Payments and refunds
+are not implemented. Booking lifecycle notifications use a durable outbox.
+
 On `/my-activity/bookings`, active Admins and Coaches can cancel only their own active Upcoming
 reservations after explicit confirmation. The Server Action rechecks staff authorization,
 and the atomic database update requires ownership and an active court and location.
@@ -1438,3 +1476,13 @@ Before expanding the platform, prove the following cases locally:
 10. **The system remains a modular monolith unless scale or complexity creates a concrete reason to change it.**
 11. **README.md and AGENTS.md are updated when architectural or tooling decisions change.**
 12. **Correctness, security, and maintainability take priority over architectural complexity.**
+
+## Booking email notifications
+
+Confirmation, customer/Admin cancellation, and customer/Admin rescheduling enqueue
+email snapshots in the booking transaction. A separate server-only worker delivers
+them through a provider-independent mail adapter, using local Mailpit SMTP in
+development. Run `npm run mail:worker` alongside the app, or
+`npm run mail:worker -- --once` to drain eligible work once. Supabase Auth email
+configuration remains independent. See [Booking notifications](docs/booking-notifications.md)
+for configuration, retry guarantees, and local verification.

@@ -340,6 +340,8 @@ Use it only when genuinely required, for example:
 
 `SUPABASE_SECRET_KEY` is now required for the server-only customer booking writer.
 Use that client only to call the service-role-only atomic booking creation RPC.
+The separate booking email worker also uses `SUPABASE_SECRET_KEY`, narrowly for
+service-role-only outbox claim/start/finish RPCs; it does not access user sessions.
 
 Never use the privileged client merely because the code runs on the server.
 
@@ -547,10 +549,36 @@ Admin Save uses a separate Admin-only same-row edit RPC with a row lock, an
 `updated_at` stale token, fixed-location enforcement, and the active-row GiST
 constraint. It preserves the creator and lifecycle fields and permits only
 reason changes once an interval starts. The owner-only edit read and mutation
-remain separate. `/profile` contains identity and settings;
-`/my-activity` is the compact personal activity overview, and `/my-activity/bookings`
-contains current/upcoming personal booking/reservation management. `/my-activity/bookings/history`
-is a server-paginated archive of the current staff user's cancelled and elapsed court reservations.
+remain separate. Admin customer-booking rescheduling has separate
+booking-specific read and quote/save RPCs. Only active Admins may change a future
+confirmed booking's schedule, within its fixed location, while preserving both row
+identities and customer/policy snapshots. Both updated-at tokens protect stale edits.
+Quote/save pricing runs inside the short transaction, matching public calendar slot
+pricing and rounding, as a narrow exception needed to atomically verify price against
+concurrent configuration changes. Changed prices require explicit confirmation and
+`price_changed` requires reconfirmation. Successful saves use `revalidateCourtActivity("edit")`.
+
+Customer self-rescheduling from `/my-activity/bookings` uses the shared Admin booking
+edit timetable, availability loader, price confirmation form, and same-row transactional
+reschedule implementation. Dedicated owner RPCs and a server-only service require an
+active account and strictly `bookings.account_user_id = auth.uid()`. Ordinary owners
+must remain within the booking's snapshotted cancellation-notice window (inclusive
+cutoff); current Admin/Coach owners bypass notice only. Every owner must be before
+booking start. The fixed location, both IDs, owner/contact/policy snapshots and creation
+timestamps are preserved. Both stale tokens, server pricing with explicit changed-price
+acknowledgement/reconfirmation, and the active-row GiST constraint remain authoritative.
+Owner-scoped availability excludes its own reservation and returns only active courts,
+opening hours and occupancy for its fixed location, independent of public publication.
+Shared internal RPC helpers are not executable by browser database roles; Admin RPCs
+retain their separate role boundary. Success calls `revalidateCourtActivity("edit")`
+for `/book`, `/reservations`, and `/my-activity/bookings`. Payments, refunds and
+guest self-management are not implemented. Booking lifecycle notifications are
+transactional outbox events; see `docs/booking-notifications.md`.
+
+ `/profile` contains identity and settings;
+`/my-activity` redirects to `/my-activity/bookings`, which
+contains current/upcoming personal booking/reservation management. `/my-activity/history`
+is the current account's completed/cancelled bookings and staff-owned direct reservations. Both pages retain the My Activity heading and Admin-style submenu. The owner-scoped read-only `list_own_court_activity` RPC filters and sorts the combined dataset in SQL before fixed 20-row pagination, with kind/ID tie-breakers. URL controls preserve filters/sort across pages and reset page 1 when changed.
 The personal reservation reads remain bound to `auth.uid()` and use location-local time for lifecycle classification.
 Active Admins and Coaches can cancel
 only their own active Upcoming reservations after explicit confirmation. Server authorization and database checks
@@ -1137,3 +1165,19 @@ This version has breaking changes — APIs, conventions, and file structure may 
 This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
 
 <!-- END:nextjs-agent-rules -->
+
+## Booking notification outbox
+
+Booking confirmation, customer/Admin cancellation and customer/Admin rescheduling
+must enqueue recipient and content snapshots atomically inside the successful
+mutation RPC. Send only to `bookings.customer_email`, never the current account email.
+Quote, stale, failed and unchanged-schedule saves must not enqueue reschedule mail.
+Direct reservations, Auth emails and payments are outside this workflow.
+
+The standalone server-only worker (`npm run mail:worker`) uses the mail adapter in
+`src/lib/mail` and token-scoped outbox claim/start/finish RPCs. Preserve SKIP LOCKED
+claims, bounded SMTP timeouts, lifecycle ordering and deduplication. SMTP has no
+exactly-once delivery guarantee: only retry definite non-acceptance; interrupted
+`sending` events become `uncertain` and must never be automatically resent.
+Local Mailpit SMTP uses port 54325; do not change Supabase Auth SMTP configuration.
+See `docs/booking-notifications.md` for operational details.

@@ -3,6 +3,7 @@
 import { useId, useRef, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
+import { BookingEditForm } from "./booking-edit-form";
 import { minuteToTime } from "@/lib/admin/opening-hours-validation";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { ModalDialog } from "@/components/modal-dialog";
@@ -132,7 +133,7 @@ export function ReservationCalendar({ day, date, location, adminOccupancy = [] }
         onClose={() => { setSelectedOccupancyId(null); setEditing(false); setEditToken(null);
           setUpdatedReservation(null); setConfirming(false); returnFocusRef.current?.focus(); }}
         className={`fixed inset-0 m-auto w-[calc(100%-2rem)] rounded-card border border-border bg-surface p-5 text-foreground shadow-floating backdrop:bg-foreground/50 ${editing && !editInProgress ? "max-w-6xl" : "max-w-md"}`}>
-        <h2 id={titleId} className="font-heading text-lg font-semibold">{selectedBooking ? "Booking details" : editing ? "Edit reservation" : "Reservation details"}</h2>
+        <h2 id={titleId} className="font-heading text-lg font-semibold">{selectedBooking ? editing ? "Edit booking" : "Booking details" : editing ? "Edit reservation" : "Reservation details"}</h2>
         {selectedBooking ? <>
           <dl className="mt-4 grid grid-cols-[7rem_1fr] gap-x-3 gap-y-2 text-sm">
             <dt className="text-muted-foreground">Customer</dt><dd className="break-words">{selectedBooking.customer_name}</dd>
@@ -143,13 +144,20 @@ export function ReservationCalendar({ day, date, location, adminOccupancy = [] }
             <dt className="text-muted-foreground">Total</dt><dd>{formatMoney(selectedBooking.total_amount_minor, selectedBooking.currency)} · {selectedBooking.currency}</dd>
             <dt className="text-muted-foreground">Status</dt><dd>Confirmed</dd>
           </dl>
-          <div className="mt-5 flex justify-end gap-2">
+          {editing ? <BookingEditForm booking={selectedBooking} location={location}
+            onCancel={() => setEditing(false)} onPendingChange={setCancelPending}
+            onSaved={async () => { dialogRef.current?.close(); setSelectedOccupancyId(null); setEditing(false);
+              setSelection(null); setMessage("Booking rescheduled."); setSuccess(true); router.refresh(); }} />
+            : <div className="mt-5 flex justify-end gap-2">
+            {isReservationUpcoming({ ...selectedBooking, status: "active", location_timezone: location.timezone }, new Date())
+              && <button type="button" disabled={cancelPending} onClick={() => setEditing(true)}
+                className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold text-primary">Edit booking</button>}
             <button ref={cancelButtonRef} type="button" disabled={cancelPending}
               onClick={() => { setCancelError(""); setConfirming(true); }}
               className="min-h-10 rounded-control border border-danger px-4 text-sm font-semibold text-danger">Cancel booking</button>
             <button type="button" disabled={cancelPending} onClick={() => dialogRef.current?.close()}
               className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button>
-          </div>
+          </div>}
         </> : selectedReservation && editing && !editToken ? <div className="mt-4 text-sm" role={editError ? "alert" : "status"}>
           {editError || "Loading reservation…"}
           {editError && <button type="button" className="ml-2 font-semibold underline" onClick={openEdit}>Retry</button>}

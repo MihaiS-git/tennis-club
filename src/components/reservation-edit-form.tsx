@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { z } from "zod";
 import { minuteToTime } from "@/lib/admin/opening-hours-validation";
 import { ReservationTimetable, type ReservationTimetableDay } from "@/components/reservation-timetable";
@@ -17,7 +17,9 @@ export type ReservationEditSaveResult = { ok: true } | { ok: false; message: str
 
 const fieldClass = "min-h-10 w-full rounded-control border border-border-strong bg-background px-3 text-sm text-foreground disabled:bg-surface-muted disabled:text-muted-foreground";
 
-export function ReservationEditForm({ reservation, inProgress, loadAvailability, onCancel, onSave, onSaved, onStale, onPendingChange }: {
+export function ReservationEditForm({ reservation, inProgress, loadAvailability, onCancel, onSave, onSaved, onStale, onPendingChange, scheduleOnly = false, renderScheduleDetails }: {
+  scheduleOnly?: boolean;
+  renderScheduleDetails?: (draft: ReservationEditDraft) => ReactNode;
   reservation: EditableReservation;
   inProgress: boolean;
   loadAvailability: (reservationId: string, date: string) => Promise<{ day: ReservationTimetableDay }>;
@@ -83,7 +85,7 @@ export function ReservationEditForm({ reservation, inProgress, loadAvailability,
     setError(""); setFieldErrors({});
     if (!inProgress && (!selection || !day || loading)) { setError("Choose an available court and interval."); return; }
     const validReason = reservationReasonSchema.safeParse(reason);
-    if (!validReason.success) {
+    if (!scheduleOnly && !validReason.success) {
       setError("Check the highlighted fields.");
       setFieldErrors({ reason: validReason.error.issues[0]?.message ?? "Enter a reason." });
       return;
@@ -124,9 +126,10 @@ export function ReservationEditForm({ reservation, inProgress, loadAvailability,
         <p className="mt-1">{selectedCourt.name} · {minuteToTime(selection.startMinute)}–{minuteToTime(selection.endMinute)} · {selection.endMinute - selection.startMinute} min</p>
       </section>}
     </>}
-    <label className="block space-y-1 text-sm font-semibold text-primary"><span>Reason</span>
+    {renderScheduleDetails?.({ date, selection, reason, inProgress })}
+    {!scheduleOnly && <label className="block space-y-1 text-sm font-semibold text-primary"><span>Reason</span>
       <input value={reason} maxLength={255} disabled={pending} onChange={(event) => setReason(event.target.value)} className={fieldClass} />
-    </label>
+    </label>}
     <p className="min-h-4 text-xs text-danger">{fieldErrors.reason || fieldErrors.startMinute}</p>
     <div className="flex justify-end gap-2 pt-2">
       <button type="button" disabled={pending} onClick={onCancel} className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Cancel</button>

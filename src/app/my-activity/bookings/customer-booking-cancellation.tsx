@@ -6,7 +6,8 @@ import type { PersonalCustomerBooking } from "@/lib/bookings/personal";
 import { customerCancellationEligibility, customerCancellationNoticeLabel } from "@/lib/bookings/self-cancellation";
 import { cancelOwnCustomerBookingAction } from "./actions";
 
-export function CustomerBookingCancellation({ booking, staff, onCancelled, onPendingChange }: {
+export function CustomerBookingCancellation({ booking, staff, onCancelled, onPendingChange, onEdit }: {
+  onEdit?: () => void;
   booking: PersonalCustomerBooking; staff: boolean; onCancelled: () => Promise<void>;
   onPendingChange: (pending: boolean) => void;
 }) {
@@ -45,6 +46,8 @@ export function CustomerBookingCancellation({ booking, staff, onCancelled, onPen
   }
 
   return <>
+    {eligibility === "eligible" && onEdit && <button type="button" disabled={pending}
+      onClick={onEdit} className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold text-primary">Edit booking</button>}
     {eligibility === "eligible" ? <button ref={triggerRef} type="button" disabled={pending}
       onClick={() => { setNow(new Date()); setError(""); setConfirming(true); }}
       className="min-h-10 rounded-control border border-danger px-4 text-sm font-semibold text-danger">Cancel booking</button>

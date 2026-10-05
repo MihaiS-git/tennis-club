@@ -8,7 +8,7 @@ test("refreshes personal activity, History and occupancy only after a lifecycle 
   cancel.mockResolvedValue({ ok: true });
   expect(await cancelOwnCustomerBookingAction("booking")).toEqual({ ok: true });
   expect(cancel).toHaveBeenCalledWith("booking");
-  expect(revalidate.mock.calls).toEqual([["/book"], ["/reservations"], ["/my-activity/bookings"], ["/my-activity/bookings/history"]]);
+  expect(revalidate.mock.calls).toEqual([["/book"], ["/reservations"], ["/my-activity/bookings"], ["/my-activity/history"]]);
   revalidate.mockClear();
   cancel.mockResolvedValue({ ok: false, message: "No longer available." });
   expect(await cancelOwnCustomerBookingAction("booking")).toEqual({ ok: false, message: "No longer available." });

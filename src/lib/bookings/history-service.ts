@@ -16,7 +16,7 @@ const common = {
   booking_date: z.iso.date(), starts_at_minute: z.number().int(), ends_at_minute: z.number().int(),
   location_name: z.string(), location_timezone: z.string(), court_name: z.string(),
 };
-const rowSchema = z.discriminatedUnion("kind", [
+export const courtHistoryRowSchema = z.discriminatedUnion("kind", [
   z.object({ ...common, kind: z.literal("booking"), status: z.enum(["confirmed", "cancelled"]),
     customer_name: z.string(), customer_email: z.string(), customer_phone: z.string(), cancellation_notice_minutes: cancellationNoticeMinutesSchema,
     total_amount_minor: minorAmountSchema, currency: z.enum(locationCurrencies) }),
@@ -32,7 +32,7 @@ export async function listOwnCourtHistory(page: number,
   const account = await readCurrentAccount(supabase);
   if (account.state !== "active") throw new Error("An active account is required.");
   const result = await supabase.rpc("list_own_court_activity_history", { p_page: page, p_now: now.toISOString() });
-  const parsed = z.array(rowSchema).safeParse(result.data);
+  const parsed = z.array(courtHistoryRowSchema).safeParse(result.data);
   if (result.error || !parsed.success || parsed.data.some((row) => row.kind === "reservation" && row.created_by_user_id !== account.userId)) {
     logger.error({ event: "activity.history_read_failed", code: result.error?.code }, "Failed to load personal court history");
     throw new Error("Unable to load your booking history.");

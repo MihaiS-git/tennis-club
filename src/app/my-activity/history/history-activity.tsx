@@ -4,26 +4,43 @@ import { useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ModalDialog } from "@/components/modal-dialog";
 import { historyStatus, type CourtHistoryItem } from "@/lib/bookings/history";
+import { parseActivityQuery, type ActivityQuery } from "@/lib/bookings/activity-query";
+import { ActivityTable } from "../activity-table";
 import { formatMoney } from "@/lib/pricing/money";
-import { dateLabel, ReservationDetails, timeLabel } from "../personal-activity";
+import { dateLabel, ReservationDetails, timeLabel } from "../bookings/personal-activity";
 
-export function HistoryActivity({ rows, page = 1 }: { rows: CourtHistoryItem[]; page?: number }) {
+export function HistoryActivity({ rows, page = 1, staff = false, query = parseActivityQuery({}, "history", staff) }: {
+  rows: CourtHistoryItem[]; page?: number; staff?: boolean; query?: ActivityQuery;
+}) {
   const [selected, setSelected] = useState<CourtHistoryItem | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const returnFocusRef = useRef<HTMLButtonElement>(null);
+  const returnFocusRef = useRef<HTMLTableRowElement>(null);
   const titleId = useId();
 
+  function openDetails(row: CourtHistoryItem, element: HTMLTableRowElement) {
+    returnFocusRef.current = element;
+    setSelected(row);
+  }
+
   return <>
-    {rows.length ? <ul className="divide-y divide-border rounded-control border border-border bg-background">
-      {rows.map((row) => <li key={`${row.kind}:${row.id}`}><button type="button"
-        onClick={(event) => { returnFocusRef.current = event.currentTarget; setSelected(row); }}
-        className="w-full p-3 text-left hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-primary">
-        <span className="block text-xs font-semibold uppercase tracking-wider text-muted-foreground">{row.kind === "booking" ? "Booking" : "Reservation"}</span>
-        <span className="block text-sm font-semibold text-primary">{row.location_name} · {row.court_name}</span>
-        <span className="mt-1 block text-sm text-foreground">{dateLabel(row.booking_date)} · {timeLabel(row.starts_at_minute)}–{timeLabel(row.ends_at_minute)} · {row.ends_at_minute - row.starts_at_minute} min</span>
-        <span className="mt-1 block truncate text-sm text-muted-foreground">{row.kind === "booking" ? `${formatMoney(row.total_amount_minor, row.currency)} · ` : ""}{historyStatus(row)}{row.kind === "reservation" && row.reason ? ` · ${row.reason}` : ""}</span>
-      </button></li>)}
-    </ul> : <p className="text-sm text-muted-foreground">{page === 1 ? "No previous or cancelled court activity." : "No booking history on this page."}</p>}
+    {rows.length ? <ActivityTable scope="history" query={query} staff={staff}>
+      {rows.map((row) => <tr key={`${row.kind}:${row.id}`} tabIndex={0}
+        aria-label={`Details for ${row.court_name} on ${dateLabel(row.booking_date)}`}
+        onClick={(event) => openDetails(row, event.currentTarget)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openDetails(row, event.currentTarget); }
+        }}
+        className="cursor-pointer hover:bg-surface-muted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary">
+        {staff && <td className="whitespace-nowrap px-3 py-3">{row.kind === "booking" ? "Booking" : "Reservation"}</td>}
+        <td className="px-3 py-3 font-semibold text-primary">{row.location_name}</td>
+        <td className="px-3 py-3">{row.court_name}</td>
+        <td className="whitespace-nowrap px-3 py-3">{dateLabel(row.booking_date)}</td>
+        <td className="whitespace-nowrap px-3 py-3 tabular-nums">{timeLabel(row.starts_at_minute)}–{timeLabel(row.ends_at_minute)}</td>
+        <td className="whitespace-nowrap px-3 py-3 tabular-nums">{row.ends_at_minute - row.starts_at_minute} min</td>
+        <td className="whitespace-nowrap px-3 py-3 tabular-nums">{row.kind === "booking" ? formatMoney(row.total_amount_minor, row.currency) : "—"}</td>
+        <td className="px-3 py-3"><span className="inline-flex rounded-full bg-surface-muted px-2 py-1 text-xs font-semibold">{historyStatus(row)}</span></td>
+      </tr>)}
+    </ActivityTable> : <p className="text-sm text-muted-foreground">{page === 1 ? "No completed or cancelled court activity matches your filters." : "No booking history on this page."}</p>}
     {selected && typeof document !== "undefined" && createPortal(
       <ModalDialog ref={dialogRef} active aria-labelledby={titleId} onClose={() => { setSelected(null); returnFocusRef.current?.focus(); }}
         className="fixed inset-0 m-auto w-[calc(100%-2rem)] max-w-md rounded-card border border-border bg-surface p-5 text-foreground shadow-floating backdrop:bg-foreground/50">

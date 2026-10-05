@@ -32,7 +32,7 @@ export function AccountMenu({ avatarUrl }: { avatarUrl: string | null }) {
       <ChevronDown aria-hidden="true" className="size-4" />
     </button>
     <div hidden={!open} className="absolute right-0 top-full z-40 mt-2 w-52 rounded-control border border-border bg-surface p-1 shadow-floating">
-      <ProfileDepartureLink ref={firstLink} href="/my-activity" onClick={() => setOpen(false)} className="block rounded-control px-3 py-2 text-sm text-primary hover:bg-surface-muted">My activity</ProfileDepartureLink>
+      <ProfileDepartureLink ref={firstLink} href="/my-activity/bookings" onClick={() => setOpen(false)} className="block rounded-control px-3 py-2 text-sm text-primary hover:bg-surface-muted">My activity</ProfileDepartureLink>
       <ProfileDepartureLink href="/profile" onClick={() => setOpen(false)} className="block rounded-control px-3 py-2 text-sm text-primary hover:bg-surface-muted">Profile & settings</ProfileDepartureLink>
       <div className="my-1 border-t border-border" />
       <ProfileDepartureForm action={signOutAction}>

@@ -82,7 +82,8 @@ it("opens Admin booking details from each occupied cell using stored snapshots",
       "10:00–11:30 (UTC)", "90 min", "RON", "Confirmed"]) expect(dialog.textContent).toContain(value);
     expect(dialog.textContent).toContain("75.00");
     expect(within(dialog).getByRole("button", { name: "Cancel booking" })).toBeTruthy();
-    expect(within(dialog).queryByRole("button", { name: /edit|refund|notify|payment/i })).toBeNull();
+    expect(within(dialog).getByRole("button", { name: "Edit booking" })).toBeDefined();
+    expect(within(dialog).queryByRole("button", { name: /refund|notify|payment/i })).toBeNull();
     fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
   }
 });

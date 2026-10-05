@@ -18,7 +18,7 @@ it("exposes personal destinations and sign out with keyboard focus and Escape", 
   expect(screen.queryByRole("button", { name: "Sign out" })).toBeNull();
   fireEvent.click(trigger);
   expect(trigger.getAttribute("aria-expanded")).toBe("true");
-  expect(screen.getByRole("link", { name: "My activity" }).getAttribute("href")).toBe("/my-activity");
+  expect(screen.getByRole("link", { name: "My activity" }).getAttribute("href")).toBe("/my-activity/bookings");
   expect(screen.getByRole("link", { name: "Profile & settings" }).getAttribute("href")).toBe("/profile");
   expect(screen.getAllByRole("button", { name: "Sign out" })).toHaveLength(1);
   expect(document.activeElement).toBe(screen.getByRole("link", { name: "My activity" }));

@@ -5,37 +5,20 @@ import { createPortal } from "react-dom";
 import { ModalDialog } from "@/components/modal-dialog";
 import { ReservationDetailFieldsView } from "@/components/reservation-details";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
+import { parseActivityQuery, type ActivitySearchParams } from "@/lib/bookings/activity-query";
+import type { UpcomingActivity as Activity, UpcomingCourtActivity as CourtActivity } from "@/lib/bookings/activity-service";
 import type { PersonalCustomerBooking } from "@/lib/bookings/personal";
 import { formatMoney } from "@/lib/pricing/money";
 import { isReservationInProgress, isReservationUpcoming, type PersonalReservation } from "@/lib/reservations/personal";
-import { cancelOwnReservationAction, loadPersonalActivityAction } from "./actions";
+import { BookingEditForm, type BookingEditActions } from "@/app/reservations/booking-edit-form";
+import { cancelOwnReservationAction, loadPersonalActivityAction, loadOwnBookingEditDayAction, quoteOwnBookingAction, rescheduleOwnBookingAction } from "./actions";
+import { ActivityControls } from "../activity-controls";
+import { ActivityTable } from "../activity-table";
+import { ActivityPagination } from "../activity-pagination";
 import { CustomerBookingCancellation } from "./customer-booking-cancellation";
 import { ReservationEditForm } from "./reservation-edit-form";
 
-type Activity = { upcoming: PersonalReservation[]; bookings: PersonalCustomerBooking[] };
-type CourtActivity = { kind: "booking"; row: PersonalCustomerBooking } | { kind: "reservation"; row: PersonalReservation };
-
-function startInstant(row: PersonalCustomerBooking | PersonalReservation) {
-  if ("starts_at_instant" in row) return Date.parse(row.starts_at_instant);
-  const [year, month, day] = row.booking_date.split("-").map(Number);
-  const localAsUtc = Date.UTC(year, month - 1, day, Math.floor(row.starts_at_minute / 60), row.starts_at_minute % 60);
-  const formatter = new Intl.DateTimeFormat("en-US", { timeZone: row.location_timezone, timeZoneName: "shortOffset" });
-  const offsetAt = (instant: number) => {
-    const label = formatter.formatToParts(new Date(instant)).find((part) => part.type === "timeZoneName")?.value ?? "GMT";
-    const match = /^GMT([+-])(\d{1,2})(?::(\d{2}))?$/.exec(label);
-    return match ? (match[1] === "+" ? 1 : -1) * (Number(match[2]) * 60 + Number(match[3] ?? 0)) * 60_000 : 0;
-  };
-  const first = localAsUtc - offsetAt(localAsUtc);
-  return localAsUtc - offsetAt(first);
-}
-
-function sortedActivity(activity: Activity): CourtActivity[] {
-  return [
-    ...activity.bookings.map((row): CourtActivity => ({ kind: "booking", row })),
-    ...activity.upcoming.map((row): CourtActivity => ({ kind: "reservation", row })),
-  ].sort((a, b) => startInstant(a.row) - startInstant(b.row)
-    || a.kind.localeCompare(b.kind) || a.row.id.localeCompare(b.row.id));
-}
+const ownBookingActions: BookingEditActions = { load: loadOwnBookingEditDayAction, quote: quoteOwnBookingAction, save: rescheduleOwnBookingAction };
 
 export function dateLabel(date: string) {
   return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(`${date}T12:00:00Z`));
@@ -61,8 +44,8 @@ export function ReservationDetails({ reservation: selected }: { reservation: Per
   </dl>;
 }
 
-export function PersonalActivity({ staff, userId, initialActivity, initialError }: {
-  staff: boolean; userId?: string; initialActivity: Activity | null; initialError: string;
+export function PersonalActivity({ staff, userId, initialActivity, initialError, listQuery }: {
+  staff: boolean; userId?: string; initialActivity: Activity | null; initialError: string; listQuery?: ActivitySearchParams;
 }) {
   const [activity, setActivity] = useState(initialActivity);
   const [error, setError] = useState(initialError);
@@ -84,20 +67,20 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError 
   const [pending, setPending] = useState(false);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const bookingDialogRef = useRef<HTMLDialogElement>(null);
-  const returnFocusRef = useRef<HTMLButtonElement | null>(null);
+  const returnFocusRef = useRef<HTMLTableRowElement | null>(null);
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
   const titleId = useId();
 
   useEffect(() => {
     if (activity || error) return;
     let cancelled = false;
-    loadPersonalActivityAction().then((value) => {
+    loadPersonalActivityAction(listQuery).then((value) => {
       if (!cancelled) setActivity(value);
     }).catch(() => {
       if (!cancelled) setError("Unable to load your court activity. Try again.");
     });
     return () => { cancelled = true; };
-  }, [activity, error]);
+  }, [activity, error, listQuery]);
 
   async function cancel() {
     if (!selected || pending) return;
@@ -115,7 +98,7 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError 
       setCancelError("Unable to cancel this reservation. Try again.");
     } finally { setPending(false); }
     if (cancelled) {
-      try { setActivity(await loadPersonalActivityAction()); }
+      try { setActivity(await loadPersonalActivityAction(listQuery)); }
       catch { setActivity(null); setError("Unable to load your court activity. Try again."); }
     }
   }
@@ -124,14 +107,14 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError 
     bookingDialogRef.current?.close();
     setSelectedBooking(null);
     setSuccess("Booking cancelled.");
-    try { setActivity(await loadPersonalActivityAction()); }
+    try { setActivity(await loadPersonalActivityAction(listQuery)); }
     catch { setActivity(null); setError("Unable to load your court activity. Try again."); }
   }
 
   async function refreshEditedReservation(notice: string) {
     setEditing(false);
     try {
-      const refreshed = await loadPersonalActivityAction();
+      const refreshed = await loadPersonalActivityAction(listQuery);
       setActivity(refreshed);
       const current = refreshed.upcoming.find((row) => row.id === selected?.id);
       setSelected(current ?? null);
@@ -147,29 +130,61 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError 
   if (error) return <div role="alert" className="text-sm text-danger">{error} <button type="button" className="font-semibold underline" onClick={() => setError("")}>Retry</button></div>;
   if (!activity) return null;
 
+  function openDetails(item: CourtActivity, row: HTMLTableRowElement) {
+    returnFocusRef.current = row;
+    setSuccess(""); setDetailNotice(""); setEditing(false);
+    if (item.kind === "booking") setSelectedBooking(item.row); else setSelected(item.row);
+  }
+
   const list = (rows: CourtActivity[]) => <section aria-label="Upcoming" className="space-y-2">
     <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Upcoming</h2>
-    {rows.length ? <ul className="divide-y divide-border rounded-control border border-border bg-background">
-      {rows.map((item) => <li key={`${item.kind}:${item.row.id}`}><button type="button" onClick={(event) => { returnFocusRef.current = event.currentTarget; setSuccess(""); setDetailNotice(""); setEditing(false);
-        if (item.kind === "booking") setSelectedBooking(item.row); else setSelected(item.row); }}
-        className="w-full p-3 text-left hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-primary">
-        <span className="block text-xs font-semibold uppercase tracking-wider text-muted-foreground">{item.kind === "booking" ? "Booking" : "Reservation"}</span>
-        <span className="block text-sm font-semibold text-primary">{item.row.location_name} · {item.row.court_name}</span>
-        <span className="mt-1 block text-sm text-foreground">{dateLabel(item.row.booking_date)} · {timeLabel(item.row.starts_at_minute)}–{timeLabel(item.row.ends_at_minute)} · {item.row.ends_at_minute - item.row.starts_at_minute} min</span>
-        <span className="mt-1 block truncate text-sm text-muted-foreground">{item.kind === "booking" ? formatMoney(item.row.total_amount_minor, item.row.currency) : item.row.reason || "No reason recorded"}</span>
-      </button></li>)}
-    </ul> : <p className="text-sm text-muted-foreground">No upcoming bookings or reservations.</p>}
+    {rows.length ? <ActivityTable scope="upcoming" query={query} staff={staff}>
+      {rows.map((item) => <tr key={`${item.kind}:${item.row.id}`} tabIndex={0}
+        aria-label={`Details for ${item.row.court_name} on ${dateLabel(item.row.booking_date)}`}
+        onClick={(event) => openDetails(item, event.currentTarget)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openDetails(item, event.currentTarget); }
+        }}
+        className="cursor-pointer hover:bg-surface-muted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary">
+        {staff && <td className="whitespace-nowrap px-3 py-3">{item.kind === "booking" ? "Booking" : "Reservation"}</td>}
+        <td className="px-3 py-3 font-semibold text-primary">{item.row.location_name}</td>
+        <td className="px-3 py-3">{item.row.court_name}</td>
+        <td className="whitespace-nowrap px-3 py-3">{dateLabel(item.row.booking_date)}</td>
+        <td className="whitespace-nowrap px-3 py-3 tabular-nums">{timeLabel(item.row.starts_at_minute)}–{timeLabel(item.row.ends_at_minute)}</td>
+        <td className="whitespace-nowrap px-3 py-3 tabular-nums">{item.row.ends_at_minute - item.row.starts_at_minute} min</td>
+        <td className="whitespace-nowrap px-3 py-3 tabular-nums">{item.kind === "booking" ? formatMoney(item.row.total_amount_minor, item.row.currency) : "—"}</td>
+      </tr>)}
+    </ActivityTable> : <p className="text-sm text-muted-foreground">No upcoming bookings or reservations match your filters.</p>}
   </section>;
 
+  const query = parseActivityQuery(listQuery ?? {}, "upcoming", staff);
   return <>
+    {activity.locations && activity.courts && <ActivityControls staff={staff} scope="upcoming" query={query}
+      options={{ locations: activity.locations, courts: activity.courts }} />}
     <p role="status" className="min-h-5 text-sm text-success">{success}</p>
-    {list(sortedActivity(activity))}
+    {list(activity.ordered ?? [...activity.bookings.map((row): CourtActivity => ({ kind: "booking", row })), ...activity.upcoming.map((row): CourtActivity => ({ kind: "reservation", row }))])}
+    {activity.hasNext !== undefined && <ActivityPagination scope="upcoming" query={query}
+      hasNext={activity.hasNext} empty={!activity.bookings.length && !activity.upcoming.length} />}
     {selectedBooking && typeof document !== "undefined" && createPortal(
       <ModalDialog ref={bookingDialogRef} active aria-labelledby={`${titleId}-booking`}
         onCancel={(event) => { if (pending) event.preventDefault(); }}
         onClose={() => { setSelectedBooking(null); returnFocusRef.current?.focus(); }}
-        className="fixed inset-0 m-auto max-h-[90vh] w-[calc(100%-2rem)] max-w-md overflow-y-auto rounded-card border border-border bg-surface p-5 text-foreground shadow-floating backdrop:bg-foreground/50">
-        <h2 id={`${titleId}-booking`} className="font-heading text-lg font-semibold">Booking</h2>
+        className={`fixed inset-0 m-auto max-h-[90vh] w-[calc(100%-2rem)] overflow-y-auto rounded-card border border-border bg-surface p-5 text-foreground shadow-floating backdrop:bg-foreground/50 ${editing ? "max-w-6xl" : "max-w-md"}`}>
+        <h2 id={`${titleId}-booking`} className="font-heading text-lg font-semibold">{editing ? "Edit booking" : "Booking"}</h2>
+        {editing ? <BookingEditForm booking={selectedBooking}
+          actions={ownBookingActions} onCancel={() => setEditing(false)} onPendingChange={setPending}
+          onSaved={async () => {
+            setEditing(false);
+            setSuccess("Booking updated.");
+            try {
+              const refreshed = await loadPersonalActivityAction(listQuery);
+              setActivity(refreshed);
+              setSelectedBooking(refreshed.bookings.find((row) => row.id === selectedBooking.id) ?? null);
+            } catch {
+              setSelectedBooking(null); setActivity(null);
+              setError("Unable to load your court activity. Try again.");
+            }
+          }} /> : <>
         <dl className="mt-4 grid grid-cols-[7rem_1fr] gap-x-3 gap-y-2 text-sm">
           <dt className="text-muted-foreground">Location</dt><dd>{selectedBooking.location_name}</dd>
           <dt className="text-muted-foreground">Court</dt><dd>{selectedBooking.court_name}</dd>
@@ -185,9 +200,10 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError 
         </dl>
         <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
           <CustomerBookingCancellation booking={selectedBooking} staff={staff}
-            onCancelled={refreshCancelledBooking} onPendingChange={setPending} />
+            onCancelled={refreshCancelledBooking} onPendingChange={setPending} onEdit={() => setEditing(true)} />
           <button type="button" disabled={pending} onClick={(event) => event.currentTarget.closest("dialog")?.close()}
           className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button></div>
+        </>}
       </ModalDialog>, document.body)}
     {selected && typeof document !== "undefined" && createPortal(
       <ModalDialog ref={dialogRef} active aria-labelledby={titleId}

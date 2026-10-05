@@ -2,7 +2,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 
 const services = vi.hoisted(() => ({
   create: vi.fn(), ownerEdit: vi.fn(), ownerCancel: vi.fn(),
-  adminEdit: vi.fn(), adminCancel: vi.fn(), adminBookingCancel: vi.fn(),
+  adminEdit: vi.fn(), adminCancel: vi.fn(), adminBookingCancel: vi.fn(), adminBookingReschedule: vi.fn(), ownerBookingReschedule: vi.fn(),
   revalidate: vi.fn(),
 }));
 vi.mock("next/cache", () => ({ revalidatePath: services.revalidate }));
@@ -12,17 +12,19 @@ vi.mock("@/lib/reservations/service", () => ({
   cancelDirectReservationAsAdmin: services.adminCancel,
   cancelCustomerBookingAsAdmin: services.adminBookingCancel,
 }));
+vi.mock("@/lib/bookings/self-reschedule", () => ({ rescheduleOwnCustomerBooking: services.ownerBookingReschedule }));
+vi.mock("@/lib/bookings/admin-reschedule", () => ({ rescheduleCustomerBookingAsAdmin: services.adminBookingReschedule }));
 vi.mock("@/lib/reservations/personal-service", () => ({
   editOwnDirectReservation: services.ownerEdit,
   cancelOwnDirectReservation: services.ownerCancel,
 }));
 
 import { cancelAdminCustomerBookingAction, cancelAdminReservationAction, editAdminReservationAction,
-  reserveCourtAction } from "@/app/reservations/actions";
-import { cancelOwnReservationAction, editOwnReservationAction } from "@/app/my-activity/bookings/actions";
+  reserveCourtAction, rescheduleAdminBookingAction, quoteAdminBookingAction } from "@/app/reservations/actions";
+import { cancelOwnReservationAction, editOwnReservationAction, quoteOwnBookingAction, rescheduleOwnBookingAction } from "@/app/my-activity/bookings/actions";
 
 const upcomingPaths = [["/book"], ["/reservations"], ["/my-activity/bookings"]];
-const cancelledPaths = [...upcomingPaths, ["/my-activity/bookings/history"]];
+const cancelledPaths = [...upcomingPaths, ["/my-activity/history"]];
 const mutations = [
   { name: "direct reservation create", action: reserveCourtAction, service: services.create, paths: upcomingPaths },
   { name: "owner edit", action: editOwnReservationAction, service: services.ownerEdit, paths: upcomingPaths },
@@ -59,5 +61,22 @@ it.each(mutations)("$name does not invalidate when the service throws", async ({
   const error = new Error("Service failed");
   service.mockRejectedValue(error);
   await expect(action("id")).rejects.toBe(error);
+  expect(services.revalidate).not.toHaveBeenCalled();
+});
+
+it.each([
+  { quote: quoteAdminBookingAction, save: rescheduleAdminBookingAction, service: services.adminBookingReschedule },
+  { quote: quoteOwnBookingAction, save: rescheduleOwnBookingAction, service: services.ownerBookingReschedule },
+])("booking rescheduling invalidates Upcoming routes only after save, never after quote or rejection", async ({ quote, save, service }) => {
+  const result = { ok: true, totalAmountMinor: 9000 };
+  service.mockResolvedValue(result);
+  expect(await quote({ save: false })).toBe(result);
+  expect(services.revalidate).not.toHaveBeenCalled();
+  expect(await save({ save: true })).toBe(result);
+  expect(services.revalidate.mock.calls).toEqual(upcomingPaths);
+  services.revalidate.mockClear();
+  const failure = { ok: false, reason: "price_changed", totalAmountMinor: 10000 };
+  service.mockResolvedValue(failure);
+  expect(await save({ save: true })).toBe(failure);
   expect(services.revalidate).not.toHaveBeenCalled();
 });

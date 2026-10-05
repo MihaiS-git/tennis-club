@@ -61,7 +61,7 @@ it("shows Matches and personal account destinations for authenticated users", ()
   expect(within(navigation).getAllByRole("link").map((link) => link.textContent)).toEqual([
     "Courts", "Coaching", "Matches", "Rankings", "Club", "My activity", "Profile & settings",
   ]);
-  expect(within(navigation).getByRole("link", { name: "My activity" }).getAttribute("href")).toBe("/my-activity");
+  expect(within(navigation).getByRole("link", { name: "My activity" }).getAttribute("href")).toBe("/my-activity/bookings");
   expect(within(navigation).getByRole("link", { name: "Profile & settings" }).getAttribute("href")).toBe("/profile");
   expect(within(navigation).queryByRole("link", { name: "Account" })).toBeNull();
   expect(within(navigation).getByRole("button", { name: "Sign out" })).toBeDefined();

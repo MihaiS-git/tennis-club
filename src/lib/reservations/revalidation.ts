@@ -9,5 +9,5 @@ export function revalidateCourtActivity(mutation: "create" | "edit" | "cancel") 
   // These are shared route paths, including when an Admin changes another owner's activity.
   revalidatePath("/my-activity/bookings");
   // Existing edits keep reservations in Upcoming; cancellation moves them to History.
-  if (mutation === "cancel") revalidatePath("/my-activity/bookings/history");
+  if (mutation === "cancel") revalidatePath("/my-activity/history");
 }
