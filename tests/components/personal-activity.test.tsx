@@ -3,6 +3,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { PersonalActivity } from "@/app/my-activity/bookings/personal-activity";
 import { localMinute, localToday } from "@/lib/courts/local-time";
+import type { PersonalCustomerBooking } from "@/lib/bookings/personal";
+import type { PersonalReservation } from "@/lib/reservations/personal";
 
 const { load, cancel, edit, availability } = vi.hoisted(() => ({ load: vi.fn(), cancel: vi.fn(), edit: vi.fn(), availability: vi.fn() }));
 vi.mock("@/app/my-activity/bookings/actions", () => ({ loadPersonalActivityAction: load, cancelOwnReservationAction: cancel,
@@ -23,6 +25,70 @@ it("gives ordinary players an empty state after requesting personal activity", a
   render(<PersonalActivity staff={false} />);
   expect(await screen.findByText("No upcoming bookings or reservations.")).toBeDefined();
   expect(load).toHaveBeenCalledOnce();
+});
+
+it.each([false, true])("renders every owned row and opens each detail dialog (staff=%s)", async (staff) => {
+  const booking = (id: string, start: number, zone = "UTC"): PersonalCustomerBooking => ({
+    id, booking_date: "2099-10-15", starts_at_minute: start, ends_at_minute: start + 60,
+    location_name: "Club", location_timezone: zone, court_name: id,
+    customer_name: `Customer ${id}`, customer_email: `${id}@example.test`, customer_phone: "123",
+    total_amount_minor: 5000, currency: "RON",
+  });
+  const reservation = (id: string, start: number): PersonalReservation => ({
+    id, court_id: id, location_id: "location", updated_at: "2026-10-01T12:00:00Z",
+    booking_date: "2099-10-15", starts_at_minute: start, ends_at_minute: start + 60,
+    location_name: "Club", location_timezone: "UTC", court_name: id,
+    reason: `Reason ${id}`, status: "active", created_by_user_id: "owner", creator_name: "Owner",
+    cancelled_at: null, cancelled_by_name: null,
+  });
+  // The two tied bookings must use the ID tie-breaker; Bucharest 10:00 is earlier
+  // than UTC 09:00 despite its later wall-clock time.
+  const bookings = [booking("booking-b", 600), booking("booking-a", 600), booking("booking-first", 600, "Europe/Bucharest")];
+  const upcoming = staff ? [reservation("reservation-last", 660), reservation("reservation-middle", 540)] : [];
+  load.mockResolvedValue({ bookings, upcoming });
+  render(<PersonalActivity staff={staff} userId="owner" />);
+  const region = await screen.findByRole("region", { name: "Upcoming" });
+  const buttons = within(region).getAllByRole("button");
+  const ordered = staff ? [bookings[2], upcoming[1], bookings[1], bookings[0], upcoming[0]]
+    : [bookings[2], bookings[1], bookings[0]];
+  expect(buttons).toHaveLength(staff ? 5 : 3);
+  expect(within(region).getAllByRole("listitem")).toHaveLength(ordered.length);
+  for (const [index, row] of ordered.entries()) {
+    expect(buttons[index].textContent).toContain(row.court_name);
+    expect(buttons[index].textContent).toContain("60 min");
+    fireEvent.click(buttons[index]);
+    const isBooking = "customer_name" in row;
+    const dialog = screen.getByRole("dialog", { name: isBooking ? "Booking" : "Reservation details" });
+    expect(within(dialog).getByText(row.court_name)).toBeDefined();
+    if (isBooking) {
+      expect(buttons[index].textContent).toMatch(/RON\s*50\.00/);
+      expect(within(dialog).getByText(row.customer_email)).toBeDefined();
+      expect(within(dialog).queryByRole("button", { name: /edit|cancel/i })).toBeNull();
+    } else {
+      expect(buttons[index].textContent).toContain(row.reason);
+      expect(within(dialog).getByText(row.reason!)).toBeDefined();
+    }
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  }
+  expect(load).toHaveBeenCalledOnce();
+});
+
+it("places an in-progress booking before future bookings", async () => {
+  const now = new Date();
+  const zone = ["UTC", "Pacific/Honolulu", "Asia/Tokyo"]
+    .find((item) => localMinute(item, now) >= 120 && localMinute(item, now) <= 1320)!;
+  const start = Math.floor(localMinute(zone, now) / 30) * 30 - 30;
+  const current: PersonalCustomerBooking = { id: "current", booking_date: localToday(zone, now),
+    starts_at_minute: start, ends_at_minute: start + 90, location_name: "Club", location_timezone: zone,
+    court_name: "Current court", customer_name: "Owner", customer_email: "owner@example.test",
+    customer_phone: "123", total_amount_minor: 5000, currency: "RON" };
+  load.mockResolvedValue({ bookings: [{ ...current, id: "future", booking_date: "2099-10-15", court_name: "Future court" }, current], upcoming: [] });
+  render(<PersonalActivity staff={false} />);
+  const rows = within(await screen.findByRole("region", { name: "Upcoming" })).getAllByRole("button");
+  expect(rows).toHaveLength(2);
+  expect(rows[0].textContent).toContain("Current court");
+  expect(rows[1].textContent).toContain("Future court");
 });
 
 it("shows an owner's booking snapshot in read-only details and sorts it with direct reservations", async () => {

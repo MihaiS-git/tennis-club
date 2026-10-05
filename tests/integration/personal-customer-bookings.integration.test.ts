@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test } from "vitest";
 import { listOwnUpcomingCustomerBookings } from "@/lib/bookings/personal-service";
 import { localMinute, localToday } from "@/lib/courts/local-time";
+import { listPersonalReservations } from "@/lib/reservations/personal-service";
 import { cleanupAuthFixtures, localFixtureClient } from "./auth-fixtures";
 
 test("upcoming customer booking reads are owner scoped for members and staff", async () => {
@@ -58,27 +59,47 @@ test("upcoming customer booking reads are owner scoped for members and staff", a
     const other = await account();
     const admin = await account("admin");
     const coach = await account("coach");
+    // Insert out of order so insertion order cannot satisfy the assertion.
+    const lastFuture = await booking(member.id, "2099-10-16", 600, 660);
     const future = await booking(member.id, "2099-10-15", 600, 660);
+    const nextFuture = await booking(member.id, "2099-10-15", 720, 780);
     const inProgress = await booking(member.id, today, inProgressStart, inProgressStart + 60);
     const elapsed = await booking(member.id, elapsedDate, 0, 60);
     const cancelled = await booking(member.id, "2099-10-16", 600, 660, { bookingStatus: "cancelled" });
     const inactive = await booking(member.id, "2099-10-17", 600, 660, { reservationStatus: "cancelled" });
     const another = await booking(other.id, "2099-10-18", 600, 660);
     const guest = await booking(null, "2099-10-19", 600, 660, { email: member.email });
-    const adminOwn = await booking(admin.id, "2099-10-20", 600, 660);
-    const coachOwn = await booking(coach.id, "2099-10-21", 600, 660);
     assert.strictEqual((await service.from("users").update({ first_name: "Current", last_name: "Profile" })
       .eq("id", member.id)).error, null);
 
     const memberRows = await listOwnUpcomingCustomerBookings(member.client);
-    expect(memberRows.map((row) => row.id).sort()).toEqual([future, inProgress].sort());
+    expect(memberRows.map((row) => row.id)).toEqual([inProgress, future, nextFuture, lastFuture]);
     expect(memberRows[0]).toMatchObject({ customer_name: "Snapshot Name", customer_email: "snapshot@example.test",
       customer_phone: "+40 123", total_amount_minor: 9000, currency: "RON" });
     for (const hidden of [elapsed, cancelled, inactive, another, guest])
       expect(memberRows.map((row) => row.id)).not.toContain(hidden);
     expect((await listOwnUpcomingCustomerBookings(other.client)).map((row) => row.id)).toEqual([another]);
-    expect((await listOwnUpcomingCustomerBookings(admin.client)).map((row) => row.id)).toEqual([adminOwn]);
-    expect((await listOwnUpcomingCustomerBookings(coach.client)).map((row) => row.id)).toEqual([coachOwn]);
+    for (const staff of [admin, coach]) {
+      const last = await booking(staff.id, "2099-10-21", 600, 660);
+      const first = await booking(staff.id, "2099-10-20", 600, 660);
+      const middle = await booking(staff.id, "2099-10-20", 720, 780);
+      const ownReservations: string[] = [];
+      for (const start of [840, 660]) {
+        const courtId = randomUUID(), id = randomUUID();
+        courtIds.push(courtId); reservationIds.push(id); ownReservations.push(id);
+        assert.strictEqual((await service.from("courts").insert({ id: courtId, location_id: locationId,
+          name: `Court ${courtIds.length}`, slug: `court-${courtIds.length}`, surface: "clay", environment: "outdoor" })).error, null);
+        assert.strictEqual((await service.from("court_reservations").insert({ id, court_id: courtId,
+          booking_date: "2099-10-20", starts_at_minute: start, ends_at_minute: start + 60,
+          created_by_user_id: staff.id, reason: "Own training" })).error, null);
+      }
+      expect((await listOwnUpcomingCustomerBookings(staff.client)).map((row) => row.id)).toEqual([first, middle, last]);
+      const direct = (await listPersonalReservations(staff.client)).upcoming;
+      expect(direct.map((row) => row.id)).toEqual([...ownReservations].reverse());
+      expect(direct.every((row) => row.created_by_user_id === staff.id)).toBe(true);
+    }
+    expect(await listPersonalReservations(member.client)).toEqual({ upcoming: [] });
+    expect((await member.client.rpc("list_personal_court_reservations")).error?.code).toBe("42501");
     expect((await member.client.from("bookings").select("id")).error?.code).toBe("42501");
   } finally {
     if (reservationIds.length) assert.strictEqual((await service.from("bookings").delete().in("reservation_id", reservationIds)).error, null);
