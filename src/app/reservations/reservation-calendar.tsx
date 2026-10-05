@@ -13,7 +13,7 @@ import { ReservationTimetable, type ReservationTimetableDay } from "@/components
 import { reservationEditInput, reservationEditSchema, selectReservationCell, type ReservationCell, type ReservationSelection } from "@/lib/reservations/domain";
 import { isReservationInProgress, isReservationUpcoming } from "@/lib/reservations/personal";
 import type { AdminOperationalOccupancy, AdminReservation, InternalLocation } from "@/lib/reservations/service";
-import { cancelAdminReservationAction, editAdminReservationAction, loadAdminReservationEditDayAction, reserveCourtAction } from "./actions";
+import { cancelAdminCustomerBookingAction, cancelAdminReservationAction, editAdminReservationAction, loadAdminReservationEditDayAction, reserveCourtAction } from "./actions";
 
 export function ReservationCalendar({ day, date, location, adminOccupancy = [] }: {
   day: ReservationTimetableDay;
@@ -76,6 +76,24 @@ export function ReservationCalendar({ day, date, location, adminOccupancy = [] }
       setCancelError("Unable to cancel this reservation. Try again.");
     } finally { setCancelPending(false); }
   }
+  async function cancelBooking() {
+    if (!selectedBooking || cancelPending) return;
+    setCancelPending(true);
+    setCancelError("");
+    try {
+      const result = await cancelAdminCustomerBookingAction(selectedBooking.id);
+      if (!result.ok) { setCancelError(result.message); return; }
+      setConfirming(false);
+      dialogRef.current?.close();
+      setSelectedOccupancyId(null);
+      setSelection(null);
+      setMessage("Booking cancelled.");
+      setSuccess(true);
+      router.refresh();
+    } catch {
+      setCancelError("Unable to cancel this booking. Try again.");
+    } finally { setCancelPending(false); }
+  }
   async function openEdit() {
     if (!selectedReservation) return;
     setEditing(true); setEditToken(null); setEditError("");
@@ -125,8 +143,13 @@ export function ReservationCalendar({ day, date, location, adminOccupancy = [] }
             <dt className="text-muted-foreground">Total</dt><dd>{formatMoney(selectedBooking.total_amount_minor, selectedBooking.currency)} · {selectedBooking.currency}</dd>
             <dt className="text-muted-foreground">Status</dt><dd>Confirmed</dd>
           </dl>
-          <div className="mt-5 flex justify-end"><button type="button" onClick={() => dialogRef.current?.close()}
-            className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button></div>
+          <div className="mt-5 flex justify-end gap-2">
+            <button ref={cancelButtonRef} type="button" disabled={cancelPending}
+              onClick={() => { setCancelError(""); setConfirming(true); }}
+              className="min-h-10 rounded-control border border-danger px-4 text-sm font-semibold text-danger">Cancel booking</button>
+            <button type="button" disabled={cancelPending} onClick={() => dialogRef.current?.close()}
+              className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button>
+          </div>
         </> : selectedReservation && editing && !editToken ? <div className="mt-4 text-sm" role={editError ? "alert" : "status"}>
           {editError || "Loading reservation…"}
           {editError && <button type="button" className="ml-2 font-semibold underline" onClick={openEdit}>Retry</button>}
@@ -173,9 +196,13 @@ export function ReservationCalendar({ day, date, location, adminOccupancy = [] }
           className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button></div>
         </> : null}
       </ModalDialog>, document.body)}
-    <ConfirmationDialog open={confirming && !!selectedReservation} title="Cancel reservation?"
-      message={selectedReservation ? `${location.name} · ${location.courts.find((court) => court.id === selectedReservation.court_id)?.name ?? "Court"}\n${reservationDateLabel(selectedReservation.booking_date)} · ${minuteToTime(selectedReservation.starts_at_minute)}–${minuteToTime(selectedReservation.ends_at_minute)}\nCreated by\n${selectedReservation.creator_name || "Unknown creator"}\n\nThis will free the court for other bookings and reservations.` : ""}
-      confirmLabel="Cancel reservation" cancelLabel="Keep reservation" pending={cancelPending} error={cancelError}
-      onConfirm={cancelReservation} onClose={() => { if (!cancelPending) setConfirming(false); }} returnFocusRef={cancelButtonRef} />
+    <ConfirmationDialog open={confirming && !!selectedOccupancy} title={selectedBooking ? "Cancel booking?" : "Cancel reservation?"}
+      message={selectedBooking
+        ? `Customer\n${selectedBooking.customer_name}\n\n${location.name} · ${selectedCourtName}\n${reservationDateLabel(selectedBooking.booking_date)} · ${minuteToTime(selectedBooking.starts_at_minute)}–${minuteToTime(selectedBooking.ends_at_minute)}\n\nTotal\n${formatMoney(selectedBooking.total_amount_minor, selectedBooking.currency)} · ${selectedBooking.currency}\n\nThis will cancel the booking and free the court.`
+        : selectedReservation ? `${location.name} · ${selectedCourtName}\n${reservationDateLabel(selectedReservation.booking_date)} · ${minuteToTime(selectedReservation.starts_at_minute)}–${minuteToTime(selectedReservation.ends_at_minute)}\nCreated by\n${selectedReservation.creator_name || "Unknown creator"}\n\nThis will free the court for other bookings and reservations.` : ""}
+      confirmLabel={selectedBooking ? "Cancel booking" : "Cancel reservation"}
+      cancelLabel={selectedBooking ? "Keep booking" : "Keep reservation"} pending={cancelPending} error={cancelError}
+      onConfirm={selectedBooking ? cancelBooking : cancelReservation}
+      onClose={() => { if (!cancelPending) setConfirming(false); }} returnFocusRef={cancelButtonRef} />
   </>;
 }

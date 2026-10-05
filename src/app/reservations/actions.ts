@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { cancelDirectReservationAsAdmin, createDirectReservation, editDirectReservationAsAdmin, getAdminReservationEditDay } from "@/lib/reservations/service";
+import { cancelCustomerBookingAsAdmin, cancelDirectReservationAsAdmin, createDirectReservation, editDirectReservationAsAdmin, getAdminReservationEditDay } from "@/lib/reservations/service";
 
 export async function reserveCourtAction(input: unknown) {
   const result = await createDirectReservation(input);
@@ -17,6 +17,17 @@ export async function cancelAdminReservationAction(id: unknown) {
   if (result.ok) {
     revalidatePath("/reservations");
     revalidatePath("/book");
+  }
+  return result;
+}
+
+export async function cancelAdminCustomerBookingAction(id: unknown) {
+  const result = await cancelCustomerBookingAsAdmin(id);
+  if (result.ok) {
+    revalidatePath("/reservations");
+    revalidatePath("/book");
+    revalidatePath("/my-activity/bookings");
+    revalidatePath("/my-activity/bookings/history");
   }
   return result;
 }

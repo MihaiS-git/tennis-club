@@ -170,6 +170,21 @@ export async function cancelDirectReservationAsAdmin(input: unknown, supabase?: 
   return { ok: true };
 }
 
+export async function cancelCustomerBookingAsAdmin(input: unknown, supabase?: Client): Promise<ReservationResult> {
+  const client = supabase ?? await createClient();
+  const actor = await requireAdminReservationRole(client);
+  const parsed = z.uuid().safeParse(input);
+  if (!parsed.success) return { ok: false, message: "Choose a valid booking." };
+  const { data, error } = await client.rpc("cancel_admin_customer_booking", { p_id: parsed.data });
+  if (error) {
+    logger.error({ event: "bookings.admin_cancel_failed", actorId: actor.userId, bookingId: parsed.data, code: error.code }, "Failed to cancel customer booking as Admin");
+    return { ok: false, message: "Unable to cancel this booking. Try again." };
+  }
+  if (!data) return { ok: false, message: "This booking is no longer available to cancel." };
+  logger.info({ event: "bookings.admin_cancelled", actorId: actor.userId, bookingId: parsed.data }, "Admin cancelled customer booking");
+  return { ok: true };
+}
+
 export async function getAdminReservationEditDay(input: { reservationId: unknown; date: unknown },
   supabase?: Client, now = new Date()) {
   const client = supabase ?? await createClient();
