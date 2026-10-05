@@ -18,7 +18,7 @@ import { LocationArchiveControl } from "../../src/app/admin/locations/location-a
 
 const location: AdminLocation = { id: "a1000000-0000-4000-8000-000000000001", name: "Central Club", slug: "central-club",
   address_line1: "Street 1", address_line2: null, city: "Cluj", postal_code: "400000", country_code: "RO",
-  timezone: "Europe/Bucharest", currency: "RON", is_active: false, is_public: false, archived_at: null, display_order: 2,
+  customer_cancellation_notice_minutes: 1440, timezone: "Europe/Bucharest", currency: "RON", is_active: false, is_public: false, archived_at: null, display_order: 2,
   created_at: "2026-09-29T10:00:00Z", updated_at: "2026-09-29T10:00:00Z" };
 
 beforeEach(() => {
@@ -172,4 +172,48 @@ it("keeps archive confirmation open with contextual safe feedback on failure", a
   await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Unable to archive"));
   expect(screen.getByRole("dialog", { name: "Archive Central Club" })).toBeTruthy();
   expect(screen.getByRole("alert").textContent).not.toContain("private database error");
+});
+
+it("edits cancellation notice in Booking policy and submits integer minutes", async () => {
+  saveLocationAction.mockResolvedValue({ ok: true, id: location.id });
+  openEditLocation();
+  expect(screen.getByText("Booking policy")).toBeTruthy();
+  const notice = screen.getByLabelText("Customer cancellation notice") as HTMLSelectElement;
+  expect(notice.value).toBe("1440");
+  fireEvent.change(notice, { target: { value: "120" } });
+  const save = screen.getByRole("button", { name: "Save location" }) as HTMLButtonElement;
+  expect(save.disabled).toBe(false);
+  fireEvent.submit(save.closest("form")!);
+  await waitFor(() => expect(saveLocationAction).toHaveBeenCalledOnce());
+  expect(saveLocationAction.mock.calls[0][0]).toMatchObject({ id: location.id,
+    fields: { customer_cancellation_notice_minutes: 120 } });
+});
+
+it.each([1440, 0])("creates a location with default or selected notice %s", async (notice) => {
+  saveLocationAction.mockResolvedValue({ ok: true, id: location.id });
+  render(<LocationDialog />);
+  fireEvent.click(screen.getByRole("button", { name: "Create location" }));
+  expect((screen.getByLabelText("Customer cancellation notice") as HTMLSelectElement).value).toBe("1440");
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "New Club" } });
+  const timezone = screen.getByRole("combobox", { name: "Timezone" });
+  fireEvent.focus(timezone);
+  fireEvent.change(timezone, { target: { value: "buch" } });
+  fireEvent.keyDown(timezone, { key: "Enter" });
+  fireEvent.change(screen.getByLabelText("Customer cancellation notice"), { target: { value: String(notice) } });
+  fireEvent.submit(screen.getByRole("button", { name: "Save location" }).closest("form")!);
+  await waitFor(() => expect(saveLocationAction).toHaveBeenCalledOnce());
+  expect(saveLocationAction.mock.calls[0][0].fields.customer_cancellation_notice_minutes).toBe(notice);
+});
+
+it("preserves non-preset saved minutes and contextual policy errors", async () => {
+  saveLocationAction.mockResolvedValue({ ok: false, reason: "invalid-input",
+    fieldErrors: { customer_cancellation_notice_minutes: "Check cancellation notice." } });
+  openEditLocation({ ...location, customer_cancellation_notice_minutes: 90 });
+  const notice = screen.getByLabelText("Customer cancellation notice") as HTMLSelectElement;
+  expect(notice.value).toBe("90");
+  fireEvent.change(notice, { target: { value: "60" } });
+  fireEvent.submit(screen.getByRole("button", { name: "Save location" }).closest("form")!);
+  await waitFor(() => expect(screen.getByText("Check cancellation notice.")).toBeTruthy());
+  expect(notice.value).toBe("60");
+  expect(notice.getAttribute("aria-invalid")).toBe("true");
 });

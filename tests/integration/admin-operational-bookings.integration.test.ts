@@ -42,13 +42,13 @@ test("Admin sees booking snapshots beside direct reservations while Coach receiv
     ])).error, null);
     assert.strictEqual((await service.from("bookings").insert({ id: bookingId, reservation_id: reservationId,
       account_user_id: member.id, customer_name: "Ana Pop", customer_email: "ana@example.test",
-      customer_phone: "+40 123", total_amount_minor: 7500, currency: "RON" })).error, null);
+      customer_phone: "+40 123", cancellation_notice_minutes: 120, total_amount_minor: 7500, currency: "RON" })).error, null);
 
     const adminDay = await getReservationDay(location, date, now, admin.client);
     expect(adminDay.adminOccupancy).toEqual([
       expect.objectContaining({ kind: "reservation", id: directId, creator_name: "Mihai Stan", reason: "Training" }),
       expect.objectContaining({ kind: "booking", id: bookingId, customer_name: "Ana Pop",
-        customer_email: "ana@example.test", customer_phone: "+40 123", total_amount_minor: 7500, currency: "RON",
+        customer_email: "ana@example.test", customer_phone: "+40 123", cancellation_notice_minutes: 120, total_amount_minor: 7500, currency: "RON",
         starts_at_minute: 660, ends_at_minute: 750 }),
     ]);
     assert.strictEqual((await service.from("users").update({ first_name: "Different", last_name: "Profile" }).eq("id", member.id)).error, null);

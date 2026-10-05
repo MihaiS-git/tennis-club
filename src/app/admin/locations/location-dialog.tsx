@@ -8,6 +8,7 @@ import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { useEditableFormBaseline } from "@/components/use-editable-form-baseline";
 import { ModalDialog } from "@/components/modal-dialog";
 import type { AdminLocation } from "@/lib/admin/locations";
+import { defaultCustomerCancellationNoticeMinutes } from "@/lib/bookings/cancellation-policy";
 import { locationFieldsSchema } from "@/lib/admin/locations-validation";
 import type { OpeningInterval } from "@/lib/admin/opening-hours-validation";
 import {
@@ -29,7 +30,7 @@ const textFields = [
   ["city", "City", 100],
   ["postal_code", "Postal code", 20],
 ] as const;
-const editableFields = ["name", "address_line1", "address_line2", "city", "postal_code", "country_code", "timezone", "currency", "is_active", "is_public"];
+const editableFields = ["name", "address_line1", "address_line2", "city", "postal_code", "country_code", "timezone", "currency", "is_active", "is_public", "customer_cancellation_notice_minutes"];
 function validLocationCreate(form: HTMLFormElement) {
   const data = new FormData(form);
   const text = (field: string) => String(data.get(field) ?? "");
@@ -38,6 +39,7 @@ function validLocationCreate(form: HTMLFormElement) {
     city: text("city"), postal_code: text("postal_code"), country_code: text("country_code"),
     timezone: text("timezone"), currency: text("currency"), is_active: text("is_active") === "true",
     is_public: text("is_public") === "true",
+    customer_cancellation_notice_minutes: Number(text("customer_cancellation_notice_minutes")),
     display_order: 0,
   }).success;
 }
@@ -114,6 +116,7 @@ export function LocationDialog({
           currency: text("currency"),
           is_active: text("is_active") === "true",
           is_public: text("is_public") === "true",
+          customer_cancellation_notice_minutes: Number(text("customer_cancellation_notice_minutes")),
           display_order: location?.display_order ?? 0,
         },
       });
@@ -307,6 +310,29 @@ export function LocationDialog({
                     {fieldError("is_public")}
                   </div>
                 </div>
+                <section className="mt-4 border-t border-border pt-4" aria-labelledby={`${prefix}-booking-policy`}>
+                  <h3 id={`${prefix}-booking-policy`} className="mb-3 text-sm font-semibold">Booking policy</h3>
+                  <label htmlFor={`${prefix}-customer_cancellation_notice_minutes`} className="mb-1.5 block text-sm font-medium">
+                    Customer cancellation notice
+                  </label>
+                  <select id={`${prefix}-customer_cancellation_notice_minutes`} name="customer_cancellation_notice_minutes"
+                    defaultValue={location?.customer_cancellation_notice_minutes ?? defaultCustomerCancellationNoticeMinutes}
+                    className="min-h-10 w-full rounded-control border border-border-strong bg-surface px-3 text-sm text-foreground"
+                    aria-invalid={Boolean(fieldErrors.customer_cancellation_notice_minutes)}
+                    aria-describedby={`${prefix}-policy-help${fieldErrors.customer_cancellation_notice_minutes ? ` ${prefix}-customer_cancellation_notice_minutes-error` : ""}`}>
+                    <option value={0}>Until booking start</option>
+                    {[60, 120, 240, 720, 1440, 2880].map((minutes) => (
+                      <option key={minutes} value={minutes}>{minutes / 60} {minutes === 60 ? "hour" : "hours"}</option>
+                    ))}
+                    {location && ![0, 60, 120, 240, 720, 1440, 2880].includes(location.customer_cancellation_notice_minutes) && (
+                      <option value={location.customer_cancellation_notice_minutes}>{location.customer_cancellation_notice_minutes} minutes</option>
+                    )}
+                  </select>
+                  <p id={`${prefix}-policy-help`} className="mt-1 text-sm text-muted-foreground">
+                    Customers may cancel only when at least this amount of time remains before the booking starts.
+                  </p>
+                  {fieldError("customer_cancellation_notice_minutes")}
+                </section>
               </fieldset>
               <div className={`mt-5 items-center gap-3 border-t border-border pt-4 ${archived ? "flex" : "grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]"}`}>
                 <div className="min-w-0">

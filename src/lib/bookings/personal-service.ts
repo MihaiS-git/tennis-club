@@ -1,6 +1,7 @@
 import "server-only";
 
 import { z } from "zod";
+import { cancellationNoticeMinutesSchema } from "@/lib/bookings/cancellation-policy";
 import { locationCurrencies } from "@/lib/admin/locations-validation";
 import { readCurrentAccount } from "@/lib/auth/account";
 import { logger } from "@/lib/logger";
@@ -9,10 +10,10 @@ import { createClient } from "@/lib/supabase/server";
 import type { PersonalCustomerBooking } from "./personal";
 
 const rowSchema = z.object({
-  id: z.uuid(), booking_date: z.iso.date(), starts_at_minute: z.number().int(),
+  id: z.uuid(), starts_at_instant: z.iso.datetime({ offset: true }), booking_date: z.iso.date(), starts_at_minute: z.number().int(),
   ends_at_minute: z.number().int(), location_name: z.string(), location_timezone: z.string(),
   court_name: z.string(), customer_name: z.string(), customer_email: z.string(),
-  customer_phone: z.string(), total_amount_minor: minorAmountSchema, currency: z.enum(locationCurrencies),
+  customer_phone: z.string(), cancellation_notice_minutes: cancellationNoticeMinutesSchema, total_amount_minor: minorAmountSchema, currency: z.enum(locationCurrencies),
 });
 
 export async function listOwnUpcomingCustomerBookings(client?: Awaited<ReturnType<typeof createClient>>) {

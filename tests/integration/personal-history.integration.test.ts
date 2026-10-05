@@ -36,7 +36,7 @@ test("mixed history is owner scoped, time zone aware, globally ordered and paged
     const id = randomUUID(); bookings.push(id);
     assert.strictEqual((await service.from("bookings").insert({ id, reservation_id: reservationId,
       account_user_id: input.owner, customer_name: "Stored Customer", customer_email: input.email ?? "stored@example.test",
-      customer_phone: "+40 999", total_amount_minor: 9000, currency: "RON", status: input.status ?? "confirmed" })).error, null);
+      customer_phone: "+40 999", cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON", status: input.status ?? "confirmed" })).error, null);
     return id;
   }
   try {
@@ -58,6 +58,8 @@ test("mixed history is owner scoped, time zone aware, globally ordered and paged
     const guest = await activity({ owner: null, date: "2026-09-26", kind: "booking", email: member.email });
     const coachReservation = await activity({ owner: coach.id, date: "2026-09-27", kind: "reservation" });
     const adminOwnBooking = await activity({ owner: admin.id, date: "2026-09-28", kind: "booking" });
+    assert.strictEqual((await service.from("locations").update({ customer_cancellation_notice_minutes: 2880 })
+      .eq("id", locationId)).error, null);
     const memberHistory = await listOwnCourtHistory(1, member.client, now);
     expect(memberHistory.rows.map((row) => row.id).sort()).toEqual([memberElapsed, memberCancelled].sort());
     expect(memberHistory.rows.map((row) => row.id)).not.toContain(memberFuture);
@@ -65,7 +67,7 @@ test("mixed history is owner scoped, time zone aware, globally ordered and paged
     expect(memberHistory.rows.map((row) => row.id)).not.toContain(guest);
     expect(memberHistory.rows.find((row) => row.id === memberElapsed)).toMatchObject({ kind: "booking", status: "confirmed",
       customer_name: "Stored Customer", customer_email: "stored@example.test", customer_phone: "+40 999",
-      total_amount_minor: 9000, currency: "RON" });
+      cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON" });
     const first = await listOwnCourtHistory(1, admin.client, now);
     const second = await listOwnCourtHistory(2, admin.client, now);
     expect(first.rows).toHaveLength(20); expect(first.hasNext).toBe(true);

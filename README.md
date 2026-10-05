@@ -334,6 +334,29 @@ A court belongs to exactly one location.
 
 A coach may work at multiple locations.
 
+Customer cancellation notice is configured in Admin → Locations → Create/Edit,
+under Booking policy. `locations.customer_cancellation_notice_minutes` stores
+0–43,200 elapsed minutes (up to 30 days), defaulting to 1,440 (24 hours).
+The incremental migration also assigns 1,440 to existing locations and bookings.
+The service-role booking RPC reads the selected court's location and stores
+`bookings.cancellation_notice_minutes`; later location changes leave that snapshot
+unchanged. Personal upcoming/history and Admin operational reads return the booking's
+own snapshot. The configuration read is Admin-only; public location reads retain
+their previous columns. Customer intent cannot supply a policy value.
+Cancellation eligibility uses the location-timezone booking start instant
+minus the booking's elapsed-minute snapshot, allowing `now <= cutoff` and rejecting
+`now > cutoff`, while always requiring `now < booking start`. Active authenticated owners may now self-cancel future confirmed customer bookings
+from their details dialog on `/my-activity/bookings`, after explicit confirmation.
+The dedicated `cancel_own_customer_booking(uuid)` RPC enforces only
+`bookings.account_user_id = auth.uid()` ownership, active account and linked lifecycle,
+using the booking snapshot. Current Admin/Coach owners bypass notice but still cannot
+cancel at or after start. The RPC locks booking and reservation, checks wall-clock time
+after waiting, and cancels both rows atomically while preserving snapshots. Repeat or
+concurrent losing attempts return a safe failure without changing cancellation metadata.
+Upcoming refreshes in place; cancelled bookings enter History and free occupancy.
+Guest identity matching grants no ownership. Admin operational cancellation and direct
+reservation cancellation remain distinct and unchanged.
+
 Each location may define:
 
 - opening hours;
@@ -1112,7 +1135,7 @@ and original details while recording the authenticated canceller and time; it re
 the occupied interval. The public `/book` server read can select only court ID, booking
 date, and start/end minutes for active public courts for the selected date;
 reservation identity, reason, creator, canceller, and timestamps remain private. Anonymous users and
-ordinary authenticated users cannot insert or cancel reservations. Every active reservation row marks
+ordinary authenticated users cannot insert or cancel direct reservations. Every active reservation row marks
 overlapping 30-minute cells booked on `/book`, which remains read-only.
 
 `/admin/users` uses server-side queries with RLS-enforced access. Search, filtering,

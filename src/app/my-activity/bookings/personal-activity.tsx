@@ -9,12 +9,14 @@ import type { PersonalCustomerBooking } from "@/lib/bookings/personal";
 import { formatMoney } from "@/lib/pricing/money";
 import { isReservationInProgress, isReservationUpcoming, type PersonalReservation } from "@/lib/reservations/personal";
 import { cancelOwnReservationAction, loadPersonalActivityAction } from "./actions";
+import { CustomerBookingCancellation } from "./customer-booking-cancellation";
 import { ReservationEditForm } from "./reservation-edit-form";
 
 type Activity = { upcoming: PersonalReservation[]; bookings: PersonalCustomerBooking[] };
 type CourtActivity = { kind: "booking"; row: PersonalCustomerBooking } | { kind: "reservation"; row: PersonalReservation };
 
 function startInstant(row: PersonalCustomerBooking | PersonalReservation) {
+  if ("starts_at_instant" in row) return Date.parse(row.starts_at_instant);
   const [year, month, day] = row.booking_date.split("-").map(Number);
   const localAsUtc = Date.UTC(year, month - 1, day, Math.floor(row.starts_at_minute / 60), row.starts_at_minute % 60);
   const formatter = new Intl.DateTimeFormat("en-US", { timeZone: row.location_timezone, timeZoneName: "shortOffset" });
@@ -108,6 +110,14 @@ export function PersonalActivity({ staff, userId }: { staff: boolean; userId?: s
     }
   }
 
+  async function refreshCancelledBooking() {
+    bookingDialogRef.current?.close();
+    setSelectedBooking(null);
+    setSuccess("Booking cancelled.");
+    try { setActivity(await loadPersonalActivityAction()); }
+    catch { setActivity(null); setError("Unable to load your court activity. Try again."); }
+  }
+
   async function refreshEditedReservation(notice: string) {
     setEditing(false);
     try {
@@ -146,6 +156,7 @@ export function PersonalActivity({ staff, userId }: { staff: boolean; userId?: s
     {list(sortedActivity(activity))}
     {selectedBooking && typeof document !== "undefined" && createPortal(
       <ModalDialog ref={bookingDialogRef} active aria-labelledby={`${titleId}-booking`}
+        onCancel={(event) => { if (pending) event.preventDefault(); }}
         onClose={() => { setSelectedBooking(null); returnFocusRef.current?.focus(); }}
         className="fixed inset-0 m-auto max-h-[90vh] w-[calc(100%-2rem)] max-w-md overflow-y-auto rounded-card border border-border bg-surface p-5 text-foreground shadow-floating backdrop:bg-foreground/50">
         <h2 id={`${titleId}-booking`} className="font-heading text-lg font-semibold">Booking</h2>
@@ -162,7 +173,10 @@ export function PersonalActivity({ staff, userId }: { staff: boolean; userId?: s
           <dt className="text-muted-foreground">Total</dt><dd>{formatMoney(selectedBooking.total_amount_minor, selectedBooking.currency)}</dd>
           <dt className="text-muted-foreground">Status</dt><dd>Confirmed</dd>
         </dl>
-        <div className="mt-5 flex justify-end"><button type="button" onClick={(event) => event.currentTarget.closest("dialog")?.close()}
+        <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+          <CustomerBookingCancellation booking={selectedBooking} staff={staff}
+            onCancelled={refreshCancelledBooking} onPendingChange={setPending} />
+          <button type="button" disabled={pending} onClick={(event) => event.currentTarget.closest("dialog")?.close()}
           className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button></div>
       </ModalDialog>, document.body)}
     {selected && typeof document !== "undefined" && createPortal(

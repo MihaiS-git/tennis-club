@@ -32,7 +32,7 @@ values ('ca000000-0000-4000-8000-000000000011', '2026-10-15', 600, 660, 'Club ev
 select set_config('test.admin_reservation_id', (select id::text from public.list_personal_court_reservations() where starts_at_minute = 600), true);
 select set_config('test.admin_updated_at', (select updated_at::text from public.list_personal_court_reservations() where starts_at_minute = 600), true);
 reset role;
-select is((select status::text from public.court_reservations where starts_at_minute = 600),
+select is((select status::text from public.court_reservations where court_id = 'ca000000-0000-4000-8000-000000000011' and starts_at_minute = 600),
   'active', 'new direct reservation defaults to active');
 set local role authenticated;
 select is((select created_by_user_id from public.list_personal_court_reservations() where starts_at_minute = 600),
@@ -201,11 +201,11 @@ select is((select count(*) from public.court_reservations where court_id = 'ca00
 select is((select count(*) from public.court_reservations where court_id = 'ca000000-0000-4000-8000-000000000011' and status = 'cancelled'
   and cancelled_at is not null and cancelled_by_user_id is not null),
   2::bigint, 'cancellation stores complete lifecycle metadata');
-select is((select cancelled_by_user_id from public.court_reservations where starts_at_minute = 600),
+select is((select cancelled_by_user_id from public.court_reservations where court_id = 'ca000000-0000-4000-8000-000000000011' and starts_at_minute = 600),
   'ca000000-0000-4000-8000-000000000001'::uuid, 'admin recorded as canceller');
-select is((select cancelled_by_user_id from public.court_reservations where starts_at_minute = 660),
+select is((select cancelled_by_user_id from public.court_reservations where court_id = 'ca000000-0000-4000-8000-000000000011' and starts_at_minute = 660),
   'ca000000-0000-4000-8000-000000000002'::uuid, 'coach recorded as canceller');
-select is((select created_by_user_id from public.court_reservations where starts_at_minute = 600),
+select is((select created_by_user_id from public.court_reservations where court_id = 'ca000000-0000-4000-8000-000000000011' and starts_at_minute = 600),
   'ca000000-0000-4000-8000-000000000001'::uuid, 'creator remains unchanged');
 select * from finish();
 rollback;

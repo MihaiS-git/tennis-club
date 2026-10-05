@@ -48,7 +48,7 @@ test("upcoming customer booking reads are owner scoped for members and staff", a
     const id = randomUUID();
     assert.strictEqual((await service.from("bookings").insert({ id, reservation_id: reservationId,
       account_user_id: accountUserId, customer_name: "Snapshot Name", customer_email: options.email ?? "snapshot@example.test",
-      customer_phone: "+40 123", total_amount_minor: 9000, currency: "RON",
+      customer_phone: "+40 123", cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON",
       status: options.bookingStatus ?? "confirmed" })).error, null);
     return id;
   }
@@ -72,10 +72,12 @@ test("upcoming customer booking reads are owner scoped for members and staff", a
     assert.strictEqual((await service.from("users").update({ first_name: "Current", last_name: "Profile" })
       .eq("id", member.id)).error, null);
 
+    assert.strictEqual((await service.from("locations").update({ customer_cancellation_notice_minutes: 2880 })
+      .eq("id", locationId)).error, null);
     const memberRows = await listOwnUpcomingCustomerBookings(member.client);
     expect(memberRows.map((row) => row.id)).toEqual([inProgress, future, nextFuture, lastFuture]);
     expect(memberRows[0]).toMatchObject({ customer_name: "Snapshot Name", customer_email: "snapshot@example.test",
-      customer_phone: "+40 123", total_amount_minor: 9000, currency: "RON" });
+      customer_phone: "+40 123", cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON" });
     for (const hidden of [elapsed, cancelled, inactive, another, guest])
       expect(memberRows.map((row) => row.id)).not.toContain(hidden);
     expect((await listOwnUpcomingCustomerBookings(other.client)).map((row) => row.id)).toEqual([another]);

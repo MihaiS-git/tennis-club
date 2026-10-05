@@ -1,6 +1,7 @@
 import "server-only";
 
 import { z } from "zod";
+import { cancellationNoticeMinutesSchema } from "@/lib/bookings/cancellation-policy";
 import { locationCurrencies } from "@/lib/admin/locations-validation";
 import { readCurrentAccount } from "@/lib/auth/account";
 import { logger } from "@/lib/logger";
@@ -17,7 +18,7 @@ const common = {
 };
 const rowSchema = z.discriminatedUnion("kind", [
   z.object({ ...common, kind: z.literal("booking"), status: z.enum(["confirmed", "cancelled"]),
-    customer_name: z.string(), customer_email: z.string(), customer_phone: z.string(),
+    customer_name: z.string(), customer_email: z.string(), customer_phone: z.string(), cancellation_notice_minutes: cancellationNoticeMinutesSchema,
     total_amount_minor: minorAmountSchema, currency: z.enum(locationCurrencies) }),
   z.object({ ...common, kind: z.literal("reservation"), status: z.enum(["active", "cancelled"]),
     court_id: z.uuid(), location_id: z.uuid(), updated_at: z.iso.datetime({ offset: true }),

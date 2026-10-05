@@ -42,10 +42,10 @@ test("Admin cancellation atomically preserves snapshots, frees occupancy and mov
     assert.strictEqual((await service.from("bookings").insert([
       { id: bookingId, reservation_id: reservationId, account_user_id: owner.id,
         customer_name: "Ana Pop", customer_email: "ana@example.test", customer_phone: "+40 123",
-        total_amount_minor: 9000, currency: "RON" },
+        cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON" },
       { id: guestBookingId, reservation_id: guestReservationId, account_user_id: null,
         customer_name: "Guest", customer_email: "guest@example.test", customer_phone: "+40 999",
-        total_amount_minor: 7000, currency: "RON" },
+        cancellation_notice_minutes: 120, total_amount_minor: 7000, currency: "RON" },
     ])).error, null);
     const beforeBooking = (await service.from("bookings").select("*").eq("id", bookingId).single()).data!;
     const beforeReservation = (await service.from("court_reservations").select("*").eq("id", reservationId).single()).data!;

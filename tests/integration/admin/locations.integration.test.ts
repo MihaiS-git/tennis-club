@@ -26,7 +26,7 @@ test("admin location workflow uses real authorization, RLS and persistence", asy
     return { client, id: data.user.id };
   }
   const fields = { name: `Location ${randomUUID()}`, address_line1: "Street 1", address_line2: "", city: "Cluj",
-    postal_code: "400000", country_code: "RO", timezone: "Europe/Bucharest", currency: "EUR", is_active: true, is_public: false, display_order: 1 };
+    postal_code: "400000", country_code: "RO", timezone: "Europe/Bucharest", currency: "EUR", is_active: true, is_public: false, display_order: 1, customer_cancellation_notice_minutes: 1440 };
   try {
     const admin = await account("admin");
     const member = await account();
@@ -35,18 +35,28 @@ test("admin location workflow uses real authorization, RLS and persistence", asy
     assert.ok(result.ok); locationIds.push(result.id);
     const original = (await listAdminLocations(admin.client)).find((row) => row.id === result.id);
     assert.ok(original);
-    expect(original).toMatchObject({ name: fields.name, currency: "EUR", address_line2: null });
+    expect(original).toMatchObject({ name: fields.name, currency: "EUR", address_line2: null, customer_cancellation_notice_minutes: 1440 });
 
     expect(await saveAdminLocation({ fields }, admin.client)).toEqual({ ok: false, reason: "duplicate-slug" });
     expect(await saveAdminLocation({ fields: { ...fields, currency: "CAD" } }, admin.client)).toMatchObject({ ok: false, reason: "invalid-input" });
 
+    for (const notice of [-1, 43201, 1.5]) {
+      expect(await saveAdminLocation({ id: result.id, fields: { ...fields,
+        customer_cancellation_notice_minutes: notice } }, admin.client)).toMatchObject({ ok: false, reason: "invalid-input" });
+    }
+    const selected = await saveAdminLocation({ fields: { ...fields, name: `Selected ${randomUUID()}`,
+      customer_cancellation_notice_minutes: 0 } }, admin.client);
+    assert.ok(selected.ok); locationIds.push(selected.id);
+    expect((await listAdminLocations(admin.client)).find((row) => row.id === selected.id))
+      .toMatchObject({ customer_cancellation_notice_minutes: 0 });
+
     // An old timestamp makes the application update contract deterministic.
     assert.strictEqual((await service.from("locations").update({ updated_at: "2000-01-01T00:00:00Z" }).eq("id", result.id)).error, null);
     for (const is_active of [false, true]) {
-      expect(await saveAdminLocation({ id: result.id, fields: { ...fields, name: "Renamed location", currency: "RON", display_order: 4, is_active } }, admin.client))
+      expect(await saveAdminLocation({ id: result.id, fields: { ...fields, name: "Renamed location", currency: "RON", display_order: 4, customer_cancellation_notice_minutes: 120, is_active } }, admin.client))
         .toEqual({ ok: true, id: result.id });
       const saved = (await listAdminLocations(admin.client)).find((row) => row.id === result.id);
-      expect(saved).toMatchObject({ name: "Renamed location", slug: original.slug, currency: "RON", display_order: 4, is_active });
+      expect(saved).toMatchObject({ name: "Renamed location", slug: original.slug, currency: "RON", display_order: 4, customer_cancellation_notice_minutes: 120, is_active });
       expect(Date.parse(saved!.updated_at)).toBeGreaterThan(Date.parse("2000-01-01T00:00:00Z"));
       const visible = await publicClient().from("locations").select("id").eq("id", result.id);
       expect(visible.error).toBeNull(); expect(visible.data).toEqual([]);

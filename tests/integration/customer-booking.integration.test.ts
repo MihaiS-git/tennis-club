@@ -33,7 +33,7 @@ test("customer booking persists both rows, snapshots contact and price, and roll
   };
   try {
     assert.strictEqual((await service.from("locations").insert({ id: locationId, slug: `booking-${locationId}`,
-      name: "Booking fixture", timezone: "UTC", currency: "RON", is_public: true })).error, null);
+      name: "Booking fixture", timezone: "UTC", currency: "RON", is_public: true, customer_cancellation_notice_minutes: 120 })).error, null);
     assert.strictEqual((await service.from("courts").insert([
       { id: courtId, location_id: locationId, name: "Court", slug: "court", surface: "clay", environment: "outdoor", is_active: true },
       { id: inactiveCourtId, location_id: locationId, name: "Inactive", slug: "inactive", surface: "clay", environment: "outdoor", is_active: false },
@@ -66,7 +66,7 @@ test("customer booking persists both rows, snapshots contact and price, and roll
     expect(first.bookings).toHaveLength(1); expect(first.reservations).toHaveLength(1);
     expect(first.bookings[0]).toMatchObject({ account_user_id: null, customer_name: "Booking Guest",
       customer_email: "guest@example.test", customer_phone: "+40 123", status: "confirmed",
-      total_amount_minor: 6000, currency: "EUR", reservation_id: first.reservations[0].id });
+      cancellation_notice_minutes: 120, total_amount_minor: 6000, currency: "EUR", reservation_id: first.reservations[0].id });
     expect(first.reservations[0]).toMatchObject({ status: "active", reason: null, created_by_user_id: null });
     const publicLocation = (await listPublicLocationsWithCourts(guest)).find((item) => item.id === locationId)!;
     const publicDay = await getPublicCourtDay(publicLocation, date, "2099-10-14", now, guest);
@@ -78,6 +78,10 @@ test("customer booking persists both rows, snapshots contact and price, and roll
     });
     expect(overlap.error?.code).toBe("23P01");
     expect((await rows()).bookings).toHaveLength(1);
+
+    assert.strictEqual((await service.from("locations").update({ customer_cancellation_notice_minutes: 1440 })
+      .eq("id", locationId)).error, null);
+    expect((await allBookings())[0]).toEqual(first.bookings[0]);
 
     const email = `booking-${randomUUID()}@example.test`, password = "booking-test-password-123";
     const created = await service.auth.admin.createUser({ email, password, email_confirm: true });
@@ -93,9 +97,14 @@ test("customer booking persists both rows, snapshots contact and price, and roll
     const booked = await allBookings();
     expect(booked).toHaveLength(2);
     expect(booked.find((row) => row.account_user_id === memberId)).toMatchObject({
-      customer_name: "Different Customer", customer_email: "different@example.test", total_amount_minor: 7000, currency: "EUR" });
+      customer_name: "Different Customer", customer_email: "different@example.test", cancellation_notice_minutes: 1440, total_amount_minor: 7000, currency: "EUR" });
     expect((await service.from("users").select("email, first_name, last_name, phone").eq("id", memberId).single()).data)
       .toEqual(profileBefore.data);
+
+    expect(booked.find((row) => row.account_user_id === null)?.cancellation_notice_minutes).toBe(120);
+    for (const policyField of ["cancellation_notice_minutes", "customer_cancellation_notice_minutes", "cancellationNoticeMinutes"]) {
+      expect(await createCustomerBooking({ ...base, [policyField]: 0 }, guest, service, now)).toMatchObject({ ok: false });
+    }
 
     const count = async () => ({ bookings: (await allBookings()).length,
       reservations: (await service.from("court_reservations").select("id").eq("court_id", courtId)).data?.length });
@@ -124,9 +133,9 @@ test("customer booking persists both rows, snapshots contact and price, and roll
     const invalidWrite = await service.rpc("create_customer_booking", {
       p_court_id: courtId, p_booking_date: date, p_starts_at_minute: 720, p_ends_at_minute: 780,
       p_account_user_id: null, p_customer_name: " ", p_customer_email: "invalid@example.test",
-      p_customer_phone: "123", p_total_amount_minor: 5000, p_currency: "RON",
+      p_customer_phone: "123", p_total_amount_minor: 5000, p_currency: "EUR",
     });
-    expect(invalidWrite.error).not.toBeNull();
+    expect(invalidWrite.error?.code).toBe("23514");
     expect(await count()).toEqual(orphanBefore);
     assert.strictEqual((await service.from("location_pricing_rules").delete().eq("location_id", locationId)).error, null);
     expect(await createCustomerBooking({ ...base, startMinute: 720, endMinute: 780 }, guest, service, now))

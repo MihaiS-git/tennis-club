@@ -1,6 +1,7 @@
 import "server-only";
 
 import { z } from "zod";
+import { cancellationNoticeMinutesSchema } from "@/lib/bookings/cancellation-policy";
 import { requireActiveAdmin } from "@/lib/admin/authorization";
 import { generateLocationSlug, locationArchiveSchema, locationCurrencies, locationMutationSchema, type LocationMutationResult } from "@/lib/admin/locations-validation";
 import { logger } from "@/lib/logger";
@@ -11,6 +12,7 @@ const locationSchema = z.object({
   id: z.uuid(), name: z.string(), slug: z.string(),
   address_line1: z.string().nullable(), address_line2: z.string().nullable(),
   city: z.string().nullable(), postal_code: z.string().nullable(), country_code: z.string().nullable(),
+  customer_cancellation_notice_minutes: cancellationNoticeMinutesSchema,
   timezone: z.string(), currency: z.enum(locationCurrencies),
   is_active: z.boolean(), is_public: z.boolean(), archived_at: z.iso.datetime({ offset: true }).nullable(), display_order: z.number().int(),
   created_at: z.iso.datetime({ offset: true }), updated_at: z.iso.datetime({ offset: true }),
@@ -22,11 +24,19 @@ export async function listAdminLocations(supabase?: Awaited<ReturnType<typeof cr
   const client = supabase ?? await createClient();
   await requireActiveAdmin(client);
   const query = client.from("locations").select(columns);
-  const { data, error } = await (view === "archived" ? query.not("archived_at", "is", null) : query.is("archived_at", null))
-    .order("display_order").order("name").order("id");
-  const parsed = z.array(locationSchema).safeParse(data);
-  if (error || !parsed.success) {
-    logger.error({ event: "admin.locations_list_failed", code: error?.code }, "Failed to load locations");
+  const [{ data, error }, policies] = await Promise.all([
+    (view === "archived" ? query.not("archived_at", "is", null) : query.is("archived_at", null))
+      .order("display_order").order("name").order("id"),
+    client.rpc("list_admin_location_cancellation_policies"),
+  ]);
+  const parsedPolicies = z.array(z.object({ id: z.uuid(),
+    customer_cancellation_notice_minutes: cancellationNoticeMinutesSchema })).safeParse(policies.data);
+  const parsed = z.array(locationSchema).safeParse(data?.map((row) => ({ ...row,
+    customer_cancellation_notice_minutes: parsedPolicies.success
+      ? parsedPolicies.data.find((policy) => policy.id === row.id)?.customer_cancellation_notice_minutes : undefined,
+  })));
+  if (error || policies.error || !parsedPolicies.success || !parsed.success) {
+    logger.error({ event: "admin.locations_list_failed", code: error?.code ?? policies.error?.code }, "Failed to load locations");
     throw new Error("Unable to load locations.");
   }
   return parsed.data;

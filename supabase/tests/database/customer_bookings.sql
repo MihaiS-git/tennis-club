@@ -15,23 +15,23 @@ insert into auth.users (id, email, aud, role) values
   ('c9000000-0000-4000-8000-000000000114', 'booking-schema@example.test', 'authenticated', 'authenticated');
 
 select throws_ok($$insert into public.bookings (reservation_id, customer_name, customer_email,
-  customer_phone, total_amount_minor, currency) values
-  ('c9000000-0000-4000-8000-000000000199', 'A', 'a@example.test', '123', 100, 'RON')$$,
+  customer_phone, total_amount_minor, currency, cancellation_notice_minutes) values
+  ('c9000000-0000-4000-8000-000000000199', 'A', 'a@example.test', '123', 100, 'RON', 120)$$,
   '23503', null, 'booking requires an existing reservation');
 select lives_ok($$insert into public.bookings (reservation_id, customer_name, customer_email,
-  customer_phone, total_amount_minor, currency) values
-  ('c9000000-0000-4000-8000-000000000112', 'Guest', 'guest@example.test', '123', 100, 'RON')$$,
+  customer_phone, total_amount_minor, currency, cancellation_notice_minutes) values
+  ('c9000000-0000-4000-8000-000000000112', 'Guest', 'guest@example.test', '123', 100, 'RON', 120)$$,
   'guest booking permits null account user');
 select is((select account_user_id from public.bookings where reservation_id =
   'c9000000-0000-4000-8000-000000000112'), null::uuid, 'guest account link is null');
 select lives_ok($$insert into public.bookings (reservation_id, account_user_id, customer_name,
-  customer_email, customer_phone, total_amount_minor, currency) values
+  customer_email, customer_phone, total_amount_minor, currency, cancellation_notice_minutes) values
   ('c9000000-0000-4000-8000-000000000113', 'c9000000-0000-4000-8000-000000000114',
-   'Member', 'member@example.test', '123', 100, 'RON')$$,
+   'Member', 'member@example.test', '123', 100, 'RON', 120)$$,
   'authenticated booking can reference an application user');
 select throws_ok($$insert into public.bookings (reservation_id, customer_name, customer_email,
-  customer_phone, total_amount_minor, currency) values
-  ('c9000000-0000-4000-8000-000000000112', 'Second', 'a@example.test', '123', 100, 'RON')$$,
+  customer_phone, total_amount_minor, currency, cancellation_notice_minutes) values
+  ('c9000000-0000-4000-8000-000000000112', 'Second', 'a@example.test', '123', 100, 'RON', 120)$$,
   '23505', null, 'one reservation cannot belong to two bookings');
 select throws_ok($$update public.bookings set customer_name = '  ' where reservation_id =
   'c9000000-0000-4000-8000-000000000112'$$, '23514', null, 'name cannot be blank');
@@ -52,8 +52,8 @@ select throws_ok($$select * from public.list_own_upcoming_customer_bookings()$$,
 select throws_ok($$select customer_name from public.bookings$$, '42501', null,
   'anonymous users cannot read customer contact');
 select throws_ok($$insert into public.bookings (reservation_id, customer_name, customer_email,
-  customer_phone, total_amount_minor, currency) values
-  ('c9000000-0000-4000-8000-000000000113', 'A', 'a@example.test', '123', 100, 'RON')$$,
+  customer_phone, total_amount_minor, currency, cancellation_notice_minutes) values
+  ('c9000000-0000-4000-8000-000000000113', 'A', 'a@example.test', '123', 100, 'RON', 120)$$,
   '42501', null, 'anonymous browser cannot insert bookings');
 select throws_ok($$select * from public.create_customer_booking(
   'c9000000-0000-4000-8000-000000000111', '2099-10-15', 720, 780, null,
@@ -68,8 +68,8 @@ set local role authenticated;
 select throws_ok($$select customer_email from public.bookings$$, '42501', null,
   'authenticated browser cannot read booking contacts');
 select throws_ok($$insert into public.bookings (reservation_id, customer_name, customer_email,
-  customer_phone, total_amount_minor, currency) values
-  ('c9000000-0000-4000-8000-000000000113', 'A', 'a@example.test', '123', 100, 'RON')$$,
+  customer_phone, total_amount_minor, currency, cancellation_notice_minutes) values
+  ('c9000000-0000-4000-8000-000000000113', 'A', 'a@example.test', '123', 100, 'RON', 120)$$,
   '42501', null, 'authenticated browser cannot insert bookings');
 select throws_ok($$select * from public.create_customer_booking(
   'c9000000-0000-4000-8000-000000000111', '2099-10-15', 720, 780, null,
@@ -88,5 +88,58 @@ select set_config('request.jwt.claim.sub', 'c9000000-0000-4000-8000-000000000199
 select throws_ok($$select * from public.list_own_upcoming_customer_bookings()$$, '42501', null,
   'account without an active public user cannot inspect bookings');
 
+reset role;
+select is((select customer_cancellation_notice_minutes from public.locations where id =
+  'c9000000-0000-4000-8000-000000000110'), 1440, 'new location defaults to 24 hours');
+select throws_ok($$update public.locations set customer_cancellation_notice_minutes = -1$$,
+  '23514', null, 'negative location notice is rejected');
+select throws_ok($$update public.locations set customer_cancellation_notice_minutes = 43201$$,
+  '23514', null, 'location notice over 30 days is rejected');
+select throws_ok($$update public.locations set customer_cancellation_notice_minutes = null$$,
+  '23502', null, 'location notice must be non-null');
+select throws_ok($$update public.bookings set cancellation_notice_minutes = -1$$,
+  '23514', null, 'negative booking snapshot is rejected');
+select throws_ok($$update public.bookings set cancellation_notice_minutes = 43201$$,
+  '23514', null, 'booking snapshot over 30 days is rejected');
+select throws_ok($$update public.bookings set cancellation_notice_minutes = null$$,
+  '23502', null, 'booking snapshot must be non-null');
+update public.locations set customer_cancellation_notice_minutes = 0
+  where id = 'c9000000-0000-4000-8000-000000000110';
+set local role service_role;
+select lives_ok($$select * from public.create_customer_booking(
+  'c9000000-0000-4000-8000-000000000111', '2099-10-15', 720, 780, null,
+  'Policy Guest', 'policy@example.test', '123', 5000, 'EUR')$$, 'guest booking snapshots zero notice');
+reset role;
+select is((select cancellation_notice_minutes from public.bookings where customer_name = 'Policy Guest'),
+  0, 'zero notice is copied from the court location');
+update public.locations set customer_cancellation_notice_minutes = 2880
+  where id = 'c9000000-0000-4000-8000-000000000110';
+select is((select cancellation_notice_minutes from public.bookings where customer_name = 'Policy Guest'),
+  0, 'changing policy leaves existing booking unchanged');
+set local role service_role;
+select lives_ok($$select * from public.create_customer_booking(
+  'c9000000-0000-4000-8000-000000000111', '2099-10-15', 780, 840,
+  'c9000000-0000-4000-8000-000000000114', 'Policy Member', 'member@example.test', '123', 6000, 'EUR')$$,
+  'authenticated booking snapshots updated notice');
+reset role;
+select is((select cancellation_notice_minutes from public.bookings where customer_name = 'Policy Member'),
+  2880, 'subsequent booking receives new policy');
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'c9000000-0000-4000-8000-000000000114', true);
+select is((select cancellation_notice_minutes from public.list_own_upcoming_customer_bookings()
+  where customer_name = 'Member'), 120, 'personal read returns old booking snapshot, not current location policy');
+select throws_ok($$select customer_cancellation_notice_minutes from public.locations$$,
+  '42501', null, 'authenticated browser cannot read policy column directly');
+select throws_ok($$select * from public.list_admin_location_cancellation_policies()$$,
+  '42501', null, 'non-Admin cannot read location policies');
+with changed as (update public.locations set customer_cancellation_notice_minutes = 60
+  where id = 'c9000000-0000-4000-8000-000000000110' returning id) select is(count(*),
+  0::bigint, 'non-Admin cannot change location policy') from changed;
+reset role;
+set local role anon;
+select throws_ok($$select customer_cancellation_notice_minutes from public.locations$$,
+  '42501', null, 'public cannot read policy configuration');
+select throws_ok($$select * from public.list_admin_location_cancellation_policies()$$,
+  '42501', null, 'public cannot call Admin policy read');
 select * from finish();
 rollback;

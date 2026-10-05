@@ -26,11 +26,11 @@ insert into public.court_reservations (id, court_id, booking_date, starts_at_min
   ('d1000000-0000-4000-8000-000000000021', 'd1000000-0000-4000-8000-000000000011', '2099-10-15', 660, 720, null, null),
   ('d1000000-0000-4000-8000-000000000022', 'd1000000-0000-4000-8000-000000000011', '2099-10-15', 720, 780, null, null);
 insert into public.bookings (id, reservation_id, account_user_id, customer_name, customer_email, customer_phone,
-  total_amount_minor, currency) values
+  total_amount_minor, currency, cancellation_notice_minutes) values
   ('d1000000-0000-4000-8000-000000000030', 'd1000000-0000-4000-8000-000000000021',
-   'd1000000-0000-4000-8000-000000000003', 'Ana Pop', 'ana@example.test', '+40 123', 7500, 'RON'),
+   'd1000000-0000-4000-8000-000000000003', 'Ana Pop', 'ana@example.test', '+40 123', 7500, 'RON', 120),
   ('d1000000-0000-4000-8000-000000000031', 'd1000000-0000-4000-8000-000000000022',
-   null, 'Cancelled Guest', 'guest@example.test', '+40 999', 7500, 'RON');
+   null, 'Cancelled Guest', 'guest@example.test', '+40 999', 7500, 'RON', 120);
 update public.bookings set status = 'cancelled' where id = 'd1000000-0000-4000-8000-000000000031';
 
 set local role authenticated;
@@ -111,5 +111,11 @@ select throws_ok($$select customer_email from public.bookings$$, '42501', null,
 select lives_ok($$select court_id, starts_at_minute from public.court_reservations
   where court_id = 'd1000000-0000-4000-8000-000000000011'$$,
   'public occupancy remains limited to interval fields');
+reset role;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"d1000000-0000-4000-8000-000000000001","role":"authenticated"}';
+select is((select cancellation_notice_minutes from public.list_admin_operational_occupancy(
+  array['d1000000-0000-4000-8000-000000000011'::uuid], '2099-10-15') where kind = 'booking'),
+  120, 'Admin read returns booking snapshot, not current location policy');
 select * from finish();
 rollback;

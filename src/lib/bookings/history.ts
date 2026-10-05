@@ -7,6 +7,7 @@ export type CustomerBookingHistoryItem = {
   location_name: string; location_timezone: string; court_name: string;
   status: "confirmed" | "cancelled";
   customer_name: string; customer_email: string; customer_phone: string;
+  cancellation_notice_minutes: number;
   total_amount_minor: number; currency: LocationCurrency;
 };
 

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { cancellationNoticeMinutesSchema } from "@/lib/bookings/cancellation-policy";
 import { isCountryCode } from "@/lib/profile/countries";
 
 export const locationCurrencies = ["EUR", "USD", "GBP", "RON", "CHF"] as const;
@@ -29,6 +30,7 @@ export const locationFieldsSchema = z.strictObject({
   country_code: z.string().trim().toUpperCase().refine((value) => value === "" || isCountryCode(value),
     "Select a supported country.").transform((value) => value || null),
   timezone: z.string().trim().refine(isIanaTimezone, "Enter an IANA timezone, such as Europe/Bucharest."),
+  customer_cancellation_notice_minutes: cancellationNoticeMinutesSchema,
   currency: z.enum(locationCurrencies, "Select a supported currency."),
   is_active: z.boolean(),
   is_public: z.boolean(),

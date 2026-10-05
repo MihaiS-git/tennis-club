@@ -507,6 +507,22 @@ and server-calculated price/currency snapshots, with one unique reference to its
 physical `court_reservations` row. The server-only `createCustomerBooking` operation
 accepts only customer intent, resolves active account identity and public eligibility
 through user-scoped reads, and reuses the `/book` calendar pricing calculation.
+Location customer cancellation notice is configured in the shared Admin Create/Edit
+location form, stored as 0–43,200 integer minutes with a 1,440-minute default.
+The atomic customer booking RPC snapshots it from the selected court's location into
+`bookings.cancellation_notice_minutes`; personal upcoming/history and Admin operational
+reads use that booking snapshot. Location configuration reads use an Admin-only RPC;
+public location SELECT keeps only its existing columns. The owner-only
+`cancel_own_customer_booking(uuid)` RPC is called through the customer booking service
+and My Activity Server Action. It requires an active account, confirmed owned booking,
+active linked reservation and a start instant still in the future. Ordinary owners use
+the snapshot cutoff, inclusive at `now <= cutoff`; current Admin/Coach owners bypass
+notice only. It locks booking then reservation and checks wall-clock time after waiting;
+both lifecycle updates commit atomically and preserve snapshots. Personal booking reads
+return PostgreSQL's timezone-resolved `starts_at_instant` for consistent UI eligibility.
+Explicit confirmation precedes cancellation; Upcoming refreshes and History retains the
+cancelled row. Guest identity matching cannot grant access. Admin operational and direct
+reservation cancellation remain separate.
 Guests have a null account link; suspended authenticated users are rejected. A
 service-role-only RPC inserts both rows atomically, leaving GiST authoritative for
 overlaps. Browser roles cannot read or insert bookings or invoke the RPC. `/book`
@@ -514,7 +530,7 @@ uses a focused customer-details dialog and Server Action. Guests can confirm wit
 an account; active signed-in users receive editable contact defaults from Profile.
 Contact edits affect only the booking snapshot. Availability conflicts clear the
 selected interval, retain contact values, and refresh public occupancy. Success
-shows the server-confirmed price. Customer payments, holds and cancellation are not present.
+shows the server-confirmed price. Customer payments and holds are not present.
 Direct reservations store the authenticated creator in nullable
 `court_reservations.created_by_user_id` (historical rows stay null). `/reservations`
 reads occupancy for Admins and Coaches and creates new direct reservations. Active

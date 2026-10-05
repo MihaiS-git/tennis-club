@@ -1,6 +1,7 @@
 import "server-only";
 
 import { z } from "zod";
+import { cancellationNoticeMinutesSchema } from "@/lib/bookings/cancellation-policy";
 import { createClient } from "@/lib/supabase/server";
 import { logger } from "@/lib/logger";
 import { openingIntervalSchema } from "@/lib/admin/opening-hours-validation";
@@ -20,7 +21,7 @@ const occupancySchema = z.object({ court_id: z.uuid(), starts_at_minute: z.numbe
 const adminOccupancyRowSchema = occupancySchema.extend({ kind: z.enum(["reservation", "booking"]), id: z.uuid(),
   booking_date: z.iso.date(), reason: z.string().nullable(), created_by_user_id: z.uuid().nullable(),
   creator_name: z.string().nullable(), customer_name: z.string().nullable(), customer_email: z.string().nullable(),
-  customer_phone: z.string().nullable(), total_amount_minor: z.number().int().nullable(), currency: z.enum(locationCurrencies).nullable() });
+  customer_phone: z.string().nullable(), cancellation_notice_minutes: cancellationNoticeMinutesSchema.nullable(), total_amount_minor: z.number().int().nullable(), currency: z.enum(locationCurrencies).nullable() });
 const adminEditAvailabilitySchema = z.object({
   location_id: z.uuid(), location_timezone: z.string(), court_id: z.uuid(), booking_date: z.iso.date(),
   starts_at_minute: z.number().int(), ends_at_minute: z.number().int(), reason: z.string().nullable(),
@@ -32,7 +33,7 @@ export type AdminReservation = Pick<z.infer<typeof adminOccupancyRowSchema>,
 export type AdminBooking = Pick<z.infer<typeof adminOccupancyRowSchema>,
   "id" | "court_id" | "booking_date" | "starts_at_minute" | "ends_at_minute"> & {
     kind: "booking"; customer_name: string; customer_email: string; customer_phone: string;
-    total_amount_minor: number; currency: LocationCurrency;
+    cancellation_notice_minutes: number; total_amount_minor: number; currency: LocationCurrency;
   };
 export type AdminOperationalOccupancy = AdminReservation | AdminBooking;
 export type InternalLocation = Pick<z.infer<typeof locationSchema>, "id" | "name" | "timezone"> & { courts: { id: string; name: string }[] };
@@ -92,10 +93,11 @@ export async function getReservationDay(location: InternalLocation, date: string
         adminOccupancy.push({ kind: "reservation", id: row.id, court_id: row.court_id, booking_date: row.booking_date,
           starts_at_minute: row.starts_at_minute, ends_at_minute: row.ends_at_minute,
           reason: row.reason, created_by_user_id: row.created_by_user_id, creator_name: row.creator_name });
-      } else if (row.customer_name && row.customer_email && row.customer_phone && row.total_amount_minor && row.currency) {
+      } else if (row.customer_name && row.customer_email && row.customer_phone && row.total_amount_minor && row.currency && row.cancellation_notice_minutes !== null) {
         adminOccupancy.push({ kind: "booking", id: row.id, court_id: row.court_id, booking_date: row.booking_date,
           starts_at_minute: row.starts_at_minute, ends_at_minute: row.ends_at_minute,
           customer_name: row.customer_name, customer_email: row.customer_email, customer_phone: row.customer_phone,
+          cancellation_notice_minutes: row.cancellation_notice_minutes,
           total_amount_minor: row.total_amount_minor, currency: row.currency });
       } else {
         logger.error({ event: "reservations.admin_booking_invalid", bookingId: row.id }, "Invalid operational booking snapshot");

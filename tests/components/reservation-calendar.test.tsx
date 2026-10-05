@@ -70,7 +70,7 @@ it("opens Admin booking details from each occupied cell using stored snapshots",
   const booking = { kind: "booking" as const, id: "33333333-3333-4333-8333-333333333333", court_id: courtId,
     booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 690,
     customer_name: "Ana Pop", customer_email: "ana@example.test", customer_phone: "+40 123",
-    total_amount_minor: 7500, currency: "RON" as const };
+    cancellation_notice_minutes: 120, total_amount_minor: 7500, currency: "RON" as const };
   render(<ReservationCalendar date={booking.booking_date} location={location}
     day={{ times: [600, 630, 660], courts: [{ court: location.courts[0], cells: ["booked", "booked", "booked"] }] }}
     adminOccupancy={[booking]} />);
@@ -94,7 +94,7 @@ it("confirms booking cancellation and refreshes the timetable in place", async (
   const booking = { kind: "booking" as const, id: "33333333-3333-4333-8333-333333333333", court_id: courtId,
     booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660,
     customer_name: "Ana Pop", customer_email: "ana@example.test", customer_phone: "+40 123",
-    total_amount_minor: 9000, currency: "RON" as const };
+    cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON" as const };
   cancelBookingAction.mockResolvedValue({ ok: true });
   const { rerender } = render(<ReservationCalendar date={booking.booking_date} location={location}
     day={{ times: [600, 630], courts: [{ court: location.courts[0], cells: ["booked", "booked"] }] }}

@@ -6,13 +6,14 @@ import { localMinute, localToday } from "@/lib/courts/local-time";
 import type { PersonalCustomerBooking } from "@/lib/bookings/personal";
 import type { PersonalReservation } from "@/lib/reservations/personal";
 
-const { load, cancel, edit, availability } = vi.hoisted(() => ({ load: vi.fn(), cancel: vi.fn(), edit: vi.fn(), availability: vi.fn() }));
-vi.mock("@/app/my-activity/bookings/actions", () => ({ loadPersonalActivityAction: load, cancelOwnReservationAction: cancel,
+const { load, cancel, cancelBooking, edit, availability } = vi.hoisted(() => ({ load: vi.fn(), cancel: vi.fn(), cancelBooking: vi.fn(), edit: vi.fn(), availability: vi.fn() }));
+vi.mock("@/app/my-activity/bookings/actions", () => ({ loadPersonalActivityAction: load, cancelOwnReservationAction: cancel, cancelOwnCustomerBookingAction: cancelBooking,
   editOwnReservationAction: edit, loadReservationEditDayAction: availability }));
 
 beforeEach(() => {
   load.mockReset();
   cancel.mockReset();
+  cancelBooking.mockReset();
   edit.mockReset();
   availability.mockReset();
   HTMLDialogElement.prototype.showModal = function () { this.open = true; };
@@ -29,10 +30,10 @@ it("gives ordinary players an empty state after requesting personal activity", a
 
 it.each([false, true])("renders every owned row and opens each detail dialog (staff=%s)", async (staff) => {
   const booking = (id: string, start: number, zone = "UTC"): PersonalCustomerBooking => ({
-    id, booking_date: "2099-10-15", starts_at_minute: start, ends_at_minute: start + 60,
+    id, starts_at_instant: `2099-10-15T${String(Math.floor(start / 60)).padStart(2, "0")}:${String(start % 60).padStart(2, "0")}:00${zone === "Europe/Bucharest" ? "+03:00" : "Z"}`, booking_date: "2099-10-15", starts_at_minute: start, ends_at_minute: start + 60,
     location_name: "Club", location_timezone: zone, court_name: id,
     customer_name: `Customer ${id}`, customer_email: `${id}@example.test`, customer_phone: "123",
-    total_amount_minor: 5000, currency: "RON",
+    cancellation_notice_minutes: 120, total_amount_minor: 5000, currency: "RON",
   });
   const reservation = (id: string, start: number): PersonalReservation => ({
     id, court_id: id, location_id: "location", updated_at: "2026-10-01T12:00:00Z",
@@ -63,7 +64,8 @@ it.each([false, true])("renders every owned row and opens each detail dialog (st
     if (isBooking) {
       expect(buttons[index].textContent).toMatch(/RON\s*50\.00/);
       expect(within(dialog).getByText(row.customer_email)).toBeDefined();
-      expect(within(dialog).queryByRole("button", { name: /edit|cancel/i })).toBeNull();
+      expect(within(dialog).getByRole("button", { name: "Cancel booking" })).toBeDefined();
+      expect(within(dialog).queryByRole("button", { name: /edit/i })).toBeNull();
     } else {
       expect(buttons[index].textContent).toContain(row.reason);
       expect(within(dialog).getByText(row.reason!)).toBeDefined();
@@ -79,11 +81,11 @@ it("places an in-progress booking before future bookings", async () => {
   const zone = ["UTC", "Pacific/Honolulu", "Asia/Tokyo"]
     .find((item) => localMinute(item, now) >= 120 && localMinute(item, now) <= 1320)!;
   const start = Math.floor(localMinute(zone, now) / 30) * 30 - 30;
-  const current: PersonalCustomerBooking = { id: "current", booking_date: localToday(zone, now),
+  const current: PersonalCustomerBooking = { id: "current", starts_at_instant: new Date(now.getTime() - 30 * 60_000).toISOString(), booking_date: localToday(zone, now),
     starts_at_minute: start, ends_at_minute: start + 90, location_name: "Club", location_timezone: zone,
     court_name: "Current court", customer_name: "Owner", customer_email: "owner@example.test",
-    customer_phone: "123", total_amount_minor: 5000, currency: "RON" };
-  load.mockResolvedValue({ bookings: [{ ...current, id: "future", booking_date: "2099-10-15", court_name: "Future court" }, current], upcoming: [] });
+    customer_phone: "123", cancellation_notice_minutes: 120, total_amount_minor: 5000, currency: "RON" };
+  load.mockResolvedValue({ bookings: [{ ...current, id: "future", starts_at_instant: "2099-10-15T10:00:00Z", booking_date: "2099-10-15", court_name: "Future court" }, current], upcoming: [] });
   render(<PersonalActivity staff={false} />);
   const rows = within(await screen.findByRole("region", { name: "Upcoming" })).getAllByRole("button");
   expect(rows).toHaveLength(2);
@@ -91,11 +93,11 @@ it("places an in-progress booking before future bookings", async () => {
   expect(rows[1].textContent).toContain("Future court");
 });
 
-it("shows an owner's booking snapshot in read-only details and sorts it with direct reservations", async () => {
-  const booking = { id: "booking", booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 690,
+it("shows an owner's booking snapshot in details and sorts it with direct reservations", async () => {
+  const booking = { id: "booking", starts_at_instant: "2099-10-15T10:00:00+03:00", booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 690,
     location_name: "RIVUS", location_timezone: "Europe/Bucharest", court_name: "Court 2",
     customer_name: "Historical Name", customer_email: "old@example.test", customer_phone: "+40 123",
-    total_amount_minor: 9000, currency: "RON" };
+    cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON" };
   const reservation = { id: "reservation", court_id: "court", location_id: "location", updated_at: "2026-10-01T12:00:00Z",
     booking_date: "2099-10-15", starts_at_minute: 540, ends_at_minute: 660, reason: "Training", status: "active",
     created_by_user_id: "owner", creator_name: "Owner", cancelled_at: null, cancelled_by_name: null,
@@ -116,14 +118,15 @@ it("shows an owner's booking snapshot in read-only details and sorts it with dir
   expect(within(dialog).getByText("+40 123")).toBeDefined();
   expect(within(dialog).getByText(/RON\s*90\.00/)).toBeDefined();
   expect(within(dialog).getByText("Confirmed")).toBeDefined();
-  expect(within(dialog).queryByRole("button", { name: /edit|cancel|pay/i })).toBeNull();
+  expect(within(dialog).getByRole("button", { name: "Cancel booking" })).toBeDefined();
+  expect(within(dialog).queryByRole("button", { name: /edit|pay/i })).toBeNull();
 });
 
 it("shows a normal player's own booking without a direct reservation", async () => {
-  load.mockResolvedValue({ bookings: [{ id: "booking", booking_date: "2099-10-15", starts_at_minute: 600,
+  load.mockResolvedValue({ bookings: [{ id: "booking", starts_at_instant: "2099-10-15T10:00:00+03:00", booking_date: "2099-10-15", starts_at_minute: 600,
     ends_at_minute: 660, location_name: "RIVUS", location_timezone: "UTC", court_name: "Court 2",
     customer_name: "Owner", customer_email: "owner@example.test", customer_phone: "123",
-    total_amount_minor: 5000, currency: "RON" }], upcoming: [] });
+    cancellation_notice_minutes: 120, total_amount_minor: 5000, currency: "RON" }], upcoming: [] });
   render(<PersonalActivity staff={false} />);
   const upcoming = await screen.findByRole("region", { name: "Upcoming" });
   expect(within(upcoming).getByText("Booking")).toBeDefined();
@@ -285,4 +288,71 @@ it("refreshes changed details after a stale edit instead of overwriting them", a
   const details = await screen.findByRole("dialog", { name: "Reservation details" });
   expect(within(details).getByText("Newer update")).toBeDefined();
   expect(within(details).getByRole("alert").textContent).toContain("changed since you opened it");
+});
+
+const cancellableBooking: PersonalCustomerBooking = {
+  id: "11111111-1111-4111-8111-111111111111", starts_at_instant: "2099-10-15T10:00:00Z",
+  booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660,
+  location_name: "Club", location_timezone: "UTC", court_name: "Customer court",
+  customer_name: "Owner", customer_email: "owner@example.test", customer_phone: "123",
+  cancellation_notice_minutes: 1440, total_amount_minor: 5000, currency: "RON",
+};
+
+it("confirms customer self-cancellation, preserves the page, and refreshes Upcoming", async () => {
+  load.mockResolvedValueOnce({ bookings: [cancellableBooking], upcoming: [] })
+    .mockResolvedValueOnce({ bookings: [], upcoming: [] });
+  cancelBooking.mockResolvedValue({ ok: true });
+  render(<PersonalActivity staff={false} userId="owner" />);
+  fireEvent.click(within(await screen.findByRole("region", { name: "Upcoming" })).getByRole("button"));
+  fireEvent.click(within(screen.getByRole("dialog", { name: "Booking" })).getByRole("button", { name: "Cancel booking" }));
+  expect(cancelBooking).not.toHaveBeenCalled();
+  fireEvent.click(within(screen.getByRole("dialog", { name: "Cancel booking?" })).getByRole("button", { name: "Keep booking" }));
+  expect(cancelBooking).not.toHaveBeenCalled();
+  fireEvent.click(within(screen.getByRole("dialog", { name: "Booking" })).getByRole("button", { name: "Cancel booking" }));
+  fireEvent.click(within(screen.getByRole("dialog", { name: "Cancel booking?" })).getByRole("button", { name: "Cancel booking" }));
+  await waitFor(() => expect(cancelBooking).toHaveBeenCalledWith(cancellableBooking.id));
+  expect(await screen.findByText("No upcoming bookings or reservations.")).toBeDefined();
+  expect(screen.getByRole("status").textContent).toBe("Booking cancelled.");
+  expect(cancel).not.toHaveBeenCalled();
+});
+
+it.each([false, true])("keeps in-progress customer details readable without cancellation (staff=%s)", async (staff) => {
+  load.mockResolvedValue({ bookings: [{ ...cancellableBooking,
+    starts_at_instant: new Date(Date.now() - 60_000).toISOString() }], upcoming: [] });
+  render(<PersonalActivity staff={staff} userId="owner" />);
+  fireEvent.click(within(await screen.findByRole("region", { name: "Upcoming" })).getByRole("button"));
+  const dialog = screen.getByRole("dialog", { name: "Booking" });
+  expect(within(dialog).queryByRole("button", { name: "Cancel booking" })).toBeNull();
+  expect(within(dialog).getByText(/this booking has started/)).toBeDefined();
+  expect(within(dialog).getByText("owner@example.test")).toBeDefined();
+});
+
+it.each([false, true])("applies snapshot notice only to ordinary owners (staff=%s)", async (staff) => {
+  load.mockResolvedValue({ bookings: [{ ...cancellableBooking,
+    starts_at_instant: new Date(Date.now() + 60 * 60_000).toISOString() }], upcoming: [] });
+  render(<PersonalActivity staff={staff} userId="owner" />);
+  fireEvent.click(within(await screen.findByRole("region", { name: "Upcoming" })).getByRole("button"));
+  const dialog = screen.getByRole("dialog", { name: "Booking" });
+  if (staff) expect(within(dialog).getByRole("button", { name: "Cancel booking" })).toBeDefined();
+  else {
+    expect(within(dialog).queryByRole("button", { name: "Cancel booking" })).toBeNull();
+    expect(within(dialog).getByText(/requires 24 hours' notice/)).toBeDefined();
+  }
+});
+
+it("keeps a stale cancellation error beside the confirmation and prevents duplicate requests", async () => {
+  load.mockResolvedValue({ bookings: [cancellableBooking], upcoming: [] });
+  let resolve!: (value: { ok: false; message: string }) => void;
+  cancelBooking.mockImplementation(() => new Promise((done) => { resolve = done; }));
+  render(<PersonalActivity staff={false} userId="owner" />);
+  fireEvent.click(within(await screen.findByRole("region", { name: "Upcoming" })).getByRole("button"));
+  fireEvent.click(within(screen.getByRole("dialog", { name: "Booking" })).getByRole("button", { name: "Cancel booking" }));
+  const confirmation = screen.getByRole("dialog", { name: "Cancel booking?" });
+  const button = within(confirmation).getByRole("button", { name: "Cancel booking" });
+  fireEvent.click(button); fireEvent.click(button);
+  expect(cancelBooking).toHaveBeenCalledOnce();
+  resolve({ ok: false, message: "The cancellation notice period for this booking has expired." });
+  await waitFor(() => expect(within(confirmation).getByRole("alert").textContent).toContain("has expired"));
+  expect(load).toHaveBeenCalledOnce();
+  expect(screen.getByRole("dialog", { name: "Booking" })).toBeDefined();
 });

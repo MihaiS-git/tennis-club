@@ -19,7 +19,7 @@ const booking: CustomerBookingHistoryItem = {
   booking_date: "2026-09-27", starts_at_minute: 1080, ends_at_minute: 1170,
   location_name: "RIVUS", location_timezone: "Europe/Bucharest", court_name: "Court 2",
   status: "confirmed", customer_name: "Snapshot Name", customer_email: "snapshot@example.test",
-  customer_phone: "+40 123", total_amount_minor: 9000, currency: "RON",
+  customer_phone: "+40 123", cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON",
 };
 
 it("shows empty history cleanly", () => {

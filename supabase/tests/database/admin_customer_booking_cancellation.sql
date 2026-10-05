@@ -22,11 +22,11 @@ insert into public.court_reservations (id, court_id, booking_date, starts_at_min
   ('ac000000-0000-4000-8000-000000000020', 'ac000000-0000-4000-8000-000000000011', '2099-10-15', 600, 660),
   ('ac000000-0000-4000-8000-000000000021', 'ac000000-0000-4000-8000-000000000011', '2099-10-15', 660, 720);
 insert into public.bookings (id, reservation_id, account_user_id, customer_name, customer_email,
-  customer_phone, total_amount_minor, currency) values
+  customer_phone, total_amount_minor, currency, cancellation_notice_minutes) values
   ('ac000000-0000-4000-8000-000000000030', 'ac000000-0000-4000-8000-000000000020',
-   'ac000000-0000-4000-8000-000000000003', 'Ana Pop', 'ana@example.test', '+40 123', 9000, 'RON'),
+   'ac000000-0000-4000-8000-000000000003', 'Ana Pop', 'ana@example.test', '+40 123', 9000, 'RON', 120),
   ('ac000000-0000-4000-8000-000000000031', 'ac000000-0000-4000-8000-000000000021',
-   null, 'Guest', 'guest@example.test', '+40 999', 7000, 'RON');
+   null, 'Guest', 'guest@example.test', '+40 999', 7000, 'RON', 120);
 
 set local role anon;
 select throws_ok($$select public.cancel_admin_customer_booking('ac000000-0000-4000-8000-000000000030')$$,

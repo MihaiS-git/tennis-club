@@ -22,10 +22,10 @@ insert into public.court_reservations (id, court_id, booking_date, starts_at_min
   ('cb000000-0000-4000-8000-000000000023', 'cb000000-0000-4000-8000-000000000013', '2026-10-04', 0, 60, null),
   ('cb000000-0000-4000-8000-000000000024', 'cb000000-0000-4000-8000-000000000014', '2026-10-04', 0, 60,
    'cb000000-0000-4000-8000-000000000003');
-insert into public.bookings (id, reservation_id, account_user_id, customer_name, customer_email, customer_phone, total_amount_minor, currency) values
-  ('cb000000-0000-4000-8000-000000000031', 'cb000000-0000-4000-8000-000000000021', 'cb000000-0000-4000-8000-000000000001', 'Owner', 'owner@example.test', '123', 9000, 'RON'),
-  ('cb000000-0000-4000-8000-000000000032', 'cb000000-0000-4000-8000-000000000022', 'cb000000-0000-4000-8000-000000000002', 'Other', 'other@example.test', '123', 9000, 'RON'),
-  ('cb000000-0000-4000-8000-000000000033', 'cb000000-0000-4000-8000-000000000023', null, 'Guest', 'owner@example.test', '123', 9000, 'RON');
+insert into public.bookings (id, reservation_id, account_user_id, customer_name, customer_email, customer_phone, total_amount_minor, currency, cancellation_notice_minutes) values
+  ('cb000000-0000-4000-8000-000000000031', 'cb000000-0000-4000-8000-000000000021', 'cb000000-0000-4000-8000-000000000001', 'Owner', 'owner@example.test', '123', 9000, 'RON', 120),
+  ('cb000000-0000-4000-8000-000000000032', 'cb000000-0000-4000-8000-000000000022', 'cb000000-0000-4000-8000-000000000002', 'Other', 'other@example.test', '123', 9000, 'RON', 120),
+  ('cb000000-0000-4000-8000-000000000033', 'cb000000-0000-4000-8000-000000000023', null, 'Guest', 'owner@example.test', '123', 9000, 'RON', 120);
 
 set local role anon;
 select throws_ok($$select * from public.list_own_court_activity_history(1, '2026-10-03T11:30:00Z')$$,
