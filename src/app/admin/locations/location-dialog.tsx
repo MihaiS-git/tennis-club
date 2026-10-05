@@ -30,7 +30,7 @@ const textFields = [
   ["city", "City", 100],
   ["postal_code", "Postal code", 20],
 ] as const;
-const editableFields = ["name", "address_line1", "address_line2", "city", "postal_code", "country_code", "timezone", "currency", "is_active", "is_public", "customer_cancellation_notice_minutes"];
+const editableFields = ["name", "address_line1", "address_line2", "city", "postal_code", "country_code", "timezone", "currency", "is_active", "is_public", "allow_pay_at_club", "customer_cancellation_notice_minutes"];
 function validLocationCreate(form: HTMLFormElement) {
   const data = new FormData(form);
   const text = (field: string) => String(data.get(field) ?? "");
@@ -39,6 +39,7 @@ function validLocationCreate(form: HTMLFormElement) {
     city: text("city"), postal_code: text("postal_code"), country_code: text("country_code"),
     timezone: text("timezone"), currency: text("currency"), is_active: text("is_active") === "true",
     is_public: text("is_public") === "true",
+    allow_pay_at_club: text("allow_pay_at_club") === "true",
     customer_cancellation_notice_minutes: Number(text("customer_cancellation_notice_minutes")),
     display_order: 0,
   }).success;
@@ -116,6 +117,7 @@ export function LocationDialog({
           currency: text("currency"),
           is_active: text("is_active") === "true",
           is_public: text("is_public") === "true",
+          allow_pay_at_club: text("allow_pay_at_club") === "true",
           customer_cancellation_notice_minutes: Number(text("customer_cancellation_notice_minutes")),
           display_order: location?.display_order ?? 0,
         },
@@ -312,6 +314,12 @@ export function LocationDialog({
                 </div>
                 <section className="mt-4 border-t border-border pt-4" aria-labelledby={`${prefix}-booking-policy`}>
                   <h3 id={`${prefix}-booking-policy`} className="mb-3 text-sm font-semibold">Booking policy</h3>
+                  <label htmlFor={`${prefix}-allow_pay_at_club`} className="mb-1.5 block text-sm font-medium">Pay at club</label>
+                  <select id={`${prefix}-allow_pay_at_club`} name="allow_pay_at_club" defaultValue={String(location?.allow_pay_at_club ?? false)}
+                    className="mb-3 min-h-10 w-full rounded-control border border-border-strong bg-surface px-3 text-sm text-foreground" {...errorProps("allow_pay_at_club")}>
+                    <option value="false">Disabled</option><option value="true">Enabled</option>
+                  </select>
+                  {fieldError("allow_pay_at_club")}
                   <label htmlFor={`${prefix}-customer_cancellation_notice_minutes`} className="mb-1.5 block text-sm font-medium">
                     Customer cancellation notice
                   </label>

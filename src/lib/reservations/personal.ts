@@ -22,3 +22,9 @@ export function isReservationUpcoming(row: ReservationClockFields & Pick<Persona
   return row.status === "active" && (row.booking_date > today
     || row.booking_date === today && row.ends_at_minute > localMinute(row.location_timezone, now));
 }
+
+export function isReservationBeforeStart(row: ReservationClockFields, now: Date) {
+  const today = localToday(row.location_timezone, now);
+  return row.booking_date > today
+    || row.booking_date === today && row.starts_at_minute > localMinute(row.location_timezone, now);
+}

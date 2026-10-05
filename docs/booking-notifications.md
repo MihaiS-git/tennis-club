@@ -6,7 +6,9 @@ successful mutation transaction. Each event snapshots `bookings.customer_email`,
 customer name, reference, location, timezone, schedule and booking total. Reschedule
 mail includes the previous and new schedules. Later account/contact/configuration
 changes do not rewrite queued content. Direct reservations, Supabase Auth emails,
-payments and refunds are excluded.
+provider-specific payment messages and refunds are excluded. Confirmation is
+enqueued only when a booking becomes confirmed: at Pay at club creation or trusted
+online settlement. Pending, failed and expired checkout emit no confirmation email.
 
 Failed mutations roll back their events. Quotes, price-change responses, stale
 requests and saves that leave the schedule unchanged enqueue no reschedule email.

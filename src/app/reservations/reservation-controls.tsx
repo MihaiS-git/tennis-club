@@ -1,6 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { CalendarDateNavigation } from "@/components/calendar-date-navigation";
 import { LocationSelect } from "@/components/location-select";
 
 export function ReservationControls({ locations, locationId, date, today }: {
@@ -15,9 +16,6 @@ export function ReservationControls({ locations, locationId, date, today }: {
   };
   return <div className="mt-3 flex flex-wrap gap-3">
     <LocationSelect id="reservation-location" locations={locations} selectedId={locationId} onChange={(id) => navigate(id)} />
-    <label className="flex min-w-44 flex-col gap-1 text-xs font-semibold text-primary">Date
-      <input type="date" min={today} value={date ?? ""} onChange={(event) => navigate(locationId, event.target.value)}
-        className="min-h-9 rounded-control border border-border-strong bg-surface px-3 text-sm font-normal text-foreground" />
-    </label>
+    <CalendarDateNavigation id="reservation-date" date={date} today={today} allowPast onChange={(selectedDate) => navigate(locationId, selectedDate)} />
   </div>;
 }

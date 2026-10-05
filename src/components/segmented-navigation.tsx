@@ -1,9 +1,9 @@
 import type { ComponentProps } from "react";
 
 export function SegmentedNavigation({ columns, className = "", ...props }: ComponentProps<"nav"> & {
-  columns: 2 | 4 | 5;
+  columns: 2 | 4 | 5 | 6;
 }) {
-  return <nav {...props} className={`flex min-w-0 max-w-full gap-1 overflow-x-auto overscroll-x-contain rounded-card border border-border bg-surface p-1 sm:grid sm:overflow-visible ${columns === 2 ? "sm:grid-cols-2" : columns === 4 ? "sm:grid-cols-4" : "sm:grid-cols-5"}${className ? ` ${className}` : ""}`} />;
+  return <nav {...props} className={`flex min-w-0 max-w-full gap-1 overflow-x-auto overscroll-x-contain rounded-card border border-border bg-surface p-1 sm:grid sm:overflow-visible ${columns === 2 ? "sm:grid-cols-2" : columns === 4 ? "sm:grid-cols-4" : columns === 6 ? "sm:grid-cols-6" : "sm:grid-cols-5"}${className ? ` ${className}` : ""}`} />;
 }
 
 export function segmentedNavigationItemClass(active: boolean, disabledCapable = false) {

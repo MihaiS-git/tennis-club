@@ -1,0 +1,21 @@
+import "server-only";
+
+import type { PaymentProvider } from "../domain";
+
+export interface PaymentProviderConfiguration {
+  readonly id: PaymentProvider;
+  isConfigured(): boolean;
+}
+
+export interface OnlinePaymentAdapter {
+  cancelPayment(attempt: { id: string; providerPaymentId: string }): Promise<"cancelled" | "succeeded" | "processing">;
+  createPayment(attempt: { id: string; amountMinor: number; currency: string }): Promise<{
+    providerPaymentId: string;
+    presentation: import("../domain").PaymentPresentation;
+  }>;
+}
+
+export type OnlinePaymentEvent = {
+  provider: PaymentProvider; eventId: string; attemptId: string; providerPaymentId: string;
+  outcome: "succeeded" | "failed" | "retryable_failed" | "cancelled"; amountMinor: number; currency: string;
+};

@@ -6,19 +6,22 @@ import { useRouter } from "next/navigation";
 import { BookingEditForm } from "./booking-edit-form";
 import { minuteToTime } from "@/lib/admin/opening-hours-validation";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
+import { DialogHeader, DialogFooter } from "@/components/dialog-layout";
+import { BookingDetails } from "@/components/booking-details";
 import { ModalDialog } from "@/components/modal-dialog";
 import { ReservationEditForm } from "@/components/reservation-edit-form";
-import { ReservationDetailFieldsView, ReservationScheduleFieldsView, reservationDateLabel } from "@/components/reservation-details";
+import { ReservationDetailsView, reservationDateLabel } from "@/components/reservation-details";
 import { formatMoney } from "@/lib/pricing/money";
 import { ReservationTimetable, type ReservationTimetableDay } from "@/components/reservation-timetable";
 import { reservationEditInput, reservationEditSchema, selectReservationCell, type ReservationCell, type ReservationSelection } from "@/lib/reservations/domain";
-import { isReservationInProgress, isReservationUpcoming } from "@/lib/reservations/personal";
+import { isReservationBeforeStart, isReservationInProgress, isReservationUpcoming } from "@/lib/reservations/personal";
 import type { AdminOperationalOccupancy, AdminReservation, InternalLocation } from "@/lib/reservations/service";
 import { cancelAdminCustomerBookingAction, cancelAdminReservationAction, editAdminReservationAction, loadAdminReservationEditDayAction, reserveCourtAction } from "./actions";
 
-export function ReservationCalendar({ day, date, location, adminOccupancy = [] }: {
+export function ReservationCalendar({ day, date, location, occupancy = [], adminOccupancy = [] }: {
   day: ReservationTimetableDay;
   date: string; location: InternalLocation; adminOccupancy?: AdminOperationalOccupancy[];
+  occupancy?: { court_id: string; starts_at_minute: number; ends_at_minute: number }[];
 }) {
   const router = useRouter();
   const [selection, setSelection] = useState<ReservationSelection | null>(null);
@@ -39,10 +42,12 @@ export function ReservationCalendar({ day, date, location, adminOccupancy = [] }
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
   const titleId = useId();
   const selectedOccupancy = adminOccupancy.find((item) => item.id === selectedOccupancyId);
+  const selectedGenericOccupancy = !adminOccupancy.length
+    ? occupancy.find((item) => `${item.court_id}:${item.starts_at_minute}` === selectedOccupancyId) : undefined;
   const selectedReservation = selectedOccupancy?.kind === "reservation"
     ? updatedReservation?.id === selectedOccupancy.id ? updatedReservation : selectedOccupancy : null;
   const selectedBooking = selectedOccupancy?.kind === "booking" ? selectedOccupancy : null;
-  const selectedCourtName = location.courts.find((court) => court.id === selectedOccupancy?.court_id)?.name ?? "Court";
+  const selectedCourtName = location.courts.find((court) => court.id === (selectedOccupancy ?? selectedGenericOccupancy)?.court_id)?.name ?? "Court";
   const editInProgress = selectedReservation ? isReservationInProgress({ ...selectedReservation,
     location_timezone: location.timezone }, new Date()) : false;
   const selectedCourt = day.courts.find((item) => item.court.id === selection?.courtId)?.court;
@@ -60,7 +65,7 @@ export function ReservationCalendar({ day, date, location, adminOccupancy = [] }
     });
   }
   async function cancelReservation() {
-    if (!selectedReservation || cancelPending) return;
+    if (!selectedReservation || cancelPending || !isReservationBeforeStart({ ...selectedReservation, location_timezone: location.timezone }, new Date())) return;
     setCancelPending(true);
     setCancelError("");
     try {
@@ -78,7 +83,7 @@ export function ReservationCalendar({ day, date, location, adminOccupancy = [] }
     } finally { setCancelPending(false); }
   }
   async function cancelBooking() {
-    if (!selectedBooking || cancelPending) return;
+    if (!selectedBooking || cancelPending || !isReservationBeforeStart({ ...selectedBooking, location_timezone: location.timezone }, new Date())) return;
     setCancelPending(true);
     setCancelError("");
     try {
@@ -105,16 +110,18 @@ export function ReservationCalendar({ day, date, location, adminOccupancy = [] }
   }
   return <>
     {day.times.length === 0 ? <p className="mt-5 rounded-card border border-border bg-surface p-5 text-muted-foreground">{location.name} is closed on {date}.</p>
-      : <ReservationTimetable day={day} date={date} selection={selection} onChoose={choose} disabled={pending}
-          occupiedIntervals={adminOccupancy.map((item) => ({ id: item.id, courtId: item.court_id,
-            startsAtMinute: item.starts_at_minute, endsAtMinute: item.ends_at_minute,
-            label: item.kind === "booking" ? `Booking · ${item.customer_name}` : `Reservation · ${item.creator_name || "Unknown creator"}` }))}
-          onOccupiedClick={adminOccupancy.length ? (id) => {
+      : <ReservationTimetable day={day} date={date} timezone={location.timezone} selection={selection} onChoose={choose} disabled={pending}
+          occupiedIntervals={adminOccupancy.length ? adminOccupancy.map((item) => ({ id: item.id, courtId: item.court_id,
+            startsAtMinute: item.starts_at_minute, endsAtMinute: item.ends_at_minute, kind: item.kind,
+            label: item.kind === "booking" ? `Booking · ${item.customer_name}` : `Reservation · ${item.creator_name || "Unknown creator"}` }))
+            : occupancy.map((item) => ({ id: `${item.court_id}:${item.starts_at_minute}`, courtId: item.court_id,
+              startsAtMinute: item.starts_at_minute, endsAtMinute: item.ends_at_minute, label: "Booked" }))}
+          onOccupiedClick={(id) => {
             returnFocusRef.current = document.activeElement instanceof HTMLButtonElement ? document.activeElement : null;
             setEditing(false);
             setUpdatedReservation(null);
             setSelectedOccupancyId(id);
-          } : undefined} />}
+          }} />}
     {selection && selectedCourt && <section aria-label="Selected reservation" className="mt-4 rounded-card border border-border bg-surface p-4">
       <h2 className="font-heading text-lg font-semibold text-primary">Reserve court</h2>
       <p className="mt-1 text-sm text-foreground">{location.name} · {selectedCourt.name} · {date} · {minuteToTime(selection.startMinute)}–{minuteToTime(selection.endMinute)} · {selection.endMinute - selection.startMinute} min</p>
@@ -127,37 +134,30 @@ export function ReservationCalendar({ day, date, location, adminOccupancy = [] }
         <button type="button" onClick={() => { setSelection(null); setMessage(""); }} className="min-h-10 rounded-control border border-border-strong px-3 text-sm font-semibold text-primary">Clear selection</button></div>
     </section>}
     <p role={success ? "status" : "alert"} className={`mt-2 min-h-5 text-sm ${success ? "text-success" : "text-danger"}`}>{message}</p>
-    {selectedOccupancy && typeof document !== "undefined" && createPortal(
+    {(selectedOccupancy || selectedGenericOccupancy) && typeof document !== "undefined" && createPortal(
       <ModalDialog ref={dialogRef} active aria-labelledby={titleId}
         onCancel={(event) => { if (cancelPending) event.preventDefault(); }}
         onClose={() => { setSelectedOccupancyId(null); setEditing(false); setEditToken(null);
           setUpdatedReservation(null); setConfirming(false); returnFocusRef.current?.focus(); }}
         className={`fixed inset-0 m-auto w-[calc(100%-2rem)] rounded-card border border-border bg-surface p-5 text-foreground shadow-floating backdrop:bg-foreground/50 ${editing && !editInProgress ? "max-w-6xl" : "max-w-md"}`}>
-        <h2 id={titleId} className="font-heading text-lg font-semibold">{selectedBooking ? editing ? "Edit booking" : "Booking details" : editing ? "Edit reservation" : "Reservation details"}</h2>
+        <DialogHeader titleId={titleId} title={selectedGenericOccupancy ? "Occupied court details" : selectedBooking ? editing ? "Edit booking" : "Booking details" : editing ? "Edit reservation" : "Reservation details"} status={editing || selectedGenericOccupancy ? undefined : selectedBooking ? "Confirmed" : "Active"} disabled={cancelPending} onClose={() => dialogRef.current?.close()} />
         {selectedBooking ? <>
-          <dl className="mt-4 grid grid-cols-[7rem_1fr] gap-x-3 gap-y-2 text-sm">
-            <dt className="text-muted-foreground">Customer</dt><dd className="break-words">{selectedBooking.customer_name}</dd>
-            <dt className="text-muted-foreground">Email</dt><dd className="break-all">{selectedBooking.customer_email}</dd>
-            <dt className="text-muted-foreground">Phone</dt><dd className="break-words">{selectedBooking.customer_phone}</dd>
-            <ReservationScheduleFieldsView reservation={{ ...selectedBooking, location_name: location.name,
-              location_timezone: location.timezone, court_name: selectedCourtName }} />
-            <dt className="text-muted-foreground">Total</dt><dd>{formatMoney(selectedBooking.total_amount_minor, selectedBooking.currency)} · {selectedBooking.currency}</dd>
-            <dt className="text-muted-foreground">Status</dt><dd>Confirmed</dd>
-          </dl>
+          <BookingDetails booking={{ ...selectedBooking, location_name: location.name,
+            location_timezone: location.timezone, court_name: selectedCourtName }} />
           {editing ? <BookingEditForm booking={selectedBooking} location={location}
             onCancel={() => setEditing(false)} onPendingChange={setCancelPending}
             onSaved={async () => { dialogRef.current?.close(); setSelectedOccupancyId(null); setEditing(false);
               setSelection(null); setMessage("Booking rescheduled."); setSuccess(true); router.refresh(); }} />
-            : <div className="mt-5 flex justify-end gap-2">
-            {isReservationUpcoming({ ...selectedBooking, status: "active", location_timezone: location.timezone }, new Date())
+            : <DialogFooter>
+            {isReservationBeforeStart({ ...selectedBooking, location_timezone: location.timezone }, new Date())
               && <button type="button" disabled={cancelPending} onClick={() => setEditing(true)}
                 className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold text-primary">Edit booking</button>}
-            <button ref={cancelButtonRef} type="button" disabled={cancelPending}
+            {isReservationBeforeStart({ ...selectedBooking, location_timezone: location.timezone }, new Date()) && <button ref={cancelButtonRef} type="button" disabled={cancelPending}
               onClick={() => { setCancelError(""); setConfirming(true); }}
-              className="min-h-10 rounded-control border border-danger px-4 text-sm font-semibold text-danger">Cancel booking</button>
+              className="min-h-10 rounded-control border border-danger px-4 text-sm font-semibold text-danger">Cancel booking</button>}
             <button type="button" disabled={cancelPending} onClick={() => dialogRef.current?.close()}
               className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button>
-          </div>}
+          </DialogFooter>}
         </> : selectedReservation && editing && !editToken ? <div className="mt-4 text-sm" role={editError ? "alert" : "status"}>
           {editError || "Loading reservation…"}
           {editError && <button type="button" className="ml-2 font-semibold underline" onClick={openEdit}>Retry</button>}
@@ -186,22 +186,29 @@ export function ReservationCalendar({ day, date, location, adminOccupancy = [] }
           onStale={async () => { setEditing(false); setEditToken(null); setUpdatedReservation(null);
             setMessage("This reservation has changed since you opened it. Refresh and try again.");
             setSuccess(false); router.refresh(); }} /> : selectedReservation ? <>
-        <dl className="mt-4 grid grid-cols-[7rem_1fr] gap-x-3 gap-y-2 text-sm">
-          <ReservationDetailFieldsView reservation={{ ...selectedReservation, location_name: location.name,
+        <ReservationDetailsView reservation={{ ...selectedReservation, location_name: location.name,
             location_timezone: location.timezone,
-            court_name: selectedCourtName }} />
+            court_name: selectedCourtName }}>
           <dt className="text-muted-foreground">Created by</dt><dd>{selectedReservation.creator_name || "Unknown creator"}</dd>
-          <dt className="text-muted-foreground">Status</dt><dd>Active</dd>
-        </dl>
-        <div className="mt-5 flex justify-end gap-2">
+        </ReservationDetailsView>
+        <DialogFooter>
           {isReservationUpcoming({ ...selectedReservation, status: "active", location_timezone: location.timezone }, new Date())
             && <button type="button" disabled={cancelPending} onClick={openEdit}
               className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold text-primary">Edit reservation</button>}
-          <button ref={cancelButtonRef} type="button" disabled={cancelPending}
+          {isReservationBeforeStart({ ...selectedReservation, location_timezone: location.timezone }, new Date()) && <button ref={cancelButtonRef} type="button" disabled={cancelPending}
             onClick={() => { setCancelError(""); setConfirming(true); }}
-            className="min-h-10 rounded-control border border-danger px-4 text-sm font-semibold text-danger">Cancel reservation</button>
+            className="min-h-10 rounded-control border border-danger px-4 text-sm font-semibold text-danger">Cancel reservation</button>}
           <button type="button" disabled={cancelPending} onClick={() => dialogRef.current?.close()}
-          className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button></div>
+          className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button></DialogFooter>
+        </> : selectedGenericOccupancy ? <>
+          <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+            <dt className="text-muted-foreground">Location</dt><dd>{location.name}</dd>
+            <dt className="text-muted-foreground">Court</dt><dd>{selectedCourtName}</dd>
+            <dt className="text-muted-foreground">Date</dt><dd>{reservationDateLabel(date)}</dd>
+            <dt className="text-muted-foreground">Time</dt><dd>{minuteToTime(selectedGenericOccupancy.starts_at_minute)}–{minuteToTime(selectedGenericOccupancy.ends_at_minute)} ({location.timezone})</dd>
+          </dl>
+          <DialogFooter><button type="button" onClick={() => dialogRef.current?.close()}
+            className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button></DialogFooter>
         </> : null}
       </ModalDialog>, document.body)}
     <ConfirmationDialog open={confirming && !!selectedOccupancy} title={selectedBooking ? "Cancel booking?" : "Cancel reservation?"}

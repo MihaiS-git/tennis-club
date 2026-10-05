@@ -25,12 +25,12 @@ export async function ReservationContent({ searchParams }: { searchParams: Promi
   const location = locations.find((item) => item.id === params.location) ?? locations[0];
   const now = new Date();
   const today = localToday(location.timezone, now);
-  const validDate = z.iso.date().safeParse(params.date).success && params.date! >= today;
-  const date = validDate ? params.date! : null;
+  const validDate = z.iso.date().safeParse(params.date).success;
+  const date = !params.date ? today : validDate ? params.date! : null;
   return <>
     <ReservationControls locations={locations} locationId={location.id} date={date} today={today} />
     <p className="mt-2 text-xs text-muted-foreground">Times shown in {location.timezone}.</p>
-    {params.date && !validDate && <p role="alert" className="mt-2 text-sm text-danger">Choose a valid date from today onward.</p>}
+    {params.date && !validDate && <p role="alert" className="mt-2 text-sm text-danger">Choose a valid date.</p>}
     {!date ? <p className="mt-5 text-sm text-muted-foreground">Choose a date to see available courts.</p> :
       <ReservationDay location={location} date={date} now={now} />}
   </>;
@@ -41,5 +41,5 @@ async function ReservationDay({ location, date, now }: {
 }) {
   const day = await getReservationDay(location, date, now);
   return <ReservationCalendar key={`${location.id}:${date}`} day={day} date={date} location={location}
-    adminOccupancy={day.adminOccupancy} />;
+    occupancy={day.occupancy} adminOccupancy={day.adminOccupancy} />;
 }

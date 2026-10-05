@@ -8,6 +8,7 @@ const sections = [
   { title: "Locations", description: "Manage physical club locations, address, timezone and currency.", href: "/admin/locations" },
   { title: "Courts", description: "Manage courts, surfaces, lighting and seasonal coverage.", href: "/admin/courts" },
   { title: "Pricing", description: "Manage hourly pricing for courts, states, days and dates.", href: "/admin/pricing" },
+  { title: "Payments", description: "Choose the active provider for new online payments.", href: "/admin/payments" },
   { title: "Users", description: "Manage users, status and roles.", href: "/admin/users" },
 ];
 

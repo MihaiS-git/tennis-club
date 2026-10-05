@@ -16,6 +16,15 @@ Future `coach_profiles` will be a sibling entity. A user may have player/coach p
 
 ## Profile presentation
 
+Admin → Users keeps its compact account table. Opening Manage user fetches current
+account and personal/tennis details through the Admin-only server read, reusing
+`loadProfile()` and user-scoped Supabase access. It never reads booking contact
+snapshots or lists guest contacts. Missing profile values show placeholders. The
+Admin-only `/admin/users/[userId]/avatar` route reuses the authenticated avatar
+reader, verifies the selected user's canonical path, and serves private, no-store
+WebP responses through the existing Storage RLS policy. Management controls retain
+their existing authorization and confirmations.
+
 The four full-label section buttons display one section at a time while keeping forms mounted to preserve unsaved edits. Below `sm` (640px), the selector uses one horizontal row of nonshrinking buttons, scrolling when needed. At `sm` (640px) and above, the selector uses four equal-width columns. Country selection searches English names derived locally with `Intl.DisplayNames` from the application-owned 249 ISO alpha-2 codes in `src/lib/profile/countries.ts`. Only canonical codes are submitted; server validation checks membership in that set.
 
 ## Unsaved changes and visit lifecycle

@@ -39,8 +39,8 @@ it("shows fixed location, visible availability and current selection, then reloa
   expect(screen.queryByLabelText("To")).toBeNull();
   await screen.findByText("Current reservation");
   expect(screen.getAllByRole("button", { name: /Court A.*selected/ })).toHaveLength(3);
-  expect(within(screen.getByRole("region", { name: "Court A timetable" })).getAllByText("Booked")).toHaveLength(1);
-  expect(screen.getByRole("region", { name: "Court B timetable" })).toBeDefined();
+  expect(within(screen.getAllByRole("row")[1]).getAllByLabelText(/, Booked/)).toHaveLength(1);
+  expect(screen.getByRole("rowheader", { name: "Court B" })).toBeDefined();
   fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2099-10-16" } });
   await waitFor(() => expect(availability).toHaveBeenLastCalledWith(reservation.id, "2099-10-16"));
   expect(screen.queryByText("Current reservation")).toBeNull();

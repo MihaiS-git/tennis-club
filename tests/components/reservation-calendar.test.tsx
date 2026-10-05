@@ -7,7 +7,7 @@ import { localMinute, localToday } from "@/lib/courts/local-time";
 const { cancelAction, cancelBookingAction, editAction, adminAvailability, refresh } = vi.hoisted(() => ({ cancelAction: vi.fn(), cancelBookingAction: vi.fn(), editAction: vi.fn(), adminAvailability: vi.fn(), refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
 vi.mock("@/app/reservations/actions", () => ({ reserveCourtAction: vi.fn(), cancelAdminReservationAction: cancelAction,
-  cancelAdminCustomerBookingAction: cancelBookingAction, editAdminReservationAction: editAction, loadAdminReservationEditDayAction: adminAvailability }));
+  cancelAdminCustomerBookingAction: cancelBookingAction, editAdminReservationAction: editAction, loadAdminBookingEditDayAction: vi.fn(), quoteAdminBookingAction: vi.fn(), rescheduleAdminBookingAction: vi.fn(), loadAdminReservationEditDayAction: adminAvailability }));
 beforeAll(() => {
   HTMLDialogElement.prototype.showModal = function () { this.open = true; };
   HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new Event("close")); };
@@ -31,12 +31,12 @@ it("shows occupied intervals without management controls and prevents their sele
   render(<ReservationCalendar date="2099-10-15" location={{ id: "11111111-1111-4111-8111-111111111111", name: "Club", timezone: "UTC",
     courts: [{ id: "22222222-2222-4222-8222-222222222222", name: "Court 1" }] }}
     day={{ times: [600, 630], courts: [{ court: { id: "22222222-2222-4222-8222-222222222222", name: "Court 1" }, cells: ["booked", "booked"] }] }} />);
-  expect(screen.getAllByText("Booked")).toHaveLength(2);
+  expect(screen.getAllByLabelText(/, Booked/)).toHaveLength(2);
   expect(screen.queryByRole("button")).toBeNull();
   expect(screen.queryByText(/details|cancel reservation|reason|created by/i)).toBeNull();
 });
 
-it("opens one Admin detail from every cell of a reservation while available cells still select", () => {
+it("opens the whole Admin reservation block while available cells still select", () => {
   const courtId = "22222222-2222-4222-8222-222222222222";
   const location = { id: "11111111-1111-4111-8111-111111111111", name: "Club", timezone: "UTC",
     courts: [{ id: courtId, name: "Court 1" }] };
@@ -46,9 +46,9 @@ it("opens one Admin detail from every cell of a reservation while available cell
     adminOccupancy={[{ kind: "reservation", id: "33333333-3333-4333-8333-333333333333", court_id: courtId,
       booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 690,
       reason: "Club event", created_by_user_id: "44444444-4444-4444-8444-444444444444", creator_name: "Mihai Stan" }]} />);
-  expect(screen.getByText("Reservation · Mihai Stan")).toBeTruthy();
-  for (const minute of ["10:00", "10:30", "11:00"]) {
-    fireEvent.click(screen.getByRole("button", { name: new RegExp(`Court 1 2099-10-15 ${minute}.*Reservation · Mihai Stan`) }));
+  expect(screen.getByRole("button", { name: /Reservation · Mihai Stan/ })).toBeTruthy();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    fireEvent.click(screen.getByRole("button", { name: /Court 1 2099-10-15 10:00–11:30, Reservation · Mihai Stan/ }));
     expect(screen.getByRole("dialog").textContent).toContain("Mihai Stan");
     expect(screen.getByRole("dialog").textContent).toContain("Club event");
     expect(screen.getByRole("dialog").textContent).toContain("90 min");
@@ -59,11 +59,11 @@ it("opens one Admin detail from every cell of a reservation while available cell
   expect(screen.queryByLabelText("Selected reservation")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: /Court 1 2099-10-15 11:30–12:00, Available/ }));
   expect(screen.getByLabelText("Selected reservation")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: /Court 1 2099-10-15 10:30.*Reservation/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Court 1 2099-10-15 10:00–11:30, Reservation/ }));
   expect(screen.getByLabelText("Selected reservation")).toBeTruthy();
 });
 
-it("opens Admin booking details from each occupied cell using stored snapshots", () => {
+it("opens the Admin booking block using stored snapshots", () => {
   const courtId = "22222222-2222-4222-8222-222222222222";
   const location = { id: "11111111-1111-4111-8111-111111111111", name: "Club", timezone: "UTC",
     courts: [{ id: courtId, name: "Court 1" }] };
@@ -74,9 +74,9 @@ it("opens Admin booking details from each occupied cell using stored snapshots",
   render(<ReservationCalendar date={booking.booking_date} location={location}
     day={{ times: [600, 630, 660], courts: [{ court: location.courts[0], cells: ["booked", "booked", "booked"] }] }}
     adminOccupancy={[booking]} />);
-  expect(screen.getByText("Booking · Ana Pop")).toBeTruthy();
-  for (const minute of ["10:00", "10:30", "11:00"]) {
-    fireEvent.click(screen.getByRole("button", { name: new RegExp(`Court 1 2099-10-15 ${minute}.*Booking · Ana Pop`) }));
+  expect(screen.getByRole("button", { name: /Booking · Ana Pop/ })).toBeTruthy();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    fireEvent.click(screen.getByRole("button", { name: /Court 1 2099-10-15 10:00–11:30, Booking · Ana Pop/ }));
     const dialog = screen.getByRole("dialog", { name: "Booking details" });
     for (const value of ["Ana Pop", "ana@example.test", "+40 123", "Club", "Court 1", "15 Oct 2099",
       "10:00–11:30 (UTC)", "90 min", "RON", "Confirmed"]) expect(dialog.textContent).toContain(value);
@@ -100,7 +100,7 @@ it("confirms booking cancellation and refreshes the timetable in place", async (
   const { rerender } = render(<ReservationCalendar date={booking.booking_date} location={location}
     day={{ times: [600, 630], courts: [{ court: location.courts[0], cells: ["booked", "booked"] }] }}
     adminOccupancy={[booking]} />);
-  fireEvent.click(screen.getByRole("button", { name: /10:00–10:30, Booking · Ana Pop/ }));
+  fireEvent.click(screen.getByRole("button", { name: /10:00–11:00, Booking · Ana Pop/ }));
   fireEvent.click(screen.getByRole("button", { name: "Cancel booking" }));
   const confirmation = screen.getByRole("dialog", { name: "Cancel booking?" });
   for (const value of ["Ana Pop", "RIVUS · Court 2", "15 Oct 2099 · 10:00–11:00", "RON", "90.00",
@@ -136,7 +136,7 @@ it("reuses the edit timetable for another user's reservation with fixed location
   render(<ReservationCalendar date={reservation.booking_date} location={location}
     day={{ times: [750, 780, 810], courts: [{ court: location.courts[0], cells: ["booked", "booked", "booked"] }] }}
     adminOccupancy={[{ ...reservation, kind: "reservation" }]} />);
-  fireEvent.click(screen.getByRole("button", { name: /12:30–13:00, Reservation/ }));
+  fireEvent.click(screen.getByRole("button", { name: /12:30–14:00, Reservation/ }));
   fireEvent.click(screen.getByRole("button", { name: "Edit reservation" }));
   const editDialog = screen.getByRole("dialog", { name: "Edit reservation" });
   await waitFor(() => expect(adminAvailability).toHaveBeenCalledWith(reservation.id, reservation.booking_date));
@@ -150,8 +150,8 @@ it("reuses the edit timetable for another user's reservation with fixed location
   expect(within(editDialog).getByLabelText("Date")).toHaveProperty("value", reservation.booking_date);
   await within(editDialog).findByText("Current reservation");
   expect(within(editDialog).getAllByRole("button", { name: /Court 1.*selected/ })).toHaveLength(3);
-  expect(within(within(editDialog).getByRole("region", { name: "Court 1 timetable" })).getAllByText("Booked")).toHaveLength(1);
-  expect(within(editDialog).getByRole("region", { name: "Court 2 timetable" })).toBeTruthy();
+  expect(within(within(editDialog).getAllByRole("row")[1]).getAllByLabelText(/, Booked/)).toHaveLength(1);
+  expect(within(editDialog).getByRole("rowheader", { name: "Court 2" })).toBeTruthy();
   expect(within(editDialog).getByRole("button", { name: "Save changes" })).toHaveProperty("disabled", false);
   fireEvent.change(within(editDialog).getByLabelText("Date"), { target: { value: "2099-10-16" } });
   await waitFor(() => expect(adminAvailability).toHaveBeenLastCalledWith(reservation.id, "2099-10-16"));
@@ -200,7 +200,7 @@ it("saves an Admin edit, refreshes the timetable, and shows the updated details 
   render(<ReservationCalendar date="2099-10-15" location={location}
     day={{ times: [600, 630], courts: [{ court: location.courts[0], cells: ["booked", "booked"] }] }}
     adminOccupancy={[{ ...reservation, kind: "reservation" }]} />);
-  fireEvent.click(screen.getByRole("button", { name: /10:00–10:30, Reservation/ }));
+  fireEvent.click(screen.getByRole("button", { name: /10:00–11:00, Reservation/ }));
   fireEvent.click(screen.getByRole("button", { name: "Edit reservation" }));
   const dialog = screen.getByRole("dialog", { name: "Edit reservation" });
   await within(dialog).findByText("Current reservation");
@@ -234,7 +234,7 @@ it("confirms Admin cancellation, refreshes in place, and leaves the interval sel
   const { rerender } = render(<ReservationCalendar date="2099-10-15" location={location}
     day={{ times: [600, 630], courts: [{ court: location.courts[0], cells: ["booked", "booked"] }] }}
     adminOccupancy={[{ ...occupied, kind: "reservation" }]} />);
-  fireEvent.click(screen.getByRole("button", { name: /10:00–10:30, Reservation/ }));
+  fireEvent.click(screen.getByRole("button", { name: /10:00–11:00, Reservation/ }));
   fireEvent.click(screen.getByRole("button", { name: "Cancel reservation" }));
   const confirmation = screen.getByRole("dialog", { name: "Cancel reservation?" });
   expect(confirmation.textContent).toContain("Club · Court 1");
@@ -280,4 +280,38 @@ it("renders a legacy null creator safely", () => {
       reason: "Maintenance", created_by_user_id: null, creator_name: null }]} />);
   fireEvent.click(screen.getByRole("button", { name: /Reservation · Unknown creator/ }));
   expect(screen.getByRole("dialog").textContent).toContain("Unknown creator");
+});
+
+it.each(["booking", "reservation"] as const)("keeps a past %s read-only in the Admin dialog", (kind) => {
+  const courtId = "22222222-2222-4222-8222-222222222222";
+  const item = { kind, id: "33333333-3333-4333-8333-333333333333", court_id: courtId,
+    booking_date: "2000-10-15", starts_at_minute: 600, ends_at_minute: 660,
+    reason: "Historical event", created_by_user_id: null, creator_name: "Coach",
+    customer_name: "Ana Pop", customer_email: "ana@example.test", customer_phone: "+40 123",
+    cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON" as const };
+  render(<ReservationCalendar date={item.booking_date} location={{ id: "11111111-1111-4111-8111-111111111111",
+    name: "Club", timezone: "Europe/Bucharest", courts: [{ id: courtId, name: "Court 1" }] }}
+    day={{ times: [600, 630], courts: [{ court: { id: courtId, name: "Court 1" }, cells: ["past", "past"] }] }}
+    adminOccupancy={[item]} />);
+  fireEvent.click(screen.getByRole("button", { name: /Court 1.*10:00–11:00/ }));
+  const dialog = screen.getByRole("dialog");
+  expect(within(dialog).queryByRole("button", { name: /^Cancel (booking|reservation)$/ })).toBeNull();
+  expect(within(dialog).queryByRole("button", { name: /^Edit (booking|reservation)$/ })).toBeNull();
+  expect(cancelAction).not.toHaveBeenCalled();
+  expect(cancelBookingAction).not.toHaveBeenCalled();
+});
+
+it("opens past occupancy for a Coach without private details or operational actions", () => {
+  const court = { id: "22222222-2222-4222-8222-222222222222", name: "Court 1" };
+  render(<ReservationCalendar date="2000-10-15"
+    location={{ id: "11111111-1111-4111-8111-111111111111", name: "Club", timezone: "Europe/Bucharest", courts: [court] }}
+    day={{ times: [600, 630, 660, 690], courts: [{ court, cells: ["booked", "booked", "past", "past"] }] }}
+    occupancy={[{ court_id: court.id, starts_at_minute: 600, ends_at_minute: 660 }]} />);
+  fireEvent.click(screen.getByRole("button", { name: /Court 1.*10:00–11:00, Booked/ }));
+  const dialog = screen.getByRole("dialog", { name: "Occupied court details" });
+  expect(within(dialog).getByText("Court 1")).toBeTruthy();
+  expect(within(dialog).getByText("10:00–11:00 (Europe/Bucharest)")).toBeTruthy();
+  expect(within(dialog).queryByText(/customer|reason|created by|price|total/i)).toBeNull();
+  expect(within(dialog).getAllByRole("button").every((button) => button.textContent === "Close" || button.getAttribute("aria-label") === "Close dialog")).toBe(true);
+  expect(screen.queryByRole("button", { name: /Available|Reserve court|Edit |Cancel / })).toBeNull();
 });

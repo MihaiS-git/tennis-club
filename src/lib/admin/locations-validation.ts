@@ -30,6 +30,7 @@ export const locationFieldsSchema = z.strictObject({
   country_code: z.string().trim().toUpperCase().refine((value) => value === "" || isCountryCode(value),
     "Select a supported country.").transform((value) => value || null),
   timezone: z.string().trim().refine(isIanaTimezone, "Enter an IANA timezone, such as Europe/Bucharest."),
+  allow_pay_at_club: z.boolean().default(false),
   customer_cancellation_notice_minutes: cancellationNoticeMinutesSchema,
   currency: z.enum(locationCurrencies, "Select a supported currency."),
   is_active: z.boolean(),

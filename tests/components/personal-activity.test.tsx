@@ -225,7 +225,7 @@ it("edits a future reservation in the details dialog and shows refreshed details
   expect(within(dialog).queryByLabelText("Location")).toBeNull();
   expect(within(dialog).queryByLabelText("From")).toBeNull();
   expect(within(dialog).queryByLabelText("To")).toBeNull();
-  await within(dialog).findByRole("region", { name: "Court 3 timetable" });
+  await within(dialog).findByRole("rowheader", { name: "Court 3" });
   expect(within(dialog).getByText("Current reservation")).toBeDefined();
   expect(within(dialog).getAllByRole("button", { name: /Court 2.*selected/ })).toHaveLength(4);
   fireEvent.click(within(dialog).getByRole("button", { name: /Court 3 2099-10-15 14:00–14:30/ }));

@@ -2,8 +2,10 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { DialogHeader, DialogFooter } from "@/components/dialog-layout";
+import { BookingDetails } from "@/components/booking-details";
 import { ModalDialog } from "@/components/modal-dialog";
-import { ReservationDetailFieldsView } from "@/components/reservation-details";
+import { ReservationDetailsView } from "@/components/reservation-details";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { parseActivityQuery, type ActivitySearchParams } from "@/lib/bookings/activity-query";
 import type { UpcomingActivity as Activity, UpcomingCourtActivity as CourtActivity } from "@/lib/bookings/activity-service";
@@ -33,15 +35,13 @@ function timestampLabel(value: string, timeZone: string) {
 }
 
 export function ReservationDetails({ reservation: selected }: { reservation: PersonalReservation }) {
-  return <dl className="mt-4 grid grid-cols-[7rem_1fr] gap-x-3 gap-y-2 text-sm">
-    <ReservationDetailFieldsView reservation={selected} />
+  return <ReservationDetailsView reservation={selected}>
     <dt className="text-muted-foreground">Created by</dt><dd>{selected.created_by_user_id ? selected.creator_name || "You" : "Not recorded"}</dd>
     {selected.status === "cancelled" && <>
-      <dt className="text-muted-foreground">Status</dt><dd>Cancelled</dd>
       <dt className="text-muted-foreground">Cancelled at</dt><dd>{selected.cancelled_at ? timestampLabel(selected.cancelled_at, selected.location_timezone) : "Not recorded"}</dd>
       <dt className="text-muted-foreground">Cancelled by</dt><dd>{selected.cancelled_by_name || "Club staff"}</dd>
     </>}
-  </dl>;
+  </ReservationDetailsView>;
 }
 
 export function PersonalActivity({ staff, userId, initialActivity, initialError, listQuery }: {
@@ -170,7 +170,7 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
         onCancel={(event) => { if (pending) event.preventDefault(); }}
         onClose={() => { setSelectedBooking(null); returnFocusRef.current?.focus(); }}
         className={`fixed inset-0 m-auto max-h-[90vh] w-[calc(100%-2rem)] overflow-y-auto rounded-card border border-border bg-surface p-5 text-foreground shadow-floating backdrop:bg-foreground/50 ${editing ? "max-w-6xl" : "max-w-md"}`}>
-        <h2 id={`${titleId}-booking`} className="font-heading text-lg font-semibold">{editing ? "Edit booking" : "Booking"}</h2>
+        <DialogHeader titleId={`${titleId}-booking`} title={editing ? "Edit booking" : "Booking"} status={editing ? undefined : "Confirmed"} disabled={pending} onClose={() => bookingDialogRef.current?.close()} />
         {editing ? <BookingEditForm booking={selectedBooking}
           actions={ownBookingActions} onCancel={() => setEditing(false)} onPendingChange={setPending}
           onSaved={async () => {
@@ -185,38 +185,26 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
               setError("Unable to load your court activity. Try again.");
             }
           }} /> : <>
-        <dl className="mt-4 grid grid-cols-[7rem_1fr] gap-x-3 gap-y-2 text-sm">
-          <dt className="text-muted-foreground">Location</dt><dd>{selectedBooking.location_name}</dd>
-          <dt className="text-muted-foreground">Court</dt><dd>{selectedBooking.court_name}</dd>
-          <dt className="text-muted-foreground">Date</dt><dd>{dateLabel(selectedBooking.booking_date)}</dd>
-          <dt className="text-muted-foreground">Time</dt><dd>{timeLabel(selectedBooking.starts_at_minute)}–{timeLabel(selectedBooking.ends_at_minute)}</dd>
-          <dt className="text-muted-foreground">Duration</dt><dd>{selectedBooking.ends_at_minute - selectedBooking.starts_at_minute} min</dd>
-          <dt className="col-span-2 mt-2 font-semibold">Contact</dt>
-          <dt className="text-muted-foreground">Name</dt><dd>{selectedBooking.customer_name}</dd>
-          <dt className="text-muted-foreground">Email</dt><dd>{selectedBooking.customer_email}</dd>
-          <dt className="text-muted-foreground">Phone</dt><dd>{selectedBooking.customer_phone}</dd>
-          <dt className="text-muted-foreground">Total</dt><dd>{formatMoney(selectedBooking.total_amount_minor, selectedBooking.currency)}</dd>
-          <dt className="text-muted-foreground">Status</dt><dd>Confirmed</dd>
-        </dl>
-        <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+        <BookingDetails booking={selectedBooking} />
+        <DialogFooter>
           <CustomerBookingCancellation booking={selectedBooking} staff={staff}
             onCancelled={refreshCancelledBooking} onPendingChange={setPending} onEdit={() => setEditing(true)} />
           <button type="button" disabled={pending} onClick={(event) => event.currentTarget.closest("dialog")?.close()}
-          className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button></div>
+          className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button></DialogFooter>
         </>}
       </ModalDialog>, document.body)}
     {selected && typeof document !== "undefined" && createPortal(
       <ModalDialog ref={dialogRef} active aria-labelledby={titleId}
         onCancel={(event) => { if (pending) event.preventDefault(); }} onClose={() => { setSelected(null); returnFocusRef.current?.focus(); }}
         className={`fixed inset-0 m-auto max-h-[90vh] w-[calc(100%-2rem)] overflow-y-auto rounded-card border border-border bg-surface p-5 text-foreground shadow-floating backdrop:bg-foreground/50 ${editing && !isReservationInProgress(selected, new Date()) ? "max-w-6xl" : "max-w-md"}`}>
-        <h2 id={titleId} className="font-heading text-lg font-semibold">{editing ? "Edit reservation" : "Reservation details"}</h2>
+        <DialogHeader titleId={titleId} title={editing ? "Edit reservation" : "Reservation details"} status={editing ? undefined : selected.status === "cancelled" ? "Cancelled" : "Active"} disabled={pending} onClose={() => dialogRef.current?.close()} />
         {editing ? <ReservationEditForm key={`${selected.id}:${selected.updated_at}`} reservation={selected}
           inProgress={isReservationInProgress(selected, new Date())} onCancel={() => setEditing(false)} onPendingChange={setPending}
           onSaved={async () => { await refreshEditedReservation(""); setSuccess("Reservation updated."); }}
           onStale={async () => { await refreshEditedReservation("This reservation has changed since you opened it. Review the current details before editing again."); }} /> : <>
         <p role={detailNotice ? "alert" : undefined} className="min-h-5 pt-2 text-sm text-danger">{detailNotice}</p>
         <ReservationDetails reservation={selected} />
-        <div className="mt-5 flex justify-end gap-2">
+        <DialogFooter>
           {staff && selected.status === "active" && activity.upcoming.some((row) => row.id === selected.id)
             && isReservationUpcoming(selected, new Date())
             && selected.created_by_user_id === userId && <>
@@ -225,7 +213,7 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
             <button ref={cancelButtonRef} type="button" disabled={pending} onClick={() => { setCancelError(""); setConfirming(true); }}
               className="min-h-10 rounded-control border border-danger px-4 text-sm font-semibold text-danger">Cancel reservation</button></>}
           <button type="button" disabled={pending} onClick={() => dialogRef.current?.close()}
-          className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button></div>
+          className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button></DialogFooter>
         </>}
       </ModalDialog>, document.body)}
     <ConfirmationDialog open={confirming && !!selected} title="Cancel reservation?"

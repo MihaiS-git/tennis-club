@@ -339,7 +339,9 @@ Use it only when genuinely required, for example:
 - narrowly scoped system operations.
 
 `SUPABASE_SECRET_KEY` is now required for the server-only customer booking writer.
-Use that client only to call the service-role-only atomic booking creation RPC.
+Use that client for the service-role-only atomic checkout, trusted payment
+settlement/hold-expiry RPCs and narrowly scoped server-only confirmation-policy
+reads documented below.
 The separate booking email worker also uses `SUPABASE_SECRET_KEY`, narrowly for
 service-role-only outbox claim/start/finish RPCs; it does not access user sessions.
 
@@ -487,10 +489,15 @@ Do not turn PostgreSQL functions into a second application/business-logic layer.
 Public location discovery for `/book` and `/courts` uses `listPublicLocationsWithCourts()` and the shared TypeScript eligibility rule in `src/lib/locations/publication.ts`. `locations.is_public` defaults to false and records explicit Admin publication intent; readiness is derived from valid location details, opening hours, active courts, and current or future base-state pricing for each active court. Admin enabling validates readiness server-side. Public RLS SELECT requires publication as defense-in-depth.
 
 The public `/book` page reads opening hours, coverage periods, and pricing
-rules for active public resources only after a valid location-local date is selected,
-through user-scoped server Supabase access. Without a date it reads only the
-locations, courts, and minimal opening-hours and pricing fields needed to derive
-public eligibility for the controls.
+rules for active public resources for one valid location-local date through
+user-scoped server Supabase access. Both `/book` and `/reservations` default to
+location-local today when the URL omits a date; explicit invalid dates remain
+rejected, and `/book` also rejects past dates. `/reservations` allows staff to
+navigate to past dates with read-only occupancy details under the existing role
+visibility rules. Past slots and records remain protected by mutation guards.
+The default is resolved during server rendering, without a
+client redirect or adjacent-day preload. Location discovery still uses only the
+minimal opening-hours and pricing fields needed to derive public eligibility.
 Public RLS SELECT policies permit those reads; configuration writes remain
 admin-only. Calendar availability is informational until bookings are implemented.
 It also reads only reservation occupancy columns for the selected date and
@@ -532,7 +539,16 @@ uses a focused customer-details dialog and Server Action. Guests can confirm wit
 an account; active signed-in users receive editable contact defaults from Profile.
 Contact edits affect only the booking snapshot. Availability conflicts clear the
 selected interval, retain contact values, and refresh public occupancy. Success
-shows the server-confirmed price. Customer payments and holds are not present.
+shows the server-confirmed price. Customer checkout now uses the provider-neutral payment/hold foundation described
+in `docs/payments-memberships.md`. Online is the default; `locations.allow_pay_at_club`
+defaults false and is rechecked by the creation RPC. Snapshot the payment method on
+bookings and provider on each online attempt. Keep `paymentHoldDurationSeconds`
+centralized in the payment domain. Active and held reservations share GiST;
+database-time occupancy filtering plus transactional lazy expiry cleanup before
+reservation writes prevents stale holds from blocking indefinitely. Settlement is
+service-role-only, retains both row IDs and emits confirmation only on confirmation.
+Stripe uses the existing checkout/hold lifecycle through its isolated adapter and
+signature-verified webhook. No browser-callable settlement endpoint exists.
 Direct reservations store the authenticated creator in nullable
 `court_reservations.created_by_user_id` (historical rows stay null). `/reservations`
 reads occupancy for Admins and Coaches and creates new direct reservations. Active
@@ -571,7 +587,7 @@ Owner-scoped availability excludes its own reservation and returns only active c
 opening hours and occupancy for its fixed location, independent of public publication.
 Shared internal RPC helpers are not executable by browser database roles; Admin RPCs
 retain their separate role boundary. Success calls `revalidateCourtActivity("edit")`
-for `/book`, `/reservations`, and `/my-activity/bookings`. Payments, refunds and
+for `/book`, `/reservations`, and `/my-activity/bookings`. Refunds and
 guest self-management are not implemented. Booking lifecycle notifications are
 transactional outbox events; see `docs/booking-notifications.md`.
 
@@ -1172,7 +1188,8 @@ Booking confirmation, customer/Admin cancellation and customer/Admin reschedulin
 must enqueue recipient and content snapshots atomically inside the successful
 mutation RPC. Send only to `bookings.customer_email`, never the current account email.
 Quote, stale, failed and unchanged-schedule saves must not enqueue reschedule mail.
-Direct reservations, Auth emails and payments are outside this workflow.
+Direct reservations, Auth emails and provider-specific payment messages are outside
+this workflow. Pending/failed/expired checkout must not enqueue confirmation mail.
 
 The standalone server-only worker (`npm run mail:worker`) uses the mail adapter in
 `src/lib/mail` and token-scoped outbox claim/start/finish RPCs. Preserve SKIP LOCKED
@@ -1181,3 +1198,49 @@ exactly-once delivery guarantee: only retry definite non-acceptance; interrupted
 `sending` events become `uncertain` and must never be automatically resent.
 Local Mailpit SMTP uses port 54325; do not change Supabase Auth SMTP configuration.
 See `docs/booking-notifications.md` for operational details.
+
+The `/book` confirmation UI reads only the selected eligible public location’s cancellation-notice value through the server-only booking client. After atomic creation, a read bound to the returned booking ID retrieves its stored policy snapshot; authenticated success uses the existing owner-scoped RPC for PostgreSQL’s start instant and cutoff display. Guest success shows the stored notice without inferring a timezone-resolved cutoff. Failed post-commit display reads are logged and never report the committed booking as a failed submission. No browser database access or public database grants are added.
+
+## Payment provider configuration
+
+Admin → Payments is the sole active-provider selection UI. Stripe and NETOPIA
+configuration modules stay behind `PaymentProviderConfiguration`; booking/domain
+code resolves only an identifier. All credentials are server-only environment values:
+`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `NETOPIA_API_KEY`,
+`NETOPIA_POS_SIGNATURE`, `NETOPIA_ENVIRONMENT`. `STRIPE_PUBLISHABLE_KEY` is
+browser-safe and must match secret key mode. Admin receives only provider IDs and
+configured booleans; never secret values or validation payloads. Stripe SDK/types
+stay inside `src/lib/payments/providers/stripe`. NETOPIA has no adapter yet.
+
+The singleton `payment_provider_settings.active_provider` starts NULL. Next.js Admin
+service must verify current complete configuration before invoking the service-role
+selection RPC with the verified actor. The RPC rechecks active Admin authority and
+writes an audit event. Browser database roles have no settings writes/RPC execution.
+Atomic checkout locks/rechecks selection before storing the attempt provider. There
+is no Stripe default, automatic failover, or customer provider choice. If selection
+or the selected provider’s configuration is absent, online payment is unavailable.
+Pay at club remains independently controlled per location. Never rewrite stored
+attempt providers when settings change; the immutable-provider trigger enforces this.
+
+Legacy booking payment method/collection is unknown: leave the method NULL and
+create no fabricated Pay at club due payment. New checkout always snapshots the
+selected method, and every online attempt snapshots its provider.
+
+
+## Stripe one-time payments
+
+`commitCustomerCheckout` extends atomic booking creation; never add another booking
+or availability flow. Persist the attempt before creating its PaymentIntent using
+the stored provider/amount/currency. Use stable attempt idempotency and register the
+provider reference before returning client-secret presentation. Card-only Payment
+Element stays inside the existing confirmation dialog. Keep the ten-minute expiry
+unchanged. Checkout capability polling is server-only, hashes a random token on the
+attempt, and never trusts browser status or totals.
+
+`/api/payments/stripe/webhook` verifies the raw body signature, translates events and
+calls common `processOnlinePaymentEvent`. Its service-only transaction records event
+receipt and reuses existing same-row settlement atomically. Preserve booking-first
+lock order, GiST occupancy and notification timing. Late paid events or financial
+mismatches must set private `payment_provider_events.reconciliation_required` and
+must never reclaim a released court. No refunds, failover or automatic reconciliation
+are implemented. See `docs/payments-memberships.md` for configuration and verification.

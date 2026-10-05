@@ -21,11 +21,11 @@ insert into public.courts (id, location_id, name, slug, surface, environment, is
 insert into public.court_reservations (id, court_id, booking_date, starts_at_minute, ends_at_minute) values
   ('ac000000-0000-4000-8000-000000000020', 'ac000000-0000-4000-8000-000000000011', '2099-10-15', 600, 660),
   ('ac000000-0000-4000-8000-000000000021', 'ac000000-0000-4000-8000-000000000011', '2099-10-15', 660, 720);
-insert into public.bookings (id, reservation_id, account_user_id, customer_name, customer_email,
+insert into public.bookings (payment_method, id, reservation_id, account_user_id, customer_name, customer_email,
   customer_phone, total_amount_minor, currency, cancellation_notice_minutes) values
-  ('ac000000-0000-4000-8000-000000000030', 'ac000000-0000-4000-8000-000000000020',
+  ('pay_at_club', 'ac000000-0000-4000-8000-000000000030', 'ac000000-0000-4000-8000-000000000020',
    'ac000000-0000-4000-8000-000000000003', 'Ana Pop', 'ana@example.test', '+40 123', 9000, 'RON', 120),
-  ('ac000000-0000-4000-8000-000000000031', 'ac000000-0000-4000-8000-000000000021',
+  ('pay_at_club', 'ac000000-0000-4000-8000-000000000031', 'ac000000-0000-4000-8000-000000000021',
    null, 'Guest', 'guest@example.test', '+40 999', 7000, 'RON', 120);
 
 set local role anon;

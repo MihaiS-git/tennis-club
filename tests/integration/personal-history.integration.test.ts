@@ -35,7 +35,7 @@ test("mixed history is owner scoped, time zone aware, globally ordered and paged
     if (input.kind === "reservation") return reservationId;
     const id = randomUUID(); bookings.push(id);
     assert.strictEqual((await service.from("bookings").insert({ id, reservation_id: reservationId,
-      account_user_id: input.owner, customer_name: "Stored Customer", customer_email: input.email ?? "stored@example.test",
+      account_user_id: input.owner, payment_method: "pay_at_club", customer_name: "Stored Customer", customer_email: input.email ?? "stored@example.test",
       customer_phone: "+40 999", cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON", status: input.status ?? "confirmed" })).error, null);
     return id;
   }

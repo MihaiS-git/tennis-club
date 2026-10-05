@@ -1,4 +1,9 @@
+import { supportsOnlineCheckout } from "@/lib/payments/providers";
+import { readPublicBookingCancellationNotice } from "@/lib/bookings/confirmation-policy";
+import { activeOnlinePaymentProvider } from "@/lib/payments/settings";
 import { z } from "zod";
+import { readCurrentAccount } from "@/lib/auth/account";
+import { createClient } from "@/lib/supabase/server";
 import { listPublicLocationsWithCourts } from "@/lib/courts/public";
 import { getPublicCourtDay } from "@/lib/courts/public-calendar";
 import { localToday } from "@/lib/courts/calendar";
@@ -14,7 +19,7 @@ export async function BookingContent({ searchParams }: { searchParams: Promise<{
   const now = new Date();
   const today = localToday(location.timezone, now);
   const validDate = z.iso.date().safeParse(params.date).success && params.date! >= today;
-  const date = validDate ? params.date! : null;
+  const date = !params.date ? today : validDate ? params.date! : null;
   return <>
     <CalendarControls locations={locations} locationId={location.id} date={date} today={today} />
     <p className="mt-2 text-xs text-muted-foreground">Times shown in {location.timezone}.</p>
@@ -27,9 +32,10 @@ export async function BookingContent({ searchParams }: { searchParams: Promise<{
 async function BookingDay({ location, date, today, now }: {
   location: Awaited<ReturnType<typeof listPublicLocationsWithCourts>>[number]; date: string; today: string; now: Date;
 }) {
-  const [day, contact] = await Promise.all([
-    getPublicCourtDay(location, date, today, now), bookingContactPrefill(),
+  const client = await createClient();
+  const [day, contact, account, cancellationNoticeMinutes, onlineProvider] = await Promise.all([
+    getPublicCourtDay(location, date, today, now, client), bookingContactPrefill(client), readCurrentAccount(client), readPublicBookingCancellationNotice(location.id), activeOnlinePaymentProvider(),
   ]);
   return <BookingCalendar key={`${location.id}:${date}`} day={day} date={date}
-    locationName={location.name} currency={location.currency} initialContact={contact} />;
+    onlinePaymentAvailable={supportsOnlineCheckout(onlineProvider)} allowPayAtClub={location.allow_pay_at_club} timezone={location.timezone} cancellationNoticeMinutes={cancellationNoticeMinutes} locationName={location.name} currency={location.currency} initialContact={contact} authenticated={account.state === "active"} />;
 }

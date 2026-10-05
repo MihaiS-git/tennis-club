@@ -7,10 +7,36 @@ import { requireActiveAdmin } from "@/lib/admin/authorization";
 import type { UserRole } from "@/lib/auth/account";
 import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
+import { loadProfile } from "@/lib/profile/profile";
 
 const roleCodeSchema = z.enum(["admin", "coach"] satisfies UserRole[]);
 const statusSchema = z.enum(["active", "suspended"]);
 const PAGE_SIZE = 20;
+const accountRowSchema = z.object({
+  id: z.uuid(), email: z.string(), status: statusSchema,
+  created_at: z.iso.datetime({ offset: true }), updated_at: z.iso.datetime({ offset: true }),
+  user_roles: z.array(z.object({ role_code: roleCodeSchema })),
+});
+
+export type AdminUserDetails = AdminUserListItem & NonNullable<Awaited<ReturnType<typeof loadProfile>>>;
+
+export async function readAdminUserDetails(userId: string, supabase?: Awaited<ReturnType<typeof createClient>>): Promise<AdminUserDetails | null> {
+  const client = supabase ?? await createClient();
+  await requireActiveAdmin(client);
+  const id = z.uuid().parse(userId);
+  const { data, error } = await client.from("users")
+    .select("id, email, status, created_at, updated_at, user_roles!user_roles_user_id_fkey(role_code)")
+    .eq("id", id).maybeSingle();
+  if (error) {
+    logger.error({ event: "admin.user_details_failed", code: error.code }, "Failed to read user details");
+    throw new Error("Unable to load user details.");
+  }
+  if (!data) return null;
+  const { user_roles, ...account } = accountRowSchema.parse(data);
+  const profile = await loadProfile(client, id);
+  if (!profile) throw new Error("Unable to load user details.");
+  return { ...account, roles: user_roles.map(({ role_code }) => role_code).sort(), ...profile };
+}
 
 export type AdminUserListItem = {
   id: string;
@@ -73,14 +99,7 @@ export async function listAdminUsers(
     throw new Error("Unable to load users.");
   }
 
-  const rows = z.array(z.object({
-    id: z.uuid(),
-    email: z.string(),
-    status: statusSchema,
-    created_at: z.iso.datetime({ offset: true }),
-    updated_at: z.iso.datetime({ offset: true }),
-    user_roles: z.array(z.object({ role_code: roleCodeSchema })),
-  })).parse(data);
+  const rows = z.array(accountRowSchema).parse(data);
   const users = rows.map(({ user_roles, ...user }) => ({
     ...user,
     roles: user_roles.map(({ role_code }) => role_code).sort(),

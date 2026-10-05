@@ -216,6 +216,12 @@ Prevent:
 - unauthorized refunds;
 - refunds for unpaid transactions.
 
+Admin cancellation of customer bookings and direct reservations is permitted only
+strictly before the location-local start. The details dialog hides cancellation
+for started or past intervals. Both cancellation RPCs check wall-clock time after
+acquiring row locks; rejected attempts preserve all booking/reservation snapshots
+and do not enqueue cancellation notifications.
+
 ## Booking UI
 
 ### Desktop
@@ -255,3 +261,11 @@ Court 1
 18:00
 19:30
 ```
+
+## Implemented checkout lifecycle
+
+See [payment lifecycle foundation](payments-memberships.md). Online commits create
+one pending booking, one temporary reservation hold and one payment attempt.
+Pay at club confirms immediately only when enabled for that location. Confirmation
+email follows actual confirmation; expired holds stop blocking using database time
+and transactional cleanup, with the same reservation GiST constraint.

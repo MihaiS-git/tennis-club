@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+import { DetailSection } from "@/components/dialog-layout";
 import { minuteToTime } from "@/lib/admin/opening-hours-validation";
 
 export type ReservationDetailFields = {
@@ -10,10 +12,13 @@ export function reservationDateLabel(date: string) {
     .format(new Date(`${date}T12:00:00Z`));
 }
 
-export function ReservationDetailFieldsView({ reservation }: { reservation: ReservationDetailFields }) {
+export function ReservationDetailsView({ reservation, children }: { reservation: ReservationDetailFields; children: ReactNode }) {
   return <>
-    <ReservationScheduleFieldsView reservation={reservation} />
-    <dt className="text-muted-foreground">Reason</dt><dd className="break-words">{reservation.reason || "Not recorded"}</dd>
+    <DetailSection title="Court and time"><ReservationScheduleFieldsView reservation={reservation} /></DetailSection>
+    <DetailSection title="Reservation record">
+      <dt className="text-muted-foreground">Reason</dt><dd>{reservation.reason || "Not recorded"}</dd>
+      {children}
+    </DetailSection>
   </>;
 }
 

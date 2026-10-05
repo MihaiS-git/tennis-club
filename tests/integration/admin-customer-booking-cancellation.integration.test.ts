@@ -4,6 +4,7 @@ import { assert, expect, test } from "vitest";
 import { listOwnCourtHistory } from "@/lib/bookings/history-service";
 import { listOwnUpcomingCustomerBookings } from "@/lib/bookings/personal-service";
 import { getReservationDay, cancelCustomerBookingAsAdmin } from "@/lib/reservations/service";
+import { localMinute, localToday } from "@/lib/courts/local-time";
 import { mondayWeekday } from "@/lib/pricing/resolution";
 import { cleanupAuthFixtures, localFixtureClient } from "./auth-fixtures";
 
@@ -11,6 +12,8 @@ test("Admin cancellation atomically preserves snapshots, frees occupancy and mov
   const service = localFixtureClient();
   const locationId = randomUUID(), courtId = randomUUID(), reservationId = randomUUID(), bookingId = randomUUID();
   const guestReservationId = randomUUID(), guestBookingId = randomUUID();
+  const pastBookingId = randomUUID(), startedBookingId = randomUUID();
+  const pastReservationId = randomUUID(), startedReservationId = randomUUID(), pastDirectId = randomUUID();
   const users: string[] = [];
   const date = "2099-10-15", now = new Date("2099-10-14T12:00:00Z");
   const location = { id: locationId, name: "Operations", timezone: "UTC", courts: [{ id: courtId, name: "Court 1" }] };
@@ -41,10 +44,10 @@ test("Admin cancellation atomically preserves snapshots, frees occupancy and mov
     ])).error, null);
     assert.strictEqual((await service.from("bookings").insert([
       { id: bookingId, reservation_id: reservationId, account_user_id: owner.id,
-        customer_name: "Ana Pop", customer_email: "ana@example.test", customer_phone: "+40 123",
+        payment_method: "pay_at_club", customer_name: "Ana Pop", customer_email: "ana@example.test", customer_phone: "+40 123",
         cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON" },
       { id: guestBookingId, reservation_id: guestReservationId, account_user_id: null,
-        customer_name: "Guest", customer_email: "guest@example.test", customer_phone: "+40 999",
+        payment_method: "pay_at_club", customer_name: "Guest", customer_email: "guest@example.test", customer_phone: "+40 999",
         cancellation_notice_minutes: 120, total_amount_minor: 7000, currency: "RON" },
     ])).error, null);
     const beforeBooking = (await service.from("bookings").select("*").eq("id", bookingId).single()).data!;
@@ -88,9 +91,36 @@ test("Admin cancellation atomically preserves snapshots, frees occupancy and mov
     ]);
     expect((await admin.client.rpc("cancel_admin_court_reservation", { p_id: guestReservationId })).data).toBe(false);
     expect((await cancelCustomerBookingAsAdmin(guestBookingId, admin.client)).ok).toBe(true);
+
+    const clock = new Date();
+    const startedMinute = Math.min(1320, Math.floor(localMinute("UTC", clock) / 30) * 30);
+    assert.strictEqual((await service.from("court_reservations").insert([
+      { id: pastReservationId, court_id: courtId, booking_date: "2000-01-01", starts_at_minute: 600, ends_at_minute: 660 },
+      { id: pastDirectId, court_id: courtId, booking_date: "2000-01-01", starts_at_minute: 660, ends_at_minute: 720 },
+      { id: startedReservationId, court_id: courtId, booking_date: localToday("UTC", clock), starts_at_minute: startedMinute, ends_at_minute: startedMinute + 120 },
+    ])).error, null);
+    assert.strictEqual((await service.from("bookings").insert([
+      { id: pastBookingId, reservation_id: pastReservationId, payment_method: "pay_at_club", customer_name: "Historical",
+        customer_email: "past@example.test", customer_phone: "+40 123", cancellation_notice_minutes: 120, total_amount_minor: 5000, currency: "RON" },
+      { id: startedBookingId, reservation_id: startedReservationId, payment_method: "pay_at_club", customer_name: "Started",
+        customer_email: "started@example.test", customer_phone: "+40 123", cancellation_notice_minutes: 120, total_amount_minor: 5000, currency: "RON" },
+    ])).error, null);
+    for (const id of [pastBookingId, startedBookingId]) {
+      const bookingBefore = (await service.from("bookings").select("*").eq("id", id).single()).data!;
+      const reservationBefore = (await service.from("court_reservations").select("*").eq("id", bookingBefore.reservation_id).single()).data!;
+      expect(await cancelCustomerBookingAsAdmin(id, admin.client)).toEqual({ ok: false, message: "This booking is no longer available to cancel." });
+      expect((await service.from("bookings").select("*").eq("id", id).single()).data).toEqual(bookingBefore);
+      expect((await service.from("court_reservations").select("*").eq("id", bookingBefore.reservation_id).single()).data).toEqual(reservationBefore);
+      expect((await service.from("booking_email_outbox").select("id").eq("booking_id", id)).data).toEqual([]);
+    }
+    const directBefore = (await service.from("court_reservations").select("*").eq("id", pastDirectId).single()).data!;
+    const directAttempt = await admin.client.rpc("cancel_admin_court_reservation", { p_id: pastDirectId });
+    expect(directAttempt.error).toBeNull();
+    expect(directAttempt.data).toBe(false);
+    expect((await service.from("court_reservations").select("*").eq("id", pastDirectId).single()).data).toEqual(directBefore);
   } finally {
-    await service.from("bookings").delete().in("id", [bookingId, guestBookingId]);
-    await service.from("court_reservations").delete().in("id", [reservationId, guestReservationId]);
+    await service.from("bookings").delete().in("id", [bookingId, guestBookingId, pastBookingId, startedBookingId]);
+    await service.from("court_reservations").delete().in("id", [reservationId, guestReservationId, pastReservationId, startedReservationId, pastDirectId]);
     await service.from("location_opening_hours").delete().eq("location_id", locationId);
     await service.from("courts").delete().eq("id", courtId);
     await service.from("locations").delete().eq("id", locationId);

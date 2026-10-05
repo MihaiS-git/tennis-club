@@ -28,6 +28,7 @@ const locationSchema = z.object({
   country_code: z.string().nullable(),
   timezone: z.string(),
   currency: z.enum(locationCurrencies),
+  allow_pay_at_club: z.boolean().default(false),
   is_active: z.boolean(),
   is_public: z.boolean(),
   archived_at: z.iso.datetime({ offset: true }).nullable(),
@@ -43,7 +44,7 @@ export async function listPublicLocationsWithCourts(
 ): Promise<PublicLocation[]> {
   const client = supabase ?? await createClient();
   const { data, error } = await client.from("locations")
-    .select("id, name, slug, address_line1, address_line2, city, postal_code, country_code, timezone, currency, is_active, is_public, archived_at, location_opening_hours(id), courts(id, name, slug, surface, environment, has_lighting, is_active, location_pricing_rules(court_state, ends_on))")
+    .select("allow_pay_at_club, id, name, slug, address_line1, address_line2, city, postal_code, country_code, timezone, currency, is_active, is_public, archived_at, location_opening_hours(id), courts(id, name, slug, surface, environment, has_lighting, is_active, location_pricing_rules(court_state, ends_on))")
     .eq("is_active", true)
     .is("archived_at", null)
     .eq("is_public", true)
@@ -64,7 +65,7 @@ export async function listPublicLocationsWithCourts(
       id: location.id, name: location.name, slug: location.slug,
       address_line1: location.address_line1, address_line2: location.address_line2,
       city: location.city, postal_code: location.postal_code, country_code: location.country_code,
-      timezone: location.timezone, currency: location.currency,
+      timezone: location.timezone, currency: location.currency, allow_pay_at_club: location.allow_pay_at_club,
       courts: location.courts.map((court) => ({
         id: court.id, name: court.name, slug: court.slug, surface: court.surface,
         environment: court.environment, has_lighting: court.has_lighting,

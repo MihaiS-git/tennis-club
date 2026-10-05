@@ -1,10 +1,12 @@
 import { z } from "zod";
+import { paymentMethodSchema } from "@/lib/payments/domain";
 import { locationCurrencies } from "@/lib/admin/locations-validation";
 import { minorAmountSchema } from "@/lib/pricing/money";
 
 export type BookingContact = { customerName: string; customerEmail: string; customerPhone: string };
 
 export const customerBookingInputSchema = z.strictObject({
+  paymentMethod: paymentMethodSchema.default("online"),
   courtId: z.uuid(),
   date: z.iso.date(),
   startMinute: z.number().int().min(0).max(1439),

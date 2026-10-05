@@ -12,13 +12,14 @@ const locationSchema = z.object({
   id: z.uuid(), name: z.string(), slug: z.string(),
   address_line1: z.string().nullable(), address_line2: z.string().nullable(),
   city: z.string().nullable(), postal_code: z.string().nullable(), country_code: z.string().nullable(),
+  allow_pay_at_club: z.boolean().default(false),
   customer_cancellation_notice_minutes: cancellationNoticeMinutesSchema,
   timezone: z.string(), currency: z.enum(locationCurrencies),
   is_active: z.boolean(), is_public: z.boolean(), archived_at: z.iso.datetime({ offset: true }).nullable(), display_order: z.number().int(),
   created_at: z.iso.datetime({ offset: true }), updated_at: z.iso.datetime({ offset: true }),
 });
 export type AdminLocation = z.infer<typeof locationSchema>;
-const columns = "id, name, slug, address_line1, address_line2, city, postal_code, country_code, timezone, currency, is_active, is_public, archived_at, display_order, created_at, updated_at";
+const columns = "allow_pay_at_club, id, name, slug, address_line1, address_line2, city, postal_code, country_code, timezone, currency, is_active, is_public, archived_at, display_order, created_at, updated_at";
 
 export async function listAdminLocations(supabase?: Awaited<ReturnType<typeof createClient>>, view: "current" | "archived" = "current"): Promise<AdminLocation[]> {
   const client = supabase ?? await createClient();

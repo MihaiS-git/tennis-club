@@ -25,11 +25,11 @@ insert into public.court_reservations (id, court_id, booking_date, starts_at_min
   ('d1000000-0000-4000-8000-000000000020', 'd1000000-0000-4000-8000-000000000011', '2099-10-15', 600, 660, 'Training', 'd1000000-0000-4000-8000-000000000002'),
   ('d1000000-0000-4000-8000-000000000021', 'd1000000-0000-4000-8000-000000000011', '2099-10-15', 660, 720, null, null),
   ('d1000000-0000-4000-8000-000000000022', 'd1000000-0000-4000-8000-000000000011', '2099-10-15', 720, 780, null, null);
-insert into public.bookings (id, reservation_id, account_user_id, customer_name, customer_email, customer_phone,
+insert into public.bookings (payment_method, id, reservation_id, account_user_id, customer_name, customer_email, customer_phone,
   total_amount_minor, currency, cancellation_notice_minutes) values
-  ('d1000000-0000-4000-8000-000000000030', 'd1000000-0000-4000-8000-000000000021',
+  ('pay_at_club', 'd1000000-0000-4000-8000-000000000030', 'd1000000-0000-4000-8000-000000000021',
    'd1000000-0000-4000-8000-000000000003', 'Ana Pop', 'ana@example.test', '+40 123', 7500, 'RON', 120),
-  ('d1000000-0000-4000-8000-000000000031', 'd1000000-0000-4000-8000-000000000022',
+  ('pay_at_club', 'd1000000-0000-4000-8000-000000000031', 'd1000000-0000-4000-8000-000000000022',
    null, 'Cancelled Guest', 'guest@example.test', '+40 999', 7500, 'RON', 120);
 update public.bookings set status = 'cancelled' where id = 'd1000000-0000-4000-8000-000000000031';
 

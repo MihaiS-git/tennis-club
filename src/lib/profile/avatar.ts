@@ -7,6 +7,7 @@ import { createClient } from "@/lib/supabase/server";
 import { profileContext, type ProfileClient } from "./profile";
 import { validateAvatar } from "./avatar-validation";
 import { avatarMutationTransport } from "./avatar-coordination";
+import { z } from "zod";
 import type { ProfileActionState } from "./validation";
 
 export const AVATAR_BUCKET = "profile-avatars";
@@ -15,20 +16,23 @@ function isOwnAvatarPath(userId: string, path: string) {
   return path === `${userId}/avatar.webp`;
 }
 
-export async function readPlayerAvatar(suppliedClient?: ProfileClient): Promise<
+export async function readPlayerAvatar(suppliedClient?: ProfileClient, adminTargetUserId?: string): Promise<
   { kind: "unauthenticated" | "forbidden" | "not-found" | "error" } | { kind: "image"; file: Blob }
 > {
   try {
     const { client, account } = await profileContext(suppliedClient);
     if (account.state === "unauthenticated") return { kind: "unauthenticated" };
     if (account.state !== "active") return { kind: "forbidden" };
-    const profile = await client.from("player_profiles").select("avatar_path").eq("user_id", account.userId).maybeSingle();
+    if (adminTargetUserId !== undefined && !account.roles.includes("admin")) return { kind: "forbidden" };
+    const userId = adminTargetUserId ?? account.userId;
+    if (adminTargetUserId !== undefined && !z.uuid().safeParse(userId).success) return { kind: "not-found" };
+    const profile = await client.from("player_profiles").select("avatar_path").eq("user_id", userId).maybeSingle();
     if (profile.error) {
       logger.error({ event: "profile.avatar_read_failed", stage: "profile", code: profile.error.code }, "Failed to read avatar");
       return { kind: "error" };
     }
     const path = profile.data?.avatar_path;
-    if (typeof path !== "string" || !isOwnAvatarPath(account.userId, path)) return { kind: "not-found" };
+    if (typeof path !== "string" || !isOwnAvatarPath(userId, path)) return { kind: "not-found" };
     const result = await client.storage.from(AVATAR_BUCKET).download(path);
     if (result.error || !result.data || result.data.type !== "image/webp") {
       logger.error({ event: "profile.avatar_read_failed", stage: "storage" }, "Failed to read avatar");

@@ -144,3 +144,28 @@ it.each(["load", "upload", "persist", "acquire response"])("releases its own att
   expect(rpc).toHaveBeenLastCalledWith("release_avatar_mutation", rpc.mock.calls[0][1]);
   expect(await changeAvatar(png())).toHaveProperty("success");
 });
+
+const targetId = "84c64ef2-6925-4901-a137-f01395541411";
+it("allows active Admins to read the selected user's canonical private avatar", async () => {
+  readCurrentAccount.mockResolvedValue({ state: "active", userId: "owner", roles: ["admin"] });
+  result.mockResolvedValue({ data: { avatar_path: `${targetId}/avatar.webp` }, error: null });
+  expect(await readPlayerAvatar(undefined, targetId)).toEqual({ kind: "image", file: original });
+  expect(download).toHaveBeenCalledWith(`${targetId}/avatar.webp`);
+});
+it.each([
+  { state: "unauthenticated", kind: "unauthenticated", roles: [] },
+  { state: "suspended", kind: "forbidden", roles: ["admin"] },
+  { state: "active", kind: "forbidden", roles: ["coach"] },
+  { state: "active", kind: "forbidden", roles: [] },
+])("rejects unauthorized Admin avatar reads: $state / $roles", async ({ state, roles, kind }) => {
+  readCurrentAccount.mockResolvedValue({ state, userId: "owner", roles });
+  expect(await readPlayerAvatar(undefined, targetId)).toEqual({ kind });
+  expect(download).not.toHaveBeenCalled();
+});
+it("rejects noncanonical avatar paths and invalid target IDs", async () => {
+  readCurrentAccount.mockResolvedValue({ state: "active", userId: "owner", roles: ["admin"] });
+  result.mockResolvedValue({ data: { avatar_path: "other/avatar.webp" }, error: null });
+  expect(await readPlayerAvatar(undefined, targetId)).toEqual({ kind: "not-found" });
+  expect(await readPlayerAvatar(undefined, "invalid")).toEqual({ kind: "not-found" });
+  expect(download).not.toHaveBeenCalled();
+});

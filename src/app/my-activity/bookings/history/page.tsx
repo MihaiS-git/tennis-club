@@ -1,11 +1,20 @@
 import { redirect } from "next/navigation";
+import { Suspense } from "react";
 
-export default async function LegacyBookingHistoryPage({ searchParams }: {
+type LegacyBookingHistoryProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
-}) {
+};
+
+export default function LegacyBookingHistoryPage({ searchParams }: LegacyBookingHistoryProps) {
+  return <Suspense fallback={<p role="status" className="text-sm text-muted-foreground">Loading booking history…</p>}>
+    <LegacyBookingHistoryRedirect searchParams={searchParams} />
+  </Suspense>;
+}
+
+async function LegacyBookingHistoryRedirect({ searchParams }: LegacyBookingHistoryProps) {
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(await searchParams)) {
     if (typeof value === "string") query.set(key, value);
   }
-  redirect(`/my-activity/history${query.size ? `?${query}` : ""}`);
+  return redirect(`/my-activity/history${query.size ? `?${query}` : ""}`);
 }

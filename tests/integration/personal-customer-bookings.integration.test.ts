@@ -47,7 +47,7 @@ test("upcoming customer booking reads are owner scoped for members and staff", a
       cancelled_by_user_id: options.reservationStatus === "cancelled" ? accountUserId : null })).error, null);
     const id = randomUUID();
     assert.strictEqual((await service.from("bookings").insert({ id, reservation_id: reservationId,
-      account_user_id: accountUserId, customer_name: "Snapshot Name", customer_email: options.email ?? "snapshot@example.test",
+      account_user_id: accountUserId, payment_method: "pay_at_club", customer_name: "Snapshot Name", customer_email: options.email ?? "snapshot@example.test",
       customer_phone: "+40 123", cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON",
       status: options.bookingStatus ?? "confirmed" })).error, null);
     return id;

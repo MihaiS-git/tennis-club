@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { Suspense } from "react";
 
 const { context, redirect, upcoming, history } = vi.hoisted(() => ({
   context: vi.fn(), redirect: vi.fn(() => { throw new Error("redirect"); }), upcoming: vi.fn(), history: vi.fn(),
@@ -23,7 +24,12 @@ it("redirects the overview directly to bookings", () => {
 });
 
 it("redirects the retired History route and preserves its query", async () => {
-  await expect(LegacyHistoryPage({ searchParams: Promise.resolve({ page: "2", type: "booking" }) })).rejects.toThrow("redirect");
+  const searchParams = Promise.resolve({ page: "2", type: "booking" });
+  const page = LegacyHistoryPage({ searchParams });
+  expect(page.type).toBe(Suspense);
+  const content = page.props.children;
+  expect(content.props.searchParams).toBe(searchParams);
+  await expect(content.type(content.props)).rejects.toThrow("redirect");
   expect(redirect).toHaveBeenCalledWith("/my-activity/history?page=2&type=booking");
 });
 

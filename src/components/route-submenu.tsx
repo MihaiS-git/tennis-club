@@ -21,7 +21,7 @@ export function RouteSubmenu({ sections, label }: { sections: readonly { label: 
   }, [current]);
 
   return (
-    <SegmentedNavigation ref={navRef} aria-label={label} columns={sections.length === 2 ? 2 : 5} className="mb-8">
+    <SegmentedNavigation ref={navRef} aria-label={label} columns={sections.length === 2 ? 2 : sections.length === 6 ? 6 : 5} className="mb-8">
       {sections.map(({ label, href }) => (
         <Link
           key={href}

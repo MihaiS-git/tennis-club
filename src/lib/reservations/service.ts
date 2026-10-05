@@ -106,7 +106,7 @@ export async function getReservationDay(location: InternalLocation, date: string
     }
   }
   return { ...buildReservationDay({ date, today: localToday(location.timezone, now), currentMinute: localMinute(location.timezone, now),
-    courts: location.courts, hours: hours.data, reservations: occupancy.data }), adminOccupancy };
+    courts: location.courts, hours: hours.data, reservations: occupancy.data }), occupancy: occupancy.data, adminOccupancy };
 }
 
 export async function validateDirectReservationTarget(input: ReservationInput, client: Client, now: Date, actorId: string): Promise<ReservationResult> {

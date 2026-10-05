@@ -9,7 +9,7 @@ import { ensureIntegrationAdminAnchor } from "../admin-anchor";
 
 vi.mock("server-only", () => ({}));
 
-import { listAdminUsers } from "../../../src/lib/admin/users";
+import { listAdminUsers, readAdminUserDetails } from "../../../src/lib/admin/users";
 
 const supabaseUrl = process.env.SUPABASE_URL ?? "";
 const publishableKey = process.env.SUPABASE_PUBLISHABLE_KEY ?? "";
@@ -106,6 +106,16 @@ test("admin user listing is authorized, ordered, bounded, and includes roles", a
     assert.strictEqual(additionalAdmin.error, null);
 
     const adminSession = await signIn(admin.email);
+    expect((await readAdminUserDetails(member.id, adminSession))?.player).toBeNull();
+    assert.strictEqual((await service.from("users").update({ first_name: "Live", last_name: "Player", phone: "+40712345678", city: "Bucharest" }).eq("id", member.id)).error, null);
+    assert.strictEqual((await service.from("player_profiles").insert({ user_id: member.id, display_name: "Live Ace", sportya_level: "6", rating: 1450, handedness: "left", backhand: "two_handed", preferred_game: "both", preferred_surface: "clay", bio: "Live bio" })).error, null);
+    const details = await readAdminUserDetails(member.id, adminSession);
+    expect(details?.personal).toMatchObject({ first_name: "Live", last_name: "Player", phone: "+40712345678", city: "Bucharest" });
+    expect(details?.player).toMatchObject({ display_name: "Live Ace", sportya_level: "6", rating: 1450, handedness: "left", backhand: "two_handed", preferred_game: "both", preferred_surface: "clay", bio: "Live bio" });
+    assert.strictEqual((await service.from("users").update({ phone: "+40799999999" }).eq("id", member.id)).error, null);
+    expect((await readAdminUserDetails(member.id, adminSession))?.personal.phone).toBe("+40799999999");
+    expect(await readAdminUserDetails(randomUUID(), adminSession)).toBeNull();
+    expect((await readAdminUserDetails(suspendedAdmin.id, adminSession))?.status).toBe("suspended");
     const allCount = await service.from("users").select("id", { count: "exact", head: true });
     assert.strictEqual(allCount.error, null);
     const defaultResult = await listAdminUsers({}, adminSession);
@@ -196,6 +206,7 @@ test("admin user listing is authorized, ordered, bounded, and includes roles", a
     }
 
     const memberSession = await signIn(member.email);
+    await expect(readAdminUserDetails(coach.id, memberSession)).rejects.toThrow("NEXT_HTTP_ERROR_FALLBACK;404");
     await expect(listAdminUsers({}, memberSession)).rejects.toThrow("NEXT_HTTP_ERROR_FALLBACK;404");
     await expect(listAdminUsers({ sort: "roles" }, memberSession)).rejects.toThrow("NEXT_HTTP_ERROR_FALLBACK;404");
     const visibleKeys = await memberSession.from("user_role_sort_keys").select("id, role_sort_key");
@@ -203,8 +214,10 @@ test("admin user listing is authorized, ordered, bounded, and includes roles", a
     expect(visibleKeys.data).toEqual([{ id: member.id, role_sort_key: 0 }]);
 
     const suspendedSession = await signIn(suspendedAdmin.email);
+    await expect(readAdminUserDetails(member.id, suspendedSession)).rejects.toThrow("NEXT_HTTP_ERROR_FALLBACK;404");
     await expect(listAdminUsers({}, suspendedSession)).rejects.toThrow("NEXT_HTTP_ERROR_FALLBACK;404");
   } finally {
+    assert.strictEqual((await service.from("player_profiles").delete().in("user_id", createdIds)).error, null);
     for (const id of createdIds.reverse()) {
       const roles = await service.from("user_roles").delete().eq("user_id", id);
       assert.strictEqual(roles.error, null);

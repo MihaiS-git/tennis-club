@@ -1,6 +1,10 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { unstable_rethrow } from "next/navigation";
+import { z } from "zod";
+import { readAdminUserDetails } from "@/lib/admin/users";
+import { logger } from "@/lib/logger";
 
 import {
   adminUserRoleSchema,
@@ -14,6 +18,19 @@ import {
   type AdminUserStatusResult,
   updateAdminUserStatus,
 } from "@/lib/admin/user-status";
+
+export async function readUserDetailsAction(userId: string) {
+  const parsed = z.uuid().safeParse(userId);
+  if (!parsed.success) return { ok: false, error: "Invalid user." } as const;
+  try {
+    const user = await readAdminUserDetails(parsed.data);
+    return user ? { ok: true, user } as const : { ok: false, error: "This user no longer exists." } as const;
+  } catch (error) {
+    unstable_rethrow(error);
+    logger.error({ event: "admin.user_details_request_failed" }, "Failed to load user details");
+    return { ok: false, error: "Unable to load user details. Please try again." } as const;
+  }
+}
 
 type UserStatusActionResult = AdminUserStatusResult | { ok: false; reason: "invalid-input" };
 type UserRoleActionResult = AdminUserRoleResult | { ok: false; reason: "invalid-input" };

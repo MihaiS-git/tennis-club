@@ -2,6 +2,8 @@
 
 import { useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { DialogHeader, DialogFooter } from "@/components/dialog-layout";
+import { BookingDetails } from "@/components/booking-details";
 import { ModalDialog } from "@/components/modal-dialog";
 import { historyStatus, type CourtHistoryItem } from "@/lib/bookings/history";
 import { parseActivityQuery, type ActivityQuery } from "@/lib/bookings/activity-query";
@@ -44,23 +46,11 @@ export function HistoryActivity({ rows, page = 1, staff = false, query = parseAc
     {selected && typeof document !== "undefined" && createPortal(
       <ModalDialog ref={dialogRef} active aria-labelledby={titleId} onClose={() => { setSelected(null); returnFocusRef.current?.focus(); }}
         className="fixed inset-0 m-auto w-[calc(100%-2rem)] max-w-md rounded-card border border-border bg-surface p-5 text-foreground shadow-floating backdrop:bg-foreground/50">
-        <h2 id={titleId} className="font-heading text-lg font-semibold">{selected.kind === "booking" ? "Booking details" : "Reservation details"}</h2>
+        <DialogHeader titleId={titleId} title={selected.kind === "booking" ? "Booking details" : "Reservation details"} status={historyStatus(selected)} onClose={() => dialogRef.current?.close()} />
         {selected.kind === "reservation" ? <ReservationDetails reservation={selected} /> :
-          <dl className="mt-4 grid grid-cols-[7rem_1fr] gap-x-3 gap-y-2 text-sm">
-            <dt className="text-muted-foreground">Location</dt><dd>{selected.location_name}</dd>
-            <dt className="text-muted-foreground">Court</dt><dd>{selected.court_name}</dd>
-            <dt className="text-muted-foreground">Date</dt><dd>{dateLabel(selected.booking_date)}</dd>
-            <dt className="text-muted-foreground">Time</dt><dd>{timeLabel(selected.starts_at_minute)}–{timeLabel(selected.ends_at_minute)} ({selected.location_timezone})</dd>
-            <dt className="text-muted-foreground">Duration</dt><dd>{selected.ends_at_minute - selected.starts_at_minute} min</dd>
-            <dt className="col-span-2 mt-2 font-semibold">Contact</dt>
-            <dt className="text-muted-foreground">Name</dt><dd>{selected.customer_name}</dd>
-            <dt className="text-muted-foreground">Email</dt><dd>{selected.customer_email}</dd>
-            <dt className="text-muted-foreground">Phone</dt><dd>{selected.customer_phone}</dd>
-            <dt className="text-muted-foreground">Total</dt><dd>{formatMoney(selected.total_amount_minor, selected.currency)}</dd>
-            <dt className="text-muted-foreground">Status</dt><dd>{historyStatus(selected)}</dd>
-          </dl>}
-        <div className="mt-5 flex justify-end"><button type="button" onClick={() => dialogRef.current?.close()}
-          className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button></div>
+          <BookingDetails booking={selected} />}
+        <DialogFooter><button type="button" onClick={() => dialogRef.current?.close()}
+          className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button></DialogFooter>
       </ModalDialog>, document.body)}
   </>;
 }

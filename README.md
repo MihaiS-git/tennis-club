@@ -259,8 +259,8 @@ Use it only for trusted system operations such as:
 - narrowly scoped system operations that genuinely require elevated access.
 
 `SUPABASE_SECRET_KEY` is used by the server-side customer booking writer and the
-booking email outbox worker. The writer calls the atomic creation RPC after
-user-scoped validation; the worker calls service-role-only delivery RPCs.
+booking email outbox worker. The writer calls atomic checkout and trusted payment lifecycle RPCs after
+server validation; the worker calls service-role-only delivery RPCs.
 
 Never expose the secret key to:
 
@@ -563,7 +563,7 @@ Owner-scoped availability excludes its own reservation and returns only active c
 opening hours and occupancy for its fixed location, independent of public publication.
 Shared internal RPC helpers are not executable by browser database roles; Admin RPCs
 retain their separate role boundary. Success calls `revalidateCourtActivity("edit")`
-for `/book`, `/reservations`, and `/my-activity/bookings`. Payments, refunds and
+for `/book`, `/reservations`, and `/my-activity/bookings`. Payment lifecycle/holds are implemented; provider checkout, refunds and
 guest self-management are not implemented. Booking lifecycle emails use the durable
 outbox described in [Booking notifications](docs/booking-notifications.md).
 
@@ -1089,9 +1089,16 @@ pricing; consumers must still check opening hours independently. The resolver us
 court, derived state, date, weekday and local minute. Public `/courts` discovers
 only eligible locations and courts. See [Pricing](docs/pricing.md).
 
-Public `/book` loads only eligible locations and courts for its controls, reading only the small opening-hours and pricing fields needed to check readiness without a date. It does not
-load a calendar day's opening hours, coverage, pricing, or reservations until a valid location-local
-date is selected in the URL. For that date it reads the selected location's opening
+`/book` and `/reservations` default to the selected location's current calendar
+date when the URL omits a date. An explicit valid date overrides that default;
+malformed explicit dates retain the validation error, and `/book` also rejects past dates.
+Admins and Coaches can navigate to past dates in `/reservations` using Prev or the
+date picker. Past occupancy opens read-only details with existing role visibility;
+past slots cannot be reserved and past activity cannot be edited or cancelled. The server renders
+only the chosen day, without a client redirect or adjacent-day preload.
+Public `/book` discovers eligible locations and courts using only the small
+opening-hours and pricing fields needed to check readiness. For the selected
+location-local date it reads the location's opening
 hours, coverage and applicable pricing for all active courts, and only that date's
 reservation occupancy. Each court has one compact 30-minute timetable with hourly
 prices in available cells. Closed gaps, booked, no-pricing, and past cells remain
@@ -1113,22 +1120,36 @@ at least 60 minutes with start and end on 30-minute boundaries, within one local
 calendar day, and uses a partial GiST exclusion constraint to reject overlapping
 active intervals for the same court/date. An optional `reason` (up to 255 characters)
 describes direct reservations; customer bookings have their own commercial record.
-Reservations have `active` or `cancelled` status; only active rows block occupancy. Active Admins
+Reservations have `active`, `cancelled`, `held` or `released` status; active rows and
+non-expired payment holds block occupancy. Active Admins
 and Coaches can create direct reservations at `/reservations` for active courts at
 structurally ready locations, including unpublished locations.
 The Server Action checks the account, resources, location-local time, opening hours,
 duration and required trimmed reason before a user-scoped insert. The GiST
 constraint resolves concurrent overlaps; the UI shows a contextual conflict error.
 Customer booking persistence is available through `/book`. `bookings` stores one unique reservation reference, an optional
-application account ID, required contact snapshot, confirmed/cancelled status, and
+application account ID, required contact snapshot, payment-method snapshot, booking lifecycle status, and
 an integer price/currency snapshot. Guests have no account link; active authenticated
 users are resolved server-side, including Admins and Coaches. The service reuses the
 public location and calendar pricing rules and validates the entire interval before
-calling a service-role-only RPC. The RPC inserts the active physical reservation and
-confirmed booking in one transaction. GiST overlap errors roll back both rows and
+calling a service-role-only RPC. The RPC inserts the physical reservation, booking and payment attempt in one
+transaction: online creates a temporary hold/pending booking; allowed Pay at club
+confirms immediately. GiST overlap errors roll back both rows and
 return a safe availability message. Browser roles have no booking table read/write
 grants or RPC access; public occupancy remains limited to court and interval fields.
-This foundation has no payment or hold state.
+See [payment lifecycle foundation](docs/payments-memberships.md) for the centralized
+10-minute hold, provider snapshots, expiry cleanup and trusted same-row settlement.
+Admin → Payments displays Stripe/NETOPIA configuration status and selects one active
+provider for new attempts. No provider is selected by default; an unconfigured or
+unselected provider disables online payment, with no failover or customer provider
+choice. Stripe configuration requires `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`,
+and `STRIPE_WEBHOOK_SECRET`; only the publishable key is browser-safe. NETOPIA uses
+server-only `NETOPIA_API_KEY`, `NETOPIA_POS_SIGNATURE` and `NETOPIA_ENVIRONMENT`
+and has no checkout adapter yet. Stripe Payment Element uses the existing ten-minute
+hold and a server-created PaymentIntent. Verified webhooks settle the same internal
+rows; duplicate events cannot duplicate confirmation, and late success is recorded
+for reconciliation. Existing attempt providers are immutable. Historical bookings retain
+an unknown (NULL) payment method, with no fabricated payment debt. Pay at club defaults OFF per location and is edited in Booking policy.
 Direct reservations have no price or payment flow. RLS permits only active Admins
 and Coaches to insert rows with a reason and their own authenticated user ID as
 creator. Existing rows can have a null creator. `/reservations` reads active occupancy
@@ -1162,8 +1183,8 @@ protect that check. Changed totals require explicit acknowledgement; a changed s
 quote returns `price_changed` without writing. Rescheduling preserves identity,
 contact and cancellation-policy snapshots, and invalidates `/book`, `/reservations`
 and `/my-activity/bookings`, without invalidating History. The owner-scoped
-self-rescheduling workflow above reuses this implementation. Payments and refunds
-are not implemented. Booking lifecycle notifications use a durable outbox.
+self-rescheduling workflow above reuses this implementation. Stripe one-time checkout
+is implemented; refunds are not. Booking lifecycle notifications use a durable outbox.
 
 On `/my-activity/bookings`, active Admins and Coaches can cancel only their own active Upcoming
 reservations after explicit confirmation. The Server Action rechecks staff authorization,
@@ -1486,3 +1507,5 @@ development. Run `npm run mail:worker` alongside the app, or
 `npm run mail:worker -- --once` to drain eligible work once. Supabase Auth email
 configuration remains independent. See [Booking notifications](docs/booking-notifications.md)
 for configuration, retry guarantees, and local verification.
+
+The `/book` confirmation UI reads only the selected eligible public location’s cancellation-notice value through the server-only booking client. After atomic creation, a read bound to the returned booking ID retrieves its stored policy snapshot; authenticated success uses the existing owner-scoped RPC for PostgreSQL’s start instant and cutoff display. Guest success shows the stored notice without inferring a timezone-resolved cutoff. Failed post-commit display reads are logged and never report the committed booking as a failed submission. No browser database access or public database grants are added.

@@ -42,10 +42,10 @@ test("Admin reschedules the same rows with acknowledged pricing, stale/overlap p
     ])).error, null);
     assert.strictEqual((await service.from("bookings").insert([
       { id: bookingId, reservation_id: reservationId, account_user_id: owner.id,
-        customer_name: "Ana Pop", customer_email: "ana@example.test", customer_phone: "+40 123",
+        payment_method: "pay_at_club", customer_name: "Ana Pop", customer_email: "ana@example.test", customer_phone: "+40 123",
         cancellation_notice_minutes: 120, total_amount_minor: 8000, currency: "RON" },
       { id: guestBookingId, reservation_id: guestReservationId, account_user_id: null,
-        customer_name: "Guest", customer_email: "guest@example.test", customer_phone: "+40 999",
+        payment_method: "pay_at_club", customer_name: "Guest", customer_email: "guest@example.test", customer_phone: "+40 999",
         cancellation_notice_minutes: 120, total_amount_minor: 7000, currency: "RON" },
     ])).error, null);
     const ruleSetId = randomUUID();

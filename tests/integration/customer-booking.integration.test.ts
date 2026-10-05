@@ -16,7 +16,7 @@ test("customer booking persists both rows, snapshots contact and price, and roll
   const locationId = randomUUID(), courtId = randomUUID(), inactiveCourtId = randomUUID(), ruleSetId = randomUUID();
   const date = "2099-10-15", now = new Date("2099-10-14T12:00:00Z");
   const userIds: string[] = [];
-  const base = { courtId, date, startMinute: 600, endMinute: 660,
+  const base = { paymentMethod: "pay_at_club", courtId, date, startMinute: 600, endMinute: 660,
     customerName: "  Booking Guest  ", customerEmail: "  guest@example.test  ", customerPhone: "  +40 123  ",
     expectedTotalAmountMinor: 5000, expectedCurrency: "RON" };
   const rows = async () => {
@@ -33,7 +33,7 @@ test("customer booking persists both rows, snapshots contact and price, and roll
   };
   try {
     assert.strictEqual((await service.from("locations").insert({ id: locationId, slug: `booking-${locationId}`,
-      name: "Booking fixture", timezone: "UTC", currency: "RON", is_public: true, customer_cancellation_notice_minutes: 120 })).error, null);
+      name: "Booking fixture", timezone: "UTC", currency: "RON", is_public: true, allow_pay_at_club: true, customer_cancellation_notice_minutes: 120 })).error, null);
     assert.strictEqual((await service.from("courts").insert([
       { id: courtId, location_id: locationId, name: "Court", slug: "court", surface: "clay", environment: "outdoor", is_active: true },
       { id: inactiveCourtId, location_id: locationId, name: "Inactive", slug: "inactive", surface: "clay", environment: "outdoor", is_active: false },
@@ -62,6 +62,7 @@ test("customer booking persists both rows, snapshots contact and price, and roll
     const guestResult = await createCustomerBooking({ ...base, expectedTotalAmountMinor: 6000,
       expectedCurrency: "EUR" }, guest, service, now);
     assert.ok(guestResult.ok, JSON.stringify(guestResult));
+    expect(guestResult.cancellationPolicy).toEqual({ noticeMinutes: 120, cutoff: null });
     const first = await rows();
     expect(first.bookings).toHaveLength(1); expect(first.reservations).toHaveLength(1);
     expect(first.bookings[0]).toMatchObject({ account_user_id: null, customer_name: "Booking Guest",
@@ -72,6 +73,7 @@ test("customer booking persists both rows, snapshots contact and price, and roll
     const publicDay = await getPublicCourtDay(publicLocation, date, "2099-10-14", now, guest);
     expect(publicDay.courts.find((item) => item.court.id === courtId)?.cells.slice(0, 2)).toEqual(["booked", "booked"]);
     const overlap = await service.rpc("create_customer_booking", {
+      p_payment_method: "pay_at_club", p_provider: null, p_hold_seconds: 600,
       p_court_id: courtId, p_booking_date: date, p_starts_at_minute: 600, p_ends_at_minute: 660,
       p_account_user_id: null, p_customer_name: "Race", p_customer_email: "race@example.test",
       p_customer_phone: "123", p_total_amount_minor: 6000, p_currency: "EUR",
@@ -93,7 +95,7 @@ test("customer booking persists both rows, snapshots contact and price, and roll
     const profileBefore = await service.from("users").select("email, first_name, last_name, phone").eq("id", memberId).single();
     expect(await createCustomerBooking({ ...base, startMinute: 660, endMinute: 720,
       customerName: "Different Customer", customerEmail: "different@example.test",
-      expectedTotalAmountMinor: 7000, expectedCurrency: "EUR" }, member, service, now)).toMatchObject({ ok: true });
+      expectedTotalAmountMinor: 7000, expectedCurrency: "EUR" }, member, service, now)).toMatchObject({ ok: true, cancellationPolicy: { noticeMinutes: 1440, cutoff: "2099-10-14T11:00:00.000Z" } });
     const booked = await allBookings();
     expect(booked).toHaveLength(2);
     expect(booked.find((row) => row.account_user_id === memberId)).toMatchObject({
@@ -131,6 +133,7 @@ test("customer booking persists both rows, snapshots contact and price, and roll
     assert.strictEqual((await service.from("locations").update({ is_public: true }).eq("id", locationId)).error, null);
     const orphanBefore = await count();
     const invalidWrite = await service.rpc("create_customer_booking", {
+      p_payment_method: "pay_at_club", p_provider: null, p_hold_seconds: 600,
       p_court_id: courtId, p_booking_date: date, p_starts_at_minute: 720, p_ends_at_minute: 780,
       p_account_user_id: null, p_customer_name: " ", p_customer_email: "invalid@example.test",
       p_customer_phone: "123", p_total_amount_minor: 5000, p_currency: "EUR",

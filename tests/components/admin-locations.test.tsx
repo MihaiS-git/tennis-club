@@ -16,7 +16,8 @@ import { LocationDialog } from "../../src/app/admin/locations/location-dialog";
 import { LocationItem } from "../../src/app/admin/locations/location-item";
 import { LocationArchiveControl } from "../../src/app/admin/locations/location-archive-control";
 
-const location: AdminLocation = { id: "a1000000-0000-4000-8000-000000000001", name: "Central Club", slug: "central-club",
+const location: AdminLocation = {
+  allow_pay_at_club: false, id: "a1000000-0000-4000-8000-000000000001", name: "Central Club", slug: "central-club",
   address_line1: "Street 1", address_line2: null, city: "Cluj", postal_code: "400000", country_code: "RO",
   customer_cancellation_notice_minutes: 1440, timezone: "Europe/Bucharest", currency: "RON", is_active: false, is_public: false, archived_at: null, display_order: 2,
   created_at: "2026-09-29T10:00:00Z", updated_at: "2026-09-29T10:00:00Z" };

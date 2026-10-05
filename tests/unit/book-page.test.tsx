@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 
 const { loadDay, loadLocations } = vi.hoisted(() => ({ loadDay: vi.fn(), loadLocations: vi.fn() }));
 vi.mock("@/lib/courts/public-calendar", () => ({ getPublicCourtDay: loadDay }));
@@ -12,15 +12,33 @@ vi.mock("@/app/book/booking-calendar", () => ({ BookingCalendar: () => null }));
 import { BookingContent } from "@/app/book/booking-content";
 import { CalendarControls } from "@/app/book/calendar-controls";
 
-it("does not load booking-day data without a valid selected date", async () => {
+afterEach(() => vi.useRealTimers());
+
+it("defaults to one location-local current day without a client redirect", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-10-02T22:30:00Z"));
+  loadLocations.mockResolvedValue([eligible]);
+  const content = await BookingContent({ searchParams: Promise.resolve({}) });
+  const controls = content.props.children[0];
+  const day = content.props.children.at(-1);
+  expect(controls.props.date).toBe("2026-10-03");
+  expect(day.props.date).toBe("2026-10-03");
+  expect(day.props.today).toBe("2026-10-03");
+  expect(day.props.location).toBe(eligible);
+});
+
+it("does not render booking-day reads for invalid or past explicit dates", async () => {
   loadDay.mockClear();
   loadLocations.mockResolvedValue([eligible]);
-  await BookingContent({ searchParams: Promise.resolve({}) });
-  await BookingContent({ searchParams: Promise.resolve({ date: "2000-01-01" }) });
+  for (const date of ["invalid", "2000-01-01"]) {
+    const content = await BookingContent({ searchParams: Promise.resolve({ date }) });
+    expect(content.props.children[0].props.date).toBeNull();
+    expect(content.props.children.at(-1).type).toBe("p");
+  }
   expect(loadDay).not.toHaveBeenCalled();
 });
 
-it("passes the one eligible location to visible controls without a timetable read", async () => {
+it("passes the eligible location to the controls and default day", async () => {
   loadLocations.mockResolvedValue([eligible]);
   loadDay.mockClear();
   const content = await BookingContent({ searchParams: Promise.resolve({}) });
@@ -28,6 +46,7 @@ it("passes the one eligible location to visible controls without a timetable rea
   expect(controls.type).toBe(CalendarControls);
   expect(controls.props.locations).toEqual([eligible]);
   expect(controls.props.locationId).toBe(eligible.id);
+  expect(content.props.children.at(-1).props.location).toBe(eligible);
   expect(loadDay).not.toHaveBeenCalled();
 });
 

@@ -30,9 +30,9 @@ insert into public.court_reservations (id, court_id, booking_date, starts_at_min
 select ('ce000000-0000-4000-8000-' || lpad((n+100)::text, 12, '0'))::uuid,
   ('ce000000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid, '2099-10-15', 600, 660
 from generate_series(101, 113) n;
-insert into public.bookings (id, reservation_id, account_user_id, customer_name, customer_email, customer_phone,
+insert into public.bookings (payment_method, id, reservation_id, account_user_id, customer_name, customer_email, customer_phone,
   total_amount_minor, currency, cancellation_notice_minutes)
-select ('ce000000-0000-4000-8000-' || lpad((n+200)::text, 12, '0'))::uuid,
+select 'pay_at_club', ('ce000000-0000-4000-8000-' || lpad((n+200)::text, 12, '0'))::uuid,
   ('ce000000-0000-4000-8000-' || lpad((n+100)::text, 12, '0'))::uuid,
   case when n in (104,106) then 'ce000000-0000-4000-8000-000000000002'::uuid
     when n in (105,107) then 'ce000000-0000-4000-8000-000000000003'::uuid

@@ -21,7 +21,7 @@ test("booking mutations enqueue once atomically; worker leases isolate retries a
   try {
     const owner = await account(false), admin = await account(true);
     expect((await db.from("locations").insert({ id: locationId, name: "Outbox test", slug: `outbox-${locationId}`,
-      timezone: "Europe/Bucharest", currency: "RON", is_public: true })).error).toBeNull();
+      timezone: "Europe/Bucharest", currency: "RON", is_public: true, allow_pay_at_club: true })).error).toBeNull();
     expect((await db.from("courts").insert({ id: courtId, location_id: locationId, name: "Court 1", slug: "court-1",
       surface: "clay", environment: "outdoor", is_active: true })).error).toBeNull();
     const date = "2099-10-15";
@@ -30,14 +30,14 @@ test("booking mutations enqueue once atomically; worker leases isolate retries a
     expect((await db.from("location_pricing_rules").insert({ rule_set_id: ruleId, location_id: locationId, court_id: courtId,
       court_state: "outdoor", weekday: 3, starts_at_minute: 600, ends_at_minute: 900, price_per_hour_minor: 9000 })).error).toBeNull();
     for (const start of [600, 660]) {
-      const created = await db.rpc("create_customer_booking", { p_court_id: courtId, p_booking_date: date,
+      const created = await db.rpc("create_customer_booking", { p_payment_method: "pay_at_club", p_provider: null, p_hold_seconds: 600, p_court_id: courtId, p_booking_date: date,
         p_starts_at_minute: start, p_ends_at_minute: start + 60, p_account_user_id: owner.id,
         p_customer_name: "Snapshot owner", p_customer_email: "snapshot@outbox.test", p_customer_phone: "+40 123",
         p_total_amount_minor: 9000, p_currency: "RON" });
       expect(created.error).toBeNull();
       bookings.push(created.data[0].booking_id); reservations.push(created.data[0].reservation_id);
     }
-    const duplicate = await db.rpc("create_customer_booking", { p_court_id: courtId, p_booking_date: date,
+    const duplicate = await db.rpc("create_customer_booking", { p_payment_method: "pay_at_club", p_provider: null, p_hold_seconds: 600, p_court_id: courtId, p_booking_date: date,
       p_starts_at_minute: 600, p_ends_at_minute: 660, p_account_user_id: owner.id,
       p_customer_name: "Conflict", p_customer_email: "conflict@outbox.test", p_customer_phone: "+40 123",
       p_total_amount_minor: 9000, p_currency: "RON" });

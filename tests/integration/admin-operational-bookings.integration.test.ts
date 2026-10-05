@@ -41,7 +41,7 @@ test("Admin sees booking snapshots beside direct reservations while Coach receiv
         ends_at_minute: 750 },
     ])).error, null);
     assert.strictEqual((await service.from("bookings").insert({ id: bookingId, reservation_id: reservationId,
-      account_user_id: member.id, customer_name: "Ana Pop", customer_email: "ana@example.test",
+      account_user_id: member.id, payment_method: "pay_at_club", customer_name: "Ana Pop", customer_email: "ana@example.test",
       customer_phone: "+40 123", cancellation_notice_minutes: 120, total_amount_minor: 7500, currency: "RON" })).error, null);
 
     const adminDay = await getReservationDay(location, date, now, admin.client);
