@@ -56,10 +56,10 @@ test("navigation follows the current account and protected routes enforce access
     }
     await signIn(page, accounts[0].email);
     await page.getByRole("button", { name: "Account menu" }).click();
-    await expect(page.getByRole("link", { name: "My activity" })).toHaveAttribute("href", "/my-activity");
+    await expect(page.getByRole("link", { name: "My activity" })).toHaveAttribute("href", "/my-activity/bookings");
     await expect(page.getByRole("link", { name: "Profile & settings" })).toHaveAttribute("href", "/profile");
     await page.getByRole("link", { name: "My activity" }).click();
-    await expect(page).toHaveURL(/\/my-activity$/);
+    await expect(page).toHaveURL(/\/my-activity\/bookings$/);
     await expect(navigation.getByRole("link", { name: "Matches" })).toBeVisible();
     await expect(navigation.getByRole("link", { name: "Admin" })).toHaveCount(0);
     await page.goto("/admin/users");

@@ -49,6 +49,7 @@ test("public discovery includes only published, configured locations and orders 
     expect(locations[0]).toEqual({
       id: ids[0], name: "Zulu", slug: `test-${ids[0]}`, timezone: "Europe/Bucharest",
       address_line1: null, address_line2: null, city: null, postal_code: null, country_code: null, currency: "EUR",
+      allow_pay_at_club: false,
       courts: locations[0].courts,
     });
     const firstAlphaId = [courtIds[2], courtIds[3]].sort()[0];
