@@ -6,6 +6,7 @@ import { requireActiveAdmin } from "@/lib/admin/authorization";
 import { generateLocationSlug, locationArchiveSchema, locationCurrencies, locationMutationSchema, type LocationMutationResult } from "@/lib/admin/locations-validation";
 import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
+import { createBookingWriter } from "@/lib/supabase/booking-writer";
 import { publicationError, publicationReadiness, publicationToday, type PublicationConfiguration } from "@/lib/locations/publication";
 
 const locationSchema = z.object({
@@ -28,15 +29,14 @@ export async function listAdminLocations(supabase?: Awaited<ReturnType<typeof cr
   const [{ data, error }, policies] = await Promise.all([
     (view === "archived" ? query.not("archived_at", "is", null) : query.is("archived_at", null))
       .order("display_order").order("name").order("id"),
-    client.rpc("list_admin_location_cancellation_policies"),
+    // The policy column has no authenticated SELECT grant, including for Admins.
+    createBookingWriter().from("locations").select("id, customer_cancellation_notice_minutes"),
   ]);
-  const parsedPolicies = z.array(z.object({ id: z.uuid(),
-    customer_cancellation_notice_minutes: cancellationNoticeMinutesSchema })).safeParse(policies.data);
   const parsed = z.array(locationSchema).safeParse(data?.map((row) => ({ ...row,
-    customer_cancellation_notice_minutes: parsedPolicies.success
-      ? parsedPolicies.data.find((policy) => policy.id === row.id)?.customer_cancellation_notice_minutes : undefined,
+    customer_cancellation_notice_minutes: policies.data
+      ?.find((policy) => policy.id === row.id)?.customer_cancellation_notice_minutes,
   })));
-  if (error || policies.error || !parsedPolicies.success || !parsed.success) {
+  if (error || policies.error || !parsed.success) {
     logger.error({ event: "admin.locations_list_failed", code: error?.code ?? policies.error?.code }, "Failed to load locations");
     throw new Error("Unable to load locations.");
   }

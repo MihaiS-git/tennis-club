@@ -1,5 +1,7 @@
 "use client";
 
+import { toast } from "sonner";
+import { cancelledBookingMessage } from "@/lib/payments/refund-message";
 import { useEffect, useRef, useState } from "react";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import type { PersonalCustomerBooking } from "@/lib/bookings/personal";
@@ -35,6 +37,7 @@ export function CustomerBookingCancellation({ booking, staff, onCancelled, onPen
     try {
       const result = await cancelOwnCustomerBookingAction(booking.id);
       if (!result.ok) { setError(result.message); return; }
+      toast.success(cancelledBookingMessage(result.refundStatus));
       setConfirming(false);
       await onCancelled();
     } catch {

@@ -1,8 +1,11 @@
 import { expect, test } from "vitest";
-import { customerCancellationEligibility, customerCancellationNoticeLabel } from "@/lib/bookings/self-cancellation";
+import { customerBookingNoticeBypass, customerCancellationEligibility, customerCancellationNoticeLabel } from "@/lib/bookings/self-cancellation";
 
 const booking = { starts_at_instant: "2026-10-15T10:00:00+03:00", cancellation_notice_minutes: 120 };
 test("snapshot cutoff is inclusive and uses elapsed minutes from the timezone-resolved instant", () => {
+  expect(customerBookingNoticeBypass([])).toBe(false);
+  expect(customerBookingNoticeBypass(["admin"])).toBe(true);
+  expect(customerBookingNoticeBypass(["coach"])).toBe(true);
   expect(customerCancellationEligibility(booking, false, new Date("2026-10-15T04:59:59.999Z"))).toBe("eligible");
   expect(customerCancellationEligibility(booking, false, new Date("2026-10-15T05:00:00Z"))).toBe("eligible");
   expect(customerCancellationEligibility(booking, false, new Date("2026-10-15T05:00:00.001Z"))).toBe("notice_required");

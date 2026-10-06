@@ -1,12 +1,12 @@
 import { DetailSection } from "@/components/dialog-layout";
 import { ReservationScheduleFieldsView } from "@/components/reservation-details";
 import type { PersonalCustomerBooking } from "@/lib/bookings/personal";
-import { customerCancellationNoticeLabel } from "@/lib/bookings/self-cancellation";
+import { customerCancellationNoticeLabel, customerMutationDeadline } from "@/lib/bookings/self-cancellation";
 import { formatMoney } from "@/lib/pricing/money";
 
 export function BookingDetails({ booking }: { booking: Omit<PersonalCustomerBooking, "id" | "starts_at_instant"> & { starts_at_instant?: string } }) {
   const cutoff = booking.starts_at_instant
-    ? new Date(Date.parse(booking.starts_at_instant) - booking.cancellation_notice_minutes * 60_000) : null;
+    ? new Date(customerMutationDeadline({ ...booking, starts_at_instant: booking.starts_at_instant }, false).deadline) : null;
   return <>
     <DetailSection title="Court and time"><ReservationScheduleFieldsView reservation={booking} /></DetailSection>
     <DetailSection title="Customer contact">

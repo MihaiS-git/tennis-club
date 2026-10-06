@@ -78,7 +78,7 @@ test("mixed history is owner scoped, time zone aware, globally ordered and paged
     expect((await listOwnCourtHistory(1, coach.client, now)).rows.map((row) => row.id)).toEqual([coachReservation]);
     expect((await listOwnCourtHistory(1, other.client, now)).rows.map((row) => row.id)).toEqual([otherBooking]);
     expect((await member.client.from("bookings").select("id")).error?.code).toBe("42501");
-    expect((await member.client.rpc("list_own_court_activity_history", { p_page: 0 })).error?.code).toBe("22023");
+    await expect(listOwnCourtHistory(0, member.client, now)).rejects.toThrow("Choose a valid history page.");
   } finally {
     if (bookings.length) assert.strictEqual((await service.from("bookings").delete().in("id", bookings)).error, null);
     if (reservations.length) assert.strictEqual((await service.from("court_reservations").delete().in("id", reservations)).error, null);

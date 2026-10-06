@@ -1,3 +1,4 @@
+import { toast } from "sonner";
 // @vitest-environment jsdom
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -334,10 +335,16 @@ it("retains inline retry after an initial server read error", async () => {
   expect(load).toHaveBeenCalledOnce();
 });
 
-it("confirms customer self-cancellation, preserves the page, and refreshes Upcoming", async () => {
+it.each([
+  [undefined, "Booking cancelled."],
+  ["succeeded", "Booking cancelled. Your full payment has been refunded."],
+  ["pending_retry", "Booking cancelled. Your full refund has been requested and is awaiting completion."],
+  ["failed", "Booking cancelled. The full refund could not be completed; please contact the club."],
+])("customer cancellation shows refund state %s and refreshes Upcoming", async (refundStatus, message) => {
+  const notification = vi.spyOn(toast, "success");
   load.mockResolvedValueOnce({ bookings: [cancellableBooking], upcoming: [] })
     .mockResolvedValueOnce({ bookings: [], upcoming: [] });
-  cancelBooking.mockResolvedValue({ ok: true });
+  cancelBooking.mockResolvedValue({ ok: true, refundStatus });
   await renderWithServerActivity({ staff: false, userId: "owner" });
   fireEvent.click(within(await screen.findByRole("region", { name: "Upcoming" })).getByRole("row", { name: /Details for/ }));
   fireEvent.click(within(screen.getByRole("dialog", { name: "Booking" })).getByRole("button", { name: "Cancel booking" }));
@@ -349,6 +356,8 @@ it("confirms customer self-cancellation, preserves the page, and refreshes Upcom
   await waitFor(() => expect(cancelBooking).toHaveBeenCalledWith(cancellableBooking.id));
   expect(await screen.findByText("No upcoming bookings or reservations match your filters.")).toBeDefined();
   expect(screen.getByRole("status").textContent).toBe("Booking cancelled.");
+  expect(notification).toHaveBeenCalledWith(message);
+  notification.mockRestore();
   expect(cancel).not.toHaveBeenCalled();
 });
 

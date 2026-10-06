@@ -1,7 +1,8 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
 
 import { z } from "zod";
-import { paymentHoldDurationSeconds, type CheckoutLifecycle } from "@/lib/payments/domain";
+import { checkoutPersistence, type CheckoutLifecycle } from "@/lib/payments/domain";
 import { activeOnlinePaymentProvider } from "@/lib/payments/settings";
 import { readCurrentAccount } from "@/lib/auth/account";
 import { getCalendarSelection } from "@/lib/courts/interval-selection";
@@ -14,6 +15,9 @@ import { createBookingWriter } from "@/lib/supabase/booking-writer";
 import { createClient } from "@/lib/supabase/server";
 import { readCreatedBookingCancellationPolicy, type ConfirmedCancellationPolicy } from "./confirmation-policy";
 import { customerBookingInputSchema } from "./domain";
+import { readCheckoutContext } from "./persistence";
+import { bookingNotification } from "@/lib/notifications/booking-email";
+import { customerMutationDeadline } from "./self-cancellation";
 
 type Reader = Awaited<ReturnType<typeof createClient>>;
 type Writer = ReturnType<typeof createBookingWriter>;
@@ -33,6 +37,11 @@ export async function createCustomerBooking(input: unknown, reader?: Reader, wri
 
   const { courtId, date, startMinute, endMinute, customerName, customerEmail, customerPhone,
     expectedTotalAmountMinor, expectedCurrency, paymentMethod } = parsed.data;
+  const bookingWriter = writer ?? createBookingWriter();
+  let context;
+  try { context = await readCheckoutContext(courtId, date, startMinute, bookingWriter); }
+  catch { return { ok: false, message: "That court is not available for booking." }; }
+  if (!context) return { ok: false, message: "That court is not available for booking." };
   let locations;
   try { locations = await listPublicLocationsWithCourts(client); }
   catch { return { ok: false, message: "Unable to check court availability. Try again." }; }
@@ -58,20 +67,28 @@ export async function createCustomerBooking(input: unknown, reader?: Reader, wri
   if (expectedTotalAmountMinor !== selection.priceMinor || expectedCurrency !== location.currency)
     return { ok: false, reason: "price_changed", totalAmountMinor: selection.priceMinor, currency: location.currency };
 
-  const bookingWriter = writer ?? createBookingWriter();
   const provider = paymentMethod === "online" ? await activeOnlinePaymentProvider(bookingWriter) : null;
   if (paymentMethod === "online" && !provider)
     return { ok: false, message: "Online payment is unavailable. Choose Pay at club if offered, or try again later." };
-  const result = await bookingWriter.rpc("create_customer_booking", {
-    p_court_id: courtId, p_booking_date: date, p_starts_at_minute: startMinute,
-    p_ends_at_minute: endMinute, p_account_user_id: account.state === "active" ? account.userId : null,
-    p_customer_name: customerName, p_customer_email: customerEmail, p_customer_phone: customerPhone,
-    p_total_amount_minor: selection.priceMinor, p_currency: location.currency,
-    p_payment_method: paymentMethod, p_provider: provider,
-    p_hold_seconds: paymentHoldDurationSeconds,
+  const bookingId = randomUUID(), reservationId = randomUUID(), attemptId = randomUUID();
+  const online = paymentMethod === "online";
+  const event = online ? null : bookingNotification("confirmed", "confirmed", {
+    booking_id: bookingId, customer_name: customerName, location_name: location.name, timezone: location.timezone,
+    court_name: context.court.name, booking_date: date, starts_at_minute: startMinute, ends_at_minute: endMinute,
+    total_amount_minor: selection.priceMinor, currency: location.currency, previous: null,
+  }, customerEmail);
+  const result = await bookingWriter.rpc("commit_checkout", {
+    p_revision: context.revision, p_event: event,
+    p_command: { booking_id: bookingId, reservation_id: reservationId, attempt_id: attemptId,
+      court_id: courtId, date, start: startMinute, end: endMinute,
+      account_user_id: account.state === "active" ? account.userId : null,
+      customer_name: customerName, customer_email: customerEmail, customer_phone: customerPhone,
+      amount: selection.priceMinor, currency: location.currency, method: paymentMethod, provider,
+      cancellation_notice_minutes: context.location.customer_cancellation_notice_minutes,
+      ...checkoutPersistence(paymentMethod) },
   });
   if (result.error) {
-    if (result.error.code === "P0001") return { ok: false, message: "Online payment availability changed. Please review your payment method and try again." };
+    if (result.error.code === "40001") return { ok: false, message: "Booking availability changed. Please review your selection and try again." };
     if (result.error.code === "23P01") return { ok: false, availabilityChanged: true,
       message: "That court is no longer available for the selected time." };
     logger.error({ event: "bookings.create_failed", courtId, code: result.error.code }, "Failed to create customer booking");
@@ -94,15 +111,10 @@ export async function createCustomerBooking(input: unknown, reader?: Reader, wri
   const cancellationPolicy = lifecycle.status === "confirmed"
     ? await readCreatedBookingCancellationPolicy(ids.data[0].booking_id, bookingWriter) : null;
   if (cancellationPolicy && account.state === "active") {
-    // Reuse PostgreSQL's timezone resolution from the existing owner-scoped read.
-    try {
-      const result = await client.rpc("list_own_upcoming_customer_bookings").eq("id", ids.data[0].booking_id);
-      const parsed = z.array(z.object({ starts_at_instant: z.iso.datetime({ offset: true }) })).length(1).safeParse(result.data);
-      if (result.error || !parsed.success) throw new Error("Start instant read failed");
-      cancellationPolicy.cutoff = new Date(Date.parse(parsed.data[0].starts_at_instant) - cancellationPolicy.noticeMinutes * 60_000).toISOString();
-    } catch {
-      logger.error({ event: "bookings.confirmed_cutoff_read_failed", bookingId: ids.data[0].booking_id }, "Unable to read confirmed booking deadline");
-    }
+    cancellationPolicy.cutoff = customerMutationDeadline({
+      starts_at_instant: context.starts_at_instant,
+      cancellation_notice_minutes: cancellationPolicy.noticeMinutes,
+    }, false).deadline;
   }
   return { ok: true, ...lifecycle, bookingId: ids.data[0].booking_id, reservationId: ids.data[0].reservation_id, paymentAttemptId: created.payment_attempt_id,
     totalAmountMinor: selection.priceMinor, currency: location.currency, cancellationPolicy };

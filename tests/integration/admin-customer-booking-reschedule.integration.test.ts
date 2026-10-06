@@ -1,3 +1,4 @@
+import { rescheduleCommandFixture } from "./checkout-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test } from "vitest";
@@ -5,6 +6,7 @@ import { listOwnCourtHistory } from "@/lib/bookings/history-service";
 import { listOwnUpcomingCustomerBookings } from "@/lib/bookings/personal-service";
 import { cancelCustomerBookingAsAdmin } from "@/lib/reservations/service";
 import { getAdminBookingEditDay, rescheduleCustomerBookingAsAdmin } from "@/lib/bookings/admin-reschedule";
+import { commandFence, readBookingActor, readBookingContext } from "@/lib/bookings/persistence";
 import { mondayWeekday } from "@/lib/pricing/resolution";
 import { cleanupAuthFixtures, localFixtureClient } from "./auth-fixtures";
 
@@ -63,20 +65,34 @@ test("Admin reschedules the same rows with acknowledged pricing, stale/overlap p
     expect(await rescheduleCustomerBookingAsAdmin(input, admin.client)).toMatchObject({ ok: false, reason: "price_changed", totalAmountMinor: 9001 });
     expect((await service.from("bookings").select("*").eq("id", bookingId).single()).data).toEqual(beforeBooking);
     expect((await service.from("court_reservations").select("*").eq("id", reservationId).single()).data).toEqual(beforeReservation);
+    const quotedFacts = await readBookingContext(bookingId, service);
+    assert.ok(quotedFacts);
+    const actorFacts = await readBookingActor(admin.id, service);
+    const persistenceCommand = { ...commandFence(quotedFacts), p_actor: admin.id, p_actor_expected: actorFacts,
+      p_scope: "admin", p_deadline: "2099-10-15T10:00:00Z", p_inclusive: false, p_total: 9001, p_event: null,
+      p_schedule: { court_id: courtId, booking_date: date, starts_at_minute: 720, ends_at_minute: 780 } };
     // A quote changing again must be acknowledged again; neither row is written.
     await service.from("location_pricing_rules").update({ price_per_hour_minor: 10001 }).eq("court_id", courtId);
+    expect((await service.rpc("commit_booking_reschedule", persistenceCommand)).error?.code).toBe("40001");
+    const currentFacts = await readBookingContext(bookingId, service);
+    assert.ok(currentFacts);
+    const currentCommand = { ...persistenceCommand, ...commandFence(currentFacts), p_total: 10001 };
+    expect((await service.rpc("commit_booking_reschedule", { ...currentCommand,
+      p_actor_expected: { ...actorFacts, roles: [] } })).error?.code).toBe("40001");
+    expect((await service.rpc("commit_booking_reschedule", { ...currentCommand,
+      p_deadline: "1970-01-01T00:00:00Z" })).error?.code).toBe("40001");
+    expect((await service.rpc("commit_booking_reschedule", { ...currentCommand,
+      p_event: { kind: "invalid", key: "invalid", recipient: "ana@example.test", payload: {} } })).error?.code).toBe("23514");
+    expect((await service.from("bookings").select("*").eq("id", bookingId).single()).data).toEqual(beforeBooking);
+    expect((await service.from("court_reservations").select("*").eq("id", reservationId).single()).data).toEqual(beforeReservation);
     expect(await rescheduleCustomerBookingAsAdmin({ ...input, priceAcknowledged: true }, admin.client))
       .toMatchObject({ ok: false, reason: "price_changed", totalAmountMinor: 10001 });
     expect((await service.from("court_reservations").select("*").eq("id", reservationId).single()).data).toEqual(beforeReservation);
     expect(await rescheduleCustomerBookingAsAdmin({ ...input, startMinute: 660, endMinute: 720,
       expectedTotal: 10001, priceAcknowledged: true }, admin.client)).toMatchObject({ ok: false, message: expect.stringContaining("no longer available") });
-    const rpcInput = { p_id: bookingId, p_expected_updated_at: input.expectedUpdatedAt,
-      p_expected_booking_updated_at: input.expectedBookingUpdatedAt, p_court_id: courtId, p_booking_date: date,
-      p_starts_at_minute: 720, p_ends_at_minute: 780, p_save: true, p_expected_total: 10001, p_price_acknowledged: true };
     for (const client of [coach.client, owner.client]) {
-      expect((await client.rpc("reschedule_admin_customer_booking", rpcInput)).error?.code).toBe("42501");
+      expect((await client.rpc("commit_booking_reschedule", rescheduleCommandFixture(bookingId))).error?.code).toBe("42501");
       await expect(rescheduleCustomerBookingAsAdmin(input, client)).rejects.toThrow();
-      expect((await client.rpc("read_admin_booking_edit_availability", { p_id: bookingId, p_date: date })).error?.code).toBe("42501");
     }
     expect(await rescheduleCustomerBookingAsAdmin({ ...input, expectedTotal: 10001, priceAcknowledged: true }, admin.client))
       .toEqual({ ok: true, totalAmountMinor: 10001 });

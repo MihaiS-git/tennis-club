@@ -20,7 +20,7 @@ the existing confirmation dialog. A pending hold is never shown as a confirmed b
 `payment_attempts` supports multiple attempts per booking. Each row stores method,
 provider, provider reference, integer minor-unit amount, currency, lifecycle status,
 expiry, creation/update and completion timestamps. Online attempts require a
-snapshotted `stripe` or `netopia` provider. Admin → Payments explicitly selects
+snapshotted `stripe` or `netopia` provider. Admin → Payments → Settings explicitly selects
 one provider for future attempts, with no default or automatic failover. Missing
 selection or incomplete configuration makes online payment unavailable. Future
 provider changes do not modify old attempts; a database trigger also forbids
@@ -54,7 +54,7 @@ Duplicate settlement returns the existing terminal status and emits no extra ema
 Pending/failed/expired checkouts never emit confirmation mail or appear as confirmed
 personal bookings. Pay at club emits confirmation atomically at creation.
 
-NETOPIA integration, credential UI, refunds, saved cards, deposits, subscriptions
+NETOPIA integration/refunds, credential UI, partial refunds, saved cards, deposits, subscriptions
 and packages remain unimplemented. The sections below distinguish the current
 one-time Stripe flow from future membership scope.
 
@@ -81,7 +81,7 @@ These credential requirements follow [Stripe authentication](https://docs.stripe
 and [NETOPIA’s API v2 merchant configuration](https://github.com/netopiapayments/composer#steps-for-start).
 Configuration checks verify format and completeness, not remote credential validity.
 
-Admin → Payments displays each provider as Configured/Not configured. Its single
+Admin → Payments → Settings displays each provider as Configured/Not configured. Its single
 selector offers configured providers and allows clearing selection to disable online
 payment. Selection applies immediately through an authenticated Server Action;
 there is no customer-facing provider choice. `payment_provider_settings` is a
@@ -202,7 +202,7 @@ in ignored `.env.local`, not source code or chat:
 
 For the future authorized verification, run `stripe listen --events payment_intent.succeeded,payment_intent.payment_failed,payment_intent.canceled --forward-to http://localhost:3000/api/payments/stripe/webhook`,
 copy that listener's signing secret into `.env.local`, and restart Next.js.
-Select Stripe in Admin → Payments and run `npm run mail:worker`. Book an available
+Select Stripe in Admin → Payments → Settings and run `npm run mail:worker`. Book an available
 interval: another visitor must see it blocked, and no confirmation email may exist
 before successful settlement. Use Stripe test success card `4242 4242 4242 4242`
 and decline card `4000 0000 0000 0002` with future expiry and any valid CVC.
@@ -356,3 +356,157 @@ Do not treat `Stripe subscription = active` as complete application authorizatio
 If consumable credits are introduced, prefer a ledger/transaction model rather than relying only on one mutable balance field.
 
 Credit consumption may require an atomic database operation together with booking confirmation or another protected workflow.
+
+## Stripe cancellation refunds
+
+Migration `20261006100000_stripe_booking_refunds.sql` adds `payment_refunds`, RLS with
+no browser database access, unique booking/attempt references and immutable financial
+snapshots. Amount/currency/provider/payment ID must exactly match a succeeded original
+Stripe attempt. Historical attempt status remains succeeded; refund status is separate.
+
+Owner cancellation uses existing ownership/notice/start guards and always requests a
+full Stripe refund. Admin cancellation still requires before-start eligibility and an
+explicit Refund full payment checkbox decision. No cutoff-based Admin refund inference
+occurs. Pay-at-club and legacy unpaid cancellations create no refund.
+
+Cancellation, occupancy release, refund request and existing cancellation email commit
+in one transaction. Mail snapshots say the full refund was requested, without promising
+provider completion. The post-commit server-only service reads the refund snapshot and
+uses the original provider adapter, independent of current provider selection.
+
+Lifecycle:
+
+- `pending`: durable request or provider refund awaiting completion.
+- `pending_retry`: provider/read/write response was incomplete or ambiguous; safe to retry.
+- `succeeded`: provider confirmed the full refund.
+- `failed`: provider returned a terminal failed/cancelled refund; contact the club.
+
+`processBookingRefund(refundId)` is the server-only retry/reconciliation operation; it
+has no customer/public retry endpoint or scheduled worker. Focused Admin recovery
+actions are described below. Repeating an authorized
+cancellation reuses the existing refund and invokes this operation. Accepted provider
+refund IDs are retrieved on subsequent attempts, never replaced. No replacement provider refund is created after a terminal failure. Admin may
+explicitly retry the same record and recheck a known provider refund. Booking and reservation stay cancelled in every state.
+
+Stripe creation uses `court-payment-refund-<persisted-refund-id>` and metadata
+`payment_refund_id`. Before creation, the adapter paginates refunds for the original
+PaymentIntent to recover an accepted response even beyond Stripe's 24-hour idempotency
+retention. It always requests the entire captured amount, so Stripe's remaining-amount
+validation additionally prevents a duplicate full refund. Pending refunds become final
+on a later invocation; asynchronous refund webhook processing is not part of this flow.
+No payment attempt/provider history is rewritten. No current pricing or client amount
+is accepted. NETOPIA refunds and partial refunds are not supported.
+
+Focused verification:
+```bash
+npx vitest run tests/unit/stripe-refund-adapter.test.ts tests/unit/customer-self-cancellation-service.test.ts tests/components/reservation-calendar.test.tsx
+node --env-file=.env.local ./node_modules/vitest/vitest.mjs run tests/integration/stripe-refunds.integration.test.ts --no-file-parallelism
+npm run typecheck
+```
+The adapter test mocks Stripe SDK calls; the integration test uses local PostgreSQL and
+a mocked provider adapter, with no fake Stripe secret keys or configuration assertions.
+
+## Admin transaction review
+
+`/admin/payments` shows persisted Transactions with focused Stripe recovery actions. `/admin/payments/settings`
+contains the existing provider configuration/selection UI. Both use the shared
+Payments submenu and require an active Admin account.
+
+`listAdminPaymentTransactions` uses a user-scoped server client and the Admin-only
+`list_admin_payment_transactions` read RPC added by
+`20261006110000_admin_payment_transactions.sql`. No financial table SELECT grants,
+privileged transaction reader or browser Supabase client are introduced.
+The helper is needed to select one logical lifecycle, join its refund and filter/sort
+before fixed 20-row pagination. It returns only explicitly selected payment,
+customer, reservation and refund snapshots plus reconciliation outcomes/reasons.
+It never returns checkout tokens, provider event payloads or credentials.
+
+Selection prefers the refund's original payment attempt, otherwise the earliest
+succeeded attempt, otherwise the newest attempt, with an ID tie-breaker. Legacy
+bookings without attempts retain their persisted booking amount/currency and unknown
+payment status/provider; no payment history is fabricated. Any explicitly flagged
+provider event across the booking's attempts is included for review.
+
+Attention means refund `pending_retry` or `failed`, or at least one persisted
+`payment_provider_events.reconciliation_required = true` event. Normal paid, pending
+refund, failed-card, abandoned and expired checkout states do not independently
+require attention. The TypeScript read model derives this flag; the database applies
+the same predicate for the Attention filter before pagination.
+
+Date, amount and stored payment status can be sorted with deterministic booking-ID
+tie-breaking. Search is a case-insensitive literal substring of customer name/email,
+booking UUID or selected provider payment ID. Filters apply immediately and search
+uses the existing debounced URL navigation pattern. Pagination/sort links preserve
+filters. Payment timestamps display UTC; booking schedules retain location timezone.
+
+Rows open shared dialogs with read-only fields with payment/booking/refund details and recorded
+attention reasons. Persisted refund error codes are translated to safe descriptions.
+The only recovery controls are the focused Stripe actions described below; there is
+no generic manual state editing.
+
+Focused verification:
+```bash
+npx vitest run tests/components/admin-payment-transactions.test.tsx
+node --env-file=.env.local ./node_modules/vitest/vitest.mjs run tests/integration/admin-payment-transactions.integration.test.ts --no-file-parallelism
+npm run typecheck
+```
+
+## Admin Stripe refund recovery
+
+Migration `20261006120000_admin_stripe_reconciliation.sql` adds `resolved_at` and
+`resolved_by_user_id` to provider events, and token/until/actor lease columns on
+refunds. It extends full-refund validation only for verified late Stripe captures:
+matching original attempt/payment ID/amount/currency, succeeded provider evidence,
+expired/cancelled/failed settlement, non-confirmed booking and released/cancelled
+original reservation. Amount mismatches and other reconciliation problems are
+ineligible. Historic attempts and occupancy never change.
+
+The detail dialog offers Retry refund only for Stripe pending_retry/failed records.
+The service reauthorizes an active Admin and applies the shared TypeScript Stripe
+refund policy. `claim_refund_command` locks booking, reservation, original attempt/event
+and refund, fences the expected snapshots, validates the relationships and claims
+a lease using the duration supplied by TypeScript. Refund captured payment is offered only for the verified
+late-capture condition and creates/reuses the unique full-refund record. Inputs are
+IDs only. A concurrent live claim returns an in-progress error; an interrupted claim
+can be reclaimed after expiry. No transaction spans a Stripe HTTP request.
+
+The existing adapter uses the same original PaymentIntent, refund financial snapshot,
+metadata recovery and `court-payment-refund-<refund-id>` idempotency key. A known
+provider refund is retrieved rather than replaced, including a terminal failed
+provider refund; it remains failed if the provider still reports failure. Definite
+invalid Stripe refund requests persist failed, ambiguous failures persist pending_retry,
+and accepted pending refunds persist pending. Customer/default refund behavior is
+unchanged. These actions introduce no NETOPIA flow or background retries.
+
+The service-only, token-scoped `commit_refund_result` atomically persists the supplied
+provider result and explicit event-resolution IDs selected by TypeScript after success.
+It checks immutable captured evidence and records the verified requesting Admin's identity. Refund failure
+or pending keeps event flags true. Repeated late-success resolution after success
+reuses the completed refund and does not rewrite resolution timestamps/actors.
+Browser database roles cannot submit provider evidence or invoke the finish RPC.
+
+The dialog reloads its authoritative transaction after every handled action, shows
+inline feedback, disables actions while pending and refreshes the filtered table.
+Resolved events remain visible with their resolution timestamp; resolved flags no
+longer contribute to Attention. Filtering/sorting/pagination semantics are unchanged.
+
+Focused verification:
+```bash
+npx vitest run tests/unit/stripe-refund-adapter.test.ts tests/components/admin-payment-transactions.test.tsx
+node --env-file=.env.local ./node_modules/vitest/vitest.mjs run tests/integration/admin-stripe-reconciliation.integration.test.ts tests/integration/admin-payment-transactions.integration.test.ts tests/integration/stripe-refunds.integration.test.ts --no-file-parallelism
+npm run typecheck
+```
+
+## TypeScript decision and persistence boundary
+
+The final command API is established by migrations `20261006130000` through
+`20261006170000`. Checkout, cancellation/refunds, payment settlement, webhook
+interpretation, rescheduling quotes and recovery eligibility are TypeScript decisions.
+The RPCs `commit_checkout`, `commit_booking_cancellation`,
+`commit_payment_transition`, `commit_booking_reschedule`, `claim_refund_command` and
+`commit_refund_result` accept authoritative server commands and optional supplied
+outbox snapshots. They preserve row locks, expected-state/actor/configuration fences,
+financial immutability, uniqueness, GiST protection and atomic multi-row persistence.
+Webhook receipts and lifecycle changes commit together; duplicate evidence is immutable.
+All mutation commands are service-role-only. Stripe requests remain outside transactions.
+The retired workflow RPCs are dropped; there is no fallback path.

@@ -7,6 +7,13 @@ export function mondayWeekday(date: string): number {
   return (new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7;
 }
 
+export function pricingHasFutureOccurrence(rule: Pick<PricingRule, "weekday" | "starts_on" | "ends_on">, today: string) {
+  const first = rule.starts_on && rule.starts_on > today ? rule.starts_on : today;
+  const next = new Date(`${first}T00:00:00Z`);
+  next.setUTCDate(next.getUTCDate() + (rule.weekday - mondayWeekday(first) + 7) % 7);
+  return !rule.ends_on || rule.ends_on >= next.toISOString().slice(0, 10);
+}
+
 export function orderPricingRules(rules: readonly PricingRule[]): PricingRule[] {
   return [...rules].sort((a, b) => a.location_id.localeCompare(b.location_id)
     || a.court_id.localeCompare(b.court_id)

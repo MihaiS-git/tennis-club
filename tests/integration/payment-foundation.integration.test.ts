@@ -1,3 +1,5 @@
+import { settleOnlinePayment } from "@/lib/payments/service";
+import { insertCheckoutFixture } from "./checkout-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { expect, test, vi } from "vitest";
@@ -29,9 +31,9 @@ test("payment lifecycle keeps one reservation, protects overlap, releases expiry
   };
   const booking = async (id: string) => (await db.from("bookings").select("*").eq("id", id).single()).data!;
   const reservation = async (id: string) => (await db.from("court_reservations").select("*").eq("id", id).single()).data!;
-  const settle = (row: { payment_attempt_id: string }, outcome: string) => db.rpc("settle_online_payment", {
-    p_attempt_id: row.payment_attempt_id, p_provider: "netopia", p_provider_payment_id: `provider-${row.payment_attempt_id}`, p_outcome: outcome,
-  });
+  const settle = (row: { payment_attempt_id: string }, outcome: "succeeded" | "failed" | "cancelled") => settleOnlinePayment({
+    attemptId: row.payment_attempt_id, provider: "netopia", providerPaymentId: `provider-${row.payment_attempt_id}`, outcome: outcome,
+  }, db);
   try {
     vi.stubEnv("NETOPIA_API_KEY", "foundation-fixture"); vi.stubEnv("NETOPIA_POS_SIGNATURE", "foundation-pos"); vi.stubEnv("NETOPIA_ENVIRONMENT", "sandbox");
     expect((await db.from("payment_provider_settings").update({ active_provider: "netopia" }).eq("id", true)).error).toBeNull();
@@ -45,13 +47,13 @@ test("payment lifecycle keeps one reservation, protects overlap, releases expiry
     expect((await db.from("location_pricing_rules").insert({ rule_set_id: ruleId, location_id: locationId, court_id: courtId,
       court_state: "outdoor", weekday: 3, starts_at_minute: 600, ends_at_minute: 1080, price_per_hour_minor: 5000 })).error).toBeNull();
     expect(await createCustomerBooking({ ...intent, paymentMethod: "pay_at_club" }, guest, db)).toMatchObject({ ok: false });
-    expect((await db.rpc("create_customer_booking", params(600, "pay_at_club"))).error?.code).toBe("42501");
+    expect((await insertCheckoutFixture(db, params(600, "pay_at_club"))).error?.code).toBe("42501");
     // Failed atomic insert leaves no orphan occupancy/payment.
-    expect((await db.rpc("create_customer_booking", { ...params(600), p_customer_name: " " })).error?.code).toBe("23514");
+    expect((await insertCheckoutFixture(db, { ...params(600), p_customer_name: " " })).error?.code).toBe("23514");
     expect((await db.from("court_reservations").select("id").eq("court_id", courtId)).data).toEqual([]);
 
     // Simultaneous writes: exactly one transaction may own the interval.
-    const races = await Promise.all([db.rpc("create_customer_booking", params(600)), db.rpc("create_customer_booking", params(600))]);
+    const races = await Promise.all([insertCheckoutFixture(db, params(600)), insertCheckoutFixture(db, params(600))]);
     expect(races.filter((r) => !r.error)).toHaveLength(1);
     expect(races.find((r) => r.error)?.error?.code).toBe("23P01");
     const held = races.find((r) => !r.error)!.data[0];
@@ -67,34 +69,33 @@ test("payment lifecycle keeps one reservation, protects overlap, releases expiry
     const day = () => getPublicCourtDay(location, date, "2026-10-05", new Date(), guest);
     expect((await day()).courts[0].cells.slice(0, 2)).toEqual(["booked", "booked"]);
     expect((await guest.from("payment_attempts").select("*")).error).not.toBeNull();
-    expect((await guest.rpc("settle_online_payment", { p_attempt_id: held.payment_attempt_id,
-      p_provider: "netopia", p_provider_payment_id: "spoof", p_outcome: "succeeded" })).error).not.toBeNull();
-    expect((await db.rpc("settle_online_payment", { p_attempt_id: held.payment_attempt_id,
-      p_provider: "stripe", p_provider_payment_id: "wrong-provider", p_outcome: "succeeded" })).data).toBe("unavailable");
+    expect((await guest.rpc("commit_payment_transition", { p_id: held.booking_id, p_fingerprint: "forged", p_revision: 0, p_attempt_id: held.payment_attempt_id, p_deadline: null, p_targets: null, p_event: null, p_receipt: null, p_result: "succeeded" })).error).not.toBeNull();
+    expect((await settleOnlinePayment({ attemptId: held.payment_attempt_id,
+      provider: "stripe", providerPaymentId: "wrong-provider", outcome: "succeeded" }, db))).toBe("unavailable");
     const settlements = await Promise.all([settle(held, "succeeded"), settle(held, "succeeded")]);
-    expect(settlements.every((r) => r.data === "succeeded" && !r.error)).toBe(true);
+    expect(settlements.every((r) => r === "succeeded")).toBe(true);
     expect(await booking(held.booking_id)).toMatchObject({ status: "confirmed", reservation_id: held.reservation_id });
     expect(await reservation(held.reservation_id)).toMatchObject({ status: "active", hold_expires_at: null });
     expect(await emails(held.booking_id)).toEqual([{ event_kind: "confirmed" }]);
 
-    const failed = (await db.rpc("create_customer_booking", params(660))).data[0];
-    expect((await settle(failed, "failed")).data).toBe("failed");
+    const failed = (await insertCheckoutFixture(db, params(660))).data[0];
+    expect((await settle(failed, "failed"))).toBe("failed");
     expect(await reservation(failed.reservation_id)).toMatchObject({ status: "released" });
     expect(await emails(failed.booking_id)).toEqual([]);
-    const expired = (await db.rpc("create_customer_booking", params(660))).data[0];
+    const expired = (await insertCheckoutFixture(db, params(660))).data[0];
     // Simulate wall-clock expiry, without a browser timer or long test sleep.
     expect((await db.from("court_reservations").update({ hold_expires_at: "2020-01-01T00:00:00Z" })
       .eq("id", expired.reservation_id)).error).toBeNull();
     expect((await day()).courts[0].cells.slice(2, 4)).toEqual(["available", "available"]);
-    const replacement = await db.rpc("create_customer_booking", params(660));
+    const replacement = await insertCheckoutFixture(db, params(660));
     expect(replacement.error).toBeNull();
     expect(await booking(expired.booking_id)).toMatchObject({ status: "expired" });
     expect(await reservation(expired.reservation_id)).toMatchObject({ status: "released", hold_expires_at: null });
-    expect((await settle(expired, "succeeded")).data).toBe("expired");
+    expect((await settle(expired, "succeeded"))).toBe("expired");
     expect(await emails(expired.booking_id)).toEqual([]);
-    const late = (await db.rpc("create_customer_booking", params(720))).data[0];
+    const late = (await insertCheckoutFixture(db, params(720))).data[0];
     expect((await db.from("court_reservations").update({ hold_expires_at: "2020-01-01T00:00:00Z" }).eq("id", late.reservation_id)).error).toBeNull();
-    expect((await settle(late, "succeeded")).data).toBe("expired");
+    expect((await settle(late, "succeeded"))).toBe("expired");
     expect(await emails(late.booking_id)).toEqual([]);
 
     expect((await db.from("locations").update({ allow_pay_at_club: true }).eq("id", locationId)).error).toBeNull();

@@ -1,3 +1,4 @@
+import { rescheduleCommandFixture } from "./checkout-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test } from "vitest";
@@ -68,16 +69,10 @@ test("Owner rescheduling preserves rows, enforces notice/ownership and shares pr
     expect((await service.from("court_reservations").select("*").eq("id", reservationId).single()).data).toEqual(beforeReservation);
     expect(await rescheduleOwnCustomerBooking({ ...input, startMinute: 660, endMinute: 720,
       expectedTotal: 10001, priceAcknowledged: true }, owner.client)).toMatchObject({ ok: false, message: expect.stringContaining("no longer available") });
-    const rpcInput = { p_id: bookingId, p_expected_updated_at: input.expectedUpdatedAt,
-      p_expected_booking_updated_at: input.expectedBookingUpdatedAt, p_court_id: courtId, p_booking_date: date,
-      p_starts_at_minute: 720, p_ends_at_minute: 780, p_save: true, p_expected_total: 10001, p_price_acknowledged: true };
     for (const client of [coach.client, admin.client]) {
-      expect((await client.rpc("reschedule_own_customer_booking", rpcInput)).data).toMatchObject({ status: "unavailable" });
       expect(await rescheduleOwnCustomerBooking(input, client)).toMatchObject({ ok: false });
-      expect((await client.rpc("read_own_booking_edit_availability", { p_id: bookingId, p_date: date })).error?.code).toBe("42501");
     }
-    expect((await owner.client.rpc("reschedule_customer_booking", { ...rpcInput, p_owner: false })).error?.code).toBe("42501");
-    expect((await owner.client.rpc("reschedule_admin_customer_booking", rpcInput)).error?.code).toBe("42501");
+    expect((await owner.client.rpc("commit_booking_reschedule", rescheduleCommandFixture(bookingId))).error?.code).toBe("42501");
 
     expect(await rescheduleOwnCustomerBooking({ ...input, expectedTotal: 10001, priceAcknowledged: true }, owner.client))
       .toEqual({ ok: true, totalAmountMinor: 10001 });
@@ -102,24 +97,24 @@ test("Owner rescheduling preserves rows, enforces notice/ownership and shares pr
     assert.strictEqual((await service.from("bookings").update({ cancellation_notice_minutes: 43200 }).eq("id", bookingId)).error, null);
     const currentBooking = (await service.from("bookings").select("updated_at").eq("id", bookingId).single()).data!;
     const currentReservation = (await service.from("court_reservations").select("updated_at").eq("id", reservationId).single()).data!;
-    const cutoffInput = { ...rpcInput, p_expected_updated_at: currentReservation.updated_at,
-      p_expected_booking_updated_at: currentBooking.updated_at, p_save: false };
-    expect((await owner.client.rpc("reschedule_own_customer_booking", cutoffInput)).data).toMatchObject({ status: "notice_required" });
+    const cutoffInput = { ...input, expectedUpdatedAt: currentReservation.updated_at,
+      expectedBookingUpdatedAt: currentBooking.updated_at, save: false };
+    expect(await rescheduleOwnCustomerBooking(cutoffInput, owner.client)).toMatchObject({ ok: false });
     await expect(getOwnBookingEditDay(bookingId, date, owner.client)).rejects.toThrow();
     for (const role of ["coach", "admin"]) {
       assert.strictEqual((await service.from("user_roles").insert({ user_id: owner.id, role_code: role })).error, null);
-      expect((await owner.client.rpc("reschedule_own_customer_booking", cutoffInput)).data).toMatchObject({ status: "quoted" });
+      expect(await rescheduleOwnCustomerBooking(cutoffInput, owner.client)).toMatchObject({ ok: true });
       assert.strictEqual((await service.from("user_roles").delete().eq("user_id", owner.id).eq("role_code", role)).error, null);
     }
     assert.strictEqual((await service.from("users").update({ status: "suspended" }).eq("id", owner.id)).error, null);
-    expect((await owner.client.rpc("reschedule_own_customer_booking", cutoffInput)).error?.code).toBe("42501");
+    expect(await rescheduleOwnCustomerBooking(cutoffInput, owner.client)).toMatchObject({ ok: false });
     assert.strictEqual((await service.from("users").update({ status: "active" }).eq("id", owner.id)).error, null);
     assert.strictEqual((await service.from("user_roles").insert({ user_id: owner.id, role_code: "coach" })).error, null);
     const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
     assert.strictEqual((await service.from("court_reservations").update({ booking_date: yesterday }).eq("id", reservationId)).error, null);
     const started = (await service.from("court_reservations").select("updated_at").eq("id", reservationId).single()).data!;
-    expect((await owner.client.rpc("reschedule_own_customer_booking", { ...cutoffInput, p_expected_updated_at: started.updated_at })).data)
-      .toMatchObject({ status: "unavailable" });
+    expect(await rescheduleOwnCustomerBooking({ ...cutoffInput, expectedUpdatedAt: started.updated_at }, owner.client))
+      .toMatchObject({ ok: false });
   } finally {
     await service.from("bookings").delete().in("id", [bookingId, guestBookingId]);
     await service.from("court_reservations").delete().in("id", [reservationId, guestReservationId]);

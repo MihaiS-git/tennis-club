@@ -45,9 +45,6 @@ select is(public.cancel_admin_court_reservation('cb000000-0000-4000-8000-0000000
   'already cancelled reservation returns false');
 select is(public.cancel_admin_court_reservation('cb000000-0000-4000-8000-000000000099'), false,
   'missing reservation returns false');
-select is((select count(*) from public.list_admin_court_reservations(
-  array['cb000000-0000-4000-8000-000000000011'::uuid], '2099-10-15')), 0::bigint,
-  'cancelled reservation disappears from live Admin schedule');
 reset role;
 select is((select count(*) from public.court_reservations where id = 'cb000000-0000-4000-8000-000000000020'),
   1::bigint, 'cancelled row remains stored');

@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { pricingOpeningHoursError } from "../../src/lib/pricing/resolution";
+import { pricingHasFutureOccurrence, pricingOpeningHoursError } from "../../src/lib/pricing/resolution";
 
 const location_id = "c7000000-0000-4000-8000-000000000011";
 const hours = [0, 1, 2, 3, 4].flatMap((weekday) => [
@@ -28,4 +28,13 @@ it("checks different weekday schedules independently", () => {
 });
 it("requires configured opening hours", () => {
   expect(check([0], 540, 600, [])).toBe("Configure this location's opening hours before saving pricing.");
+});
+
+it("only future matching weekdays retain an opening-hours dependency", () => {
+  const rule = { weekday: 0, starts_on: null, ends_on: null };
+  expect(pricingHasFutureOccurrence(rule, "2026-10-06")).toBe(true);
+  expect(pricingHasFutureOccurrence({ ...rule, ends_on: "2026-10-12" }, "2026-10-06")).toBe(true);
+  expect(pricingHasFutureOccurrence({ ...rule, ends_on: "2026-10-11" }, "2026-10-06")).toBe(false);
+  expect(pricingHasFutureOccurrence({ ...rule, starts_on: "2026-10-13", ends_on: "2026-10-18" }, "2026-10-06")).toBe(false);
+  expect(pricingHasFutureOccurrence({ ...rule, ends_on: "2026-10-05" }, "2026-10-06")).toBe(false);
 });

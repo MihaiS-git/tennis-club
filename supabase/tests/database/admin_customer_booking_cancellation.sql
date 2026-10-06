@@ -28,36 +28,29 @@ insert into public.bookings (payment_method, id, reservation_id, account_user_id
   ('pay_at_club', 'ac000000-0000-4000-8000-000000000031', 'ac000000-0000-4000-8000-000000000021',
    null, 'Guest', 'guest@example.test', '+40 999', 7000, 'RON', 120);
 
+-- Test the final persistence command with already-decided snapshots.
+create function pg_temp.cancel_command(id uuid) returns jsonb language plpgsql as $$
+declare revision bigint; fingerprint text;
+begin
+  select x.revision into revision from public.booking_configuration_revision x where x.id;
+  fingerprint := md5(public.booking_command_snapshot(id)::text);
+  return public.commit_booking_cancellation(id,fingerprint,revision,
+    'ac000000-0000-4000-8000-000000000001','admin',clock_timestamp()+interval '1 hour',false,null,null,
+    public.booking_actor_snapshot('ac000000-0000-4000-8000-000000000001'));
+end;
+$$;
 set local role anon;
-select throws_ok($$select public.cancel_admin_customer_booking('ac000000-0000-4000-8000-000000000030')$$,
-  '42501', null, 'anonymous cannot cancel booking');
+select throws_ok($$select public.commit_booking_cancellation(null,null,0,null,'admin',null,false,null,null,null)$$,
+  '42501',null,'anonymous cannot submit authoritative cancellation commands');
 reset role;
 set local role authenticated;
-set local request.jwt.claims = '{"sub":"ac000000-0000-4000-8000-000000000002","role":"authenticated"}';
-select throws_ok($$select public.cancel_admin_customer_booking('ac000000-0000-4000-8000-000000000030')$$,
-  '42501', null, 'Coach cannot cancel booking');
-set local request.jwt.claims = '{"sub":"ac000000-0000-4000-8000-000000000003","role":"authenticated"}';
-select throws_ok($$select public.cancel_admin_customer_booking('ac000000-0000-4000-8000-000000000030')$$,
-  '42501', null, 'owner cannot invoke Admin cancellation');
-set local request.jwt.claims = '{"sub":"ac000000-0000-4000-8000-000000000004","role":"authenticated"}';
-select throws_ok($$select public.cancel_admin_customer_booking('ac000000-0000-4000-8000-000000000030')$$,
-  '42501', null, 'suspended Admin cannot cancel booking');
 set local request.jwt.claims = '{"sub":"ac000000-0000-4000-8000-000000000001","role":"authenticated"}';
-select is(public.cancel_admin_court_reservation('ac000000-0000-4000-8000-000000000020'), false,
-  'direct-reservation cancellation still excludes bookings');
-select is(public.cancel_admin_customer_booking('ac000000-0000-4000-8000-000000000030'), true,
-  'Admin cancels another account booking');
-select is(public.cancel_admin_customer_booking('ac000000-0000-4000-8000-000000000030'), false,
-  'repeat cancellation is unchanged');
-select is(public.cancel_admin_customer_booking('ac000000-0000-4000-8000-000000000099'), false,
-  'missing booking is unchanged');
-select is((select count(*) from public.list_admin_operational_occupancy(
-  array['ac000000-0000-4000-8000-000000000011'::uuid], '2099-10-15')),
-  1::bigint, 'cancelled booking leaves live Admin schedule');
-select is((select count(*) from public.list_own_upcoming_customer_bookings()), 0::bigint,
-  'Admin sees no unrelated upcoming booking');
+select throws_ok($$select public.commit_booking_cancellation(null,null,0,null,'admin',null,false,null,null,null)$$,
+  '42501',null,'even an Admin browser cannot submit authoritative lifecycle commands');
+select is(public.cancel_admin_court_reservation('ac000000-0000-4000-8000-000000000020'),false,
+  'direct-reservation cancellation excludes bookings');
 reset role;
-
+select is(pg_temp.cancel_command('ac000000-0000-4000-8000-000000000030')->>'outcome','cancelled','atomic cancellation persists');
 select is((select status::text from public.bookings where id = 'ac000000-0000-4000-8000-000000000030'),
   'cancelled', 'booking status is cancelled');
 select is((select status::text from public.court_reservations where id = 'ac000000-0000-4000-8000-000000000020'),
@@ -96,9 +89,7 @@ end;
 $$;
 create trigger reject_test_reservation_cancel before update on public.court_reservations
 for each row execute function public.reject_test_reservation_cancel();
-set local role authenticated;
-set local request.jwt.claims = '{"sub":"ac000000-0000-4000-8000-000000000001","role":"authenticated"}';
-select throws_ok($$select public.cancel_admin_customer_booking('ac000000-0000-4000-8000-000000000031')$$,
+select throws_ok($$select pg_temp.cancel_command('ac000000-0000-4000-8000-000000000031')$$,
   'P0001', null, 'second write failure rolls back the RPC');
 reset role;
 select is((select status::text from public.bookings where id = 'ac000000-0000-4000-8000-000000000031'),

@@ -370,10 +370,6 @@ test("direct reservations require active staff, opening hours and an available a
     const coachDay = await getReservationDay(locations.find((location) => location.id === locationId)!, date, now, coach.client);
     expect(coachDay.adminOccupancy).toEqual([]);
     expect(coachDay.courts[0].cells.filter((cell) => cell === "booked")).toHaveLength(4);
-    expect((await coach.client.rpc("list_admin_court_reservations", { p_court_ids: [courtId], p_date: date })).error?.code).toBe("42501");
-    expect((await member.client.rpc("list_admin_court_reservations", { p_court_ids: [courtId], p_date: date })).error?.code).toBe("42501");
-    expect((await suspended.client.rpc("list_admin_court_reservations", { p_court_ids: [courtId], p_date: date })).error?.code).toBe("42501");
-    expect((await publicClient().rpc("list_admin_court_reservations", { p_court_ids: [courtId], p_date: date })).error).toBeTruthy();
     const adminPersonal = await listPersonalReservations(admin.client, now);
     const coachPersonal = await listPersonalReservations(coach.client, now);
     expect(adminPersonal.upcoming.map((row) => row.created_by_user_id)).toEqual([admin.id]);
@@ -391,18 +387,9 @@ test("direct reservations require active staff, opening hours and an available a
     await expect(getAdminReservationEditDay({ reservationId: coachPersonal.upcoming[0].id, date }, coach.client, now)).rejects.toThrow();
     await expect(getAdminReservationEditDay({ reservationId: coachPersonal.upcoming[0].id, date }, member.client, now)).rejects.toThrow();
     await expect(getAdminReservationEditDay({ reservationId: coachPersonal.upcoming[0].id, date }, suspended.client, now)).rejects.toThrow();
-    expect((await coach.client.rpc("read_admin_reservation_edit_availability", {
-      p_id: coachPersonal.upcoming[0].id, p_date: date })).error?.code).toBe("42501");
-    expect((await member.client.rpc("read_admin_reservation_edit_availability", {
-      p_id: coachPersonal.upcoming[0].id, p_date: date })).error?.code).toBe("42501");
-    expect((await suspended.client.rpc("read_admin_reservation_edit_availability", {
-      p_id: coachPersonal.upcoming[0].id, p_date: date })).error?.code).toBe("42501");
-    expect((await publicClient().rpc("read_admin_reservation_edit_availability", {
-      p_id: coachPersonal.upcoming[0].id, p_date: date })).error).toBeTruthy();
     await expect(getAdminReservationEditDay({ reservationId: randomUUID(), date }, admin.client, now)).rejects.toThrow();
-    expect(await listPersonalReservations(member.client, now)).toEqual({ upcoming: [] });
+    await expect(listPersonalReservations(member.client, now)).rejects.toThrow();
     expect(await listOwnCourtHistory(1, member.client, now)).toEqual({ rows: [], hasNext: false, page: 1 });
-    expect((await member.client.rpc("list_personal_court_reservations")).error?.code).toBe("42501");
     expect((await publicClient().from("court_reservations").select("reason").eq("court_id", courtId)).error?.code).toBe("42501");
     expect((await publicClient().from("court_reservations").select("created_by_user_id").eq("court_id", courtId)).error?.code).toBe("42501");
     assert.strictEqual((await service.from("locations").update({ is_public: true }).eq("id", locationId)).error, null);

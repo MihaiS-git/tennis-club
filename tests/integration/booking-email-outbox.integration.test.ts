@@ -1,3 +1,8 @@
+import { rescheduleCustomerBookingAsAdmin } from "@/lib/bookings/admin-reschedule";
+import { rescheduleOwnCustomerBooking } from "@/lib/bookings/self-reschedule";
+import { cancelCustomerBookingAsAdmin } from "@/lib/reservations/service";
+import { cancelOwnCustomerBooking } from "@/lib/bookings/self-cancellation-service";
+import { insertCheckoutFixture } from "./checkout-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { expect, test } from "vitest";
@@ -30,14 +35,14 @@ test("booking mutations enqueue once atomically; worker leases isolate retries a
     expect((await db.from("location_pricing_rules").insert({ rule_set_id: ruleId, location_id: locationId, court_id: courtId,
       court_state: "outdoor", weekday: 3, starts_at_minute: 600, ends_at_minute: 900, price_per_hour_minor: 9000 })).error).toBeNull();
     for (const start of [600, 660]) {
-      const created = await db.rpc("create_customer_booking", { p_payment_method: "pay_at_club", p_provider: null, p_hold_seconds: 600, p_court_id: courtId, p_booking_date: date,
+      const created = await insertCheckoutFixture(db, { p_payment_method: "pay_at_club", p_provider: null, p_hold_seconds: 600, p_court_id: courtId, p_booking_date: date,
         p_starts_at_minute: start, p_ends_at_minute: start + 60, p_account_user_id: owner.id,
         p_customer_name: "Snapshot owner", p_customer_email: "snapshot@outbox.test", p_customer_phone: "+40 123",
         p_total_amount_minor: 9000, p_currency: "RON" });
       expect(created.error).toBeNull();
       bookings.push(created.data[0].booking_id); reservations.push(created.data[0].reservation_id);
     }
-    const duplicate = await db.rpc("create_customer_booking", { p_payment_method: "pay_at_club", p_provider: null, p_hold_seconds: 600, p_court_id: courtId, p_booking_date: date,
+    const duplicate = await insertCheckoutFixture(db, { p_payment_method: "pay_at_club", p_provider: null, p_hold_seconds: 600, p_court_id: courtId, p_booking_date: date,
       p_starts_at_minute: 600, p_ends_at_minute: 660, p_account_user_id: owner.id,
       p_customer_name: "Conflict", p_customer_email: "conflict@outbox.test", p_customer_phone: "+40 123",
       p_total_amount_minor: 9000, p_currency: "RON" });
@@ -46,19 +51,18 @@ test("booking mutations enqueue once atomically; worker leases isolate retries a
     for (const [i, actor, kind] of [[0, owner.client, "own"], [1, admin.client, "admin"]] as const) {
       const b = (await db.from("bookings").select("updated_at").eq("id", bookings[i]).single()).data!;
       const r = (await db.from("court_reservations").select("updated_at").eq("id", reservations[i]).single()).data!;
-      const params = { p_id: bookings[i], p_expected_updated_at: r.updated_at, p_expected_booking_updated_at: b.updated_at,
-        p_court_id: courtId, p_booking_date: date, p_starts_at_minute: 720 + i * 60, p_ends_at_minute: 780 + i * 60,
-        p_save: true, p_expected_total: 9000, p_price_acknowledged: false };
-      expect((await actor.rpc(`reschedule_${kind}_customer_booking`, { ...params, p_expected_total: 1 })).data.status).toBe("price_changed");
-      expect((await actor.rpc(`reschedule_${kind}_customer_booking`, params)).data.status).toBe("updated");
-      expect((await actor.rpc(`reschedule_${kind}_customer_booking`, params)).data.status).toBe("stale");
+      const params = { id: bookings[i], expectedUpdatedAt: r.updated_at, expectedBookingUpdatedAt: b.updated_at,
+        courtId, date, startMinute: 720 + i * 60, endMinute: 780 + i * 60, save: true, expectedTotal: 9000, priceAcknowledged: false };
+      const reschedule = kind === "own" ? rescheduleOwnCustomerBooking : rescheduleCustomerBookingAsAdmin;
+      expect(await reschedule({ ...params, expectedTotal: 1 }, actor)).toMatchObject({ ok: false, reason: "price_changed" });
+      expect(await reschedule(params, actor)).toMatchObject({ ok: true });
+      expect(await reschedule(params, actor)).toMatchObject({ ok: false, reason: "stale" });
       const freshB = (await db.from("bookings").select("updated_at").eq("id", bookings[i]).single()).data!;
       const freshR = (await db.from("court_reservations").select("updated_at").eq("id", reservations[i]).single()).data!;
-      expect((await actor.rpc(`reschedule_${kind}_customer_booking`, { ...params,
-        p_expected_updated_at: freshR.updated_at, p_expected_booking_updated_at: freshB.updated_at })).data.status).toBe("updated");
-      const cancelled = await Promise.all([actor.rpc(`cancel_${kind}_customer_booking`, { p_id: bookings[i] }),
-        actor.rpc(`cancel_${kind}_customer_booking`, { p_id: bookings[i] })]);
-      expect(cancelled.filter((result) => result.data === true || result.data === "cancelled")).toHaveLength(1);
+      expect(await reschedule({ ...params, expectedUpdatedAt: freshR.updated_at, expectedBookingUpdatedAt: freshB.updated_at }, actor)).toMatchObject({ ok: true });
+      const cancel = kind === "own" ? cancelOwnCustomerBooking : cancelCustomerBookingAsAdmin;
+      const cancelled = await Promise.all([cancel(bookings[i], actor), cancel(bookings[i], actor)]);
+      expect(cancelled.filter((result) => result.ok)).toHaveLength(1);
     }
     const events = (await db.from("booking_email_outbox").select("*").in("booking_id", bookings)).data!;
     expect(events.map((e) => e.event_kind).sort()).toEqual(["admin_cancelled", "admin_rescheduled", "confirmed", "confirmed", "customer_cancelled", "customer_rescheduled"]);
@@ -73,8 +77,8 @@ test("booking mutations enqueue once atomically; worker leases isolate retries a
     const starts = await Promise.all([db.rpc("start_booking_email", { p_id: earliest.id, p_token: token }),
       db.rpc("start_booking_email", { p_id: earliest.id, p_token: token })]);
     expect(starts.filter((r) => r.data === true)).toHaveLength(1);
-    expect((await db.rpc("finish_booking_email", { p_id: earliest.id, p_token: randomUUID(), p_outcome: "delivered" })).data).toBe(false);
-    expect((await db.rpc("finish_booking_email", { p_id: earliest.id, p_token: token, p_outcome: "retry", p_error: "smtp_before_data_failed" })).data).toBe(true);
+    expect((await db.rpc("finish_booking_email", { p_id: earliest.id, p_token: randomUUID(), p_status: "delivered", p_delay_seconds: 0 })).data).toBe(false);
+    expect((await db.rpc("finish_booking_email", { p_id: earliest.id, p_token: token, p_status: "pending", p_delay_seconds: 30, p_error: "smtp_before_data_failed" })).data).toBe(true);
     const retried = (await db.from("booking_email_outbox").select("status,available_at").eq("id", earliest.id).single()).data!;
     expect(retried.status).toBe("pending");
     expect(new Date(retried.available_at).getTime()).toBeGreaterThan(Date.now());

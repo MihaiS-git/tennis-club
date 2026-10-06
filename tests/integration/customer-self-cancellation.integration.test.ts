@@ -1,3 +1,4 @@
+import { cancellationCommandFixture } from "./checkout-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test } from "vitest";
@@ -59,9 +60,8 @@ test("self-cancellation enforces account ownership, snapshot notice, staff exemp
     // Privileges do not turn My Activity into a global management surface.
     for (const actor of [other, admin, coach]) {
       expect(await cancelOwnCustomerBooking(eligible.id, actor.client)).toMatchObject({ ok: false });
-      expect((await actor.client.rpc("cancel_own_customer_booking", { p_id: eligible.id })).data).toBe("unavailable");
     }
-    expect((await reader().rpc("cancel_own_customer_booking", { p_id: eligible.id })).error?.code).toBe("42501");
+    expect((await reader().rpc("commit_booking_cancellation", cancellationCommandFixture(eligible.id))).error?.code).toBe("42501");
     expect(await cancelOwnCustomerBooking(randomUUID(), owner.client)).toMatchObject({ ok: false });
     expect(await cancelOwnCustomerBooking("invalid", owner.client)).toMatchObject({ ok: false });
     expect(await cancelOwnCustomerBooking(eligible.id, owner.client)).toEqual({ ok: true });
@@ -77,47 +77,41 @@ test("self-cancellation enforces account ownership, snapshot notice, staff exemp
       id: eligible.id, status: "cancelled", cancellation_notice_minutes: 60 }));
     expect((await reader().from("court_reservations").select("court_id, starts_at_minute").eq("court_id", eligible.courtId)).data).toEqual([]);
     expect(await cancelOwnCustomerBooking(eligible.id, owner.client)).toMatchObject({ ok: false });
-    expect((await owner.client.rpc("cancel_own_customer_booking", { p_id: eligible.id })).data).toBe("unavailable");
     expect(await read(eligible)).toEqual(after);
 
     const expired = await booking(owner.id, 180, 1440);
     expect(await cancelOwnCustomerBooking(expired.id, owner.client)).toMatchObject({ ok: false, message: expect.stringContaining("expired") });
-    expect((await owner.client.rpc("cancel_own_customer_booking", { p_id: expired.id })).data).toBe("notice_required");
     for (const [actor, role] of [[admin, "admin"], [coach, "coach"]] as const) {
       const own = await booking(actor.id, 180, 43200);
       expect(await cancelOwnCustomerBooking(own.id, actor.client)).toEqual({ ok: true });
       // Current roles, rather than booking-time roles, determine the exemption.
       const removedRole = await booking(actor.id, 180, 43200);
       assert.strictEqual((await service.from("user_roles").delete().eq("user_id", actor.id)).error, null);
-      expect((await actor.client.rpc("cancel_own_customer_booking", { p_id: removedRole.id })).data).toBe("notice_required");
+      expect(await cancelOwnCustomerBooking(removedRole.id, actor.client)).toMatchObject({ ok: false });
       assert.strictEqual((await service.from("user_roles").insert({ user_id: actor.id, role_code: role })).error, null);
     }
     // 36 hours in the past avoids midnight interval boundaries in every timezone.
     for (const actor of [owner, admin, coach]) {
       const started = await booking(actor.id, -2160, 0);
-      expect((await actor.client.rpc("cancel_own_customer_booking", { p_id: started.id })).data).toBe("started");
+      expect(await cancelOwnCustomerBooking(started.id, actor.client)).toMatchObject({ ok: false });
     }
     assert.strictEqual((await service.from("users").update({ first_name: "Stored", last_name: "Owner", phone: "123" })
       .eq("id", owner.id)).error, null);
     const guest = await booking(null, 180, 0, owner.email);
     expect(await cancelOwnCustomerBooking(guest.id, owner.client)).toMatchObject({ ok: false });
-    expect((await owner.client.rpc("cancel_own_customer_booking", { p_id: guest.id })).data).toBe("unavailable");
     const inactive = await booking(owner.id, 180, 0);
     assert.strictEqual((await service.from("court_reservations").update({ status: "cancelled",
       cancelled_at: new Date().toISOString(), cancelled_by_user_id: owner.id }).eq("id", inactive.reservationId)).error, null);
-    expect((await owner.client.rpc("cancel_own_customer_booking", { p_id: inactive.id })).data).toBe("unavailable");
+    expect(await cancelOwnCustomerBooking(inactive.id, owner.client)).toMatchObject({ ok: false });
     expect((await read(inactive)).booking.status).toBe("confirmed");
     const race = await booking(owner.id, 180, 0);
-    const attempts = await Promise.all([1, 2].map(() => owner.client.rpc("cancel_own_customer_booking", { p_id: race.id })));
-    for (const attempt of attempts) expect(attempt.error).toBeNull();
-    expect(attempts.map((row) => row.data).sort()).toEqual(["cancelled", "unavailable"]);
+    const attempts = await Promise.all([1, 2].map(() => cancelOwnCustomerBooking(race.id, owner.client)));
+    expect(attempts.map((row) => row.ok).sort()).toEqual([false, true]);
     const raceAfter = await read(race);
-    expect((await owner.client.rpc("cancel_own_customer_booking", { p_id: race.id })).data).toBe("unavailable");
     expect(await read(race)).toEqual(raceAfter);
     const suspended = await booking(owner.id, 180, 0);
     assert.strictEqual((await service.from("users").update({ status: "suspended" }).eq("id", owner.id)).error, null);
     expect(await cancelOwnCustomerBooking(suspended.id, owner.client)).toMatchObject({ ok: false });
-    expect((await owner.client.rpc("cancel_own_customer_booking", { p_id: suspended.id })).error?.code).toBe("42501");
     expect((await read(suspended)).booking.status).toBe("confirmed");
   } finally {
     if (bookings.length) assert.strictEqual((await service.from("bookings").delete().in("id", bookings)).error, null);

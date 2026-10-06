@@ -342,6 +342,17 @@ Use it only when genuinely required, for example:
 Use that client for the service-role-only atomic checkout, trusted payment
 settlement/hold-expiry RPCs and narrowly scoped server-only confirmation-policy
 reads documented below.
+The personal direct-reservation service also uses that client narrowly for SELECT
+after `requireReservationRole`, with verified creator ID and active-status filters;
+private-column grants and public occupancy RLS must remain unchanged.
+Internal timetable occupancy uses bounded privileged SELECTs after `requireReservationRole`,
+restricted to requested courts/date and active or held reservations at active, unarchived
+resources. TypeScript includes held rows only while their persisted deadline is later than
+one shared `now`; reads never expire holds. Coach occupancy remains generic, with
+customer/direct-reservation details confined to the existing Admin-only read.
+Personal history also uses bounded privileged SELECTs after active-account authorization,
+always filtered by verified booking owner or direct-reservation creator. Direct-reservation
+history requires an Admin/Coach role; classification, merge, sort, and pagination remain in TypeScript.
 The separate booking email worker also uses `SUPABASE_SECRET_KEY`, narrowly for
 service-role-only outbox claim/start/finish RPCs; it does not access user sessions.
 
@@ -518,17 +529,19 @@ accepts only customer intent, resolves active account identity and public eligib
 through user-scoped reads, and reuses the `/book` calendar pricing calculation.
 Location customer cancellation notice is configured in the shared Admin Create/Edit
 location form, stored as 0–43,200 integer minutes with a 1,440-minute default.
-The atomic customer booking RPC snapshots it from the selected court's location into
+The checkout service supplies the location policy snapshot to `commit_checkout`, which verifies and stores it in
 `bookings.cancellation_notice_minutes`; personal upcoming/history and Admin operational
 reads use that booking snapshot. Location configuration reads use an Admin-only RPC;
-public location SELECT keeps only its existing columns. The owner-only
-`cancel_own_customer_booking(uuid)` RPC is called through the customer booking service
-and My Activity Server Action. It requires an active account, confirmed owned booking,
-active linked reservation and a start instant still in the future. Ordinary owners use
-the snapshot cutoff, inclusive at `now <= cutoff`; current Admin/Coach owners bypass
-notice only. It locks booking then reservation and checks wall-clock time after waiting;
-both lifecycle updates commit atomically and preserve snapshots. Personal booking reads
-return PostgreSQL's timezone-resolved `starts_at_instant` for consistent UI eligibility.
+public location SELECT keeps only its existing columns. The server-only cancellation
+service requires an active owner, confirmed booking and active linked reservation.
+The shared TypeScript policy enforces the inclusive snapshot cutoff and Admin/Coach
+notice bypass, while always rejecting booking start. `commit_booking_cancellation`
+fences expected booking/configuration/actor snapshots and the supplied deadline after
+locking, then commits lifecycle rows, supplied refund and supplied outbox atomically.
+Personal upcoming customer-booking reads authorize the active account, then use narrow
+server-only privileged SELECTs filtered by verified owner, confirmed booking and active
+reservation. TypeScript uses existing location-time utilities for upcoming filtering
+and `starts_at_instant` composition; browser grants remain unchanged.
 Explicit confirmation precedes cancellation; Upcoming refreshes and History retains the
 cancelled row. Guest identity matching cannot grant access. Admin operational and direct
 reservation cancellation remain separate.
@@ -565,19 +578,19 @@ Admin Save uses a separate Admin-only same-row edit RPC with a row lock, an
 `updated_at` stale token, fixed-location enforcement, and the active-row GiST
 constraint. It preserves the creator and lifecycle fields and permits only
 reason changes once an interval starts. The owner-only edit read and mutation
-remain separate. Admin customer-booking rescheduling has separate
-booking-specific read and quote/save RPCs. Only active Admins may change a future
-confirmed booking's schedule, within its fixed location, while preserving both row
-identities and customer/policy snapshots. Both updated-at tokens protect stale edits.
-Quote/save pricing runs inside the short transaction, matching public calendar slot
-pricing and rounding, as a narrow exception needed to atomically verify price against
-concurrent configuration changes. Changed prices require explicit confirmation and
-`price_changed` requires reconfirmation. Successful saves use `revalidateCourtActivity("edit")`.
+remain separate. Admin customer-booking rescheduling uses the shared TypeScript
+service and existing calendar court-state/pricing/rounding functions. Only active
+Admins may change future confirmed bookings within their fixed location. The thin
+`commit_booking_reschedule` command locks and fences both row versions, actor facts
+and a configuration revision before atomic schedule/price/outbox persistence.
+Configuration writes advance that revision under a lock protocol, so stale pricing,
+coverage, hours and resource decisions cannot commit. Price acknowledgement and
+reconfirmation belong only in TypeScript. Success uses `revalidateCourtActivity("edit")`.
 
 Customer self-rescheduling from `/my-activity/bookings` uses the shared Admin booking
 edit timetable, availability loader, price confirmation form, and same-row transactional
-reschedule implementation. Dedicated owner RPCs and a server-only service require an
-active account and strictly `bookings.account_user_id = auth.uid()`. Ordinary owners
+reschedule implementation. The server-only service and scoped persistence command require
+an active account and strictly bind the booking account to the verified actor. Ordinary owners
 must remain within the booking's snapshotted cancellation-notice window (inclusive
 cutoff); current Admin/Coach owners bypass notice only. Every owner must be before
 booking start. The fixed location, both IDs, owner/contact/policy snapshots and creation
@@ -585,16 +598,16 @@ timestamps are preserved. Both stale tokens, server pricing with explicit change
 acknowledgement/reconfirmation, and the active-row GiST constraint remain authoritative.
 Owner-scoped availability excludes its own reservation and returns only active courts,
 opening hours and occupancy for its fixed location, independent of public publication.
-Shared internal RPC helpers are not executable by browser database roles; Admin RPCs
-retain their separate role boundary. Success calls `revalidateCourtActivity("edit")`
-for `/book`, `/reservations`, and `/my-activity/bookings`. Refunds and
-guest self-management are not implemented. Booking lifecycle notifications are
+Booking command/read RPCs are service-role-only; owner and Admin services retain
+separate authorization boundaries, also checked during persistence. Success calls `revalidateCourtActivity("edit")`
+for `/book`, `/reservations`, and `/my-activity/bookings`. Full Stripe cancellation
+refunds are implemented; guest self-management is not implemented. Booking lifecycle notifications are
 transactional outbox events; see `docs/booking-notifications.md`.
 
  `/profile` contains identity and settings;
 `/my-activity` redirects to `/my-activity/bookings`, which
 contains current/upcoming personal booking/reservation management. `/my-activity/history`
-is the current account's completed/cancelled bookings and staff-owned direct reservations. Both pages retain the My Activity heading and Admin-style submenu. The owner-scoped read-only `list_own_court_activity` RPC filters and sorts the combined dataset in SQL before fixed 20-row pagination, with kind/ID tie-breakers. URL controls preserve filters/sort across pages and reset page 1 when changed.
+is the current account's completed/cancelled bookings and staff-owned direct reservations. Both pages retain the My Activity heading and Admin-style submenu. The server activity service authorizes the active account before bounded, privileged owner-filtered SELECTs; direct reservations require an Admin/Coach role. TypeScript classifies, filters and sorts the combined dataset before fixed 20-row pagination, with kind/ID tie-breakers. URL controls preserve filters/sort across pages and reset page 1 when changed.
 The personal reservation reads remain bound to `auth.uid()` and use location-local time for lifecycle classification.
 Active Admins and Coaches can cancel
 only their own active Upcoming reservations after explicit confirmation. Server authorization and database checks
@@ -1199,11 +1212,11 @@ exactly-once delivery guarantee: only retry definite non-acceptance; interrupted
 Local Mailpit SMTP uses port 54325; do not change Supabase Auth SMTP configuration.
 See `docs/booking-notifications.md` for operational details.
 
-The `/book` confirmation UI reads only the selected eligible public location’s cancellation-notice value through the server-only booking client. After atomic creation, a read bound to the returned booking ID retrieves its stored policy snapshot; authenticated success uses the existing owner-scoped RPC for PostgreSQL’s start instant and cutoff display. Guest success shows the stored notice without inferring a timezone-resolved cutoff. Failed post-commit display reads are logged and never report the committed booking as a failed submission. No browser database access or public database grants are added.
+The `/book` confirmation UI reads only the selected eligible public location’s cancellation-notice value through the server-only booking client. After atomic creation, a read bound to the returned booking ID retrieves its stored policy snapshot; authenticated success uses the existing TypeScript timezone utility for start instant and cutoff display. Guest success shows the stored notice without inferring a timezone-resolved cutoff. Failed post-commit display reads are logged and never report the committed booking as a failed submission. No browser database access or public database grants are added.
 
 ## Payment provider configuration
 
-Admin → Payments is the sole active-provider selection UI. Stripe and NETOPIA
+Admin → Payments → Settings (`/admin/payments/settings`) is the sole active-provider selection UI. Stripe and NETOPIA
 configuration modules stay behind `PaymentProviderConfiguration`; booking/domain
 code resolves only an identifier. All credentials are server-only environment values:
 `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `NETOPIA_API_KEY`,
@@ -1242,5 +1255,54 @@ calls common `processOnlinePaymentEvent`. Its service-only transaction records e
 receipt and reuses existing same-row settlement atomically. Preserve booking-first
 lock order, GiST occupancy and notification timing. Late paid events or financial
 mismatches must set private `payment_provider_events.reconciliation_required` and
-must never reclaim a released court. No refunds, failover or automatic reconciliation
-are implemented. See `docs/payments-memberships.md` for configuration and verification.
+must never reclaim a released court. Full Stripe cancellation refunds are implemented as described below; failover and automatic reconciliation
+are not implemented. See `docs/payments-memberships.md` for configuration and verification.
+
+## Stripe cancellation refunds
+
+`cancel_customer_booking_with_refund` preserves existing owner cutoff and Admin-before-start
+rules, locks booking then reservation then original successful Stripe attempt, cancels
+occupancy and creates one full `payment_refunds` snapshot atomically. Customer cancellation
+requires a full refund; Admin supplies an explicit boolean choice. Pay-at-club creates no
+refund. Legacy cancellation entrypoints delegate to this boundary; lifecycle helpers are
+not browser-executable. Never calculate refunds from current booking prices.
+
+The server-only refund service uses `SUPABASE_SECRET_KEY` narrowly for refund reads/result
+persistence. Stripe SDK access stays in its adapter, uses the original PaymentIntent and
+`court-payment-refund-<refund-id>`, and recovers matching refund metadata before creating
+on retries. Pending/network failure never restores occupancy or changes historical payment
+attempts. Refund records use pending/pending_retry/succeeded/failed; no partial or NETOPIA
+refunds or reconciliation actions are implemented. See `docs/payments-memberships.md`.
+
+## Admin Payments
+
+`/admin/payments` shows Transactions; `/admin/payments/settings` preserves provider
+settings. `listAdminPaymentTransactions` authorizes with `requireActiveAdmin` and calls
+an active-Admin-only read RPC through the user-scoped client. Keep filtering, sorting
+and fixed 20-row pagination inside this read projection; never fetch all financial
+records to filter in the browser. Prefer the refund-linked original attempt, then
+the earliest succeeded attempt, then the newest attempt. Preserve historic snapshots.
+Attention is refund pending_retry/failed or persisted reconciliation_required events
+across the booking's attempts; ordinary failed/expired checkout is not attention.
+Dialog fields are read-only; only the focused Stripe recovery actions below may mutate
+financial recovery state. No transaction/refund tables gain browser SELECT access.
+See `docs/payments-memberships.md` for selection, search and review semantics.
+
+## Admin Stripe reconciliation actions
+
+Only active Admins can retry existing pending_retry/failed Stripe refunds or refund
+verified late captures whose hold could not confirm the booking. the TypeScript Stripe refund policy
+selects eligible persisted evidence. `claim_refund_command` fences the supplied command,
+validates snapshot relationships, inserts at most one supplied refund and commits a
+token/actor-scoped lease whose duration is supplied by TypeScript. Existing
+refund snapshots, provider IDs and idempotency keys remain immutable. No occupancy or
+historical payment attempt changes are permitted. Never send client amounts or evidence.
+
+`processBookingRefund` accepts an internal Admin claim to recheck failed refunds via
+the existing adapter and persist through service-role-only `commit_refund_result`.
+TypeScript supplies the qualifying same-attempt event IDs after refund success; the
+command verifies their immutable evidence, resolves them atomically and
+records resolved_at/resolved_by_user_id; pending/failure remains unresolved. Browser
+roles cannot supply refund results. No generic mark-resolved, replacement provider
+refund, manual status editing, NETOPIA or scheduled retry worker is introduced.
+See `docs/payments-memberships.md` for the exact late-capture predicate and lifecycle.

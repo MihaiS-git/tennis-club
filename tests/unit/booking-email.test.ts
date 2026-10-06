@@ -1,7 +1,7 @@
 import { expect, test, vi } from "vitest";
 import { renderBookingEmail, type BookingEmailEvent } from "@/lib/notifications/booking-email";
 import { smtpFailure } from "@/lib/mail/smtp";
-import { deliverNextBookingEmail } from "@/lib/notifications/worker";
+import { deliveryPersistence, deliverNextBookingEmail } from "@/lib/notifications/worker";
 import { createClient } from "@supabase/supabase-js";
 
 const event: BookingEmailEvent = {
@@ -37,17 +37,31 @@ test("SMTP only retries definite non-delivery; ambiguous DATA failures are quara
 test("worker checks lease before sending and records failures without leaking transport errors", async () => {
   const client = createClient("http://localhost:54321", "test");
   const rpc = vi.spyOn(client, "rpc");
-  rpc.mockResolvedValueOnce({ data: [event], error: null, success: true, count: null, status: 200, statusText: "OK" });
+  rpc.mockResolvedValueOnce({ data: [{ ...event, attempts: 1 }], error: null, success: true, count: null, status: 200, statusText: "OK" });
   rpc.mockResolvedValueOnce({ data: false, error: null, success: true, count: null, status: 200, statusText: "OK" });
   const send = vi.fn();
   await deliverNextBookingEmail(client, { send });
   expect(send).not.toHaveBeenCalled();
-  rpc.mockResolvedValueOnce({ data: [event], error: null, success: true, count: null, status: 200, statusText: "OK" });
+  rpc.mockResolvedValueOnce({ data: [{ ...event, attempts: 1 }], error: null, success: true, count: null, status: 200, statusText: "OK" });
   rpc.mockResolvedValueOnce({ data: true, error: null, success: true, count: null, status: 200, statusText: "OK" });
   rpc.mockResolvedValueOnce({ data: true, error: null, success: true, count: null, status: 200, statusText: "OK" });
   send.mockRejectedValueOnce(new Error("sensitive transport details"));
   await deliverNextBookingEmail(client, { send });
   expect(rpc).toHaveBeenLastCalledWith("finish_booking_email", {
-    p_id: event.id, p_token: event.lease_token, p_outcome: "uncertain", p_error: "adapter_acknowledgement_unknown",
+    p_id: event.id, p_token: event.lease_token, p_status: "uncertain", p_delay_seconds: 30, p_error: "adapter_acknowledgement_unknown",
   });
+});
+
+test("cancellation mail snapshots refund request without claiming completion", () => {
+  const rendered = renderBookingEmail({ ...event, event_kind: "customer_cancelled",
+    payload: { ...event.payload, refund_status: "requested" } });
+  expect(rendered.text).toContain("Your full payment refund has been requested.");
+  expect(rendered.text).not.toContain("has been refunded");
+});
+
+test("retry policy chooses capped backoff and exhausts at ten attempts", () => {
+  expect(deliveryPersistence("retry", 1)).toEqual({ status: "pending", delaySeconds: 30 });
+  expect(deliveryPersistence("retry", 8)).toEqual({ status: "pending", delaySeconds: 3600 });
+  expect(deliveryPersistence("retry", 10)).toEqual({ status: "failed", delaySeconds: 3600 });
+  expect(deliveryPersistence("uncertain", 1).status).toBe("uncertain");
 });

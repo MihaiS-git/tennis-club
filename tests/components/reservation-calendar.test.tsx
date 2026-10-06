@@ -107,7 +107,7 @@ it("confirms booking cancellation and refreshes the timetable in place", async (
     "This will cancel the booking and free the court."]) expect(confirmation.textContent).toContain(value);
   expect(within(confirmation).getByRole("button", { name: "Keep booking" })).toBeTruthy();
   fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel booking" }));
-  await waitFor(() => expect(cancelBookingAction).toHaveBeenCalledWith(booking.id));
+  await waitFor(() => expect(cancelBookingAction).toHaveBeenCalledWith({ id: booking.id, refund: null }));
   await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
   expect(cancelAction).not.toHaveBeenCalled();
   expect(screen.queryByRole("dialog")).toBeNull();
@@ -314,4 +314,37 @@ it("opens past occupancy for a Coach without private details or operational acti
   expect(within(dialog).queryByText(/customer|reason|created by|price|total/i)).toBeNull();
   expect(within(dialog).getAllByRole("button").every((button) => button.textContent === "Close" || button.getAttribute("aria-label") === "Close dialog")).toBe(true);
   expect(screen.queryByRole("button", { name: /Available|Reserve court|Edit |Cancel / })).toBeNull();
+});
+
+it.each([true, false])("Admin explicitly cancels a paid Stripe booking with refund=%s", async (refund) => {
+  const courtId = "22222222-2222-4222-8222-222222222222";
+  const location = { id: "11111111-1111-4111-8111-111111111111", name: "RIVUS", timezone: "UTC",
+    courts: [{ id: courtId, name: "Court 2" }] };
+  const booking = { kind: "booking" as const, stripe_refund_available: true, id: "33333333-3333-4333-8333-333333333333", court_id: courtId,
+    booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660,
+    customer_name: "Ana Pop", customer_email: "ana@example.test", customer_phone: "+40 123",
+    cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON" as const };
+  cancelBookingAction.mockResolvedValue({ ok: true });
+  const { rerender } = render(<ReservationCalendar date={booking.booking_date} location={location}
+    day={{ times: [600, 630], courts: [{ court: location.courts[0], cells: ["booked", "booked"] }] }}
+    adminOccupancy={[booking]} />);
+  fireEvent.click(screen.getByRole("button", { name: /10:00–11:00, Booking · Ana Pop/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Cancel booking" }));
+  const confirmation = screen.getByRole("dialog", { name: "Cancel booking?" });
+  for (const value of ["Ana Pop", "RIVUS · Court 2", "15 Oct 2099 · 10:00–11:00", "RON", "90.00",
+    "This will cancel the booking and free the court."]) expect(confirmation.textContent).toContain(value);
+  expect(within(confirmation).getByRole("button", { name: "Keep booking" })).toBeTruthy();
+  const checkbox = within(confirmation).getByRole("checkbox", { name: "Refund full payment" });
+  if (refund) fireEvent.click(checkbox);
+  fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel booking" }));
+  await waitFor(() => expect(cancelBookingAction).toHaveBeenCalledWith({ id: booking.id, refund }));
+  await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+  expect(cancelAction).not.toHaveBeenCalled();
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.getByRole("status").textContent).toContain("Booking cancelled.");
+  rerender(<ReservationCalendar date={booking.booking_date} location={location}
+    day={{ times: [600, 630], courts: [{ court: location.courts[0], cells: ["available", "available"] }] }}
+    adminOccupancy={[]} />);
+  fireEvent.click(screen.getByRole("button", { name: /10:00–10:30, Available/ }));
+  expect(screen.getByLabelText("Selected reservation")).toBeTruthy();
 });

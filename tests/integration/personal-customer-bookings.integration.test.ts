@@ -100,8 +100,7 @@ test("upcoming customer booking reads are owner scoped for members and staff", a
       expect(direct.map((row) => row.id)).toEqual([...ownReservations].reverse());
       expect(direct.every((row) => row.created_by_user_id === staff.id)).toBe(true);
     }
-    expect(await listPersonalReservations(member.client)).toEqual({ upcoming: [] });
-    expect((await member.client.rpc("list_personal_court_reservations")).error?.code).toBe("42501");
+    await expect(listPersonalReservations(member.client)).rejects.toThrow();
     expect((await member.client.from("bookings").select("id")).error?.code).toBe("42501");
   } finally {
     if (reservationIds.length) assert.strictEqual((await service.from("bookings").delete().in("reservation_id", reservationIds)).error, null);

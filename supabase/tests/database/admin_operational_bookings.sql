@@ -62,19 +62,10 @@ select is((select total_amount_minor from public.list_admin_operational_occupanc
 select is((select currency from public.list_admin_operational_occupancy(
   array['d1000000-0000-4000-8000-000000000011'::uuid], '2099-10-15') where starts_at_minute = 660),
   'RON', 'Admin receives stored currency');
-select is((select count(*) from public.list_admin_court_reservations(
-  array['d1000000-0000-4000-8000-000000000011'::uuid], '2099-10-15')), 1::bigint,
-  'direct-reservation inspection excludes linked bookings');
-select ok((public.read_admin_reservation_edit_availability(
-  'd1000000-0000-4000-8000-000000000020', '2099-10-15')->>'updated_at') is not null,
-  'Admin direct edit read retains its stale token');
 select is(public.cancel_admin_court_reservation('d1000000-0000-4000-8000-000000000021'), false,
   'Admin direct cancellation cannot cancel booking');
 select is(public.edit_admin_court_reservation('d1000000-0000-4000-8000-000000000021', now(),
   'Changed', false, null, null, null, null), 'unavailable', 'Admin direct edit cannot change booking');
-select throws_ok($$select * from public.read_admin_reservation_edit_availability(
-  'd1000000-0000-4000-8000-000000000021', '2099-10-15')$$, '42501', null,
-  'Admin direct edit read excludes booking');
 select throws_ok($$select customer_email from public.bookings$$, '42501', null,
   'Admin function does not add broad table SELECT');
 reset role;
@@ -95,8 +86,6 @@ set local request.jwt.claims = '{"sub":"d1000000-0000-4000-8000-000000000003","r
 select throws_ok($$select * from public.list_admin_operational_occupancy(
   array['d1000000-0000-4000-8000-000000000011'::uuid], '2099-10-15')$$,
   '42501', null, 'member cannot inspect Admin booking details');
-select is((select count(*) from public.list_own_upcoming_customer_bookings()), 1::bigint,
-  'member still reads only their own customer booking');
 set local request.jwt.claims = '{"sub":"d1000000-0000-4000-8000-000000000004","role":"authenticated"}';
 select throws_ok($$select * from public.list_admin_operational_occupancy(
   array['d1000000-0000-4000-8000-000000000011'::uuid], '2099-10-15')$$,

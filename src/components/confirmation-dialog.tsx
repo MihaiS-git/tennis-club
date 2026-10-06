@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useId, useRef, type RefObject } from "react";
+import { useEffect, useId, useRef, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/button";
 import { ModalDialog } from "@/components/modal-dialog";
 
-export function ConfirmationDialog({ open, title, message, confirmLabel, cancelLabel = "Cancel", pending = false, error = "", onConfirm, onClose, returnFocusRef }: {
+export function ConfirmationDialog({ open, title, message, confirmLabel, cancelLabel = "Cancel", pending = false, error = "", onConfirm, onClose, returnFocusRef, children }: {
+  children?: ReactNode;
   open: boolean;
   title: string;
   message: string;
@@ -33,6 +34,7 @@ export function ConfirmationDialog({ open, title, message, confirmLabel, cancelL
       className="fixed inset-0 m-auto w-[calc(100%-2rem)] max-w-sm rounded-card border border-border bg-surface p-5 text-foreground shadow-floating backdrop:bg-foreground/50">
       <h2 id={titleId} className="font-heading text-lg font-semibold">{title}</h2>
       <p className="mt-3 whitespace-pre-line text-sm text-foreground">{message}</p>
+      {children}
       <p role={error ? "alert" : undefined} className="min-h-5 pt-2 text-sm text-danger">{error}</p>
       <div className="mt-4 flex justify-end gap-2">
         <Button type="button" variant="secondary" size="small" disabled={pending} onClick={() => dialogRef.current?.close()}>{cancelLabel}</Button>

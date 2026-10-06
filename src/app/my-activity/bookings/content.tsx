@@ -3,6 +3,7 @@ import { profileContext } from "@/lib/profile/profile";
 import { logger } from "@/lib/logger";
 import { listOwnUpcomingActivity } from "@/lib/bookings/activity-service";
 import type { ActivitySearchParams } from "@/lib/bookings/activity-query";
+import { customerBookingNoticeBypass } from "@/lib/bookings/self-cancellation";
 import { PersonalActivity } from "./personal-activity";
 
 export async function MyBookingsContent({ searchParams = Promise.resolve({}) }: {
@@ -11,7 +12,7 @@ export async function MyBookingsContent({ searchParams = Promise.resolve({}) }: 
   const { account, client } = await profileContext();
   if (account.state === "unauthenticated") redirect("/login");
   if (account.state !== "active") return <p className="text-muted-foreground">Your account cannot access activity right now.</p>;
-  const staff = account.roles.some((role) => role === "admin" || role === "coach");
+  const staff = customerBookingNoticeBypass(account.roles);
   const rawParams = await searchParams;
   const params = staff ? rawParams : { ...rawParams, type: "booking" };
   let initialActivity = null;

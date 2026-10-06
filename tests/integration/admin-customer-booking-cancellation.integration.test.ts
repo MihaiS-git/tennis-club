@@ -1,3 +1,4 @@
+import { cancellationCommandFixture } from "./checkout-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test } from "vitest";
@@ -55,20 +56,20 @@ test("Admin cancellation atomically preserves snapshots, frees occupancy and mov
     expect((await listOwnUpcomingCustomerBookings(owner.client)).map((item) => item.id)).toContain(bookingId);
     expect((await listOwnUpcomingCustomerBookings(owner.client)).map((item) => item.id)).not.toContain(guestBookingId);
     expect((await getReservationDay(location, date, now, admin.client)).adminOccupancy.map((item) => item.id)).toContain(bookingId);
-    expect((await coach.client.rpc("cancel_admin_customer_booking", { p_id: bookingId })).error?.code).toBe("42501");
-    expect((await owner.client.rpc("cancel_admin_customer_booking", { p_id: bookingId })).error?.code).toBe("42501");
+    expect((await coach.client.rpc("commit_booking_cancellation", cancellationCommandFixture(bookingId))).error?.code).toBe("42501");
+    expect((await owner.client.rpc("commit_booking_cancellation", cancellationCommandFixture(bookingId))).error?.code).toBe("42501");
     const anonymous = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_PUBLISHABLE_KEY!, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
-    expect((await anonymous.rpc("cancel_admin_customer_booking", { p_id: bookingId })).error?.code).toBe("42501");
+    expect((await anonymous.rpc("commit_booking_cancellation", cancellationCommandFixture(bookingId))).error?.code).toBe("42501");
     const attempts = await Promise.all([
-      admin.client.rpc("cancel_admin_customer_booking", { p_id: bookingId }),
-      secondAdmin.client.rpc("cancel_admin_customer_booking", { p_id: bookingId }),
+      cancelCustomerBookingAsAdmin(bookingId, admin.client),
+      cancelCustomerBookingAsAdmin(bookingId, secondAdmin.client),
     ]);
-    expect(attempts.map(({ data, error }) => { expect(error).toBeNull(); return data; }).sort()).toEqual([false, true]);
-    const winner = attempts[0].data ? admin.id : secondAdmin.id;
-    expect((await admin.client.rpc("cancel_admin_customer_booking", { p_id: bookingId })).data).toBe(false);
-    expect((await admin.client.rpc("cancel_admin_customer_booking", { p_id: randomUUID() })).data).toBe(false);
+    expect(attempts.map((result) => result.ok).sort()).toEqual([false, true]);
+    const winner = attempts[0].ok ? admin.id : secondAdmin.id;
+    expect((await cancelCustomerBookingAsAdmin(bookingId, admin.client)).ok).toBe(false);
+    expect((await cancelCustomerBookingAsAdmin(randomUUID(), admin.client)).ok).toBe(false);
     const afterBooking = (await service.from("bookings").select("*").eq("id", bookingId).single()).data!;
     const afterReservation = (await service.from("court_reservations").select("*").eq("id", reservationId).single()).data!;
     expect(afterBooking.status).toBe("cancelled");

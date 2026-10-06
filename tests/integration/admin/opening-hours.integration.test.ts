@@ -60,7 +60,7 @@ test("weekly opening hours create, conflict rollback, grouped replace/remove, an
     expect(removed.intervals.every((row) => row.closes_at_minute === 720)).toBe(true);
 
     await expect(mutateAdminOpeningHours({ location_id, weekdays: [6], replace_ids: [], intervals: [{ opens_at: "08:00", closes_at: "22:00" }] }, member)).rejects.toThrow();
-    expect((await member.rpc("mutate_location_opening_hours", { p_location_id: location_id, p_weekdays: [6], p_replace_ids: [], p_opens_at_minutes: [480], p_closes_at_minutes: [1320] })).error?.code).toBe("42501");
+    expect((await member.rpc("commit_location_opening_hours", { p_actor: userIds[1], p_revision: 0, p_applicable_rule_ids: [], p_location_id: location_id, p_weekdays: [6], p_replace_ids: [], p_opens_at_minutes: [480], p_closes_at_minutes: [1320] })).error?.code).toBe("42501");
   } finally {
     if (locationIds.length) {
       assert.strictEqual((await service.from("location_opening_hours").delete().in("location_id", locationIds)).error, null);

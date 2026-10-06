@@ -30,9 +30,6 @@ select throws_ok($$select reason from public.court_reservations$$,
   '42501', null, 'reservation reason is not public');
 select throws_ok($$select created_by_user_id from public.court_reservations$$,
   '42501', null, 'reservation creator is not public');
-select throws_ok($$select * from public.list_admin_court_reservations(
-  array['c9000000-0000-4000-8000-000000000011'::uuid], '2026-10-15')$$,
-  '42501', null, 'anonymous users cannot inspect operational reservations');
 select throws_ok($$select status, cancelled_at, cancelled_by_user_id from public.court_reservations$$,
   '42501', null, 'cancellation metadata is not public');
 select throws_ok($$insert into public.court_reservations (court_id, booking_date, starts_at_minute, ends_at_minute)

@@ -7,6 +7,7 @@ export async function selectPaymentProviderAction(input: unknown): Promise<Payme
   const result = await selectActivePaymentProvider(input);
   if (result.ok) {
     revalidatePath("/admin/payments");
+    revalidatePath("/admin/payments/settings");
     revalidatePath("/book");
   }
   return result;

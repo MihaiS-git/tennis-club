@@ -1,13 +1,14 @@
 import "server-only";
+import { cancelBookingCommand } from "@/lib/bookings/cancellation-service";
 
 import { z } from "zod";
 import { readCurrentAccount } from "@/lib/auth/account";
 import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
 import { listOwnUpcomingCustomerBookings } from "./personal-service";
-import { customerCancellationEligibility } from "./self-cancellation";
+import { customerBookingNoticeBypass, customerCancellationEligibility } from "./self-cancellation";
 
-type CancellationResult = { ok: true } | { ok: false; message: string };
+import { finishBookingCancellation, type BookingCancellationResult } from "@/lib/payments/refunds";
 const messages = {
   unavailable: "This booking is no longer available for cancellation.",
   started: "This booking has started and can no longer be cancelled here.",
@@ -15,32 +16,30 @@ const messages = {
 };
 
 export async function cancelOwnCustomerBooking(id: unknown,
-  client?: Awaited<ReturnType<typeof createClient>>): Promise<CancellationResult> {
+  client?: Awaited<ReturnType<typeof createClient>>): Promise<BookingCancellationResult> {
   const parsed = z.uuid().safeParse(id);
   if (!parsed.success) return { ok: false, message: "Choose a valid booking." };
   const supabase = client ?? await createClient();
   const account = await readCurrentAccount(supabase);
   if (account.state !== "active") return { ok: false, message: "An active account is required to cancel a booking." };
-  // The owner-bound read is also the application's ownership boundary. Never
-  // resolve a booking by contact details or grant staff a global self-service read.
+  // All reads/mutations are owner-bound. Never resolve a booking by contact
+  // details or grant staff a global self-service read.
   const booking = (await listOwnUpcomingCustomerBookings(supabase)).find((row) => row.id === parsed.data);
-  if (!booking) return { ok: false, message: messages.unavailable };
-  const eligibility = customerCancellationEligibility(booking,
-    account.roles.some((role) => role === "admin" || role === "coach"));
+  // Missing Upcoming rows may be a replay after a committed cancellation.
+  // The RPC still verifies active ownership before returning an existing refund.
+  const eligibility = booking ? customerCancellationEligibility(booking,
+    customerBookingNoticeBypass(account.roles)) : "eligible";
   if (eligibility !== "eligible") return { ok: false, message: messages[eligibility] };
-  const result = await supabase.rpc("cancel_own_customer_booking", { p_id: parsed.data });
-  if (result.error) {
+  let data: unknown;
+  try {
+    data = await cancelBookingCommand(parsed.data, account.userId, false, null);
+  } catch {
     logger.error({ event: "bookings.self_cancel_failed", bookingId: parsed.data,
-      actorId: account.userId, code: result.error.code }, "Failed to cancel own customer booking");
-    return { ok: false, message: result.error.code === "42501"
-      ? "An active account is required to cancel a booking." : "Unable to cancel this booking. Try again." };
+      actorId: account.userId }, "Failed to cancel own customer booking");
+    return { ok: false, message: "Unable to cancel this booking. Try again." };
   }
-  if (result.data === "cancelled") {
-    logger.info({ event: "bookings.self_cancelled", bookingId: parsed.data, actorId: account.userId }, "Customer booking cancelled by owner");
-    return { ok: true };
-  }
-  const outcome = z.enum(["unavailable", "started", "notice_required"]).safeParse(result.data);
-  if (outcome.success) return { ok: false, message: messages[outcome.data] };
-  logger.error({ event: "bookings.self_cancel_invalid_result", bookingId: parsed.data }, "Invalid self-cancellation result");
-  return { ok: false, message: "Unable to cancel this booking. Try again." };
+  const outcome = await finishBookingCancellation(data);
+  if (outcome.ok) logger.info({ event: "bookings.self_cancelled", bookingId: parsed.data,
+    actorId: account.userId, refundStatus: outcome.refundStatus }, "Customer booking cancelled by owner");
+  return outcome;
 }

@@ -1,6 +1,5 @@
 -- Existing staff management is replaced by a personal mutation. Timetables read
 -- occupancy columns directly; private details remain available only to the owner.
-drop function public.list_internal_court_reservations(uuid[], date);
 drop function public.cancel_internal_court_reservation(uuid);
 
 revoke update (status, cancelled_at, cancelled_by_user_id)

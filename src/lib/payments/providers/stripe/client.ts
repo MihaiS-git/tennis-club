@@ -7,7 +7,7 @@ export function stripeClient() {
 }
 
 export class StripeProviderError extends Error {
-  constructor(readonly kind: "configuration" | "creation" | "signature" | "cancellation") {
+  constructor(readonly kind: "configuration" | "creation" | "signature" | "cancellation" | "refund") {
     super("Payment service unavailable.");
   }
 }

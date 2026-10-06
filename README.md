@@ -261,6 +261,20 @@ Use it only for trusted system operations such as:
 `SUPABASE_SECRET_KEY` is used by the server-side customer booking writer and the
 booking email outbox worker. The writer calls atomic checkout and trusted payment lifecycle RPCs after
 server validation; the worker calls service-role-only delivery RPCs.
+The personal direct-reservation read also uses this server-only client after
+`requireReservationRole` authorization, with mandatory verified-owner and active-status
+SELECT filters. Personal upcoming customer-booking reads use the same server-only
+client after active-account authorization, with verified-owner, confirmed-booking and
+active-reservation filters; TypeScript composes results and filters by location-local time.
+Personal history uses bounded owner-filtered privileged SELECTs after active-account
+authorization; direct-reservation history is included only for Admins and Coaches.
+TypeScript classifies completion with location time, merges, sorts, and paginates the results.
+Public occupancy grants and RLS remain unchanged.
+Internal timetable occupancy uses bounded privileged SELECTs after `requireReservationRole`,
+restricted to requested courts/date and active or held reservations at active, unarchived
+resources. TypeScript includes held rows only while their persisted deadline is later than
+one shared `now`; reads never expire holds. Coach occupancy remains generic, with
+customer/direct-reservation details confined to the existing Admin-only read.
 
 Never expose the secret key to:
 
@@ -339,7 +353,7 @@ Customer cancellation notice is configured in Admin → Locations → Create/Edi
 under Booking policy. `locations.customer_cancellation_notice_minutes` stores
 0–43,200 elapsed minutes (up to 30 days), defaulting to 1,440 (24 hours).
 The incremental migration also assigns 1,440 to existing locations and bookings.
-The service-role booking RPC reads the selected court's location and stores
+The checkout service supplies the selected location policy snapshot; `commit_checkout` verifies and stores
 `bookings.cancellation_notice_minutes`; later location changes leave that snapshot
 unchanged. Personal upcoming/history and Admin operational reads return the booking's
 own snapshot. The configuration read is Admin-only; public location reads retain
@@ -348,12 +362,12 @@ Cancellation eligibility uses the location-timezone booking start instant
 minus the booking's elapsed-minute snapshot, allowing `now <= cutoff` and rejecting
 `now > cutoff`, while always requiring `now < booking start`. Active authenticated owners may now self-cancel future confirmed customer bookings
 from their details dialog on `/my-activity/bookings`, after explicit confirmation.
-The dedicated `cancel_own_customer_booking(uuid)` RPC enforces only
-`bookings.account_user_id = auth.uid()` ownership, active account and linked lifecycle,
-using the booking snapshot. Current Admin/Coach owners bypass notice but still cannot
-cancel at or after start. The RPC locks booking and reservation, checks wall-clock time
-after waiting, and cancels both rows atomically while preserving snapshots. Repeat or
-concurrent losing attempts return a safe failure without changing cancellation metadata.
+The server-only cancellation service verifies ownership and uses the shared TypeScript
+cutoff/staff-bypass policy. `commit_booking_cancellation` locks the linked rows,
+checks the expected booking/configuration/actor snapshots and supplied deadline after
+waiting, and atomically cancels both rows with any supplied refund and notification.
+Repeated Stripe refund requests reuse the existing refund without changing cancellation
+metadata; other duplicate cancellations return a safe failure.
 Upcoming refreshes in place; cancelled bookings enter History and free occupancy.
 Guest identity matching grants no ownership. Admin operational cancellation and direct
 reservation cancellation remain distinct and unchanged.
@@ -552,8 +566,8 @@ The booking can retain its existing identity while its scheduled resources chang
 
 Customer self-rescheduling from `/my-activity/bookings` uses the shared Admin booking
 edit timetable, availability loader, price confirmation form, and same-row transactional
-reschedule implementation. Dedicated owner RPCs and a server-only service require an
-active account and strictly `bookings.account_user_id = auth.uid()`. Ordinary owners
+reschedule implementation. The server-only service and scoped persistence command require
+an active account and strictly bind the booking account to the verified actor. Ordinary owners
 must remain within the booking's snapshotted cancellation-notice window (inclusive
 cutoff); current Admin/Coach owners bypass notice only. Every owner must be before
 booking start. The fixed location, both IDs, owner/contact/policy snapshots and creation
@@ -561,52 +575,30 @@ timestamps are preserved. Both stale tokens, server pricing with explicit change
 acknowledgement/reconfirmation, and the active-row GiST constraint remain authoritative.
 Owner-scoped availability excludes its own reservation and returns only active courts,
 opening hours and occupancy for its fixed location, independent of public publication.
-Shared internal RPC helpers are not executable by browser database roles; Admin RPCs
-retain their separate role boundary. Success calls `revalidateCourtActivity("edit")`
-for `/book`, `/reservations`, and `/my-activity/bookings`. Payment lifecycle/holds are implemented; provider checkout, refunds and
-guest self-management are not implemented. Booking lifecycle emails use the durable
+Booking command/read RPCs are service-role-only; owner and Admin services retain
+separate authorization boundaries, also checked during persistence. Success calls `revalidateCourtActivity("edit")`
+for `/book`, `/reservations`, and `/my-activity/bookings`. Payment lifecycle/holds, Stripe checkout and full Stripe cancellation refunds are implemented;
+guest self-management is not implemented. Booking lifecycle emails use the durable
 outbox described in [Booking notifications](docs/booking-notifications.md).
 
 ---
 
 ## Cancellation and refunds
 
-Cancellation/refund policy must be configurable.
+Eligible customer self-cancellation of a confirmed Stripe-paid booking cancels both
+booking and reservation and requests a full refund of the original captured amount.
+Existing cancellation notice and start-time rules remain unchanged. Admin cancellation
+before start explicitly chooses whether to refund the full payment. Pay-at-club
+cancellation has no refund operation.
 
-Example:
-
-```text
-More than 24 hours:
-100% refund
-
-6–24 hours:
-50% refund
-
-Less than 6 hours:
-No refund
-```
-
-Actual club policy must come from configuration rather than UI code.
-
-Cancellation flow:
-
-```text
-request cancellation
-→ load booking/payment state
-→ evaluate cancellation policy
-→ calculate refund
-→ cancel booking
-→ create Stripe refund if applicable
-→ synchronize payment state
-```
-
-The system must prevent:
-
-- duplicate cancellation;
-- duplicate refund;
-- refunds exceeding the paid amount;
-- unauthorized refunds;
-- refunds for unpaid transactions.
+The durable `payment_refunds` record retains the original successful attempt, provider,
+amount and currency. Cancellation, occupancy release, refund request and cancellation
+email snapshot commit together. Stripe runs after commit; failures never restore the
+court. Repeated requests reuse the record and its stable idempotency key. See
+[refund lifecycle and retry handling](docs/payments-memberships.md#stripe-cancellation-refunds).
+Partial and NETOPIA refunds and generic manual reconciliation are outside the implemented scope.
+Admin payment transactions and persisted reconciliation reasons can be reviewed
+at `/admin/payments`, with focused Stripe refund retry and late-capture refund actions; provider settings are at `/admin/payments/settings`.
 
 ---
 
@@ -769,7 +761,7 @@ Personal and tennis forms independently compare editable values against their la
 
 `/my-activity` redirects to `/my-activity/bookings`, which contains current and upcoming personal court activity. `/my-activity/history` contains completed/cancelled owned bookings and staff-owned direct reservations. The retired `/my-activity/bookings/history` URL redirects with its search parameters. Both pages preserve the My Activity heading and reuse Admin's submenu component, active styling and mobile overflow behavior. Avatar and mobile menus link directly to Bookings.
 
-Both lists use the user-scoped, read-only `list_own_court_activity` RPC. It combines owned bookings and staff-owned direct reservations, applies type/location/court/date filters (plus History status), sorts globally, and then returns 20 rows per page. Date/time defaults to ascending for Bookings and descending for History; kind/ID tie-breakers make ordering deterministic. Location, court, type, duration and History status are also sortable. URL controls reset page 1 when changed; pagination preserves the query. Controls derive location/court choices from the full owner-scoped eligible dataset, with courts narrowed to the selected location. Bookings require an active physical interval that has not ended in the location's timezone. Details preserve contact and price snapshots; guest and other users' bookings remain excluded without granting booking-table SELECT. Existing cancellation/rescheduling services, mutation RPCs and lifecycle rules remain unchanged.
+Both lists authorize the active account before bounded, owner-filtered SELECTs through the server-only privileged Supabase client. TypeScript combines owned bookings and Admin/Coach-owned direct reservations, applies type/location/court/date filters (plus History status), sorts globally, and then returns 20 rows per page. Date/time defaults to ascending for Bookings and descending for History; kind/ID tie-breakers make ordering deterministic. Location, court, type, duration and History status are also sortable. URL controls reset page 1 when changed; pagination preserves the query. Controls derive location/court choices from the full owner-scoped eligible dataset, with courts narrowed to the selected location. Bookings require an active physical interval that has not ended in the location's timezone. Details preserve contact and price snapshots; guest and other users' bookings remain excluded without granting booking-table SELECT. Existing cancellation/rescheduling services, mutation RPCs and lifecycle rules remain unchanged.
 
 A direct-reservation details dialog lets the owner edit or cancel an active Upcoming reservation; archive details are read-only. Future direct reservations keep their location fixed and use the direct-reservation timetable to choose a date, active court at that location, and interval; a server read excludes the edited row from occupancy while preserving other booked cells. In-progress direct reservations can change only reason. Editing updates the same row through a personal RPC that locks the row, verifies ownership, `updated_at`, and the unchanged location, and leaves the original intact on a stale edit or GiST conflict. A role-checked database function binds direct-reservation reads to `auth.uid()` and keeps private reservation metadata out of public occupancy reads.
 
@@ -1064,8 +1056,10 @@ requires explicit publication and derived configuration readiness. Enabling Publ
 
 Location opening hours are managed from Edit Location through an explicit Manage opening hours action. The compact weekly editor groups weekdays only when their complete
 interval sets match. One form selects weekdays, supports multiple intervals, and
-creates, replaces, or removes grouped intervals together. A user-scoped transactional
-RPC commits each multi-day change atomically while RLS remains active.
+creates, replaces, or removes grouped intervals together. A server-only transactional
+command commits each multi-day change atomically. TypeScript supplies which pricing
+rules remain applicable; PostgreSQL checks structural containment under a configuration
+revision and stores those dependencies. RLS remains active; browser roles cannot write hours.
 Archived locations cannot have opening hours changed through the RPC or direct admin writes; admins can still read their hours. Restoring a location leaves it inactive and allows hours editing again.
 `location_opening_hours` stores local minute-of-day boundaries (0–1440, including
 `24:00`), with Monday = 0 and Sunday = 6. A GiST exclusion constraint prevents
@@ -1174,17 +1168,18 @@ mutation remains separate.
 Admins can reschedule future confirmed customer bookings from the booking details
 dialog on `/reservations`. The booking-specific timetable keeps the location fixed,
 preselects the current interval and excludes its own reservation from occupancy.
-Contact snapshots remain read-only. A dedicated user-scoped Admin RPC locks the
-booking and reservation, checks both stale tokens, validates the target and updates
-the same rows. Its quote/save calculation matches public calendar slot pricing and
-aggregate rounding. This narrow transactional pricing exception prevents changes to
-pricing or coverage between calculation and persistence; short configuration locks
-protect that check. Changed totals require explicit acknowledgement; a changed save
-quote returns `price_changed` without writing. Rescheduling preserves identity,
+Contact snapshots remain read-only. The shared TypeScript rescheduling service reuses
+public-calendar court-state, pricing and rounding functions, then evaluates price
+acknowledgement. `commit_booking_reschedule` locks and updates the same rows using
+expected versions, actor facts and a configuration revision. Configuration writes
+advance that revision under a shared lock protocol; intervening pricing, coverage,
+hours or resource changes reject the supplied decision and trigger a fresh quote.
+Changed totals require explicit acknowledgement; a changed save quote returns
+`price_changed` without writing. Rescheduling preserves identity,
 contact and cancellation-policy snapshots, and invalidates `/book`, `/reservations`
 and `/my-activity/bookings`, without invalidating History. The owner-scoped
 self-rescheduling workflow above reuses this implementation. Stripe one-time checkout
-is implemented; refunds are not. Booking lifecycle notifications use a durable outbox.
+and full Stripe cancellation refunds are implemented. Booking lifecycle notifications use a durable outbox.
 
 On `/my-activity/bookings`, active Admins and Coaches can cancel only their own active Upcoming
 reservations after explicit confirmation. The Server Action rechecks staff authorization,
@@ -1508,4 +1503,4 @@ development. Run `npm run mail:worker` alongside the app, or
 configuration remains independent. See [Booking notifications](docs/booking-notifications.md)
 for configuration, retry guarantees, and local verification.
 
-The `/book` confirmation UI reads only the selected eligible public location’s cancellation-notice value through the server-only booking client. After atomic creation, a read bound to the returned booking ID retrieves its stored policy snapshot; authenticated success uses the existing owner-scoped RPC for PostgreSQL’s start instant and cutoff display. Guest success shows the stored notice without inferring a timezone-resolved cutoff. Failed post-commit display reads are logged and never report the committed booking as a failed submission. No browser database access or public database grants are added.
+The `/book` confirmation UI reads only the selected eligible public location’s cancellation-notice value through the server-only booking client. After atomic creation, a read bound to the returned booking ID retrieves its stored policy snapshot; authenticated success uses the existing TypeScript timezone utility for start instant and cutoff display. Guest success shows the stored notice without inferring a timezone-resolved cutoff. Failed post-commit display reads are logged and never report the committed booking as a failed submission. No browser database access or public database grants are added.

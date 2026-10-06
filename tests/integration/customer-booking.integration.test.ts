@@ -1,3 +1,4 @@
+import { insertCheckoutFixture } from "./checkout-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test } from "vitest";
@@ -72,7 +73,7 @@ test("customer booking persists both rows, snapshots contact and price, and roll
     const publicLocation = (await listPublicLocationsWithCourts(guest)).find((item) => item.id === locationId)!;
     const publicDay = await getPublicCourtDay(publicLocation, date, "2099-10-14", now, guest);
     expect(publicDay.courts.find((item) => item.court.id === courtId)?.cells.slice(0, 2)).toEqual(["booked", "booked"]);
-    const overlap = await service.rpc("create_customer_booking", {
+    const overlap = await insertCheckoutFixture(service, {
       p_payment_method: "pay_at_club", p_provider: null, p_hold_seconds: 600,
       p_court_id: courtId, p_booking_date: date, p_starts_at_minute: 600, p_ends_at_minute: 660,
       p_account_user_id: null, p_customer_name: "Race", p_customer_email: "race@example.test",
@@ -132,7 +133,7 @@ test("customer booking persists both rows, snapshots contact and price, and roll
     expect(await count()).toEqual(before);
     assert.strictEqual((await service.from("locations").update({ is_public: true }).eq("id", locationId)).error, null);
     const orphanBefore = await count();
-    const invalidWrite = await service.rpc("create_customer_booking", {
+    const invalidWrite = await insertCheckoutFixture(service, {
       p_payment_method: "pay_at_club", p_provider: null, p_hold_seconds: 600,
       p_court_id: courtId, p_booking_date: date, p_starts_at_minute: 720, p_ends_at_minute: 780,
       p_account_user_id: null, p_customer_name: " ", p_customer_email: "invalid@example.test",

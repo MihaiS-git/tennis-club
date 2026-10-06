@@ -2,7 +2,8 @@
 
 Booking confirmation, customer cancellation, Admin cancellation, customer
 rescheduling and Admin rescheduling write to `booking_email_outbox` inside their
-successful mutation transaction. Each event snapshots `bookings.customer_email`,
+successful mutation transaction. TypeScript chooses the event and supplies its complete
+persisted snapshot to the atomic command. Each event snapshots `bookings.customer_email`,
 customer name, reference, location, timezone, schedule and booking total. Reschedule
 mail includes the previous and new schedules. Later account/contact/configuration
 changes do not rewrite queued content. Direct reservations, Supabase Auth emails,
@@ -59,7 +60,9 @@ Private outbox data has RLS enabled and no anonymous/authenticated table or RPC 
 
 Definite non-acceptance (connection failure before DATA or an explicit temporary
 SMTP rejection) retries with exponential backoff from 30 seconds up to one hour,
-with ten attempts maximum. Permanent rejection becomes `failed`. A crashed
+with ten attempts maximum. This retry/exhaustion policy lives only in
+`src/lib/notifications/worker.ts`; `finish_booking_email` persists the supplied status
+and retry delay under its token guard. Permanent rejection becomes `failed`. A crashed
 `processing` claim can be reclaimed. A crashed `sending` claim or missing SMTP
 acknowledgement becomes `uncertain`; the worker never automatically resends it.
 

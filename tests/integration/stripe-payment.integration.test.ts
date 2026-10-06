@@ -1,3 +1,9 @@
+import { listOwnCourtActivity } from "@/lib/bookings/activity-service";
+import { parseActivityQuery, type ActivityScope } from "@/lib/bookings/activity-query";
+import { listOwnCourtHistory } from "@/lib/bookings/history-service";
+import { listOwnUpcomingCustomerBookings } from "@/lib/bookings/personal-service";
+import { cancelOwnCustomerBooking } from "@/lib/bookings/self-cancellation-service";
+import { insertCheckoutFixture } from "./checkout-fixtures";
 import { randomUUID } from "node:crypto";
 import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
@@ -27,21 +33,19 @@ test("verified webhook settles original hold once, keeps retryable failure, rele
   const member = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_PUBLISHABLE_KEY!, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
-  const activity = async (scope: string, now?: string) => {
-    const result = await member.rpc("list_own_court_activity", { p_scope: scope, ...(now ? { p_now: now } : {}) });
-    expect(result.error).toBeNull(); return result.data.rows;
-  };
+  const activity = async (scope: ActivityScope, now?: string) =>
+    (await listOwnCourtActivity(scope, parseActivityQuery({}, scope), member, now ? new Date(now) : new Date())).rows;
   const invisible = async (id: string) => {
-    for (const scope of ["upcoming", "history"]) expect((await activity(scope)).map((r: { id: string }) => r.id)).not.toContain(id);
-    expect((await member.rpc("list_own_upcoming_customer_bookings")).data.map((r: { id: string }) => r.id)).not.toContain(id);
-    expect((await member.rpc("list_own_court_activity_history")).data.map((r: { id: string }) => r.id)).not.toContain(id);
+    for (const scope of ["upcoming", "history"] as const) expect((await activity(scope)).map((r: { id: string }) => r.id)).not.toContain(id);
+    expect((await listOwnUpcomingCustomerBookings(member)).map((r) => r.id)).not.toContain(id);
+    expect((await listOwnCourtHistory(1, member)).rows.map((r) => r.id)).not.toContain(id);
   };
   const params = (start: number) => ({ p_court_id: courtId, p_booking_date: "2099-10-15", p_starts_at_minute: start,
     p_ends_at_minute: start + 60, p_account_user_id: userIds[0], p_customer_name: "Stripe guest",
     p_customer_email: "stripe@example.test", p_customer_phone: "123", p_total_amount_minor: 5000,
     p_currency: "RON", p_payment_method: "online", p_provider: "stripe", p_hold_seconds: paymentHoldDurationSeconds });
   async function hold(start: number) {
-    const held = await db.rpc("create_customer_booking", params(start));
+    const held = await insertCheckoutFixture(db, params(start));
     expect(held.error).toBeNull();
     return held.data[0];
   }
@@ -68,7 +72,7 @@ test("verified webhook settles original hold once, keeps retryable failure, rele
     const held = await hold(600), checkout = await begin(held.payment_attempt_id);
     expect(create).toHaveBeenCalledWith({ amount: 5000, currency: "ron", allowed_payment_method_types: ["card"],
       metadata: { payment_attempt_id: held.payment_attempt_id } }, { idempotencyKey: `court-payment-${held.payment_attempt_id}` });
-    expect((await db.rpc("create_customer_booking", params(600))).error?.code).toBe("23P01");
+    expect((await insertCheckoutFixture(db, params(600))).error?.code).toBe("23P01");
     expect(await email(held.booking_id)).toEqual([]);
     expect(await readOnlineCheckout({ attemptId: checkout.attemptId, token: checkout.token }, db)).toMatchObject({ status: "pending_payment" });
     await invisible(held.booking_id);
@@ -89,7 +93,7 @@ test("verified webhook settles original hold once, keeps retryable failure, rele
     expect(await email(held.booking_id)).toEqual([{ event_kind: "confirmed" }]);
     expect((await activity("upcoming")).map((r: { id: string }) => r.id)).toEqual([held.booking_id]);
     expect((await activity("history", "2099-10-16T00:00:00Z")).map((r: { id: string }) => r.id)).toEqual([held.booking_id]);
-    expect((await member.rpc("cancel_own_customer_booking", { p_id: held.booking_id })).data).toBe("cancelled");
+    expect((await cancelOwnCustomerBooking(held.booking_id, member)).ok).toBe(true);
     expect(await activity("upcoming")).toEqual([]);
     expect(await activity("history")).toMatchObject([{ id: held.booking_id, status: "cancelled" }]);
     expect(await email(held.booking_id)).toEqual([{ event_kind: "confirmed" }, { event_kind: "customer_cancelled" }]);
@@ -101,7 +105,7 @@ test("verified webhook settles original hold once, keeps retryable failure, rele
     expect((await db.from("payment_attempts").select("status,provider_payment_id").eq("id", failed.payment_attempt_id).single()).data)
       .toEqual({ status: "pending", provider_payment_id: `pi_${failed.payment_attempt_id}` });
     await invisible(failed.booking_id);
-    expect((await db.rpc("create_customer_booking", params(660))).error?.code).toBe("23P01");
+    expect((await insertCheckoutFixture(db, params(660))).error?.code).toBe("23P01");
     // A different card succeeds on the original pending attempt and reservation.
     expect((await POST(webhook(failureCheckout.attemptId, "payment_intent.succeeded"))).status).toBe(200);
     expect(await readOnlineCheckout({ attemptId: failureCheckout.attemptId, token: failureCheckout.token }, db)).toMatchObject({ status: "confirmed" });

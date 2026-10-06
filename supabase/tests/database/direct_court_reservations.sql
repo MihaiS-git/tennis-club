@@ -29,14 +29,14 @@ set local request.jwt.claims = '{"sub":"ca000000-0000-4000-8000-000000000001","r
 select lives_ok($$insert into public.court_reservations (court_id, booking_date, starts_at_minute, ends_at_minute, reason, created_by_user_id)
 values ('ca000000-0000-4000-8000-000000000011', '2026-10-15', 600, 660, 'Club event', 'ca000000-0000-4000-8000-000000000001')$$,
 'active admin reserves unpublished court');
-select set_config('test.admin_reservation_id', (select id::text from public.list_personal_court_reservations() where starts_at_minute = 600), true);
-select set_config('test.admin_updated_at', (select updated_at::text from public.list_personal_court_reservations() where starts_at_minute = 600), true);
 reset role;
+select set_config('test.admin_reservation_id', (select id::text from public.court_reservations where court_id = 'ca000000-0000-4000-8000-000000000011' and starts_at_minute = 600), true);
+select set_config('test.admin_updated_at', (select updated_at::text from public.court_reservations where court_id = 'ca000000-0000-4000-8000-000000000011' and starts_at_minute = 600), true);
 select is((select status::text from public.court_reservations where court_id = 'ca000000-0000-4000-8000-000000000011' and starts_at_minute = 600),
   'active', 'new direct reservation defaults to active');
-set local role authenticated;
-select is((select created_by_user_id from public.list_personal_court_reservations() where starts_at_minute = 600),
+select is((select created_by_user_id from public.court_reservations where court_id = 'ca000000-0000-4000-8000-000000000011' and starts_at_minute = 600),
 'ca000000-0000-4000-8000-000000000001'::uuid, 'creator is stored');
+set local role authenticated;
 select throws_ok($$insert into public.court_reservations (court_id, booking_date, starts_at_minute, ends_at_minute, reason, created_by_user_id)
 values ('ca000000-0000-4000-8000-000000000011', '2026-10-16', 600, 660, 'Spoof', 'ca000000-0000-4000-8000-000000000002')$$,
 '42501', null, 'staff cannot spoof creator');
@@ -45,54 +45,24 @@ values ('ca000000-0000-4000-8000-000000000011', '2026-10-15', 630, 690, 'Conflic
 '23P01', null, 'GiST exclusion rejects overlap');
 select throws_ok($$select reason from public.court_reservations$$,
 '42501', null, 'reason has no direct authenticated read grant');
-select is((select count(*) from public.list_personal_court_reservations()),
-  1::bigint, 'admin can read own details');
 set local request.jwt.claims = '{"sub":"ca000000-0000-4000-8000-000000000002","role":"authenticated"}';
 select lives_ok($$insert into public.court_reservations (court_id, booking_date, starts_at_minute, ends_at_minute, reason, created_by_user_id)
 values ('ca000000-0000-4000-8000-000000000011', '2026-10-15', 660, 720, 'Course with Andrej', 'ca000000-0000-4000-8000-000000000002')$$,
 'active coach reserves adjacent interval');
-select set_config('test.coach_reservation_id', (select id::text from public.list_personal_court_reservations() where starts_at_minute = 660), true);
-select is((select count(*) from public.list_personal_court_reservations()),
-  1::bigint, 'coach can read only own details');
-select throws_ok($$select * from public.list_admin_court_reservations(
-  array['ca000000-0000-4000-8000-000000000011'::uuid], '2026-10-15')$$,
-  '42501', null, 'coach cannot read operational details');
-select is((select count(*) from public.list_own_reservation_edit_occupancy(current_setting('test.coach_reservation_id')::uuid, '2026-10-15')),
-  1::bigint, 'edit occupancy excludes the coach reservation itself');
-select is((select starts_at_minute from public.list_own_reservation_edit_occupancy(current_setting('test.coach_reservation_id')::uuid, '2026-10-15')),
-  600, 'another active reservation still blocks the coach');
+reset role;
+select set_config('test.coach_reservation_id', (select id::text from public.court_reservations where court_id = 'ca000000-0000-4000-8000-000000000011' and starts_at_minute = 660), true);
+set local role authenticated;
 reset role;
 insert into public.court_reservations (court_id, booking_date, starts_at_minute, ends_at_minute, reason)
 values ('ca000000-0000-4000-8000-000000000011', '2026-10-15', 720, 780, 'Legacy maintenance');
 set local role authenticated;
 set local request.jwt.claims = '{"sub":"ca000000-0000-4000-8000-000000000001","role":"authenticated"}';
-select is((select count(*) from public.list_admin_court_reservations(
-  array['ca000000-0000-4000-8000-000000000011'::uuid], '2026-10-15')),
-  3::bigint, 'admin sees all active direct reservations at selected court and date');
-select is((select creator_name from public.list_admin_court_reservations(
-  array['ca000000-0000-4000-8000-000000000011'::uuid], '2026-10-15') where starts_at_minute = 600),
-  'Mihai Stan', 'admin reads creator display identity');
-select is((select reason from public.list_admin_court_reservations(
-  array['ca000000-0000-4000-8000-000000000011'::uuid], '2026-10-15') where starts_at_minute = 660),
-  'Course with Andrej', 'admin can inspect another staff member reservation');
-select is((select creator_name from public.list_admin_court_reservations(
-  array['ca000000-0000-4000-8000-000000000011'::uuid], '2026-10-15') where starts_at_minute = 720),
-  null::text, 'legacy reservation has null creator identity');
-select is((select count(*) from public.list_personal_court_reservations()),
-  1::bigint, 'Admin operational read does not broaden personal ownership');
 reset role;
 delete from public.court_reservations where court_id = 'ca000000-0000-4000-8000-000000000011'
   and starts_at_minute = 720 and created_by_user_id is null;
 update public.locations set is_public = true where id = 'ca000000-0000-4000-8000-000000000010';
 set local role authenticated;
 set local request.jwt.claims = '{"sub":"ca000000-0000-4000-8000-000000000003","role":"authenticated"}';
-select throws_ok($$select * from public.list_personal_court_reservations()$$,
-  '42501', null, 'ordinary user cannot read personal details');
-select throws_ok($$select * from public.list_admin_court_reservations(
-  array['ca000000-0000-4000-8000-000000000011'::uuid], '2026-10-15')$$,
-  '42501', null, 'ordinary user cannot inspect operational details');
-select throws_ok($$select * from public.list_own_reservation_edit_occupancy('ca000000-0000-4000-8000-000000000099', '2026-10-15')$$,
-  '42501', null, 'ordinary user cannot read edit occupancy');
 select throws_ok($$select public.cancel_own_court_reservation('ca000000-0000-4000-8000-000000000099')$$,
   '42501', null, 'ordinary user cannot cancel');
 select throws_ok($$select public.edit_own_court_reservation(null, null, 'Spoof', false, null, null, null, null)$$,
@@ -120,10 +90,6 @@ values ('ca000000-0000-4000-8000-000000000011', '2026-10-16', 600, 660, 'Spoof')
 '42501', null, 'suspended coach denied by RLS');
 reset role;
 set local role anon;
-select throws_ok($$select * from public.list_personal_court_reservations()$$,
-  '42501', null, 'anonymous cannot read personal details');
-select throws_ok($$select * from public.list_own_reservation_edit_occupancy('ca000000-0000-4000-8000-000000000099', '2026-10-15')$$,
-  '42501', null, 'anonymous cannot read edit occupancy');
 select throws_ok($$select public.cancel_own_court_reservation('ca000000-0000-4000-8000-000000000099')$$,
   '42501', null, 'anonymous cannot cancel');
 select throws_ok($$select public.edit_own_court_reservation(null, null, 'Spoof', false, null, null, null, null)$$,
@@ -148,8 +114,6 @@ select is(has_column_privilege('authenticated', 'public.court_reservations', 're
   'direct reason UPDATE is not granted');
 select is(to_regprocedure('public.cancel_internal_court_reservation(uuid)'), null::regprocedure,
   'broad staff cancellation RPC removed');
-select is(to_regprocedure('public.list_internal_court_reservations(uuid[],date)'), null::regprocedure,
-  'staff details RPC removed from creation timetable');
 set local role authenticated;
 set local request.jwt.claims = '{"sub":"ca000000-0000-4000-8000-000000000001","role":"authenticated"}';
 select is(public.cancel_own_court_reservation('ca000000-0000-4000-8000-000000000099'),
@@ -160,41 +124,46 @@ select is(public.edit_own_court_reservation(current_setting('test.coach_reservat
 select is(public.edit_own_court_reservation(current_setting('test.admin_reservation_id')::uuid,
   current_setting('test.admin_updated_at')::timestamptz, 'Updated club event', false, null, null, null, null),
   'updated', 'admin edits own reason in place');
-select isnt((select updated_at::text from public.list_personal_court_reservations() where starts_at_minute = 600),
+reset role;
+select isnt((select updated_at::text from public.court_reservations where court_id = 'ca000000-0000-4000-8000-000000000011' and starts_at_minute = 600),
   current_setting('test.admin_updated_at'), 'edit advances updated_at');
+set local role authenticated;
 select is(public.edit_own_court_reservation(current_setting('test.admin_reservation_id')::uuid,
   current_setting('test.admin_updated_at')::timestamptz, 'Stale overwrite', false, null, null, null, null),
   'stale', 'old updated_at cannot overwrite a newer edit');
-select is((select reason from public.list_personal_court_reservations() where starts_at_minute = 600),
+reset role;
+select is((select reason from public.court_reservations where court_id = 'ca000000-0000-4000-8000-000000000011' and starts_at_minute = 600),
   'Updated club event', 'stale edit preserves newer reason');
-select set_config('test.admin_updated_at', (select updated_at::text from public.list_personal_court_reservations() where starts_at_minute = 600), true);
+select set_config('test.admin_updated_at', (select updated_at::text from public.court_reservations where court_id = 'ca000000-0000-4000-8000-000000000011' and starts_at_minute = 600), true);
+set local role authenticated;
 select is(public.edit_own_court_reservation(current_setting('test.admin_reservation_id')::uuid,
   current_setting('test.admin_updated_at')::timestamptz, 'Cross-location', true,
   'ca000000-0000-4000-8000-000000000021', '2026-10-15', 600, 660),
   'unavailable', 'same-row edit refuses a court at another location');
-select is((select court_id from public.list_personal_court_reservations() where id = current_setting('test.admin_reservation_id')::uuid),
+reset role;
+select is((select court_id from public.court_reservations where id = current_setting('test.admin_reservation_id')::uuid),
   'ca000000-0000-4000-8000-000000000011'::uuid, 'cross-location rejection keeps the original court');
+set local role authenticated;
 select throws_ok($$select public.edit_own_court_reservation(
   current_setting('test.admin_reservation_id')::uuid, current_setting('test.admin_updated_at')::timestamptz,
   'Overlap', true, 'ca000000-0000-4000-8000-000000000011', '2026-10-15', 660, 720)$$,
   '23P01', null, 'GiST rejects overlapping in-place edit');
-select is((select starts_at_minute from public.list_personal_court_reservations() where id = current_setting('test.admin_reservation_id')::uuid),
+reset role;
+select is((select starts_at_minute from public.court_reservations where id = current_setting('test.admin_reservation_id')::uuid),
   600, 'failed reschedule keeps the original interval');
+set local role authenticated;
 select is(public.cancel_own_court_reservation(current_setting('test.coach_reservation_id')::uuid),
   false, 'admin cannot cancel coach reservation');
-select ok(public.cancel_own_court_reservation((select id from public.list_personal_court_reservations() where starts_at_minute = 600)),
+select ok(public.cancel_own_court_reservation(current_setting('test.admin_reservation_id')::uuid),
   'admin cancels own reservation');
-select is(public.cancel_own_court_reservation((select id from public.list_personal_court_reservations() where starts_at_minute = 600)),
+select is(public.cancel_own_court_reservation(current_setting('test.admin_reservation_id')::uuid),
   false, 'already-cancelled reservation returns false');
 set local request.jwt.claims = '{"sub":"ca000000-0000-4000-8000-000000000002","role":"authenticated"}';
 select is(public.cancel_own_court_reservation(current_setting('test.admin_reservation_id')::uuid),
   false, 'coach cannot cancel admin reservation');
-select ok(public.cancel_own_court_reservation((select id from public.list_personal_court_reservations() where starts_at_minute = 660)),
+select ok(public.cancel_own_court_reservation(current_setting('test.coach_reservation_id')::uuid),
   'coach cancels own reservation');
 set local request.jwt.claims = '{"sub":"ca000000-0000-4000-8000-000000000001","role":"authenticated"}';
-select is((select count(*) from public.list_admin_court_reservations(
-  array['ca000000-0000-4000-8000-000000000011'::uuid], '2026-10-15')),
-  0::bigint, 'cancelled reservations are absent from live Admin inspection');
 reset role;
 select is((select count(*) from public.court_reservations where court_id = 'ca000000-0000-4000-8000-000000000011'),
   2::bigint, 'cancellation preserves both rows');

@@ -5,6 +5,10 @@ import { requireActiveAdmin } from "./authorization";
 import { weeklyHoursMutationSchema, openingIntervalSchema, timeToMinute, minuteToTime, weekdays, type OpeningHoursMutationResult } from "./opening-hours-validation";
 import { createClient } from "@/lib/supabase/server";
 import { logger } from "@/lib/logger";
+import { createBookingWriter } from "@/lib/supabase/booking-writer";
+import { pricingRuleSchema } from "@/lib/pricing/validation";
+import { pricingHasFutureOccurrence } from "@/lib/pricing/resolution";
+import { localToday } from "@/lib/courts/local-time";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
 const pricingConflictSchema = z.array(z.object({
@@ -78,11 +82,26 @@ export async function mutateAdminOpeningHours(input: unknown, supabase?: Client)
   }
   if (!location.data) return { ok: false, reason: "not-found" };
   if (location.data.archived_at !== null) return { ok: false, reason: "archived" };
-  const { data, error } = await client.rpc("mutate_location_opening_hours", {
-    p_location_id: location_id, p_weekdays: weekdays, p_replace_ids: replace_ids,
-    p_opens_at_minutes: intervals.map((interval) => timeToMinute(interval.opens_at)),
-    p_closes_at_minutes: intervals.map((interval) => timeToMinute(interval.closes_at)),
-  });
+  const writer = createBookingWriter();
+  const persist = async () => {
+    for (let retry = 0; retry < 3; retry++) {
+      const snapshot = await writer.rpc("read_opening_hours_command_context", { p_location_id: location_id });
+      if (snapshot.error) throw new Error("Unable to read configuration.");
+      const context = z.object({ revision: z.number().int(), timezone: z.string(), now: z.string(), pricing: z.array(pricingRuleSchema) }).parse(snapshot.data);
+      const today = localToday(context.timezone, new Date(context.now));
+      const result = await writer.rpc("commit_location_opening_hours", {
+        p_actor: actor.userId, p_revision: context.revision,
+        p_applicable_rule_ids: context.pricing.filter((rule) => pricingHasFutureOccurrence(rule, today)).map((rule) => rule.id),
+        p_location_id: location_id, p_weekdays: weekdays, p_replace_ids: replace_ids,
+        p_opens_at_minutes: intervals.map((interval) => timeToMinute(interval.opens_at)),
+        p_closes_at_minutes: intervals.map((interval) => timeToMinute(interval.closes_at)),
+      });
+      if (result.error?.code === "40001") continue;
+      return result;
+    }
+    throw new Error("Opening hours changed concurrently. Try again.");
+  };
+  const { data, error } = await persist();
   if (error) {
     if (error.code === "P0001" && error.message === "opening_hours_pricing_conflict") {
       return { ok: false, reason: "pricing-conflict", message: pricingConflictMessage(error.details) };
