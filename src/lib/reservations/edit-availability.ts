@@ -4,7 +4,9 @@ import { z } from "zod";
 import { openingIntervalSchema } from "@/lib/admin/opening-hours-validation";
 import { localMinute, localToday } from "@/lib/courts/local-time";
 import { logger } from "@/lib/logger";
-import { mondayWeekday } from "@/lib/pricing/resolution";
+import { getDataSource } from "@/lib/db/data-source";
+import { normalizeDatabaseError } from "@/lib/db/errors";
+import { findReservationEditLocation, listReservationOpeningHours } from "@/lib/db/repositories/reservations.repository";
 import { createClient } from "@/lib/supabase/server";
 import { buildReservationDay, type Occupancy } from "./domain";
 
@@ -17,23 +19,26 @@ export async function loadReservationEditDayForLocation(input: {
   date: string; occupancy: Occupancy[]; now: Date;
   configuration?: { location: z.infer<typeof reservationEditLocationSchema>; hours: z.infer<typeof openingIntervalSchema>[] };
 }) {
-  const { client, locationId, timezone, date, occupancy, now } = input;
+  const { locationId, timezone, date, occupancy, now } = input;
   if (date < localToday(timezone, now)) throw new Error("Choose a future date at this location.");
-  const [locationResult, hoursResult] = input.configuration
-    ? [{ data: input.configuration.location, error: null }, { data: input.configuration.hours, error: null }]
-    : await Promise.all([
-    client.from("locations").select("id, name, timezone, is_active, archived_at, courts(id, name, is_active)")
-      .eq("id", locationId).eq("courts.is_active", true).maybeSingle(),
-    client.from("location_opening_hours").select("id, location_id, weekday, opens_at_minute, closes_at_minute, created_at, updated_at")
-      .eq("location_id", locationId).eq("weekday", mondayWeekday(date)),
-  ]);
-  const location = reservationEditLocationSchema.nullable().safeParse(locationResult.data);
-  const hours = z.array(openingIntervalSchema).safeParse(hoursResult.data);
-  if (locationResult.error || hoursResult.error || !location.success || !hours.success) {
-    logger.error({ event: "reservations.edit_day_read_failed", locationCode: locationResult.error?.code,
-      hoursCode: hoursResult.error?.code }, "Failed to load reservation edit day");
-    throw new Error("Unable to load court availability.");
+  let configuration = input.configuration;
+  if (!configuration) {
+    try {
+      const manager = (await getDataSource()).manager;
+      const [location, hours] = await Promise.all([
+        findReservationEditLocation(manager, locationId), listReservationOpeningHours(manager, locationId, date),
+      ]);
+      if (!location) throw new Error("This location is no longer available.");
+      configuration = { location, hours };
+    } catch (error: unknown) {
+      if (error instanceof Error && error.message === "This location is no longer available.") throw error;
+      logger.error({ event: "reservations.edit_day_read_failed", code: normalizeDatabaseError(error).sqlState }, "Failed to load reservation edit day");
+      throw new Error("Unable to load court availability.");
+    }
   }
+  const location = reservationEditLocationSchema.safeParse(configuration.location);
+  const hours = z.array(openingIntervalSchema).safeParse(configuration.hours);
+  if (!location.success || !hours.success) throw new Error("Unable to load court availability.");
   if (!location.data || !location.data.is_active || location.data.archived_at
     || location.data.id !== locationId || location.data.timezone !== timezone) {
     throw new Error("This location is no longer available.");

@@ -7,7 +7,7 @@ const choice = <T extends string>(values: readonly [T, ...T[]]) =>
   z.union([z.enum(values), z.literal("")]).transform((value) => value || null);
 
 export const sportyaLevels = ["4", "5", "6", "7", "8", "9"] as const;
-export const sportyaLevelSchema = choice(sportyaLevels).nullable();
+const sportyaLevelSchema = choice(sportyaLevels).nullable();
 
 export const personalInformationSchema = z.strictObject({
   first_name: optionalText(100),
@@ -32,8 +32,6 @@ export const tennisProfileSchema = z.strictObject({
   bio: optionalText(2000),
 });
 
-export type PersonalInformation = z.output<typeof personalInformationSchema>;
-export type TennisProfile = z.output<typeof tennisProfileSchema>;
 export type ProfileActionState = {
   fieldErrors?: Record<string, string>;
   formError?: string;

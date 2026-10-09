@@ -4,6 +4,9 @@ import { z } from "zod";
 import { cache } from "react";
 
 import { decideAccountAccess } from "@/lib/auth/decisions";
+import { getDataSource } from "@/lib/db/data-source";
+import { normalizeDatabaseError } from "@/lib/db/errors";
+import { findAccountById } from "@/lib/db/repositories/accounts.repository";
 import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
 
@@ -28,38 +31,28 @@ export const readCurrentAccount = cache(async function readCurrentAccount(
 
   if (identityError || !identity.user) return { state: "unauthenticated" };
 
-  const [profileResult, rolesResult] = await Promise.all([
-    supabase
-      .from("users")
-      .select("email, status")
-      .eq("id", identity.user.id)
-      .maybeSingle(),
-    supabase
-      .from("user_roles")
-      .select("role_code")
-      .eq("user_id", identity.user.id)
-      .order("role_code"),
-  ]);
-
-  if (profileResult.error || rolesResult.error) {
+  let persistence;
+  try {
+    const dataSource = await getDataSource();
+    persistence = await findAccountById(dataSource.manager, identity.user.id);
+  } catch (error: unknown) {
+    const databaseError = normalizeDatabaseError(error);
     logger.error({
       event: "auth.account_load_failed",
-      profileCode: profileResult.error?.code,
-      rolesCode: rolesResult.error?.code,
+      kind: databaseError.kind,
+      sqlState: databaseError.sqlState,
     }, "Failed to load the authenticated application account");
     return { state: "load-error" };
   }
 
-  if (!profileResult.data) return { state: "missing-profile" };
+  if (!persistence) return { state: "missing-profile" };
 
-  const access = decideAccountAccess(profileResult.data.status);
-  const parsedRoles = roleSchema.array().safeParse(
-    rolesResult.data?.map((assignment) => assignment.role_code),
-  );
+  const access = decideAccountAccess(persistence.user.status);
+  const parsedRoles = roleSchema.array().safeParse(persistence.roleCodes);
 
   if (
     access === "structural-error" ||
-    !profileResult.data.email ||
+    !persistence.user.email ||
     !parsedRoles.success
   ) {
     return { state: "load-error" };
@@ -68,7 +61,7 @@ export const readCurrentAccount = cache(async function readCurrentAccount(
   return {
     state: access,
     userId: identity.user.id,
-    email: profileResult.data.email,
+    email: persistence.user.email,
     roles: parsedRoles.data,
   };
 });

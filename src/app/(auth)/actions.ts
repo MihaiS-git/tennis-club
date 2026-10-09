@@ -1,8 +1,14 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { cookies } from "next/headers";
 
 import type { AuthActionState } from "@/lib/auth/action-state";
+import {
+  CONFIRMATION_RESEND_SUCCESS,
+  SIGNUP_CONFIRMATION_CALLBACK,
+  SIGNUP_EMAIL_COOKIE,
+} from "@/lib/auth/confirmation";
 import {
   decideSignUpResult,
   safeAuthError,
@@ -44,9 +50,7 @@ export async function signUpAction(
     email: parsed.data.email,
     password: parsed.data.password,
     options: {
-      emailRedirectTo: getApplicationUrl(
-        "/auth/callback?next=/account&flow=email-confirmation",
-      ),
+      emailRedirectTo: getApplicationUrl(SIGNUP_CONFIRMATION_CALLBACK),
     },
   });
 
@@ -59,7 +63,17 @@ export async function signUpAction(
   // A signup session means email confirmation is disabled or misconfigured.
   // Never let that session authenticate the user before confirmation.
   if (data.session) await supabase.auth.signOut({ scope: "local" });
-  if (decision === "check-email") redirect("/signup/check-email");
+  if (decision === "check-email") {
+    const cookieStore = await cookies();
+    cookieStore.set(SIGNUP_EMAIL_COOKIE, parsed.data.email, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/signup/check-email",
+      maxAge: 3600,
+    });
+    redirect("/signup/check-email");
+  }
 
   if (
     error?.code === "weak_password" &&
@@ -96,7 +110,10 @@ export async function signInAction(
 
   if (error) {
     await supabase.auth.signOut({ scope: "local" });
-    return { formError: safeAuthError("signin", error.code) };
+    return {
+      formError: safeAuthError("signin", error.code),
+      ...(error.code === "email_not_confirmed" ? { emailUnconfirmed: true } : {}),
+    };
   }
 
   const { data: identity, error: identityError } = await supabase.auth.getUser();
@@ -106,6 +123,35 @@ export async function signInAction(
   }
 
   redirect("/");
+}
+
+export async function resendConfirmationAction(
+  _previousState: AuthActionState,
+  formData: FormData,
+): Promise<AuthActionState> {
+  const parsed = recoverySchema.safeParse({ email: value(formData, "email") });
+  if (!parsed.success) {
+    return { fieldErrors: fieldValidationErrors(parsed.error) };
+  }
+
+  try {
+    const supabase = await createClient();
+    const { error } = await supabase.auth.resend({
+      type: "signup",
+      email: parsed.data.email,
+      options: { emailRedirectTo: getApplicationUrl(SIGNUP_CONFIRMATION_CALLBACK) },
+    });
+    if (error?.status === 429 || error?.code === "over_email_send_rate_limit" || error?.code === "over_request_rate_limit") {
+      return { formError: "Too many email requests. Please wait a few minutes before trying again." };
+    }
+    // Never reveal missing/already-confirmed accounts or provider messages.
+    if (error && !["user_not_found", "user_already_exists", "email_exists", "email_not_confirmed"].includes(error.code ?? "")) {
+      return { formError: "We could not request a confirmation email. Please try again later." };
+    }
+    return { success: CONFIRMATION_RESEND_SUCCESS };
+  } catch {
+    return { formError: "We could not request a confirmation email. Please try again later." };
+  }
 }
 
 export async function forgotPasswordAction(

@@ -2,71 +2,75 @@ import "server-only";
 import { createHash, randomBytes } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { createBookingWriter } from "@/lib/supabase/booking-writer";
+import { getDataSource } from "@/lib/db/data-source";
+import { inTransaction } from "@/lib/db/transaction";
+import { lockCheckoutBooking, findCheckoutBookingStatus } from "@/lib/db/repositories/bookings.repository";
+import { findCheckoutAttempt, lockCheckoutAttempt, attachCheckoutPayment } from "@/lib/db/repositories/payments.repository";
+import { expirePaymentHolds } from "./hold-expiry";
 import { readCreatedBookingCancellationPolicy } from "@/lib/bookings/confirmation-policy";
 import { paymentProviderSchema, type OnlineCheckout } from "./domain";
 import { onlinePaymentAdapter } from "./providers";
 import { locationCurrencies } from "@/lib/admin/locations-validation";
 import { settleOnlinePayment } from "./service";
 
-const attemptSchema = z.object({ id: z.uuid(), booking_id: z.uuid(), method: z.literal("online"),
-  provider: paymentProviderSchema, amount_minor: z.number().int().positive(), currency: z.enum(locationCurrencies),
-  status: z.enum(["pending", "succeeded", "failed", "cancelled", "expired"]), expires_at: z.string() });
-export const checkoutAccessSchema = z.strictObject({ attemptId: z.uuid(), token: z.string().regex(/^[a-f0-9]{64}$/) });
+const attemptSchema = z.object({ id: z.uuid(), bookingId: z.uuid(), method: z.literal("online"),
+  provider: paymentProviderSchema, amountMinor: z.number().int().positive(), currency: z.enum(locationCurrencies),
+  status: z.enum(["pending", "succeeded", "failed", "cancelled", "expired"]), expiresAt: z.date() });
+const checkoutAccessSchema = z.strictObject({ attemptId: z.uuid(), token: z.string().regex(/^[a-f0-9]{64}$/) });
 const tokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
 
-// Validate the checkout capability before contacting the provider. Provider cancellation
-// must succeed before releasing occupancy, so a concurrent card attempt cannot charge
-// a court that we have already made available to another customer.
-export async function abandonOnlineCheckout(input: unknown, writer = createBookingWriter()) {
+// Validate the capability before contacting the provider.
+export async function abandonOnlineCheckout(input: unknown) {
   const access = checkoutAccessSchema.parse(input);
-  const result = await writer.from("payment_attempts").select("*")
-    .eq("id", access.attemptId).eq("checkout_token_hash", tokenHash(access.token)).single();
-  if (result.error) throw new Error("Payment unavailable.");
-  const attempt = attemptSchema.extend({ provider_payment_id: z.string().min(1) }).parse(result.data);
+  const row = await findCheckoutAttempt((await getDataSource()).manager, access.attemptId, tokenHash(access.token));
+  const attempt = attemptSchema.extend({ providerPaymentId: z.string().min(1) }).parse(row);
   if (attempt.status === "succeeded") return { released: false as const };
   const adapter = await onlinePaymentAdapter(attempt.provider);
-  const cancelled = await adapter.cancelPayment({ id: attempt.id, providerPaymentId: attempt.provider_payment_id });
+  const cancelled = await adapter.cancelPayment({ id: attempt.id, providerPaymentId: attempt.providerPaymentId });
   if (cancelled !== "cancelled") return { released: false as const };
-  // Reuse the existing booking-first transaction. A settled success cannot be downgraded.
+  // Never release occupancy before provider cancellation; a settled success cannot be downgraded.
   const status = await settleOnlinePayment({ attemptId: attempt.id, provider: attempt.provider,
-    providerPaymentId: attempt.provider_payment_id, outcome: "cancelled" }, writer);
+    providerPaymentId: attempt.providerPaymentId, outcome: "cancelled" });
   if (status === "succeeded") return { released: false as const };
   if (status !== "cancelled" && status !== "expired" && status !== "failed")
     throw new Error("Unable to release the payment hold.");
   return { released: true as const };
 }
 
-// Called only with the attempt returned by the trusted booking creation operation.
-export async function startOnlineCheckout(attemptId: string, writer = createBookingWriter()): Promise<OnlineCheckout> {
-  const result = await writer.from("payment_attempts").select("*").eq("id", attemptId).single();
-  if (result.error) throw new Error("Unable to read payment attempt.");
-  const attempt = attemptSchema.parse(result.data);
-  if (attempt.status !== "pending" || Date.parse(attempt.expires_at) <= Date.now()) throw new Error("Payment hold expired.");
+// Called only with the attempt returned by trusted booking creation.
+export async function startOnlineCheckout(attemptId: string): Promise<OnlineCheckout> {
+  const attempt = attemptSchema.parse(await findCheckoutAttempt((await getDataSource()).manager, attemptId));
+  if (attempt.status !== "pending" || attempt.expiresAt.getTime() <= Date.now()) throw new Error("Payment hold expired.");
   const adapter = await onlinePaymentAdapter(attempt.provider);
-  const payment = await adapter.createPayment({ id: attempt.id, amountMinor: attempt.amount_minor, currency: attempt.currency });
+  // No database transaction remains open across this network call.
+  const payment = await adapter.createPayment({ id: attempt.id, amountMinor: attempt.amountMinor, currency: attempt.currency });
+  const providerPaymentId = z.string().min(1).max(255).parse(payment.providerPaymentId);
   const token = randomBytes(32).toString("hex");
-  const attached = await writer.rpc("attach_online_payment", { p_attempt_id: attempt.id, p_provider: attempt.provider,
-    p_provider_payment_id: payment.providerPaymentId, p_token_hash: tokenHash(token) });
-  if (attached.error || attached.data !== true) throw new Error("Unable to register payment.");
-  if (Date.parse(attempt.expires_at) <= Date.now()) throw new Error("Payment hold expired.");
+  const attached = await inTransaction(async (manager) => {
+    if (!await lockCheckoutBooking(manager, attempt.bookingId)) return false;
+    const current = await lockCheckoutAttempt(manager, attempt.id);
+    if (!current || current.bookingId !== attempt.bookingId || current.method !== "online"
+      || current.provider !== attempt.provider || current.checkoutTokenHash !== null
+      || (current.providerPaymentId !== null && current.providerPaymentId !== providerPaymentId)) return false;
+    // Deliberately attach after expiry too: retain evidence without reopening occupancy.
+    return attachCheckoutPayment(manager, { attemptId: attempt.id, bookingId: attempt.bookingId,
+      provider: attempt.provider, providerPaymentId, tokenHash: tokenHash(token) });
+  });
+  if (!attached) throw new Error("Unable to register payment.");
+  if (attempt.expiresAt.getTime() <= Date.now()) throw new Error("Payment hold expired.");
   return { attemptId: attempt.id, token, presentation: payment.presentation };
 }
 
 // Capability-bound polling works for guests too; no customer identity is accepted.
-export async function readOnlineCheckout(input: unknown, writer = createBookingWriter()) {
+export async function readOnlineCheckout(input: unknown) {
   const access = checkoutAccessSchema.parse(input);
-  const result = await writer.from("payment_attempts").select("*")
-    .eq("id", access.attemptId).eq("checkout_token_hash", tokenHash(access.token)).single();
-  if (result.error) throw new Error("Payment unavailable.");
-  const attempt = attemptSchema.parse(result.data);
-  const expiry = await writer.rpc("expire_payment_holds");
-  if (expiry.error) throw new Error("Unable to check payment hold.");
-  const booking = await writer.from("bookings").select("status").eq("id", attempt.booking_id).single();
-  if (booking.error) throw new Error("Payment unavailable.");
-  const status = z.enum(["pending_payment", "confirmed", "expired", "failed", "cancelled", "completed"]).parse(booking.data.status);
-  // Also refresh the current calendar when a webhook already released this hold.
-  if (expiry.data > 0 || status === "expired" || status === "failed") revalidatePath("/book");
-  return { status, totalAmountMinor: attempt.amount_minor, currency: attempt.currency,
-    cancellationPolicy: status === "confirmed" ? await readCreatedBookingCancellationPolicy(attempt.booking_id, writer) : null };
+  const manager = (await getDataSource()).manager;
+  const attempt = attemptSchema.parse(await findCheckoutAttempt(manager, access.attemptId, tokenHash(access.token)));
+  const expiry = await expirePaymentHolds();
+  const booking = await findCheckoutBookingStatus(manager, attempt.bookingId);
+  if (!booking) throw new Error("Payment unavailable.");
+  const status = z.enum(["pending_payment", "confirmed", "expired", "failed", "cancelled", "completed"]).parse(booking.status);
+  if (expiry > 0 || status === "expired" || status === "failed") revalidatePath("/book");
+  return { status, totalAmountMinor: attempt.amountMinor, currency: attempt.currency,
+    cancellationPolicy: status === "confirmed" ? await readCreatedBookingCancellationPolicy(attempt.bookingId) : null };
 }

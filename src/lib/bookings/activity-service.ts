@@ -1,5 +1,6 @@
 import "server-only";
 
+import { normalizeDatabaseError } from "@/lib/db/errors";
 import { z } from "zod";
 import { readCurrentAccount } from "@/lib/auth/account";
 import { logger } from "@/lib/logger";
@@ -7,7 +8,8 @@ import { createClient } from "@/lib/supabase/server";
 import { cancellationNoticeMinutesSchema } from "@/lib/bookings/cancellation-policy";
 import { locationCurrencies } from "@/lib/admin/locations-validation";
 import { localStartInstant } from "@/lib/courts/local-time";
-import { createBookingWriter } from "@/lib/supabase/booking-writer";
+import { getDataSource } from "@/lib/db/data-source";
+import { listOwnerActivityBatch } from "@/lib/db/repositories/court-activity.repository";
 import type { CourtHistoryItem } from "./history";
 import { minorAmountSchema } from "@/lib/pricing/money";
 import { ACTIVITY_PAGE_SIZE, parseActivityQuery, type ActivityQuery, type ActivityScope, type ActivitySearchParams } from "./activity-query";
@@ -80,7 +82,7 @@ export async function listOwnCourtActivity(scope: ActivityScope, query: Activity
     || (query.from && query.to && query.from > query.to)) {
     throw new Error("Unable to load your court activity. Try again.");
   }
-  const reader = createBookingWriter();
+  const manager = (await getDataSource()).manager;
   const needed = query.page * ACTIVITY_PAGE_SIZE + 1;
   const batchSize = 1000;
   let candidates: ActivityRow[] = [];
@@ -100,32 +102,14 @@ export async function listOwnCourtActivity(scope: ActivityScope, query: Activity
   for (const kind of staff ? ["booking", "reservation"] as const : ["booking"] as const) {
     for (const cancelled of scope === "history" ? [false, true] : [false]) {
       for (let offset = 0; ; offset += batchSize) {
-        const read = kind === "booking"
-          ? reader.from("bookings").select(`
-              id, account_user_id, status, updated_at, customer_name, customer_email, customer_phone,
-              cancellation_notice_minutes, total_amount_minor, currency, payment_method,
-              payments:payment_attempts(status),
-              reservation:court_reservations!inner(court_id, status, booking_date, starts_at_minute, ends_at_minute,
-                court:courts!inner(name, location_id, location:locations!inner(name, timezone)))
-            `).eq("account_user_id", account.userId).eq("status", cancelled ? "cancelled" : "confirmed")
-            .eq("payments.status", "succeeded")
-          : reader.from("court_reservations").select(`
-              id, court_id, status, updated_at, booking_date, starts_at_minute, ends_at_minute,
-              reason, created_by_user_id, cancelled_at,
-              court:courts!inner(name, location_id, location:locations!inner(name, timezone)),
-              creator:users!court_reservations_created_by_user_id_fkey(first_name, last_name),
-              canceller:users!court_reservations_cancelled_by_user_id_fkey(first_name, last_name)
-            `).eq("created_by_user_id", account.userId).eq("status", cancelled ? "cancelled" : "active");
-        if (!cancelled) {
-          if (kind === "booking") read.eq("reservation.status", "active");
-          const dateColumn = kind === "booking" ? "reservation.booking_date" : "booking_date";
-          if (scope === "upcoming") read.gte(dateColumn, earliestDate);
-          else read.lte(dateColumn, latestDate);
-        }
-        const result = await read.order("id").range(offset, offset + batchSize - 1);
-        const parsed = kind === "booking" ? z.array(bookingSelectSchema).safeParse(result.data)
-          : z.array(reservationSelectSchema).safeParse(result.data);
-        if (result.error || !parsed.success) return fail(result.error?.code);
+        let data: unknown;
+        try {
+          data = await listOwnerActivityBatch(manager, { actorId: account.userId, kind, cancelled,
+            scope, earliestDate, latestDate, offset, limit: batchSize });
+        } catch (error: unknown) { return fail(normalizeDatabaseError(error).sqlState); }
+        const parsed = kind === "booking" ? z.array(bookingSelectSchema).safeParse(data)
+          : z.array(reservationSelectSchema).safeParse(data);
+        if (!parsed.success) return fail();
         for (const source of parsed.data) {
           const interval = "reservation" in source ? source.reservation : source;
           const { court } = interval;

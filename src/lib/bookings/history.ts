@@ -11,7 +11,7 @@ export type CustomerBookingHistoryItem = {
   total_amount_minor: number; currency: LocationCurrency;
 };
 
-export type DirectReservationHistoryItem = PersonalReservation & {
+type DirectReservationHistoryItem = PersonalReservation & {
   kind: "reservation"; history_at: string;
 };
 

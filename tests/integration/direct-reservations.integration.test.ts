@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test } from "vitest";
 import { cancelDirectReservationAsAdmin, createDirectReservation, editDirectReservationAsAdmin, getAdminReservationEditDay, getReservationDay, listInternalLocations } from "@/lib/reservations/service";
-import { cancelOwnDirectReservation, editOwnDirectReservation, getOwnReservationEditDay, listPersonalReservations } from "@/lib/reservations/personal-service";
-import { listOwnCourtHistory } from "@/lib/bookings/history-service";
+import { cancelOwnDirectReservation, editOwnDirectReservation, getOwnReservationEditDay } from "@/lib/reservations/personal-service";
+import { listOwnCourtHistory, listOwnUpcomingReservations } from "../helpers/current-activity";
 import { mondayWeekday } from "@/lib/pricing/resolution";
 import { localMinute, localToday } from "@/lib/courts/local-time";
 import { cleanupAuthFixtures, localFixtureClient } from "./auth-fixtures";
@@ -51,10 +51,6 @@ test("Admin cancellation preserves the creator and reservation, releases occupan
       .eq("court_id", courtId).order("starts_at_minute");
     assert.strictEqual(originalResult.error, null);
     const [original, second] = originalResult.data!;
-    expect((await coach.client.rpc("cancel_admin_court_reservation", { p_id: original.id })).error?.code).toBe("42501");
-    expect((await member.client.rpc("cancel_admin_court_reservation", { p_id: original.id })).error?.code).toBe("42501");
-    expect((await suspended.client.rpc("cancel_admin_court_reservation", { p_id: original.id })).error?.code).toBe("42501");
-    expect((await client().rpc("cancel_admin_court_reservation", { p_id: original.id })).error).toBeTruthy();
     await expect(cancelDirectReservationAsAdmin(original.id, coach.client)).rejects.toThrow();
     await expect(cancelDirectReservationAsAdmin(original.id, member.client)).rejects.toThrow();
     expect(await cancelOwnDirectReservation(original.id, admin.client)).toMatchObject({ ok: false });
@@ -81,7 +77,7 @@ test("Admin cancellation preserves the creator and reservation, releases occupan
     expect((await getReservationDay(location, date, now, admin.client)).courts[0].cells).toEqual([
       "available", "available", "available", "available",
     ]);
-    expect((await listPersonalReservations(coach.client, now)).upcoming).toEqual([]);
+    expect((await listOwnUpcomingReservations(coach.client, now)).upcoming).toEqual([]);
     expect((await listOwnCourtHistory(1, coach.client, now)).rows).toHaveLength(2);
   } finally {
     assert.strictEqual((await service.from("court_reservations").delete().eq("court_id", courtId)).error, null);
@@ -137,7 +133,7 @@ test("Admin edits another creator's row atomically while preserving owner-only e
       startMinute: 600, endMinute: 660, reason: "Coach training" }, coach.client, now)).toEqual({ ok: true });
     expect(await createDirectReservation({ locationId: ids.location, courtId: ids.secondCourt, date: nextDate,
       startMinute: 720, endMinute: 780, reason: "Occupied" }, coach.client, now)).toEqual({ ok: true });
-    const original = (await listPersonalReservations(coach.client, now)).upcoming.find((row) => row.court_id === ids.court)!;
+    const original = (await listOwnUpcomingReservations(coach.client, now)).upcoming.find((row) => row.court_id === ids.court)!;
     const row = async () => {
       const result = await service.from("court_reservations")
         .select("id, court_id, booking_date, starts_at_minute, ends_at_minute, reason, created_by_user_id, created_at, updated_at, status, cancelled_at, cancelled_by_user_id")
@@ -147,10 +143,6 @@ test("Admin edits another creator's row atomically while preserving owner-only e
     };
     const before = await row();
     const reasonEdit = { kind: "reason", id: original.id, expectedUpdatedAt: before.updated_at, reason: " Admin update " };
-    const rpcArgs = { p_id: original.id, p_expected_updated_at: before.updated_at, p_reason: "Spoof", p_schedule: false,
-      p_court_id: null, p_booking_date: null, p_starts_at_minute: null, p_ends_at_minute: null };
-    expect((await coach.client.rpc("edit_admin_court_reservation", rpcArgs)).error?.code).toBe("42501");
-    expect((await member.client.rpc("edit_admin_court_reservation", rpcArgs)).error?.code).toBe("42501");
     await expect(editDirectReservationAsAdmin(reasonEdit, coach.client, now)).rejects.toThrow();
     await expect(editDirectReservationAsAdmin(reasonEdit, member.client, now)).rejects.toThrow();
     expect(await editOwnDirectReservation(reasonEdit, admin.client, now)).toMatchObject({ ok: false });
@@ -170,9 +162,6 @@ test("Admin edits another creator's row atomically while preserving owner-only e
       { ...schedule.schedule, date: "2099-10-13" },
     ]) expect(await editDirectReservationAsAdmin({ ...schedule, schedule: invalid }, admin.client, now)).toMatchObject({ ok: false });
     expect(await row()).toEqual(changedReason);
-    expect((await admin.client.rpc("edit_admin_court_reservation", { ...rpcArgs,
-      p_expected_updated_at: changedReason.updated_at, p_schedule: true, p_court_id: ids.otherCourt,
-      p_booking_date: nextDate, p_starts_at_minute: 780, p_ends_at_minute: 870 })).data).toBe("unavailable");
     expect(await row()).toEqual(changedReason);
     const conflict = await editDirectReservationAsAdmin({ ...schedule,
       schedule: { ...schedule.schedule, startMinute: 720, endMinute: 780 } }, admin.client, now);
@@ -257,10 +246,6 @@ test("in-progress Admin edit changes only the reason on the same row", async () 
       schedule: { courtId, date, startMinute: startMinute + 30, endMinute, reason: "Moved live" } };
     expect(await editDirectReservationAsAdmin(schedule, admin.client, now)).toMatchObject({ ok: false,
       message: "An in-progress reservation can only change its reason." });
-    const crafted = await admin.client.rpc("edit_admin_court_reservation", { p_id: original.id,
-      p_expected_updated_at: original.updated_at, p_reason: "Moved live", p_schedule: true,
-      p_court_id: courtId, p_booking_date: date, p_starts_at_minute: startMinute + 30, p_ends_at_minute: endMinute });
-    expect(crafted.data).toBe("unavailable");
     expect(await editDirectReservationAsAdmin({ kind: "reason", id: original.id,
       expectedUpdatedAt: original.updated_at, reason: " Updated live training " }, admin.client, now)).toMatchObject({ ok: true });
     const retained = await service.from("court_reservations")
@@ -277,6 +262,185 @@ test("in-progress Admin edit changes only the reason on the same row", async () 
     assert.strictEqual((await service.from("location_opening_hours").delete().eq("location_id", locationId)).error, null);
     assert.strictEqual((await service.from("courts").delete().eq("id", courtId)).error, null);
     assert.strictEqual((await service.from("locations").delete().eq("id", locationId)).error, null);
+    await cleanupAuthFixtures(service, userIds);
+  }
+}, 30000);
+
+test("an in-progress owner may edit reason while scheduling stays locked and cancellation still works", async () => {
+  const service = localFixtureClient();
+  await ensureIntegrationAdminAnchor(service);
+  const locationId = randomUUID();
+  const courtId = randomUUID();
+  const now = new Date();
+  const timezone = ["UTC", "America/Los_Angeles", "Pacific/Honolulu", "Asia/Tokyo", "Europe/Bucharest"]
+    .find((zone) => localMinute(zone, now) >= 120 && localMinute(zone, now) <= 1320)!;
+  const date = localToday(timezone, now);
+  const startMinute = Math.floor(localMinute(timezone, now) / 30) * 30 - 30;
+  const email = `reservation-progress-${randomUUID()}@example.test`;
+  const password = "direct-edit-password-123";
+  const { data: created, error: createError } = await service.auth.admin.createUser({ email, password, email_confirm: true });
+  assert.strictEqual(createError, null); assert.ok(created.user);
+  try {
+    assert.strictEqual((await service.from("user_roles").insert({ user_id: created.user.id, role_code: "admin" })).error, null);
+    assert.strictEqual((await service.from("locations").insert({ id: locationId, name: "In progress", slug: `progress-${locationId}`,
+      timezone, is_active: true, is_public: false })).error, null);
+    assert.strictEqual((await service.from("courts").insert({ id: courtId, location_id: locationId, name: "Court", slug: "court",
+      surface: "clay", environment: "outdoor", is_active: true })).error, null);
+    assert.strictEqual((await service.from("location_opening_hours").insert({ location_id: locationId,
+      weekday: mondayWeekday(date), opens_at_minute: 0, closes_at_minute: 1440 })).error, null);
+    assert.strictEqual((await service.from("court_reservations").insert({ court_id: courtId, booking_date: date,
+      starts_at_minute: startMinute, ends_at_minute: startMinute + 90, reason: "Training",
+      created_by_user_id: created.user.id })).error, null);
+    const client = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_PUBLISHABLE_KEY!, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    });
+    assert.strictEqual((await client.auth.signInWithPassword({ email, password })).error, null);
+    const original = (await listOwnUpcomingReservations(client)).upcoming[0];
+    expect(original.id).toBeDefined();
+    expect(await editOwnDirectReservation({ kind: "schedule", id: original.id, expectedUpdatedAt: original.updated_at,
+      schedule: { locationId, courtId, date, startMinute, endMinute: startMinute + 90, reason: "Moved" } }, client)).toMatchObject({ ok: false });
+    expect(await editOwnDirectReservation({ kind: "reason", id: original.id, expectedUpdatedAt: original.updated_at,
+      reason: " Updated training " }, client)).toEqual({ ok: true });
+    const updated = (await listOwnUpcomingReservations(client)).upcoming[0];
+    expect(updated).toMatchObject({ id: original.id, court_id: courtId, booking_date: date,
+      starts_at_minute: startMinute, ends_at_minute: startMinute + 90, reason: "Updated training" });
+    expect(updated.updated_at).not.toBe(original.updated_at);
+    expect(await cancelOwnDirectReservation(original.id, client)).toEqual({ ok: true });
+    expect((await listOwnCourtHistory(1, client)).rows[0]).toMatchObject({ id: original.id, status: "cancelled" });
+  } finally {
+    assert.strictEqual((await service.from("court_reservations").delete().eq("court_id", courtId)).error, null);
+    assert.strictEqual((await service.from("location_opening_hours").delete().eq("location_id", locationId)).error, null);
+    assert.strictEqual((await service.from("courts").delete().eq("id", courtId)).error, null);
+    assert.strictEqual((await service.from("locations").delete().eq("id", locationId)).error, null);
+    await cleanupAuthFixtures(service, [created.user.id]);
+  }
+}, 30000);
+
+test("personal edits lock and update the same row without losing it on stale or overlapping changes", async () => {
+  const service = localFixtureClient();
+  await ensureIntegrationAdminAnchor(service);
+  const ids = { location: randomUUID(), otherLocation: randomUUID(), inactiveLocation: randomUUID(),
+    court: randomUUID(), otherCourt: randomUUID(), targetCourt: randomUUID(), inactiveCourt: randomUUID(), inactiveLocationCourt: randomUUID() };
+  const userIds: string[] = [];
+  const date = "2099-10-15";
+  const targetDate = "2099-10-16";
+  const now = new Date("2099-10-14T12:00:00Z");
+  const password = "direct-edit-password-123";
+  const publicClient = () => createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_PUBLISHABLE_KEY!, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  });
+  async function account(role?: "admin" | "coach") {
+    const email = `reservation-edit-${randomUUID()}@example.test`;
+    const { data, error } = await service.auth.admin.createUser({ email, password, email_confirm: true });
+    assert.strictEqual(error, null); assert.ok(data.user);
+    userIds.push(data.user.id);
+    if (role) assert.strictEqual((await service.from("user_roles").insert({ user_id: data.user.id, role_code: role })).error, null);
+    const client = publicClient();
+    assert.strictEqual((await client.auth.signInWithPassword({ email, password })).error, null);
+    return { id: data.user.id, client };
+  }
+  try {
+    assert.strictEqual((await service.from("locations").insert([
+      { id: ids.location, name: "Internal", slug: `edit-${ids.location}`, timezone: "UTC", is_active: true, is_public: false },
+      { id: ids.otherLocation, name: "Other", slug: `edit-${ids.otherLocation}`, timezone: "UTC", is_active: true, is_public: false },
+      { id: ids.inactiveLocation, name: "Inactive", slug: `edit-${ids.inactiveLocation}`, timezone: "UTC", is_active: false, is_public: false },
+    ])).error, null);
+    assert.strictEqual((await service.from("courts").insert([
+      { id: ids.court, location_id: ids.location, name: "A", slug: "a", surface: "clay", environment: "outdoor", is_active: true },
+      { id: ids.otherCourt, location_id: ids.location, name: "B", slug: "b", surface: "clay", environment: "outdoor", is_active: true },
+      { id: ids.targetCourt, location_id: ids.otherLocation, name: "C", slug: "c", surface: "clay", environment: "outdoor", is_active: true },
+      { id: ids.inactiveCourt, location_id: ids.location, name: "D", slug: "d", surface: "clay", environment: "outdoor", is_active: false },
+      { id: ids.inactiveLocationCourt, location_id: ids.inactiveLocation, name: "E", slug: "e", surface: "clay", environment: "outdoor", is_active: true },
+    ])).error, null);
+    assert.strictEqual((await service.from("location_opening_hours").insert([
+      { location_id: ids.location, weekday: mondayWeekday(date), opens_at_minute: 600, closes_at_minute: 1200 },
+      { location_id: ids.location, weekday: mondayWeekday(targetDate), opens_at_minute: 600, closes_at_minute: 1200 },
+      { location_id: ids.otherLocation, weekday: mondayWeekday(targetDate), opens_at_minute: 600, closes_at_minute: 1200 },
+    ])).error, null);
+    const admin = await account("admin");
+    const coach = await account("coach");
+    const member = await account();
+    const first = { locationId: ids.location, courtId: ids.court, date, startMinute: 600, endMinute: 660, reason: "Club event" };
+    expect(await createDirectReservation(first, admin.client, now)).toEqual({ ok: true });
+    expect(await createDirectReservation({ ...first, startMinute: 660, endMinute: 720, reason: "Coaching" }, coach.client, now)).toEqual({ ok: true });
+    const original = (await listOwnUpcomingReservations(admin.client, now)).upcoming[0];
+    const coachOriginal = (await listOwnUpcomingReservations(coach.client, now)).upcoming[0];
+    const editDay = await getOwnReservationEditDay({ reservationId: original.id, date }, admin.client, now);
+    expect(editDay.location.id).toBe(ids.location);
+    expect(editDay.day.courts.map((item) => item.court.id)).toEqual([ids.court, ids.otherCourt]);
+    expect(editDay.day.courts[0].cells.slice(0, 4)).toEqual(["available", "available", "booked", "booked"]);
+    expect((await getOwnReservationEditDay({ reservationId: original.id, date: targetDate }, admin.client, now)).location.id).toBe(ids.location);
+    await expect(getOwnReservationEditDay({ reservationId: coachOriginal.id, date }, admin.client, now)).rejects.toThrow();
+    await expect(getOwnReservationEditDay({ reservationId: original.id, date }, member.client, now)).rejects.toThrow();
+    const reasonEdit = { kind: "reason", id: original.id, expectedUpdatedAt: original.updated_at, reason: " Updated event " };
+    await expect(editOwnDirectReservation(reasonEdit, member.client, now)).rejects.toThrow();
+    expect(await editOwnDirectReservation({ ...reasonEdit, id: coachOriginal.id }, admin.client, now)).toMatchObject({ ok: false });
+    expect(await editOwnDirectReservation({ ...reasonEdit, created_by_user_id: coach.id }, admin.client, now)).toMatchObject({ ok: false });
+    expect(await editOwnDirectReservation(reasonEdit, admin.client, now)).toEqual({ ok: true });
+    const reasonRow = (await listOwnUpcomingReservations(admin.client, now)).upcoming[0];
+    expect(reasonRow).toMatchObject({ id: original.id, court_id: ids.court, booking_date: date, starts_at_minute: 600,
+      ends_at_minute: 660, reason: "Updated event", created_by_user_id: admin.id, status: "active" });
+    expect(reasonRow.updated_at).not.toBe(original.updated_at);
+    expect(await editOwnDirectReservation(reasonEdit, admin.client, now)).toMatchObject({ ok: false, stale: true });
+    expect((await listOwnUpcomingReservations(admin.client, now)).upcoming[0]).toEqual(reasonRow);
+    const schedule = { kind: "schedule", id: original.id, expectedUpdatedAt: reasonRow.updated_at,
+      schedule: { courtId: ids.court, date, startMinute: 600, endMinute: 660, reason: "Moved event" } };
+    expect(await editOwnDirectReservation({ ...schedule, schedule: { ...schedule.schedule, locationId: ids.otherLocation } }, admin.client, now)).toMatchObject({ ok: false });
+    for (const invalid of [
+      { ...schedule.schedule, startMinute: 615 },
+      { ...schedule.schedule, endMinute: 630 },
+      { ...schedule.schedule, startMinute: 1140, endMinute: 1230 },
+      { ...schedule.schedule, courtId: ids.inactiveCourt },
+      { ...schedule.schedule, courtId: ids.inactiveLocationCourt },
+      { ...schedule.schedule, courtId: ids.targetCourt },
+      { ...schedule.schedule, date: "2099-10-13" },
+    ]) expect(await editOwnDirectReservation({ ...schedule, schedule: invalid }, admin.client, now)).toMatchObject({ ok: false });
+    expect((await listOwnUpcomingReservations(admin.client, now)).upcoming[0]).toEqual(reasonRow);
+    const conflict = await editOwnDirectReservation({ ...schedule,
+      schedule: { ...schedule.schedule, startMinute: 660, endMinute: 720, reason: "Conflict" } }, admin.client, now);
+    expect(conflict).toEqual({ ok: false,
+      message: "That court is no longer available for the selected time. Your existing reservation has not been changed." });
+    expect((await listOwnUpcomingReservations(admin.client, now)).upcoming[0]).toEqual(reasonRow);
+    expect(await editOwnDirectReservation({ ...schedule, schedule: { courtId: ids.targetCourt,
+      date: targetDate, startMinute: 900, endMinute: 990, reason: "Moved event" } }, admin.client, now)).toMatchObject({ ok: false });
+    expect((await listOwnUpcomingReservations(admin.client, now)).upcoming[0]).toEqual(reasonRow);
+    expect((await listOwnUpcomingReservations(admin.client, now)).upcoming[0]).toEqual(reasonRow);
+    expect(await editOwnDirectReservation({ ...schedule, schedule: { courtId: ids.otherCourt,
+      date: targetDate, startMinute: 900, endMinute: 990, reason: "Moved event" } }, admin.client, now)).toEqual({ ok: true });
+    const moved = (await listOwnUpcomingReservations(admin.client, now)).upcoming[0];
+    expect(moved).toMatchObject({ id: original.id, court_id: ids.otherCourt, location_id: ids.location,
+      booking_date: targetDate, starts_at_minute: 900, ends_at_minute: 990, reason: "Moved event", created_by_user_id: admin.id,
+      status: "active", cancelled_at: null });
+    expect(moved.updated_at).not.toBe(reasonRow.updated_at);
+    expect(await editOwnDirectReservation({ kind: "schedule", id: coachOriginal.id, expectedUpdatedAt: coachOriginal.updated_at,
+      schedule: { courtId: ids.otherCourt, date, startMinute: 720, endMinute: 810, reason: "Coaching moved" } }, coach.client, now)).toEqual({ ok: true });
+    expect((await listOwnUpcomingReservations(coach.client, now)).upcoming[0]).toMatchObject({ id: coachOriginal.id,
+      court_id: ids.otherCourt, reason: "Coaching moved", created_by_user_id: coach.id });
+    const coachMoved = (await listOwnUpcomingReservations(coach.client, now)).upcoming[0];
+    const racing = await Promise.all(["Version A", "Version B"].map((reason) => editOwnDirectReservation({
+      kind: "reason", id: coachMoved.id, expectedUpdatedAt: coachMoved.updated_at, reason,
+    }, coach.client, now)));
+    expect(racing.filter((result) => result.ok)).toHaveLength(1);
+    expect(racing.filter((result) => !result.ok && result.stale)).toHaveLength(1);
+    const coachAfterRace = (await listOwnUpcomingReservations(coach.client, now)).upcoming[0];
+    expect(["Version A", "Version B"]).toContain(coachAfterRace.reason);
+    expect(coachAfterRace.updated_at).not.toBe(coachMoved.updated_at);
+    const retained = await service.from("court_reservations")
+      .select("id, court_id, booking_date, starts_at_minute, ends_at_minute, reason, created_by_user_id, cancelled_at, cancelled_by_user_id")
+      .eq("id", original.id).single();
+    assert.strictEqual(retained.error, null);
+    expect(retained.data).toMatchObject({ id: original.id, court_id: ids.otherCourt, booking_date: targetDate,
+      starts_at_minute: 900, ends_at_minute: 990, reason: "Moved event", created_by_user_id: admin.id,
+      cancelled_at: null, cancelled_by_user_id: null });
+    expect(await cancelOwnDirectReservation(original.id, admin.client)).toEqual({ ok: true });
+    expect(await editOwnDirectReservation({ kind: "reason", id: original.id, expectedUpdatedAt: moved.updated_at,
+      reason: "Too late" }, admin.client, now)).toMatchObject({ ok: false });
+    expect((await service.from("court_reservations").select("id").eq("id", original.id)).data).toHaveLength(1);
+  } finally {
+    assert.strictEqual((await service.from("court_reservations").delete().in("court_id", [ids.court, ids.otherCourt, ids.targetCourt, ids.inactiveCourt, ids.inactiveLocationCourt])).error, null);
+    assert.strictEqual((await service.from("location_opening_hours").delete().in("location_id", [ids.location, ids.otherLocation, ids.inactiveLocation])).error, null);
+    assert.strictEqual((await service.from("courts").delete().in("location_id", [ids.location, ids.otherLocation, ids.inactiveLocation])).error, null);
+    assert.strictEqual((await service.from("locations").delete().in("id", [ids.location, ids.otherLocation, ids.inactiveLocation])).error, null);
     await cleanupAuthFixtures(service, userIds);
   }
 }, 30000);
@@ -370,8 +534,8 @@ test("direct reservations require active staff, opening hours and an available a
     const coachDay = await getReservationDay(locations.find((location) => location.id === locationId)!, date, now, coach.client);
     expect(coachDay.adminOccupancy).toEqual([]);
     expect(coachDay.courts[0].cells.filter((cell) => cell === "booked")).toHaveLength(4);
-    const adminPersonal = await listPersonalReservations(admin.client, now);
-    const coachPersonal = await listPersonalReservations(coach.client, now);
+    const adminPersonal = await listOwnUpcomingReservations(admin.client, now);
+    const coachPersonal = await listOwnUpcomingReservations(coach.client, now);
     expect(adminPersonal.upcoming.map((row) => row.created_by_user_id)).toEqual([admin.id]);
     expect(coachPersonal.upcoming.map((row) => row.created_by_user_id)).toEqual([coach.id]);
     expect(adminPersonal.upcoming[0].reason).toBe("Sportya tournament");
@@ -388,15 +552,14 @@ test("direct reservations require active staff, opening hours and an available a
     await expect(getAdminReservationEditDay({ reservationId: coachPersonal.upcoming[0].id, date }, member.client, now)).rejects.toThrow();
     await expect(getAdminReservationEditDay({ reservationId: coachPersonal.upcoming[0].id, date }, suspended.client, now)).rejects.toThrow();
     await expect(getAdminReservationEditDay({ reservationId: randomUUID(), date }, admin.client, now)).rejects.toThrow();
-    await expect(listPersonalReservations(member.client, now)).rejects.toThrow();
-    expect(await listOwnCourtHistory(1, member.client, now)).toEqual({ rows: [], hasNext: false, page: 1 });
+    expect((await listOwnUpcomingReservations(member.client, now)).upcoming).toEqual([]);
+    expect(await listOwnCourtHistory(1, member.client, now)).toMatchObject({ rows: [], hasNext: false, page: 1 });
     expect((await publicClient().from("court_reservations").select("reason").eq("court_id", courtId)).error?.code).toBe("42501");
     expect((await publicClient().from("court_reservations").select("created_by_user_id").eq("court_id", courtId)).error?.code).toBe("42501");
     assert.strictEqual((await service.from("locations").update({ is_public: true }).eq("id", locationId)).error, null);
     const publicBefore = await publicClient().from("court_reservations").select("court_id, booking_date, starts_at_minute, ends_at_minute")
       .eq("court_id", courtId).eq("booking_date", date);
-    assert.strictEqual(publicBefore.error, null);
-    expect(publicBefore.data).toHaveLength(2);
+    expect(publicBefore.error?.code).toBe("42501");
     await expect(cancelOwnDirectReservation(rows.data![0].id, member.client)).rejects.toThrow();
     await expect(cancelOwnDirectReservation(rows.data![0].id, publicClient())).rejects.toThrow();
     const coachReservation = coachPersonal.upcoming[0];
@@ -413,8 +576,7 @@ test("direct reservations require active staff, opening hours and an available a
     expect(after.adminOccupancy).toEqual([]);
     const publicAfter = await publicClient().from("court_reservations").select("court_id, booking_date, starts_at_minute, ends_at_minute")
       .eq("court_id", courtId).eq("booking_date", date);
-    assert.strictEqual(publicAfter.error, null);
-    expect(publicAfter.data).toHaveLength(0);
+    expect(publicAfter.error?.code).toBe("42501");
     const retained = await service.from("court_reservations")
       .select("id, court_id, booking_date, starts_at_minute, ends_at_minute, reason, created_at, created_by_user_id, status, cancelled_at, cancelled_by_user_id")
       .eq("court_id", courtId).eq("booking_date", date).order("starts_at_minute");
@@ -447,11 +609,12 @@ test("direct reservations require active staff, opening hours and an available a
     const secondPage = await listOwnCourtHistory(2, admin.client, now);
     expect(firstPage.rows).toHaveLength(20);
     expect(firstPage.hasNext).toBe(true);
-    expect(firstPage.rows.slice(0, 3).map((row) => row.id)).toEqual([elapsedId, archived[20].id, archived[19].id]);
-    expect(secondPage.rows.map((row) => row.id)).toEqual([archived[1].id, archived[0].id, rows.data![0].id]);
+    // Current activity sorts by booking start, then kind/UUID, rather than cancellation time.
+    const historyIds = [rows.data![0].id, elapsedId, ...archived.map((row) => row.id).sort()];
+    expect([...firstPage.rows, ...secondPage.rows].map((row) => row.id)).toEqual(historyIds);
     expect(secondPage.hasNext).toBe(false);
     expect((await listOwnCourtHistory(3, admin.client, now)).rows).toEqual([]);
-    expect((await listPersonalReservations(admin.client, now)).upcoming).toEqual([]);
+    expect((await listOwnUpcomingReservations(admin.client, now)).upcoming).toEqual([]);
     expect((await listOwnCourtHistory(1, coach.client, now)).rows).toHaveLength(1);
     expect(await createDirectReservation(input, admin.client, now)).toEqual({ ok: true });
   } finally {
@@ -463,198 +626,6 @@ test("direct reservations require active staff, opening hours and an available a
     assert.strictEqual((await service.from("location_opening_hours").delete().in("location_id", [locationId, otherLocationId])).error, null);
     assert.strictEqual((await service.from("courts").delete().in("location_id", [locationId, otherLocationId])).error, null);
     assert.strictEqual((await service.from("locations").delete().in("id", [locationId, otherLocationId])).error, null);
-    await cleanupAuthFixtures(service, userIds);
-  }
-}, 30000);
-
-test("an in-progress owner may edit reason while scheduling stays locked and cancellation still works", async () => {
-  const service = localFixtureClient();
-  await ensureIntegrationAdminAnchor(service);
-  const locationId = randomUUID();
-  const courtId = randomUUID();
-  const now = new Date();
-  const timezone = ["UTC", "America/Los_Angeles", "Pacific/Honolulu", "Asia/Tokyo", "Europe/Bucharest"]
-    .find((zone) => localMinute(zone, now) >= 120 && localMinute(zone, now) <= 1320)!;
-  const date = localToday(timezone, now);
-  const startMinute = Math.floor(localMinute(timezone, now) / 30) * 30 - 30;
-  const email = `reservation-progress-${randomUUID()}@example.test`;
-  const password = "direct-edit-password-123";
-  const { data: created, error: createError } = await service.auth.admin.createUser({ email, password, email_confirm: true });
-  assert.strictEqual(createError, null); assert.ok(created.user);
-  try {
-    assert.strictEqual((await service.from("user_roles").insert({ user_id: created.user.id, role_code: "admin" })).error, null);
-    assert.strictEqual((await service.from("locations").insert({ id: locationId, name: "In progress", slug: `progress-${locationId}`,
-      timezone, is_active: true, is_public: false })).error, null);
-    assert.strictEqual((await service.from("courts").insert({ id: courtId, location_id: locationId, name: "Court", slug: "court",
-      surface: "clay", environment: "outdoor", is_active: true })).error, null);
-    assert.strictEqual((await service.from("location_opening_hours").insert({ location_id: locationId,
-      weekday: mondayWeekday(date), opens_at_minute: 0, closes_at_minute: 1440 })).error, null);
-    assert.strictEqual((await service.from("court_reservations").insert({ court_id: courtId, booking_date: date,
-      starts_at_minute: startMinute, ends_at_minute: startMinute + 90, reason: "Training",
-      created_by_user_id: created.user.id })).error, null);
-    const client = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_PUBLISHABLE_KEY!, {
-      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-    });
-    assert.strictEqual((await client.auth.signInWithPassword({ email, password })).error, null);
-    const original = (await listPersonalReservations(client)).upcoming[0];
-    expect(original.id).toBeDefined();
-    expect(await editOwnDirectReservation({ kind: "schedule", id: original.id, expectedUpdatedAt: original.updated_at,
-      schedule: { locationId, courtId, date, startMinute, endMinute: startMinute + 90, reason: "Moved" } }, client)).toMatchObject({ ok: false });
-    const directSchedule = await client.rpc("edit_own_court_reservation", {
-      p_id: original.id, p_expected_updated_at: original.updated_at, p_reason: "Moved", p_schedule: true,
-      p_court_id: courtId, p_booking_date: date, p_starts_at_minute: startMinute, p_ends_at_minute: startMinute + 90,
-    });
-    assert.strictEqual(directSchedule.error, null);
-    expect(directSchedule.data).toBe("unavailable");
-    expect(await editOwnDirectReservation({ kind: "reason", id: original.id, expectedUpdatedAt: original.updated_at,
-      reason: " Updated training " }, client)).toEqual({ ok: true });
-    const updated = (await listPersonalReservations(client)).upcoming[0];
-    expect(updated).toMatchObject({ id: original.id, court_id: courtId, booking_date: date,
-      starts_at_minute: startMinute, ends_at_minute: startMinute + 90, reason: "Updated training" });
-    expect(updated.updated_at).not.toBe(original.updated_at);
-    expect(await cancelOwnDirectReservation(original.id, client)).toEqual({ ok: true });
-    expect((await listOwnCourtHistory(1, client)).rows[0]).toMatchObject({ id: original.id, status: "cancelled" });
-  } finally {
-    assert.strictEqual((await service.from("court_reservations").delete().eq("court_id", courtId)).error, null);
-    assert.strictEqual((await service.from("location_opening_hours").delete().eq("location_id", locationId)).error, null);
-    assert.strictEqual((await service.from("courts").delete().eq("id", courtId)).error, null);
-    assert.strictEqual((await service.from("locations").delete().eq("id", locationId)).error, null);
-    await cleanupAuthFixtures(service, [created.user.id]);
-  }
-}, 30000);
-
-test("personal edits lock and update the same row without losing it on stale or overlapping changes", async () => {
-  const service = localFixtureClient();
-  await ensureIntegrationAdminAnchor(service);
-  const ids = { location: randomUUID(), otherLocation: randomUUID(), inactiveLocation: randomUUID(),
-    court: randomUUID(), otherCourt: randomUUID(), targetCourt: randomUUID(), inactiveCourt: randomUUID(), inactiveLocationCourt: randomUUID() };
-  const userIds: string[] = [];
-  const date = "2099-10-15";
-  const targetDate = "2099-10-16";
-  const now = new Date("2099-10-14T12:00:00Z");
-  const password = "direct-edit-password-123";
-  const publicClient = () => createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_PUBLISHABLE_KEY!, {
-    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-  });
-  async function account(role?: "admin" | "coach") {
-    const email = `reservation-edit-${randomUUID()}@example.test`;
-    const { data, error } = await service.auth.admin.createUser({ email, password, email_confirm: true });
-    assert.strictEqual(error, null); assert.ok(data.user);
-    userIds.push(data.user.id);
-    if (role) assert.strictEqual((await service.from("user_roles").insert({ user_id: data.user.id, role_code: role })).error, null);
-    const client = publicClient();
-    assert.strictEqual((await client.auth.signInWithPassword({ email, password })).error, null);
-    return { id: data.user.id, client };
-  }
-  try {
-    assert.strictEqual((await service.from("locations").insert([
-      { id: ids.location, name: "Internal", slug: `edit-${ids.location}`, timezone: "UTC", is_active: true, is_public: false },
-      { id: ids.otherLocation, name: "Other", slug: `edit-${ids.otherLocation}`, timezone: "UTC", is_active: true, is_public: false },
-      { id: ids.inactiveLocation, name: "Inactive", slug: `edit-${ids.inactiveLocation}`, timezone: "UTC", is_active: false, is_public: false },
-    ])).error, null);
-    assert.strictEqual((await service.from("courts").insert([
-      { id: ids.court, location_id: ids.location, name: "A", slug: "a", surface: "clay", environment: "outdoor", is_active: true },
-      { id: ids.otherCourt, location_id: ids.location, name: "B", slug: "b", surface: "clay", environment: "outdoor", is_active: true },
-      { id: ids.targetCourt, location_id: ids.otherLocation, name: "C", slug: "c", surface: "clay", environment: "outdoor", is_active: true },
-      { id: ids.inactiveCourt, location_id: ids.location, name: "D", slug: "d", surface: "clay", environment: "outdoor", is_active: false },
-      { id: ids.inactiveLocationCourt, location_id: ids.inactiveLocation, name: "E", slug: "e", surface: "clay", environment: "outdoor", is_active: true },
-    ])).error, null);
-    assert.strictEqual((await service.from("location_opening_hours").insert([
-      { location_id: ids.location, weekday: mondayWeekday(date), opens_at_minute: 600, closes_at_minute: 1200 },
-      { location_id: ids.location, weekday: mondayWeekday(targetDate), opens_at_minute: 600, closes_at_minute: 1200 },
-      { location_id: ids.otherLocation, weekday: mondayWeekday(targetDate), opens_at_minute: 600, closes_at_minute: 1200 },
-    ])).error, null);
-    const admin = await account("admin");
-    const coach = await account("coach");
-    const member = await account();
-    const first = { locationId: ids.location, courtId: ids.court, date, startMinute: 600, endMinute: 660, reason: "Club event" };
-    expect(await createDirectReservation(first, admin.client, now)).toEqual({ ok: true });
-    expect(await createDirectReservation({ ...first, startMinute: 660, endMinute: 720, reason: "Coaching" }, coach.client, now)).toEqual({ ok: true });
-    const original = (await listPersonalReservations(admin.client, now)).upcoming[0];
-    const coachOriginal = (await listPersonalReservations(coach.client, now)).upcoming[0];
-    const editDay = await getOwnReservationEditDay({ reservationId: original.id, date }, admin.client, now);
-    expect(editDay.location.id).toBe(ids.location);
-    expect(editDay.day.courts.map((item) => item.court.id)).toEqual([ids.court, ids.otherCourt]);
-    expect(editDay.day.courts[0].cells.slice(0, 4)).toEqual(["available", "available", "booked", "booked"]);
-    expect((await getOwnReservationEditDay({ reservationId: original.id, date: targetDate }, admin.client, now)).location.id).toBe(ids.location);
-    await expect(getOwnReservationEditDay({ reservationId: coachOriginal.id, date }, admin.client, now)).rejects.toThrow();
-    await expect(getOwnReservationEditDay({ reservationId: original.id, date }, member.client, now)).rejects.toThrow();
-    const reasonEdit = { kind: "reason", id: original.id, expectedUpdatedAt: original.updated_at, reason: " Updated event " };
-    await expect(editOwnDirectReservation(reasonEdit, member.client, now)).rejects.toThrow();
-    expect(await editOwnDirectReservation({ ...reasonEdit, id: coachOriginal.id }, admin.client, now)).toMatchObject({ ok: false });
-    expect(await editOwnDirectReservation({ ...reasonEdit, created_by_user_id: coach.id }, admin.client, now)).toMatchObject({ ok: false });
-    expect(await editOwnDirectReservation(reasonEdit, admin.client, now)).toEqual({ ok: true });
-    const reasonRow = (await listPersonalReservations(admin.client, now)).upcoming[0];
-    expect(reasonRow).toMatchObject({ id: original.id, court_id: ids.court, booking_date: date, starts_at_minute: 600,
-      ends_at_minute: 660, reason: "Updated event", created_by_user_id: admin.id, status: "active" });
-    expect(reasonRow.updated_at).not.toBe(original.updated_at);
-    expect(await editOwnDirectReservation(reasonEdit, admin.client, now)).toMatchObject({ ok: false, stale: true });
-    expect((await listPersonalReservations(admin.client, now)).upcoming[0]).toEqual(reasonRow);
-    const schedule = { kind: "schedule", id: original.id, expectedUpdatedAt: reasonRow.updated_at,
-      schedule: { courtId: ids.court, date, startMinute: 600, endMinute: 660, reason: "Moved event" } };
-    expect(await editOwnDirectReservation({ ...schedule, schedule: { ...schedule.schedule, locationId: ids.otherLocation } }, admin.client, now)).toMatchObject({ ok: false });
-    for (const invalid of [
-      { ...schedule.schedule, startMinute: 615 },
-      { ...schedule.schedule, endMinute: 630 },
-      { ...schedule.schedule, startMinute: 1140, endMinute: 1230 },
-      { ...schedule.schedule, courtId: ids.inactiveCourt },
-      { ...schedule.schedule, courtId: ids.inactiveLocationCourt },
-      { ...schedule.schedule, courtId: ids.targetCourt },
-      { ...schedule.schedule, date: "2099-10-13" },
-    ]) expect(await editOwnDirectReservation({ ...schedule, schedule: invalid }, admin.client, now)).toMatchObject({ ok: false });
-    expect((await listPersonalReservations(admin.client, now)).upcoming[0]).toEqual(reasonRow);
-    const conflict = await editOwnDirectReservation({ ...schedule,
-      schedule: { ...schedule.schedule, startMinute: 660, endMinute: 720, reason: "Conflict" } }, admin.client, now);
-    expect(conflict).toEqual({ ok: false,
-      message: "That court is no longer available for the selected time. Your existing reservation has not been changed." });
-    expect((await listPersonalReservations(admin.client, now)).upcoming[0]).toEqual(reasonRow);
-    expect(await editOwnDirectReservation({ ...schedule, schedule: { courtId: ids.targetCourt,
-      date: targetDate, startMinute: 900, endMinute: 990, reason: "Moved event" } }, admin.client, now)).toMatchObject({ ok: false });
-    expect((await listPersonalReservations(admin.client, now)).upcoming[0]).toEqual(reasonRow);
-    const craftedRpc = await admin.client.rpc("edit_own_court_reservation", {
-      p_id: original.id, p_expected_updated_at: reasonRow.updated_at, p_reason: "Cross-location",
-      p_schedule: true, p_court_id: ids.targetCourt, p_booking_date: targetDate,
-      p_starts_at_minute: 900, p_ends_at_minute: 990,
-    });
-    expect(craftedRpc.error).toBeNull();
-    expect(craftedRpc.data).toBe("unavailable");
-    expect((await listPersonalReservations(admin.client, now)).upcoming[0]).toEqual(reasonRow);
-    expect(await editOwnDirectReservation({ ...schedule, schedule: { courtId: ids.otherCourt,
-      date: targetDate, startMinute: 900, endMinute: 990, reason: "Moved event" } }, admin.client, now)).toEqual({ ok: true });
-    const moved = (await listPersonalReservations(admin.client, now)).upcoming[0];
-    expect(moved).toMatchObject({ id: original.id, court_id: ids.otherCourt, location_id: ids.location,
-      booking_date: targetDate, starts_at_minute: 900, ends_at_minute: 990, reason: "Moved event", created_by_user_id: admin.id,
-      status: "active", cancelled_at: null });
-    expect(moved.updated_at).not.toBe(reasonRow.updated_at);
-    expect(await editOwnDirectReservation({ kind: "schedule", id: coachOriginal.id, expectedUpdatedAt: coachOriginal.updated_at,
-      schedule: { courtId: ids.otherCourt, date, startMinute: 720, endMinute: 810, reason: "Coaching moved" } }, coach.client, now)).toEqual({ ok: true });
-    expect((await listPersonalReservations(coach.client, now)).upcoming[0]).toMatchObject({ id: coachOriginal.id,
-      court_id: ids.otherCourt, reason: "Coaching moved", created_by_user_id: coach.id });
-    const coachMoved = (await listPersonalReservations(coach.client, now)).upcoming[0];
-    const racing = await Promise.all(["Version A", "Version B"].map((reason) => editOwnDirectReservation({
-      kind: "reason", id: coachMoved.id, expectedUpdatedAt: coachMoved.updated_at, reason,
-    }, coach.client, now)));
-    expect(racing.filter((result) => result.ok)).toHaveLength(1);
-    expect(racing.filter((result) => !result.ok && result.stale)).toHaveLength(1);
-    const coachAfterRace = (await listPersonalReservations(coach.client, now)).upcoming[0];
-    expect(["Version A", "Version B"]).toContain(coachAfterRace.reason);
-    expect(coachAfterRace.updated_at).not.toBe(coachMoved.updated_at);
-    const retained = await service.from("court_reservations")
-      .select("id, court_id, booking_date, starts_at_minute, ends_at_minute, reason, created_by_user_id, cancelled_at, cancelled_by_user_id")
-      .eq("id", original.id).single();
-    assert.strictEqual(retained.error, null);
-    expect(retained.data).toMatchObject({ id: original.id, court_id: ids.otherCourt, booking_date: targetDate,
-      starts_at_minute: 900, ends_at_minute: 990, reason: "Moved event", created_by_user_id: admin.id,
-      cancelled_at: null, cancelled_by_user_id: null });
-    expect(await cancelOwnDirectReservation(original.id, admin.client)).toEqual({ ok: true });
-    expect(await editOwnDirectReservation({ kind: "reason", id: original.id, expectedUpdatedAt: moved.updated_at,
-      reason: "Too late" }, admin.client, now)).toMatchObject({ ok: false });
-    expect((await service.from("court_reservations").select("id").eq("id", original.id)).data).toHaveLength(1);
-  } finally {
-    assert.strictEqual((await service.from("court_reservations").delete().in("court_id", [ids.court, ids.otherCourt, ids.targetCourt, ids.inactiveCourt, ids.inactiveLocationCourt])).error, null);
-    assert.strictEqual((await service.from("location_opening_hours").delete().in("location_id", [ids.location, ids.otherLocation, ids.inactiveLocation])).error, null);
-    assert.strictEqual((await service.from("courts").delete().in("location_id", [ids.location, ids.otherLocation, ids.inactiveLocation])).error, null);
-    assert.strictEqual((await service.from("locations").delete().in("id", [ids.location, ids.otherLocation, ids.inactiveLocation])).error, null);
     await cleanupAuthFixtures(service, userIds);
   }
 }, 30000);

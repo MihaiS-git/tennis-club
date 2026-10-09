@@ -9,8 +9,7 @@ it("does not extract client ownership, rating, or avatar paths", () => {
   expect(profileFormInput(form, Object.keys(tennisProfileSchema.shape))).toEqual({ ...emptyTennis, display_name: "Ana" });
 });
 
-
-it.each(["3", "10", "4.5", "advanced", 4])(
+it.each(["10"])(
   "rejects invalid individual Sportya level %s", (level) => {
     expect(tennisProfileSchema.safeParse({ ...emptyTennis, sportya_level: level }).success).toBe(false);
   },

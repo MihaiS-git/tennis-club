@@ -1,89 +1,32 @@
-# Booking notifications
+# Booking email notifications
 
-Booking confirmation, customer cancellation, Admin cancellation, customer
-rescheduling and Admin rescheduling write to `booking_email_outbox` inside their
-successful mutation transaction. TypeScript chooses the event and supplies its complete
-persisted snapshot to the atomic command. Each event snapshots `bookings.customer_email`,
-customer name, reference, location, timezone, schedule and booking total. Reschedule
-mail includes the previous and new schedules. Later account/contact/configuration
-changes do not rewrite queued content. Direct reservations, Supabase Auth emails,
-provider-specific payment messages and refunds are excluded. Confirmation is
-enqueued only when a booking becomes confirmed: at Pay at club creation or trusted
-online settlement. Pending, failed and expired checkout emit no confirmation email.
+Booking confirmation, customer/Admin cancellation and customer/Admin rescheduling
+capture the booking contact and schedule within the successful transaction, then
+send the preserved text template through Brevo's transactional HTTP API after commit.
+Use only the snapshotted `bookings.customer_email`, never the current account email.
+Quote, stale, failed and unchanged-schedule saves send no rescheduling email;
+pending/failed/expired checkout sends no confirmation. Transition and webhook receipt
+checks prevent replayed operations from sending again. Delivery is best-effort with
+a 10-second HTTP timeout, sanitized error logging, and no persistent queue or retries.
+Email failure cannot change committed booking/payment state. Server-only
+`BREVO_API_KEY` and a Brevo-verified `BOOKING_MAIL_FROM` are required.
+Supabase Auth confirmation/recovery emails remain independent.
 
-Failed mutations roll back their events. Quotes, price-change responses, stale
-requests and saves that leave the schedule unchanged enqueue no reschedule email.
-Unique event/version keys and the existing locked lifecycle/stale-token boundaries
-prevent duplicate events from retried mutation requests.
+The Next.js backend awaits one request to
+[Brevo's transactional email endpoint](https://developers.brevo.com/reference/send-transac-email).
+Pay-at-club creation sends confirmation after the creation commit; online payment
+sends confirmation only when settlement first transitions the booking to confirmed.
+Cancellation includes the existing refund-request wording when a refund is requested,
+without claiming completion. Rescheduling preserves the old/new schedule text.
+Direct reservations and refund completion have no email notifications.
 
-## Local operation
+No worker, cron, database polling, delivery locks or SMTP adapter is required.
+A process interruption or provider failure can lose an email; replay does not retry it.
+Provider acceptance is not a guarantee of inbox delivery.
 
-Apply `20261005180000_booking_email_outbox.sql` incrementally after its preceding
-booking migrations; do not reset the database. Local Supabase's `[local_smtp]`
-exposes Mailpit SMTP on port 54325 and its inbox at http://127.0.0.1:54324.
-An already running stack needs `supabase stop` followed by `supabase start` to expose
-the new port; this preserves data. Supabase Auth email configuration is unchanged.
-
-Add the server-only `BOOKING_*` variables from `.env.example` to `.env.local`,
-including `BOOKING_MAIL_FROM`, `BOOKING_SMTP_HOST`, `BOOKING_SMTP_PORT`, and
-`BOOKING_SMTP_SECURE`. The worker also needs `SUPABASE_URL` and
-`SUPABASE_SECRET_KEY`. Optional SMTP username/password must both be supplied.
-
-Run alongside `npm run dev`:
-
-```sh
-npm run mail:worker
-```
-
-For one pass through currently eligible messages:
-
-```sh
-npm run mail:worker -- --once
-```
-
-The worker polls every two seconds. It is separate from the web request, so mail
-failures never reverse bookings or turn a successful booking into a UI error.
-Restarting the worker resumes durable pending work. The same command can run under
-a process supervisor later; no hosting or production mail provider is configured.
-The `MailAdapter` interface accepts a stable event idempotency key and returns a
-safe outcome. The SMTP adapter uses Nodemailer; another provider can implement the
-same interface without changing booking mutations or email rendering.
-
-## Retries and concurrency
-
-Service-role-only RPCs claim one event using `FOR UPDATE SKIP LOCKED`, issue a
-random lease token, then transition to `sending` before calling the adapter.
-Other workers cannot send that event. Pending events for a booking wait for earlier
-pending/in-flight events. A stale worker cannot start or finish another worker's
-claim. SMTP transport timeouts are bounded below the two-minute lease duration.
-Private outbox data has RLS enabled and no anonymous/authenticated table or RPC access.
-
-Definite non-acceptance (connection failure before DATA or an explicit temporary
-SMTP rejection) retries with exponential backoff from 30 seconds up to one hour,
-with ten attempts maximum. This retry/exhaustion policy lives only in
-`src/lib/notifications/worker.ts`; `finish_booking_email` persists the supplied status
-and retry delay under its token guard. Permanent rejection becomes `failed`. A crashed
-`processing` claim can be reclaimed. A crashed `sending` claim or missing SMTP
-acknowledgement becomes `uncertain`; the worker never automatically resends it.
-
-SMTP cannot guarantee exactly-once receipt: acceptance can happen just before a
-connection or process fails. A stable Message-ID is useful for tracing, but does
-not force recipient deduplication. Quarantining ambiguous sends preserves the
-no-duplicate automatic retry requirement at the cost of possible non-delivery.
-Inspect `uncertain` rows against Mailpit/provider records using the event Message-ID
-before deciding whether to mark delivered or explicitly requeue. Never blindly
-requeue ambiguous events. `failed` rows need configuration/recipient diagnosis.
-Outcome logs contain only event ID and safe codes, without recipient or message data.
-
-## Verification
-
-Focused coverage: `tests/unit/booking-email.test.ts` and
-`tests/integration/booking-email-outbox.integration.test.ts`.
-
-Manually verified local booking mutations through the real RPCs and delivery through
-SMTP, then read all six Mailpit messages: two confirmations, customer and Admin
-reschedules, and customer and Admin cancellations. Recipient snapshots, references,
-location timezone, old/new schedules, totals and actor wording were checked.
-The verification mailbox is `booking-notifications-local@example.test`; local
-verification bookings are cancelled and therefore do not block availability.
-No E2E/QA expansion or payment notifications were added.
+Unit tests mock HTTP success, rejection, timeout and missing configuration.
+Transaction integration tests mock the notification boundary and verify snapshots,
+commit ordering, rollback behavior and duplicate transition suppression without
+calling Brevo. Existing local databases may retain unused email tables until the
+next explicitly authorized development rebuild; the three final-state migrations
+no longer create them. This cleanup does not run a rebuild.

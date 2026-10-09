@@ -7,7 +7,6 @@ import type { BookingRescheduleResult } from "./reschedule";
 import { logger } from "@/lib/logger";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
-export type { BookingEditContext as AdminBookingEditContext, BookingRescheduleResult as AdminBookingRescheduleResult } from "./reschedule";
 
 export async function getAdminBookingEditDay(id: unknown, date: unknown, supabase?: Client, now = new Date()) {
   const client = supabase ?? await createClient();

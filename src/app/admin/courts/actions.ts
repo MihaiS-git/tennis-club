@@ -21,6 +21,7 @@ export async function saveCourtAction(input: unknown) {
   if (result.ok) {
     revalidatePath("/admin/courts");
     revalidatePath("/courts");
+    revalidatePath("/admin/locations", "layout");
   }
   return result;
 }

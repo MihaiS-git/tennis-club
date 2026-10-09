@@ -1,10 +1,9 @@
-import { cancellationCommandFixture } from "./checkout-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test } from "vitest";
 import { cancelOwnCustomerBooking } from "@/lib/bookings/self-cancellation-service";
-import { listOwnUpcomingCustomerBookings } from "@/lib/bookings/personal-service";
-import { listOwnCourtHistory } from "@/lib/bookings/history-service";
+import { listOwnUpcomingCustomerBookings } from "../helpers/current-activity";
+import { listOwnCourtHistory } from "../helpers/current-activity";
 import { localMinute, localToday } from "@/lib/courts/local-time";
 import { cleanupAuthFixtures, localFixtureClient } from "./auth-fixtures";
 import { ensureIntegrationAdminAnchor } from "./admin-anchor";
@@ -61,7 +60,6 @@ test("self-cancellation enforces account ownership, snapshot notice, staff exemp
     for (const actor of [other, admin, coach]) {
       expect(await cancelOwnCustomerBooking(eligible.id, actor.client)).toMatchObject({ ok: false });
     }
-    expect((await reader().rpc("commit_booking_cancellation", cancellationCommandFixture(eligible.id))).error?.code).toBe("42501");
     expect(await cancelOwnCustomerBooking(randomUUID(), owner.client)).toMatchObject({ ok: false });
     expect(await cancelOwnCustomerBooking("invalid", owner.client)).toMatchObject({ ok: false });
     expect(await cancelOwnCustomerBooking(eligible.id, owner.client)).toEqual({ ok: true });
@@ -75,7 +73,7 @@ test("self-cancellation enforces account ownership, snapshot notice, staff exemp
     expect((await listOwnUpcomingCustomerBookings(owner.client)).map((row) => row.id)).not.toContain(eligible.id);
     expect((await listOwnCourtHistory(1, owner.client)).rows).toContainEqual(expect.objectContaining({
       id: eligible.id, status: "cancelled", cancellation_notice_minutes: 60 }));
-    expect((await reader().from("court_reservations").select("court_id, starts_at_minute").eq("court_id", eligible.courtId)).data).toEqual([]);
+    expect((await reader().from("court_reservations").select("court_id, starts_at_minute").eq("court_id", eligible.courtId)).error?.code).toBe("42501");
     expect(await cancelOwnCustomerBooking(eligible.id, owner.client)).toMatchObject({ ok: false });
     expect(await read(eligible)).toEqual(after);
 

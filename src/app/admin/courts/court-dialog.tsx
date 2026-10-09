@@ -25,8 +25,8 @@ function validCourtCreate(form: HTMLFormElement) {
   }).success;
 }
 
-export function CourtDialog({ court, locations, locationId, open: controlledOpen, onOpenChange }: {
-  court?: AdminCourt; locations: LocationChoice[]; locationId?: string;
+export function CourtDialog({ court, locations, locationId, triggerLabel = "Create court", open: controlledOpen, onOpenChange }: {
+  court?: AdminCourt; locations: LocationChoice[]; locationId?: string; triggerLabel?: string;
   open?: boolean; onOpenChange?: (open: boolean) => void;
 }) {
   const prefix = useId();
@@ -157,7 +157,7 @@ export function CourtDialog({ court, locations, locationId, open: controlledOpen
   return <>
     {!court && controlledOpen === undefined && <Button type="button" variant="secondary" size="small" disabled={locations.length === 0} onClick={() => {
       setFieldErrors({}); setFormError(""); setOpen(true);
-    }}>Create court</Button>}
+    }}>{triggerLabel}</Button>}
     {dialog}
     <ConfirmationDialog open={deactivating} title={`Deactivate ${court?.name ?? "court"}?`}
       message={`${court?.name ?? "This court"} will become unavailable for normal use until reactivated.`}

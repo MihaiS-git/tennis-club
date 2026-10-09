@@ -1,3 +1,5 @@
+import { connection } from "next/server";
+
 import { supportsOnlineCheckout } from "@/lib/payments/providers";
 import { readPublicBookingCancellationNotice } from "@/lib/bookings/confirmation-policy";
 import { activeOnlinePaymentProvider } from "@/lib/payments/settings";
@@ -12,6 +14,7 @@ import { CalendarControls } from "./calendar-controls";
 import { BookingCalendar } from "./booking-calendar";
 
 export async function BookingContent({ searchParams }: { searchParams: Promise<{ location?: string; date?: string }> }) {
+  await connection();
   const locations = await listPublicLocationsWithCourts();
   if (!locations.length) return <p className="rounded-card border border-border bg-surface p-6">No locations are currently open for public booking. Please check back soon.</p>;
   const params = await searchParams;

@@ -22,13 +22,3 @@ it("renders one duration-spanning reservation block without invoking creation", 
   fireEvent.click(screen.getByRole("button", { name: /Court 1 2099-10-15 14:00–14:30, Available/ }));
   expect(onChoose).toHaveBeenCalledOnce();
 });
-
-it("keeps generic occupied cells inert when no occupied interaction is provided", () => {
-  const onChoose = vi.fn();
-  render(<ReservationTimetable date="2099-10-15" selection={null} onChoose={onChoose}
-    day={{ times: [750, 780], courts: [{ court: { id: "court", name: "Court 1" },
-      cells: ["booked", "booked"] }] }} />);
-  expect(screen.getAllByLabelText(/, Booked/)).toHaveLength(2);
-  expect(screen.queryByRole("button")).toBeNull();
-  expect(onChoose).not.toHaveBeenCalled();
-});

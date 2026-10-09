@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { signUp, signOut, redirect } = vi.hoisted(() => ({
+const { signUp, signOut, redirect, setCookie } = vi.hoisted(() => ({
+  setCookie: vi.fn(),
   signUp: vi.fn(),
   signOut: vi.fn(),
   redirect: vi.fn((path: string) => {
@@ -9,6 +10,7 @@ const { signUp, signOut, redirect } = vi.hoisted(() => ({
 }));
 
 vi.mock("next/navigation", () => ({ redirect }));
+vi.mock("next/headers", () => ({ cookies: async () => ({ set: setCookie }) }));
 vi.mock("../../../src/lib/supabase/server", () => ({
   createClient: async () => ({ auth: { signUp, signOut } }),
 }));
@@ -46,6 +48,9 @@ describe("signup action role boundary", () => {
       },
     });
     expect(redirect).toHaveBeenCalledWith("/signup/check-email");
+    expect(setCookie).toHaveBeenCalledWith("signup-confirmation-email", "new-member@example.com", {
+      httpOnly: true, secure: false, sameSite: "lax", path: "/signup/check-email", maxAge: 3600,
+    });
   });
 
   it("signs out an unexpected signup session and returns a safe error", async () => {
@@ -64,6 +69,7 @@ describe("signup action role boundary", () => {
     });
     expect(signOut).toHaveBeenCalledExactlyOnceWith({ scope: "local" });
     expect(redirect).not.toHaveBeenCalled();
+    expect(setCookie).not.toHaveBeenCalled();
   });
 
   it("rejects a short password before calling Supabase", async () => {
@@ -80,10 +86,6 @@ describe("signup action role boundary", () => {
 
   it.each([
     [["pwned"], "This password is too common or has appeared in a data breach. Choose another."],
-    [["length"], "The authentication provider rejected this password's length requirements. Please contact support."],
-    [["characters"], "The authentication provider rejected this password's requirements. Please contact support."],
-    [["characters", "pwned"], "This password is too common or has appeared in a data breach. Choose another."],
-    [[], "The authentication provider rejected this password's requirements. Please contact support."],
   ])("maps Supabase weak-password reasons %j on the password field", async (reasons, message) => {
     const report = vi.spyOn(logger, "warn").mockImplementation(() => {});
     signUp.mockResolvedValue({

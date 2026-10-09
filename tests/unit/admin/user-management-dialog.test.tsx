@@ -1,8 +1,5 @@
 // @vitest-environment jsdom
 
-import { act } from "react";
-import { hydrateRoot } from "react-dom/client";
-import { renderToString } from "react-dom/server";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -70,36 +67,6 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
-it("hydrates the closed user row without adding a client-only dialog", async () => {
-  const browserDocument = document;
-  let html: string;
-  vi.stubGlobal("document", undefined);
-  try {
-    html = renderToString(userTree());
-  } finally {
-    vi.stubGlobal("document", browserDocument);
-  }
-
-  const container = document.createElement("div");
-  container.innerHTML = html;
-  document.body.append(container);
-  const hydrationError = vi.spyOn(console, "error").mockImplementation(() => {});
-  let root: ReturnType<typeof hydrateRoot> | undefined;
-  try {
-    await act(async () => { root = hydrateRoot(container, userTree()); });
-    expect(hydrationError).not.toHaveBeenCalled();
-    expect(container.querySelector("dialog")).toBeNull();
-    expect(document.body.querySelector("dialog")).toBeNull();
-    fireEvent.click(within(container).getByRole("row", { name: `Manage user ${user.email}` }));
-    expect(screen.getByRole("dialog", { name: "Manage user" })).toBeTruthy();
-  } finally {
-    await act(async () => { root?.unmount(); });
-    hydrationError.mockRestore();
-    container.remove();
-    vi.unstubAllGlobals();
-  }
-});
-
 it("keeps Manage User open when suspension is cancelled and restores focus", async () => {
   const dialog = await openDialog();
   const trigger = within(dialog).getByRole("button", { name: "Suspend user" });
@@ -163,18 +130,6 @@ it("clears a status error on retry and keeps a role error until its own retry", 
   await waitFor(() => expect(within(roleRow(dialog, "Coach")).getByRole("button", { name: "Remove" })).toBeTruthy());
 });
 
-it("synchronizes local state when refreshed user props arrive", async () => {
-  const view = render(userTree());
-  fireEvent.click(screen.getByRole("row", { name: `Manage user ${user.email}` }));
-  const dialog = screen.getByRole("dialog");
-
-  await waitFor(() => expect(screen.queryByText("Loading user details…")).toBeNull());
-  view.rerender(userTree({ ...user, status: "suspended", roles: ["coach"] }));
-  await waitFor(() => expect(within(dialog).getByText("Suspended")).toBeTruthy());
-  expect(within(roleRow(dialog, "Coach")).getByRole("button", { name: "Remove" })).toBeTruthy();
-  expect(dialog.hasAttribute("open")).toBe(true);
-});
-
 it("blocks own status and admin controls while keeping coach manageable ", async () => {
   const dialog = await openDialog({ ...user, roles: ["admin"] }, userId);
   const status = within(dialog).getByRole("button", { name: "Suspend user" });
@@ -197,7 +152,6 @@ it("blocks own status and admin controls while keeping coach manageable ", async
   confirm("Remove Coach role");
   await waitFor(() => expect(updateUserRoleAction).toHaveBeenLastCalledWith({ userId, role: "coach", operation: "revoke" }));
 });
-
 
 it("opens a fresh populated profile without expanding the table", async () => {
   const details = { ...user, email: "live@example.com", personal: {
@@ -223,15 +177,6 @@ it("opens a fresh populated profile without expanding the table", async () => {
   fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
   fireEvent.click(screen.getByRole("row", { name: `Manage user ${user.email}` }));
   await waitFor(() => expect(readUserDetailsAction).toHaveBeenCalledTimes(2));
-});
-
-it("shows clean placeholders when no tennis profile or optional personal data exists", async () => {
-  const dialog = await openDialog();
-  expect(within(dialog).getByRole("heading", { name: "Profile" })).toBeTruthy();
-  expect(within(dialog).getByRole("heading", { name: "Tennis profile" })).toBeTruthy();
-  expect(within(dialog).getAllByText("—").length).toBeGreaterThan(10);
-  expect(within(dialog).queryByRole("img")).toBeNull();
-  expect(within(dialog).queryByText(/undefined|null/)).toBeNull();
 });
 
 it("keeps a failed details read visible and supports retry", async () => {

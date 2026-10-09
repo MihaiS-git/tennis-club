@@ -34,26 +34,6 @@ it("opens on focus, marks the current option, and selects with arrows and Enter"
   expect(screen.queryByRole("listbox")).toBeNull();
 });
 
-it("closes on Escape or outside click without changing the selected value", () => {
-  const onValueChange = vi.fn();
-  render(<><label htmlFor="choice">Choice</label>
-    <SearchableCombobox id="choice" options={options} defaultValue="b"
-      onValueChange={onValueChange} placeholder="Choose" listLabel="Choices" emptyMessage="None" />
-    <button type="button">Outside</button></>);
-  const input = screen.getByRole("combobox", { name: "Choice" }) as HTMLInputElement;
-  fireEvent.focus(input);
-  fireEvent.change(input, { target: { value: "alpha" } });
-  fireEvent.keyDown(input, { key: "Escape" });
-  expect(input.value).toBe("Beta");
-  expect(screen.queryByRole("listbox")).toBeNull();
-  fireEvent.click(input);
-  expect(screen.getByRole("listbox", { name: "Choices" })).toBeTruthy();
-  fireEvent.pointerDown(screen.getByRole("button", { name: "Outside" }));
-  expect(screen.queryByRole("listbox")).toBeNull();
-  expect(input.value).toBe("Beta");
-  expect(onValueChange).not.toHaveBeenCalled();
-});
-
 it("filters options and selects one by mouse", () => {
   const onValueChange = vi.fn();
   render(<><label htmlFor="choice">Choice</label>

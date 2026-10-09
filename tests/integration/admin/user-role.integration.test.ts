@@ -1,15 +1,16 @@
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { assert, expect, test, vi } from "vitest";
 
 import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
+import { assertTestEnvironment } from "../../local/environment.mjs";
 
 import { ensureIntegrationAdminAnchor } from "../admin-anchor";
 
 vi.mock("server-only", () => ({}));
 
 import { updateAdminUserRole } from "../../../src/lib/admin/user-role";
+import * as userRolesRepository from "../../../src/lib/db/repositories/user-roles.repository";
 
 const supabaseUrl = process.env.SUPABASE_URL ?? "";
 const publishableKey = process.env.SUPABASE_PUBLISHABLE_KEY ?? "";
@@ -18,14 +19,8 @@ if (!supabaseUrl || !publishableKey) {
 }
 
 function localServiceRoleKey(): string {
-  if (process.env.LOCAL_SUPABASE_SERVICE_ROLE_KEY) {
-    return process.env.LOCAL_SUPABASE_SERVICE_ROLE_KEY;
-  }
-  const status = execFileSync("supabase", ["status", "-o", "json"], {
-    encoding: "utf8",
-  });
-  return z.object({ SERVICE_ROLE_KEY: z.string().min(1) }).parse(JSON.parse(status))
-    .SERVICE_ROLE_KEY;
+  assertTestEnvironment();
+  return process.env.LOCAL_SUPABASE_SERVICE_ROLE_KEY!;
 }
 
 function client(key = publishableKey) {
@@ -39,7 +34,7 @@ function client(key = publishableKey) {
   });
 }
 
-test("admin role changes are idempotent, authorized, and preserve the final active admin", async () => {
+test("admin TypeORM role changes are idempotent, authorized, and preserve the final active admin", async () => {
   const service = client(localServiceRoleKey());
   await ensureIntegrationAdminAnchor(service);
   const createdIds: string[] = [];
@@ -85,27 +80,26 @@ test("admin role changes are idempotent, authorized, and preserve the final acti
 
     const selfDelete = await adminSession.from("user_roles").delete()
       .eq("user_id", admin.id).eq("role_code", "admin").select("role_code");
-    expect(selfDelete.error).toBeNull();
-    expect(selfDelete.data).toEqual([]);
+    expect(selfDelete.error?.code).toBe("42501");
     expect(await hasRole(admin.id, "admin")).toBe(1);
     const selfInsert = await adminSession.from("user_roles").insert({ user_id: admin.id, role_code: "admin" });
     expect(selfInsert.error?.code).toBe("42501");
     const ownCoach = await adminSession.from("user_roles").insert({ user_id: admin.id, role_code: "coach" });
-    expect(ownCoach.error).toBeNull();
-    expect(await hasRole(admin.id, "coach")).toBe(1);
+    expect(ownCoach.error?.code).toBe("42501");
+    expect(await hasRole(admin.id, "coach")).toBe(0);
     const ownCoachDelete = await adminSession.from("user_roles").delete().eq("user_id", admin.id).eq("role_code", "coach");
-    expect(ownCoachDelete.error).toBeNull();
+    expect(ownCoachDelete.error?.code).toBe("42501");
     expect(await hasRole(admin.id, "coach")).toBe(0);
     const otherAdmin = await adminSession.from("user_roles").insert({ user_id: member.id, role_code: "admin" });
-    expect(otherAdmin.error).toBeNull();
-    expect(await hasRole(member.id, "admin")).toBe(1);
-    const otherAdminDelete = await adminSession.from("user_roles").delete().eq("user_id", member.id).eq("role_code", "admin");
-    expect(otherAdminDelete.error).toBeNull();
+    expect(otherAdmin.error?.code).toBe("42501");
     expect(await hasRole(member.id, "admin")).toBe(0);
-
-
-
-
+    const otherAdminDelete = await adminSession.from("user_roles").delete().eq("user_id", member.id).eq("role_code", "admin");
+    expect(otherAdminDelete.error?.code).toBe("42501");
+    expect(await hasRole(member.id, "admin")).toBe(0);
+    // Auth still uses Supabase; role persistence must never use PostgREST.
+    vi.spyOn(adminSession, "from").mockImplementation(() => {
+      throw new Error("Unexpected PostgREST role persistence.");
+    });
     for (const operation of ["assign", "revoke"] as const) {
       expect(await updateAdminUserRole({ userId: admin.id.toUpperCase(), role: "admin", operation }, adminSession))
         .toEqual({ ok: false, reason: "self-management" });
@@ -123,6 +117,10 @@ test("admin role changes are idempotent, authorized, and preserve the final acti
     expect(await updateAdminUserRole({ userId: member.id, role: "coach", operation: "assign" }, adminSession))
       .toEqual({ ok: true, user: { id: member.id, roles: ["coach"] } });
     expect(await hasRole(member.id, "coach")).toBe(1);
+    const attributed = await service.from("user_roles").select("assigned_by").eq("user_id", member.id).eq("role_code", "coach").single();
+    expect(attributed.error).toBeNull();
+    expect(attributed.data?.assigned_by).toBe(admin.id);
+
 
     expect(await updateAdminUserRole({ userId: member.id, role: "coach", operation: "assign" }, adminSession))
       .toEqual({ ok: true, user: { id: member.id, roles: ["coach"] } });
@@ -131,6 +129,15 @@ test("admin role changes are idempotent, authorized, and preserve the final acti
     expect(await updateAdminUserRole({ userId: member.id, role: "coach", operation: "revoke" }, adminSession))
       .toEqual({ ok: true, user: { id: member.id, roles: [] } });
     expect(await hasRole(member.id, "coach")).toBe(0);
+
+    const reload = vi.spyOn(userRolesRepository, "listUserRoleCodes")
+      .mockResolvedValueOnce(["unsupported-role"]);
+    try {
+      await expect(updateAdminUserRole({ userId: member.id, role: "coach", operation: "revoke" }, adminSession))
+        .rejects.toThrow("Unable to update user roles.");
+    } finally {
+      reload.mockRestore();
+    }
 
     expect(await updateAdminUserRole({ userId: member.id, role: "coach", operation: "revoke" }, adminSession))
       .toEqual({ ok: true, user: { id: member.id, roles: [] } });
@@ -179,12 +186,11 @@ test("admin role changes are idempotent, authorized, and preserve the final acti
 
     expect(await updateAdminUserRole({ userId: admin.id, role: "admin", operation: "revoke" }, adminSession))
       .toEqual({ ok: false, reason: "self-management" });
-    // Trusted writes still exercise the independent database invariant.
-    const finalAdmin = await service.from("user_roles").delete().eq("user_id", admin.id).eq("role_code", "admin");
-    expect(finalAdmin.error?.code).toBe("23514");
-    expect(finalAdmin.error?.message).toBe("At least one active administrator must remain.");
-    expect(await hasRole(admin.id, "admin")).toBe(1);
+    // Final-admin policy belongs to TypeScript; native PostgreSQL has no policy trigger.
+    // Application concurrency coverage is shared with the status-change suite.
+
   } finally {
+    vi.restoreAllMocks();
     for (const id of temporarilySuspendedIds) {
       const result = await service.from("users").update({ status: "active" }).eq("id", id);
       assert.strictEqual(result.error, null);

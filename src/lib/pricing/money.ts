@@ -12,17 +12,9 @@ export const majorAmountSchema = z.string().trim()
     return Number(whole) * 100 + Number(fraction.padEnd(2, "0"));
   }).pipe(minorAmountSchema);
 
-export function majorToMinor(amount: string): number {
-  return majorAmountSchema.parse(amount);
-}
-
 export function minorToMajor(amount: number): string {
   minorAmountSchema.parse(amount);
   return `${Math.floor(amount / 100)}.${String(amount % 100).padStart(2, "0")}`;
-}
-
-export function formatHourlyPrice(amount: number, currency: LocationCurrency): string {
-  return formatMoney(amount, currency);
 }
 
 export function formatMoney(amount: number, currency: LocationCurrency): string {

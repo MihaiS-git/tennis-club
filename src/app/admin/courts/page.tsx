@@ -13,7 +13,7 @@ export const instant = false;
 
 export default async function AdminCourtsPage({ searchParams }: {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
-} = {}) {
+}) {
   const params = await searchParams;
   const options = courtInventorySchema.parse(params ?? {});
   const [courts, locations, periods] = await Promise.all([listAdminCourts(), listAdminLocations(), listAdminCourtCoverage()]);
@@ -35,6 +35,7 @@ export default async function AdminCourtsPage({ searchParams }: {
   }
   return <>
     <AdminPageHeader title="Courts" description="Manage the club’s court inventory by location, including inactive courts." />
+    {selected && <Link href={`/admin/locations/${selected.id}`} className="mb-4 inline-block text-sm font-medium text-primary underline focus-visible:outline-2 focus-visible:outline-focus">Back to {selected.name} setup</Link>}
     <CourtsToolbar locations={locationChoices} selectedId={selected?.id} />
     {locations.length === 0 && <div className="rounded-card border border-border bg-surface px-6 py-8 text-muted-foreground">
       <Link href="/admin/locations" className="font-semibold text-primary underline">Create a location</Link> before adding courts.

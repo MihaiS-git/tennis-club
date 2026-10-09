@@ -7,7 +7,7 @@ import { startOnlineCheckout } from "@/lib/payments/checkout";
 import { paymentHoldDurationSeconds } from "@/lib/payments/domain";
 import { logger } from "@/lib/logger";
 
-// One orchestration around the existing atomic writer. Provider SDKs stay behind payments.
+// Provider initialization starts only after the TypeORM creation transaction commits.
 export async function commitCustomerCheckout(input: unknown) {
   const intent = customerBookingInputSchema.parse(input);
   if (intent.paymentMethod === "online" && !supportsOnlineCheckout(await activeOnlinePaymentProvider()))

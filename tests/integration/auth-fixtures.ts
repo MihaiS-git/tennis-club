@@ -1,17 +1,11 @@
-import { execFileSync } from "node:child_process";
 import { assert } from "vitest";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { z } from "zod";
+import { assertTestEnvironment } from "../local/environment.mjs";
 
 export function localFixtureClient() {
-  const url = process.env.SUPABASE_URL ?? "";
-  assert.ok(["127.0.0.1", "localhost", "[::1]"].includes(new URL(url).hostname),
-    "Auth fixture cleanup requires local Supabase.");
-  const key = process.env.LOCAL_SUPABASE_SERVICE_ROLE_KEY ?? z.object({
-    SERVICE_ROLE_KEY: z.string().min(1),
-  }).parse(JSON.parse(execFileSync("supabase", ["status", "-o", "json"], {
-    encoding: "utf8",
-  }))).SERVICE_ROLE_KEY;
+  assertTestEnvironment();
+  const url = process.env.SUPABASE_URL!;
+  const key = process.env.LOCAL_SUPABASE_SERVICE_ROLE_KEY!;
   return createClient(url, key, {
     auth: { autoRefreshToken: false, detectSessionInUrl: false, persistSession: false },
   });

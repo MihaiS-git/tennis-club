@@ -14,15 +14,15 @@ row per rule set, with compact weekday labels and Edit/Remove actions.
 
 `pricing_rule_sets` gives each definition a stable identity and a row lock for
 concurrent edits. `location_pricing_rules` contains one atomic row per selected
-court × weekday, all with the same `rule_set_id`. `save_pricing_rule_set` creates or
+court × weekday, all with the same `rule_set_id`. TypeORM creates or
 replaces the complete cartesian product in one transaction. An edit locks the set
 before deleting old rows and inserting replacements. On any conflict the transaction
-rolls back, including the delete. `remove_pricing_rule_set` deletes the parent and
-cascades to every atomic row. These invoker RPCs retain authenticated-user RLS;
+rolls back, including the delete. TypeORM removal deletes the parent and
+cascades to every atomic row. Browser roles have no application table grants;
 Next.js performs active-admin authorization, validates explicit fields, checks the
 selected courts and every weekday against opening hours, and decides the intended
-applicability. The court/location/environment composite foreign key prevents wrong
-court state or location even under concurrent court changes. The GiST exclusion
+applicability. TypeScript validates court state/location under configuration and location locks;
+ordinary court and composite rule-set foreign keys retain structural integrity. The GiST exclusion
 constraint prevents overlapping applicability for the same court, state, weekday,
 inclusive date range and half-open time range. Different courts may share schedules.
 
@@ -40,8 +40,8 @@ existing pricing that can still apply on or after the location's current local d
 Historical rules whose inclusive date range can no longer reach their weekday do
 not block a change. A conflict rejects the entire opening-hours mutation and asks
 the admin to update or remove pricing first. Both mutation paths serialize on the
-location row; database triggers protect direct writes and check the final schedule
-after a grouped replacement. The current application has no opening-hours exceptions.
+configuration advisory fence and location row; TypeScript checks the final schedule
+before a grouped replacement. The current application has no opening-hours exceptions.
 
 `resolvePricingRule()` consumes supplied atomic rows and a court ID, derived court
 state, calendar date and local minute, returning one matching row or `null`. Monday
@@ -50,20 +50,7 @@ resolver does not infer coverage state or calculate booking totals. Public `/cou
 is unchanged and retains its temporary “From €10/hour”. Future booking integration
 needs its own authorized pricing read and booking/payment policies.
 
-Pricing remains in `20260929130000_location_pricing_rules.sql`, after the
-consolidated Auth/RBAC, profiles/avatars, and club-resources migrations. The rewritten
-development migration history requires an explicitly approved local database reset
-before database or integration checks; the reset deletes local data.
-
-Focused checks:
-
-```bash
-psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres' -v ON_ERROR_STOP=1 -f supabase/tests/database/location_pricing_rules.sql
-psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres' -v ON_ERROR_STOP=1 -f supabase/tests/database/opening_hours_pricing_integrity.sql
-npx vitest run tests/unit/pricing.test.ts tests/unit/admin/pricing.test.ts tests/unit/admin/pricing-actions.test.ts tests/components/admin-pricing.test.tsx tests/components/admin-dashboard.test.tsx
-node --env-file=.env.local ./node_modules/vitest/vitest.mjs run tests/integration/admin/pricing.integration.test.ts --no-file-parallelism
-npm run typecheck
-npx eslint src/lib/pricing src/lib/admin/pricing.ts src/app/admin/pricing src/app/admin/page.tsx src/components/admin-navigation.tsx tests/unit/pricing.test.ts tests/unit/admin/pricing.test.ts tests/unit/admin/pricing-actions.test.ts tests/components/admin-pricing.test.tsx tests/components/admin-dashboard.test.tsx tests/integration/admin/pricing.integration.test.ts
-```
-
-Run database and integration checks after the approved rebuild.
+Pricing entities and native overlap integrity are installed by the TypeORM history.
+See [fresh setup](../README.md#application-migrations-and-fresh-local-setup) and
+[focused disposable validation](testing.md#typeorm-cutover-validation). Existing populated
+databases require a separate authorized cutover; no reset is part of validation.

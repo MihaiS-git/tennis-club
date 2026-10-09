@@ -52,7 +52,7 @@ export type OpeningHoursMutationResult =
   | { ok: false; reason: "pricing-conflict"; message: string }
   | { ok: false; reason: "not-found" | "archived" };
 
-export function weeklySchedule(locationId: string, intervals: readonly OpeningInterval[]) {
+function weeklySchedule(locationId: string, intervals: readonly OpeningInterval[]) {
   return weekdays.map((label, weekday) => ({
     label, weekday,
     intervals: intervals.filter((interval) => interval.location_id === locationId && interval.weekday === weekday)

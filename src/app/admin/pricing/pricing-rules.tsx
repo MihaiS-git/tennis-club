@@ -10,7 +10,7 @@ import { toast } from "sonner";
 import type { AdminLocation } from "@/lib/admin/locations";
 import { weekdays, minuteToTime, type OpeningInterval } from "@/lib/admin/opening-hours-validation";
 import { courtStateLabels, type PricingRuleSet, type PricingMutationResult } from "@/lib/pricing/validation";
-import { formatHourlyPrice } from "@/lib/pricing/money";
+import { formatMoney } from "@/lib/pricing/money";
 import { formatWeekdays } from "@/lib/pricing/resolution";
 import { PricingRuleForm, type PricingCourt } from "./pricing-rule-form";
 import { savePricingRuleAction, removePricingRuleAction } from "./actions";
@@ -84,7 +84,7 @@ export function PricingRules({ location, locations = [], courts, rules, openingH
           <dt>Days</dt><dd>{formatWeekdays(item.weekdays)}</dd>
           <dt>Time</dt><dd>{minuteToTime(item.starts_at_minute)}–{minuteToTime(item.ends_at_minute)}</dd>
           <dt>Validity</dt><dd>{validity(item)}</dd>
-          <dt>Price/hour</dt><dd>{formatHourlyPrice(item.price_per_hour_minor, location.currency)}</dd>
+          <dt>Price/hour</dt><dd>{formatMoney(item.price_per_hour_minor, location.currency)}</dd>
         </dl>
       </article>)}</div><div className="hidden overflow-x-auto rounded-card border border-border bg-surface lg:block">
         <table className="w-full min-w-[680px] text-left text-sm">
@@ -101,7 +101,7 @@ export function PricingRules({ location, locations = [], courts, rules, openingH
             <td className="px-3 py-3">{formatWeekdays(item.weekdays)}</td>
             <td className="whitespace-nowrap px-3 py-3 tabular-nums">{minuteToTime(item.starts_at_minute)}–{minuteToTime(item.ends_at_minute)}</td>
             <td className="px-3 py-3">{validity(item)}</td>
-            <td className="whitespace-nowrap px-3 py-3 font-semibold">{formatHourlyPrice(item.price_per_hour_minor, location.currency)}</td>
+            <td className="whitespace-nowrap px-3 py-3 font-semibold">{formatMoney(item.price_per_hour_minor, location.currency)}</td>
           </tr>)}</tbody>
         </table>
         <p className="sr-only">Times include their start and exclude their end. {weekdays[0]} starts the week.</p>

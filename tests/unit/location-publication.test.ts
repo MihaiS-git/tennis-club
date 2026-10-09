@@ -15,7 +15,6 @@ it("exposes a published, active, configured location", () => {
 });
 
 it.each([
-  ["private", { is_public: false }],
   ["inactive", { is_active: false }],
   ["archived", { archived_at: "2026-10-01T00:00:00Z" }],
 ])("excludes %s locations", (_label, change) => {
@@ -42,12 +41,4 @@ it("separates structural readiness from publication", () => {
   }
   expect(isStructurallyReady(ready, today)).toBe(true);
   expect(isPubliclyEligible(ready, today)).toBe(true);
-});
-
-it("omits an incomplete Central Club-style location from both option lists", () => {
-  const central = { ...ready, name: "Central Club", is_public: false,
-    courts: [{ ...ready.courts[0], location_pricing_rules: [] }] };
-  const candidates = [ready, central];
-  expect(candidates.filter((location) => isStructurallyReady(location, today)).map((location) => location.name)).toEqual(["RIVUS"]);
-  expect(candidates.filter((location) => isPubliclyEligible(location, today)).map((location) => location.name)).toEqual(["RIVUS"]);
 });

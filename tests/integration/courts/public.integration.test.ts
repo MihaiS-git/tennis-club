@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { expect, test } from "vitest";
 
+import { getPublicCourtDay } from "@/lib/courts/public-calendar";
+import { getDataSource } from "@/lib/db/data-source";
 import { listPublicLocationsWithCourts } from "../../../src/lib/courts/public";
 import { localFixtureClient } from "../auth-fixtures";
 
@@ -71,7 +73,36 @@ test("public discovery includes only published, configured locations and orders 
       expect(court).not.toHaveProperty("balloon_installed");
     }
     expect(await listPublicLocationsWithCourts(anonymous)).toEqual(read);
+    const manager = (await getDataSource()).manager;
+    const selected = locations[0], date = "2099-10-12";
+    // Test privileged SQL visibility even when passed a stale discovered parent.
+    const intervalIds = [randomUUID(), randomUUID(), randomUUID()];
+    await manager.query(`INSERT INTO public.court_reservations(id,court_id,booking_date,starts_at_minute,ends_at_minute,status,hold_expires_at)
+      VALUES($1,$4,$5,480,540,'active',NULL),($2,$4,$5,540,600,'held',clock_timestamp()+interval '1 hour'),
+      ($3,$4,$5,600,660,'released',NULL)`, [...intervalIds, courtIds[0],date]);
+    const expiryId = randomUUID(); intervalIds.push(expiryId);
+    await manager.query(`INSERT INTO public.court_reservations(id,court_id,booking_date,starts_at_minute,ends_at_minute,status,hold_expires_at)
+      VALUES($1,$2,$3,660,720,'held',clock_timestamp()+interval '1 hour')`, [expiryId,courtIds[0],date]);
+    await manager.query("UPDATE public.court_reservations SET hold_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", [expiryId]);
+    const { listPublicDayOccupancy } = await import("@/lib/db/repositories/reservations.repository");
+    expect(await listPublicDayOccupancy(manager, selected.id, [courtIds[0]], date)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ starts_at_minute: 480 }), expect.objectContaining({ starts_at_minute: 540 }),
+    ]));
+    expect(await manager.query("SELECT status FROM public.court_reservations WHERE id=$1", [expiryId])).toEqual([{ status: "held" }]);
+    for (const mutation of ["is_public=false", "is_active=false", "is_active=false,archived_at=clock_timestamp()"] ) {
+      await manager.query(`UPDATE public.locations SET ${mutation} WHERE id=$1`, [selected.id]);
+      expect(await listPublicDayOccupancy(manager, selected.id, [courtIds[0]], date)).toEqual([]);
+      const day = await getPublicCourtDay(selected, date, date, new Date(`${date}T00:00:00Z`), anonymous);
+      expect(day.times).toEqual([]);
+      expect((await listPublicLocationsWithCourts(anonymous)).map((row) => row.id)).not.toContain(selected.id);
+      await manager.query("UPDATE public.locations SET is_active=true,is_public=true,archived_at=NULL WHERE id=$1", [selected.id]);
+    }
+    await manager.query("UPDATE public.courts SET is_active=false WHERE id=$1", [courtIds[0]]);
+    expect(await listPublicDayOccupancy(manager, selected.id, [courtIds[0]], date)).toEqual([]);
+    await manager.query("DELETE FROM public.court_reservations WHERE id=ANY($1::uuid[])", [intervalIds]);
+
   } finally {
+    expect((await service.from("court_reservations").delete().in("court_id", courtIds)).error).toBeNull();
     expect((await service.from("location_pricing_rules").delete().in("location_id", ids)).error).toBeNull();
     expect((await service.from("pricing_rule_sets").delete().in("location_id", ids)).error).toBeNull();
     expect((await service.from("location_opening_hours").delete().in("location_id", ids)).error).toBeNull();

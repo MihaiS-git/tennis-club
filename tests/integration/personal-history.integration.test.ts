@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test } from "vitest";
-import { listOwnCourtHistory } from "@/lib/bookings/history-service";
+import { listOwnCourtActivity } from "@/lib/bookings/activity-service";
+import { parseActivityQuery } from "@/lib/bookings/activity-query";
+async function listOwnCourtHistory(page: number, client: Parameters<typeof listOwnCourtActivity>[2], now: Date) {
+  return listOwnCourtActivity("history", { ...parseActivityQuery({}, "history"), page }, client, now);
+}
 import { cleanupAuthFixtures, localFixtureClient } from "./auth-fixtures";
 
 test("mixed history is owner scoped, time zone aware, globally ordered and paged", async () => {
@@ -70,6 +74,14 @@ test("mixed history is owner scoped, time zone aware, globally ordered and paged
       cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON" });
     const first = await listOwnCourtHistory(1, admin.client, now);
     const second = await listOwnCourtHistory(2, admin.client, now);
+    const filtered = await listOwnCourtActivity("history", parseActivityQuery({ type: "reservation" }, "history"), admin.client, now);
+    expect(filtered.rows.every((row) => row.kind === "reservation")).toBe(true);
+    expect(filtered.locations).toEqual(first.locations);
+    expect(filtered.courts).toEqual(first.courts);
+    // Privileged personal history must preserve archived-resource visibility.
+    assert.strictEqual((await service.from("locations").update({ is_active: false, archived_at: now.toISOString() }).eq("id", locationId)).error, null);
+    expect((await listOwnCourtHistory(1, admin.client, now)).rows).toEqual(first.rows);
+
     expect(first.rows).toHaveLength(20); expect(first.hasNext).toBe(true);
     expect(first.rows[0]).toMatchObject({ kind: "booking", id: adminOwnBooking });
     expect([...first.rows.slice(1), ...second.rows].map((row) => ({ kind: row.kind, id: row.id }))).toEqual(expected);
@@ -78,10 +90,29 @@ test("mixed history is owner scoped, time zone aware, globally ordered and paged
     expect((await listOwnCourtHistory(1, coach.client, now)).rows.map((row) => row.id)).toEqual([coachReservation]);
     expect((await listOwnCourtHistory(1, other.client, now)).rows.map((row) => row.id)).toEqual([otherBooking]);
     expect((await member.client.from("bookings").select("id")).error?.code).toBe("42501");
-    await expect(listOwnCourtHistory(0, member.client, now)).rejects.toThrow("Choose a valid history page.");
+    await expect(listOwnCourtHistory(0, member.client, now)).rejects.toThrow("Unable to load your court activity. Try again.");
+    // Continue beyond PostgREST's former 1000-row cap with bounded TypeORM batches.
+    const batchIds = Array.from({ length: 1001 }, () => randomUUID());
+    reservations.push(...batchIds);
+    assert.strictEqual((await service.from("court_reservations").insert(batchIds.map((id, index) => ({
+      id, court_id: courts[0], booking_date: new Date(Date.UTC(2000, 0, index + 1)).toISOString().slice(0, 10),
+      starts_at_minute: 600, ends_at_minute: 660, created_by_user_id: admin.id, reason: "Batch continuation",
+    })))).error, null);
+    const tail = await listOwnCourtActivity("history", parseActivityQuery({ type: "reservation", to: "2003-01-01", page: "51" }, "history"), admin.client, now);
+    expect(tail.rows).toHaveLength(1); expect(tail.hasNext).toBe(false);
+    const beforeTail = await listOwnCourtActivity("history", parseActivityQuery({ type: "reservation", to: "2003-01-01", page: "50" }, "history"), admin.client, now);
+    expect(beforeTail.rows).toHaveLength(20); expect(beforeTail.hasNext).toBe(true);
+    // Lossless cancelled-history tokens remain PostgreSQL strings.
+    const precise = "2026-10-01T12:00:00.123456+00:00";
+    assert.strictEqual((await service.from("bookings").update({ updated_at: precise }).eq("id", memberCancelled)).error, null);
+    // Database timestamp triggers may replace explicit tokens; compare against DB.
+    const stored = await service.from("bookings").select("updated_at").eq("id", memberCancelled).single();
+    expect((await listOwnCourtHistory(1, member.client, now)).rows.find((row) => row.id === memberCancelled)?.history_at).toBe(stored.data!.updated_at);
+
   } finally {
     if (bookings.length) assert.strictEqual((await service.from("bookings").delete().in("id", bookings)).error, null);
-    if (reservations.length) assert.strictEqual((await service.from("court_reservations").delete().in("id", reservations)).error, null);
+    for (let offset = 0; offset < reservations.length; offset += 100)
+      assert.strictEqual((await service.from("court_reservations").delete().in("id", reservations.slice(offset, offset + 100))).error, null);
     if (courts.length) assert.strictEqual((await service.from("courts").delete().in("id", courts)).error, null);
     assert.strictEqual((await service.from("locations").delete().eq("id", locationId)).error, null);
     await cleanupAuthFixtures(service, users);

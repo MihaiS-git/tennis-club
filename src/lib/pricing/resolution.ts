@@ -14,16 +14,6 @@ export function pricingHasFutureOccurrence(rule: Pick<PricingRule, "weekday" | "
   return !rule.ends_on || rule.ends_on >= next.toISOString().slice(0, 10);
 }
 
-export function orderPricingRules(rules: readonly PricingRule[]): PricingRule[] {
-  return [...rules].sort((a, b) => a.location_id.localeCompare(b.location_id)
-    || a.court_id.localeCompare(b.court_id)
-    || courtStates.indexOf(a.court_state) - courtStates.indexOf(b.court_state)
-    || a.weekday - b.weekday || a.starts_at_minute - b.starts_at_minute
-    || (a.starts_on ?? "").localeCompare(b.starts_on ?? "")
-    || (a.ends_on ?? "9999-12-31").localeCompare(b.ends_on ?? "9999-12-31")
-    || a.ends_at_minute - b.ends_at_minute || a.id.localeCompare(b.id));
-}
-
 const selectorSchema = z.strictObject({
   court_id: z.uuid(), court_state: z.enum(courtStates),
   date: z.iso.date(), minute: z.number().int().min(0).max(1439),

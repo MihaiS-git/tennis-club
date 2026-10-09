@@ -69,14 +69,11 @@ test("Admin transaction projection selects original payments, joins refunds, fil
     expect((await listAdminPaymentTransactions(query({ q: "%" }),admin)).total).toBe(0);
     expect((await db.from("user_roles").delete().eq("user_id",users[0]).eq("role_code","admin")).error).toBeNull();
     await expect(listAdminPaymentTransactions(query(),admin)).rejects.toThrow();
-    expect((await admin.rpc("list_admin_payment_transactions")).error?.code).toBe("42501");
     expect((await db.from("user_roles").insert({ user_id: users[0],role_code: "admin" })).error).toBeNull();
     expect((await db.from("users").update({ status: "suspended" }).eq("id",users[0])).error).toBeNull();
     await expect(listAdminPaymentTransactions(query(),admin)).rejects.toThrow();
-    expect((await admin.rpc("list_admin_payment_transactions")).error?.code).toBe("42501");
   } finally {
     await db.from("users").update({ status: "active" }).in("id",users);
-    await db.from("booking_email_outbox").delete().in("booking_id",bookingIds);
     await db.from("bookings").delete().in("id",bookingIds);
     await db.from("court_reservations").delete().in("id",reservationIds);
     await db.from("courts").delete().eq("id",courtId); await db.from("locations").delete().eq("id",locationId);

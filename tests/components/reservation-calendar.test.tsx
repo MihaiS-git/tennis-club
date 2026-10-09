@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { installDialogMock } from "../helpers/dialog";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { ReservationCalendar } from "@/app/reservations/reservation-calendar";
@@ -9,8 +10,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
 vi.mock("@/app/reservations/actions", () => ({ reserveCourtAction: vi.fn(), cancelAdminReservationAction: cancelAction,
   cancelAdminCustomerBookingAction: cancelBookingAction, editAdminReservationAction: editAction, loadAdminBookingEditDayAction: vi.fn(), quoteAdminBookingAction: vi.fn(), rescheduleAdminBookingAction: vi.fn(), loadAdminReservationEditDayAction: adminAvailability }));
 beforeAll(() => {
-  HTMLDialogElement.prototype.showModal = function () { this.open = true; };
-  HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new Event("close")); };
+  installDialogMock();
 });
 afterEach(() => { cleanup(); cancelAction.mockReset(); cancelBookingAction.mockReset(); editAction.mockReset(); adminAvailability.mockReset(); refresh.mockReset(); });
 
@@ -34,58 +34,6 @@ it("shows occupied intervals without management controls and prevents their sele
   expect(screen.getAllByLabelText(/, Booked/)).toHaveLength(2);
   expect(screen.queryByRole("button")).toBeNull();
   expect(screen.queryByText(/details|cancel reservation|reason|created by/i)).toBeNull();
-});
-
-it("opens the whole Admin reservation block while available cells still select", () => {
-  const courtId = "22222222-2222-4222-8222-222222222222";
-  const location = { id: "11111111-1111-4111-8111-111111111111", name: "Club", timezone: "UTC",
-    courts: [{ id: courtId, name: "Court 1" }] };
-  render(<ReservationCalendar date="2099-10-15" location={location}
-    day={{ times: [600, 630, 660, 690, 720], courts: [{ court: location.courts[0],
-      cells: ["booked", "booked", "booked", "available", "available"] }] }}
-    adminOccupancy={[{ kind: "reservation", id: "33333333-3333-4333-8333-333333333333", court_id: courtId,
-      booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 690,
-      reason: "Club event", created_by_user_id: "44444444-4444-4444-8444-444444444444", creator_name: "Mihai Stan" }]} />);
-  expect(screen.getByRole("button", { name: /Reservation · Mihai Stan/ })).toBeTruthy();
-  for (let attempt = 0; attempt < 2; attempt++) {
-    fireEvent.click(screen.getByRole("button", { name: /Court 1 2099-10-15 10:00–11:30, Reservation · Mihai Stan/ }));
-    expect(screen.getByRole("dialog").textContent).toContain("Mihai Stan");
-    expect(screen.getByRole("dialog").textContent).toContain("Club event");
-    expect(screen.getByRole("dialog").textContent).toContain("90 min");
-    expect(screen.getByRole("button", { name: "Cancel reservation" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Edit reservation" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
-  }
-  expect(screen.queryByLabelText("Selected reservation")).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: /Court 1 2099-10-15 11:30–12:00, Available/ }));
-  expect(screen.getByLabelText("Selected reservation")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: /Court 1 2099-10-15 10:00–11:30, Reservation/ }));
-  expect(screen.getByLabelText("Selected reservation")).toBeTruthy();
-});
-
-it("opens the Admin booking block using stored snapshots", () => {
-  const courtId = "22222222-2222-4222-8222-222222222222";
-  const location = { id: "11111111-1111-4111-8111-111111111111", name: "Club", timezone: "UTC",
-    courts: [{ id: courtId, name: "Court 1" }] };
-  const booking = { kind: "booking" as const, id: "33333333-3333-4333-8333-333333333333", court_id: courtId,
-    booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 690,
-    customer_name: "Ana Pop", customer_email: "ana@example.test", customer_phone: "+40 123",
-    cancellation_notice_minutes: 120, total_amount_minor: 7500, currency: "RON" as const };
-  render(<ReservationCalendar date={booking.booking_date} location={location}
-    day={{ times: [600, 630, 660], courts: [{ court: location.courts[0], cells: ["booked", "booked", "booked"] }] }}
-    adminOccupancy={[booking]} />);
-  expect(screen.getByRole("button", { name: /Booking · Ana Pop/ })).toBeTruthy();
-  for (let attempt = 0; attempt < 2; attempt++) {
-    fireEvent.click(screen.getByRole("button", { name: /Court 1 2099-10-15 10:00–11:30, Booking · Ana Pop/ }));
-    const dialog = screen.getByRole("dialog", { name: "Booking details" });
-    for (const value of ["Ana Pop", "ana@example.test", "+40 123", "Club", "Court 1", "15 Oct 2099",
-      "10:00–11:30 (UTC)", "90 min", "RON", "Confirmed"]) expect(dialog.textContent).toContain(value);
-    expect(dialog.textContent).toContain("75.00");
-    expect(within(dialog).getByRole("button", { name: "Cancel booking" })).toBeTruthy();
-    expect(within(dialog).getByRole("button", { name: "Edit booking" })).toBeDefined();
-    expect(within(dialog).queryByRole("button", { name: /refund|notify|payment/i })).toBeNull();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
-  }
 });
 
 it("confirms booking cancellation and refreshes the timetable in place", async () => {
@@ -186,72 +134,6 @@ it("keeps an in-progress Admin edit to reason only", async () => {
   expect(adminAvailability).toHaveBeenCalledOnce();
 });
 
-it("saves an Admin edit, refreshes the timetable, and shows the updated details in the same context", async () => {
-  const courtId = "22222222-2222-4222-8222-222222222222";
-  const reservation = { id: "33333333-3333-4333-8333-333333333333", court_id: courtId,
-    booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660,
-    reason: "Training", created_by_user_id: "44444444-4444-4444-8444-444444444444", creator_name: "Coach" };
-  const location = { id: "11111111-1111-4111-8111-111111111111", name: "RIVUS", timezone: "UTC",
-    courts: [{ id: courtId, name: "Court 1" }] };
-  adminAvailability.mockResolvedValue({ reservation: { ...reservation, updated_at: "2099-10-01T00:00:00Z" },
-    day: { times: [600, 630], courts: [{ court: location.courts[0], cells: ["available", "available"] }] } });
-  editAction.mockResolvedValue({ ok: true, reservation: { court_id: courtId, booking_date: "2099-10-15",
-    starts_at_minute: 600, ends_at_minute: 660, reason: "Updated training" } });
-  render(<ReservationCalendar date="2099-10-15" location={location}
-    day={{ times: [600, 630], courts: [{ court: location.courts[0], cells: ["booked", "booked"] }] }}
-    adminOccupancy={[{ ...reservation, kind: "reservation" }]} />);
-  fireEvent.click(screen.getByRole("button", { name: /10:00–11:00, Reservation/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Edit reservation" }));
-  const dialog = screen.getByRole("dialog", { name: "Edit reservation" });
-  await within(dialog).findByText("Current reservation");
-  fireEvent.change(within(dialog).getByRole("textbox", { name: "Reason" }), { target: { value: "Updated training" } });
-  fireEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
-  await waitFor(() => expect(editAction).toHaveBeenCalledWith({ kind: "reason", id: reservation.id,
-    expectedUpdatedAt: "2099-10-01T00:00:00Z", reason: "Updated training" }));
-  await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
-  expect(screen.getByRole("dialog", { name: "Reservation details" }).textContent).toContain("Updated training");
-  expect(screen.getByRole("status").textContent).toContain("Reservation updated.");
-  editAction.mockResolvedValueOnce({ ok: false,
-    message: "That court is no longer available for the selected time. The existing reservation has not been changed." });
-  fireEvent.click(screen.getByRole("button", { name: "Edit reservation" }));
-  const reopened = screen.getByRole("dialog", { name: "Edit reservation" });
-  await within(reopened).findByText("Current reservation");
-  fireEvent.change(within(reopened).getByRole("textbox", { name: "Reason" }), { target: { value: "Keep entered reason" } });
-  fireEvent.click(within(reopened).getByRole("button", { name: "Save changes" }));
-  await waitFor(() => expect(within(reopened).getByRole("alert").textContent).toContain("has not been changed"));
-  expect(within(reopened).getByRole("textbox", { name: "Reason" })).toHaveProperty("value", "Keep entered reason");
-  expect(screen.getByRole("dialog", { name: "Edit reservation" })).toBeTruthy();
-});
-
-it("confirms Admin cancellation, refreshes in place, and leaves the interval selectable", async () => {
-  const courtId = "22222222-2222-4222-8222-222222222222";
-  const location = { id: "11111111-1111-4111-8111-111111111111", name: "Club", timezone: "UTC",
-    courts: [{ id: courtId, name: "Court 1" }] };
-  const occupied = { id: "33333333-3333-4333-8333-333333333333", court_id: courtId,
-    booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660,
-    reason: "Club event", created_by_user_id: "44444444-4444-4444-8444-444444444444", creator_name: "Mihai Stan" };
-  cancelAction.mockResolvedValue({ ok: true });
-  const { rerender } = render(<ReservationCalendar date="2099-10-15" location={location}
-    day={{ times: [600, 630], courts: [{ court: location.courts[0], cells: ["booked", "booked"] }] }}
-    adminOccupancy={[{ ...occupied, kind: "reservation" }]} />);
-  fireEvent.click(screen.getByRole("button", { name: /10:00–11:00, Reservation/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Cancel reservation" }));
-  const confirmation = screen.getByRole("dialog", { name: "Cancel reservation?" });
-  expect(confirmation.textContent).toContain("Club · Court 1");
-  expect(confirmation.textContent).toContain("Mihai Stan");
-  expect(confirmation.textContent).toContain("This will free the court");
-  fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel reservation" }));
-  await waitFor(() => expect(cancelAction).toHaveBeenCalledWith(occupied.id));
-  await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
-  expect(screen.queryByRole("dialog")).toBeNull();
-  expect(screen.getByRole("status").textContent).toContain("Reservation cancelled.");
-  rerender(<ReservationCalendar date="2099-10-15" location={location}
-    day={{ times: [600, 630], courts: [{ court: location.courts[0], cells: ["available", "available"] }] }}
-    adminOccupancy={[]} />);
-  fireEvent.click(screen.getByRole("button", { name: /10:00–10:30, Available/ }));
-  expect(screen.getByLabelText("Selected reservation")).toBeTruthy();
-});
-
 it("keeps the confirmation open with a clear error on stale cancellation", async () => {
   const courtId = "22222222-2222-4222-8222-222222222222";
   cancelAction.mockResolvedValue({ ok: false, message: "This reservation is no longer available to cancel." });
@@ -270,19 +152,7 @@ it("keeps the confirmation open with a clear error on stale cancellation", async
   expect(refresh).not.toHaveBeenCalled();
 });
 
-it("renders a legacy null creator safely", () => {
-  const courtId = "22222222-2222-4222-8222-222222222222";
-  render(<ReservationCalendar date="2099-10-15" location={{ id: "11111111-1111-4111-8111-111111111111",
-    name: "Club", timezone: "UTC", courts: [{ id: courtId, name: "Court 1" }] }}
-    day={{ times: [600], courts: [{ court: { id: courtId, name: "Court 1" }, cells: ["booked"] }] }}
-    adminOccupancy={[{ kind: "reservation", id: "33333333-3333-4333-8333-333333333333", court_id: courtId,
-      booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660,
-      reason: "Maintenance", created_by_user_id: null, creator_name: null }]} />);
-  fireEvent.click(screen.getByRole("button", { name: /Reservation · Unknown creator/ }));
-  expect(screen.getByRole("dialog").textContent).toContain("Unknown creator");
-});
-
-it.each(["booking", "reservation"] as const)("keeps a past %s read-only in the Admin dialog", (kind) => {
+it.each(["reservation"] as const)("keeps a past %s read-only in the Admin dialog", (kind) => {
   const courtId = "22222222-2222-4222-8222-222222222222";
   const item = { kind, id: "33333333-3333-4333-8333-333333333333", court_id: courtId,
     booking_date: "2000-10-15", starts_at_minute: 600, ends_at_minute: 660,

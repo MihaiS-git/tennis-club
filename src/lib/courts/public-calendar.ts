@@ -1,6 +1,11 @@
 import "server-only";
 
+import { normalizeDatabaseError } from "@/lib/db/errors";
 import { z } from "zod";
+import { getDataSource } from "@/lib/db/data-source";
+import { listPublicDayOpeningHours, listPublicDayCoverage } from "@/lib/db/repositories/clubs.repository";
+import { listPublicDayPricing } from "@/lib/db/repositories/pricing.repository";
+import { listPublicDayOccupancy } from "@/lib/db/repositories/reservations.repository";
 import { createClient } from "@/lib/supabase/server";
 import { logger } from "@/lib/logger";
 import { openingIntervalSchema } from "@/lib/admin/opening-hours-validation";
@@ -17,35 +22,29 @@ const calendarReservationSchema = z.object({
 });
 
 export async function getPublicCourtDay(location: PublicLocation, date: string, today: string, now: Date,
-  suppliedClient?: Awaited<ReturnType<typeof createClient>>) {
-  const client = suppliedClient ?? await createClient();
-  const courtIds = location.courts.map((court) => court.id);
-  const [hoursResult, coverageResult, pricingResult, reservationResult] = await Promise.all([
-    client.from("location_opening_hours")
-      .select("id, location_id, weekday, opens_at_minute, closes_at_minute, created_at, updated_at")
-      .eq("location_id", location.id).eq("weekday", mondayWeekday(date)),
-    client.from("court_coverage_periods")
-      .select("id, court_id, starts_on, ends_on, created_at, updated_at")
-      .in("court_id", courtIds).lte("starts_on", date).or(`ends_on.is.null,ends_on.gte.${date}`),
-    client.from("location_pricing_rules")
-      .select("id, rule_set_id, location_id, court_id, court_state, weekday, starts_at_minute, ends_at_minute, starts_on, ends_on, price_per_hour_minor, created_at, updated_at")
-      .in("court_id", courtIds).eq("weekday", mondayWeekday(date))
-      .or(`starts_on.is.null,starts_on.lte.${date}`).or(`ends_on.is.null,ends_on.gte.${date}`),
-    client.from("court_reservations")
-      .select("court_id, booking_date, starts_at_minute, ends_at_minute")
-      .in("court_id", courtIds).eq("booking_date", date),
-  ]);
-  const hours = z.array(openingIntervalSchema).safeParse(hoursResult.data);
-  const coverage = z.array(coveragePeriodSchema).safeParse(coverageResult.data);
-  const pricing = z.array(pricingRuleSchema).safeParse(pricingResult.data);
-  const reservations = z.array(calendarReservationSchema).safeParse(reservationResult.data);
-  if (hoursResult.error || coverageResult.error || pricingResult.error || reservationResult.error
-    || !hours.success || !coverage.success || !pricing.success || !reservations.success) {
-    logger.error({ event: "courts.public_calendar_read_failed", hoursCode: hoursResult.error?.code,
-      coverageCode: coverageResult.error?.code, pricingCode: pricingResult.error?.code,
-      reservationCode: reservationResult.error?.code }, "Failed to load court day");
+  _suppliedClient?: Awaited<ReturnType<typeof createClient>>) {
+  void _suppliedClient; // Retained only for fixture compatibility.
+  try {
+    const manager = (await getDataSource()).manager;
+    const courtIds = location.courts.map((court) => court.id);
+    const [hoursResult, coverageResult, pricingResult, reservationResult] = await Promise.all([
+      listPublicDayOpeningHours(manager, location.id, mondayWeekday(date)),
+      listPublicDayCoverage(manager, location.id, courtIds, date),
+      listPublicDayPricing(manager, location.id, courtIds, mondayWeekday(date), date),
+      listPublicDayOccupancy(manager, location.id, courtIds, date),
+    ]);
+    const hours = z.array(openingIntervalSchema).safeParse(hoursResult);
+    const coverage = z.array(coveragePeriodSchema).safeParse(coverageResult);
+    const pricing = z.array(pricingRuleSchema).safeParse(pricingResult);
+    const reservations = z.array(calendarReservationSchema).safeParse(reservationResult);
+    if (!hours.success || !coverage.success || !pricing.success || !reservations.success) {
+      logger.error({ event: "courts.public_calendar_read_failed" }, "Failed to load court day");
+      throw new Error("Unable to load court availability.");
+    }
+    return buildCourtDay({ date, today, currentMinute: localMinute(location.timezone, now), courts: location.courts,
+      hours: hours.data, coverage: coverage.data, pricing: pricing.data, reservations: reservations.data });
+  } catch (error: unknown) {
+    logger.error({ event: "courts.public_calendar_read_failed", code: normalizeDatabaseError(error).sqlState }, "Database projection failed");
     throw new Error("Unable to load court availability.");
   }
-  return buildCourtDay({ date, today, currentMinute: localMinute(location.timezone, now), courts: location.courts,
-    hours: hours.data, coverage: coverage.data, pricing: pricing.data, reservations: reservations.data });
 }

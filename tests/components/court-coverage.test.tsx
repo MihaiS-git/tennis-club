@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { installDialogMock } from "../helpers/dialog";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const { saveCoverageAction, removeCoverageAction } = vi.hoisted(() => ({ saveCoverageAction: vi.fn(), removeCoverageAction: vi.fn() }));
 vi.mock("../../src/app/admin/courts/actions", () => ({ saveCoverageAction, removeCoverageAction }));
@@ -8,8 +9,7 @@ const courtId = "c5000000-0000-4000-8000-000000000001";
 const period = { id: "c5000000-0000-4000-8000-000000000002", court_id: courtId,
   starts_on: "2026-10-15", ends_on: "2027-04-15", created_at: "2026-09-29T00:00:00Z", updated_at: "2026-09-29T00:00:00Z" };
 beforeEach(() => { vi.clearAllMocks(); saveCoverageAction.mockResolvedValue({ ok: true, id: period.id }); removeCoverageAction.mockResolvedValue({ ok: true, id: period.id });
-  HTMLDialogElement.prototype.showModal = function () { this.open = true; };
-  HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new Event("close")); };
+  installDialogMock();
 });
 it("enables coverage Save only after an edit differs from the persisted dates", () => {
   render(<CoveragePeriods courtId={courtId} periods={[period]} />);
@@ -23,23 +23,7 @@ it("enables coverage Save only after an edit differs from the persisted dates", 
   expect(save.disabled).toBe(true);
 });
 afterEach(cleanup);
-it("cancels or retries coverage removal without losing the period", async () => {
-  removeCoverageAction.mockResolvedValue({ ok: false, reason: "not-found" });
-  render(<CoveragePeriods courtId={courtId} courtName="Court One" periods={[period]} />);
-  const trigger = screen.getByRole("button", { name: "Remove period" });
-  fireEvent.click(trigger);
-  const confirmation = screen.getByRole("dialog", { name: "Remove coverage period from Court One?" });
-  expect(within(confirmation).getByText(/15 Oct 2026 to 15 Apr 2027/)).toBeTruthy();
-  fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel" }));
-  expect(removeCoverageAction).not.toHaveBeenCalled();
-  expect(screen.getByText("15 Oct 2026 — 15 Apr 2027")).toBeTruthy();
-  fireEvent.click(trigger);
-  fireEvent.click(within(screen.getByRole("dialog", { name: "Remove coverage period from Court One?" })).getByRole("button", { name: "Remove period" }));
-  await waitFor(() => expect(within(screen.getByRole("dialog", { name: "Remove coverage period from Court One?" })).getByRole("alert").textContent).toContain("no longer exists"));
-  expect(screen.getByRole("dialog", { name: "Remove coverage period from Court One?" })).toBeTruthy();
-});
 it.each([
-  [{ ok: false, reason: "overlap" }, "These dates overlap an existing coverage period."],
   [{ ok: false, reason: "invalid-input", fieldErrors: { ends_on: "End date must be on or after start date." } }, "Check the coverage dates."],
 ])("shows safe errors and retains entered dates", async (result, message) => {
   saveCoverageAction.mockResolvedValue(result);

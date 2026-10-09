@@ -45,7 +45,6 @@ export const locationMutationSchema = z.strictObject({
 
 export const locationArchiveSchema = z.strictObject({ id: z.uuid(), archived: z.boolean() });
 
-export type LocationFormValues = z.input<typeof locationFieldsSchema>;
 export type LocationMutationResult =
   | { ok: true; id: string }
   | { ok: false; reason: "invalid-input"; fieldErrors: Record<string, string> }

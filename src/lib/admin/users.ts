@@ -5,6 +5,9 @@ import { z } from "zod";
 import { adminUserFiltersSchema, type AdminUserListInput } from "@/lib/admin/users-filters";
 import { requireActiveAdmin } from "@/lib/admin/authorization";
 import type { UserRole } from "@/lib/auth/account";
+import { getDataSource } from "@/lib/db/data-source";
+import { normalizeDatabaseError } from "@/lib/db/errors";
+import { countAdminUsers, findAdminUserById, findAdminUsersPage } from "@/lib/db/repositories/users.repository";
 import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
 import { loadProfile } from "@/lib/profile/profile";
@@ -24,15 +27,22 @@ export async function readAdminUserDetails(userId: string, supabase?: Awaited<Re
   const client = supabase ?? await createClient();
   await requireActiveAdmin(client);
   const id = z.uuid().parse(userId);
-  const { data, error } = await client.from("users")
-    .select("id, email, status, created_at, updated_at, user_roles!user_roles_user_id_fkey(role_code)")
-    .eq("id", id).maybeSingle();
-  if (error) {
-    logger.error({ event: "admin.user_details_failed", code: error.code }, "Failed to read user details");
+  let data;
+  try {
+    data = await findAdminUserById((await getDataSource()).manager, id);
+  } catch (error: unknown) {
+    logger.error({ event: "admin.user_details_failed", code: normalizeDatabaseError(error).sqlState }, "Failed to read user details");
     throw new Error("Unable to load user details.");
   }
   if (!data) return null;
-  const { user_roles, ...account } = accountRowSchema.parse(data);
+  const { user_roles, ...account } = accountRowSchema.parse({
+    id: data.user.id,
+    email: data.user.email,
+    status: data.user.status,
+    created_at: data.user.createdAt.toISOString(),
+    updated_at: data.user.updatedAt.toISOString(),
+    user_roles: data.roleCodes.map((role_code) => ({ role_code })),
+  });
   const profile = await loadProfile(client, id);
   if (!profile) throw new Error("Unable to load user details.");
   return { ...account, roles: user_roles.map(({ role_code }) => role_code).sort(), ...profile };
@@ -63,43 +73,35 @@ export async function listAdminUsers(
   await requireActiveAdmin(client);
   const filters = adminUserFiltersSchema.parse(input);
 
-  function filteredQuery(head: boolean) {
-    // A separate embedding filters parent users without narrowing the full role list.
-    const columns = filters.role
-      ? "id, email, status, created_at, updated_at, user_roles!user_roles_user_id_fkey(role_code), role_filter:user_roles!user_roles_user_id_fkey!inner(role_code)"
-      : "id, email, status, created_at, updated_at, user_roles!user_roles_user_id_fkey(role_code)";
-    let query = client.from(filters.sort === "roles" ? "user_role_sort_keys" : "users").select(columns, { head, count: head ? "exact" : undefined });
-    if (filters.search) {
-      // Escape regex metacharacters so search is literal partial text, not a pattern.
-      // Unlike ILIKE, PostgREST's imatch does not reinterpret '*' as a wildcard.
-      const literal = filters.search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      query = query.filter("email", "imatch", literal);
-    }
-    if (filters.status) query = query.eq("status", filters.status);
-    if (filters.role) query = query.eq("role_filter.role_code", filters.role);
-    return query;
-  }
-
-  const counted = await filteredQuery(true);
-  if (counted.error || counted.count === null) {
-    logger.error({ event: "admin.users_list_failed", code: counted.error?.code }, "Failed to count users");
+  let manager;
+  let total;
+  try {
+    manager = (await getDataSource()).manager;
+    total = await countAdminUsers(manager, filters);
+  } catch (error: unknown) {
+    logger.error({ event: "admin.users_list_failed", code: normalizeDatabaseError(error).sqlState }, "Failed to count users");
     throw new Error("Unable to load users.");
   }
-  const total = counted.count;
   const totalPages = Math.ceil(total / PAGE_SIZE);
   const page = Math.min(filters.page, Math.max(1, totalPages));
   if (total === 0) return { users: [], page, pageSize: PAGE_SIZE, total, totalPages };
 
-  const { data, error } = await filteredQuery(false)
-    .order({ email: "email", status: "status", roles: "role_sort_key", joined: "created_at" }[filters.sort], { ascending: filters.dir === "asc" })
-    .order("id", { ascending: filters.dir === "asc" })
-    .range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1);
-  if (error || !data) {
-    logger.error({ event: "admin.users_list_failed", code: error?.code }, "Failed to list users");
+  let data;
+  try {
+    data = await findAdminUsersPage(manager, filters, (page - 1) * PAGE_SIZE, PAGE_SIZE);
+  } catch (error: unknown) {
+    logger.error({ event: "admin.users_list_failed", code: normalizeDatabaseError(error).sqlState }, "Failed to list users");
     throw new Error("Unable to load users.");
   }
 
-  const rows = z.array(accountRowSchema).parse(data);
+  const rows = z.array(accountRowSchema).parse(data.map(({ user, roleCodes }) => ({
+    id: user.id,
+    email: user.email,
+    status: user.status,
+    created_at: user.createdAt.toISOString(),
+    updated_at: user.updatedAt.toISOString(),
+    user_roles: roleCodes.map((role_code) => ({ role_code })),
+  })));
   const users = rows.map(({ user_roles, ...user }) => ({
     ...user,
     roles: user_roles.map(({ role_code }) => role_code).sort(),

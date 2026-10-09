@@ -41,7 +41,7 @@ async function findEmailLink(
 ): Promise<string> {
   let link = "";
   await expect.poll(async () => {
-    const inboxResponse = await request.get("http://127.0.0.1:54324/api/v1/messages");
+    const inboxResponse = await request.get(`${process.env.MAILPIT_URL}/api/v1/messages`);
     expect(inboxResponse.ok()).toBe(true);
     const inbox = mailpitMessagesSchema.parse(await inboxResponse.json());
     const message = inbox.messages.find((candidate) =>
@@ -49,7 +49,7 @@ async function findEmailLink(
     if (!message) return "";
 
     const detailResponse = await request.get(
-      `http://127.0.0.1:54324/api/v1/message/${message.ID}`,
+      `${process.env.MAILPIT_URL}/api/v1/message/${message.ID}`,
     );
     expect(detailResponse.ok()).toBe(true);
     const detail = mailpitMessageSchema.parse(await detailResponse.json());

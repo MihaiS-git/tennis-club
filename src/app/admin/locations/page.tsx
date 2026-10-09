@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { AdminPageHeader, AdminToolbar } from "@/components/admin-page-controls";
-import { listAdminLocations } from "@/lib/admin/locations";
-import { listAdminOpeningHours } from "@/lib/admin/opening-hours";
+import { listAdminLocationsWithReadiness } from "@/lib/admin/locations";
 import { countries } from "@/lib/profile/countries";
 import { LocationDialog } from "./location-dialog";
 import { LocationItem } from "./location-item";
@@ -12,13 +11,10 @@ export default async function AdminLocationsPage({ searchParams }: {
   searchParams?: Promise<{ view?: string | string[] }>;
 }) {
   const archived = (await searchParams)?.view === "archived";
-  const [locations, openingHours] = await Promise.all([
-    listAdminLocations(undefined, archived ? "archived" : "current"), listAdminOpeningHours(),
-  ]);
+  const locations = await listAdminLocationsWithReadiness(archived ? "archived" : "current");
   const rows = locations.map((location) => {
-    const intervals = openingHours.filter((interval) => interval.location_id === location.id);
     const countryName = countries.find((entry) => entry.code === location.country_code)?.name;
-    return { location, intervals, countryName };
+    return { location, countryName };
   }).sort((a, b) => a.location.name.localeCompare(b.location.name) || a.location.id.localeCompare(b.location.id));
 
   return <>
@@ -30,22 +26,18 @@ export default async function AdminLocationsPage({ searchParams }: {
     {rows.length === 0 ? <p className="rounded-control border border-border bg-surface px-4 py-6 text-sm text-muted-foreground">
       {archived ? "No archived locations." : "No locations found."}
     </p> : <>
-      <div className="overflow-hidden rounded-control border border-border bg-surface max-lg:hidden">
-        <table className="w-full text-left text-sm" aria-label={archived ? "Archived locations" : "Locations"}>
+      <div className="overflow-x-auto rounded-control border border-border bg-surface">
+        <table className="w-full min-w-[1100px] text-left text-sm" aria-label={archived ? "Archived locations" : "Locations"}>
           <thead className="border-b border-border bg-surface-muted text-xs font-semibold text-muted-foreground">
-            <tr>{["Location", "Status", "City / Country", "Timezone", "Currency"].map((label) =>
-              <th key={label} scope="col" className="px-3 py-3">{label}</th>)}</tr>
+            <tr>{["Location", "Status", "City / Country", "Timezone", "Currency", "Details", "Opening hours", "Courts", "Pricing", "Public booking"].map((label, index) =>
+              <th key={label} scope="col" className={`px-3 py-3 whitespace-nowrap ${index >= 5 && index <= 8 ? "text-center" : ""}`}>{label}</th>)}</tr>
           </thead>
           <tbody className="divide-y divide-border">
-            {rows.map(({ location, intervals, countryName }) => <LocationItem key={`${location.id}-${location.updated_at}`}
-              location={location} intervals={intervals} countryName={countryName} />)}
+            {rows.map(({ location, countryName }) => <LocationItem key={`${location.id}-${location.updated_at}`}
+              location={location} missing={location.missing} countryName={countryName} />)}
           </tbody>
         </table>
       </div>
-      <ul aria-label={archived ? "Archived locations" : "Locations"} className="divide-y divide-border rounded-control border border-border bg-surface lg:hidden">
-        {rows.map(({ location, intervals, countryName }) => <LocationItem key={`${location.id}-${location.updated_at}`}
-          location={location} intervals={intervals} countryName={countryName} mobile />)}
-      </ul>
     </>}
   </>;
 }

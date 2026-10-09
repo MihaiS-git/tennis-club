@@ -1,8 +1,11 @@
 import "server-only";
 
+import { normalizeDatabaseError } from "@/lib/db/errors";
 import { z } from "zod";
 
 import { logger } from "@/lib/logger";
+import { getDataSource } from "@/lib/db/data-source";
+import { listPublicLocationFacts } from "@/lib/db/repositories/clubs.repository";
 import { createClient } from "@/lib/supabase/server";
 import { locationCurrencies } from "@/lib/admin/locations-validation";
 import { isPubliclyEligible, publicationToday } from "@/lib/locations/publication";
@@ -40,35 +43,29 @@ export type PublicCourt = Omit<z.infer<typeof courtSchema>, "location_pricing_ru
 export type PublicLocation = Omit<z.infer<typeof locationSchema>, "is_active" | "is_public" | "archived_at" | "location_opening_hours" | "courts"> & { courts: PublicCourt[] };
 
 export async function listPublicLocationsWithCourts(
-  supabase?: Awaited<ReturnType<typeof createClient>>,
+  _supabase?: Awaited<ReturnType<typeof createClient>>,
 ): Promise<PublicLocation[]> {
-  const client = supabase ?? await createClient();
-  const { data, error } = await client.from("locations")
-    .select("allow_pay_at_club, id, name, slug, address_line1, address_line2, city, postal_code, country_code, timezone, currency, is_active, is_public, archived_at, location_opening_hours(id), courts(id, name, slug, surface, environment, has_lighting, is_active, location_pricing_rules(court_state, ends_on))")
-    .eq("is_active", true)
-    .is("archived_at", null)
-    .eq("is_public", true)
-    .eq("courts.is_active", true)
-    .order("display_order")
-    .order("name")
-    .order("id")
-    .order("name", { referencedTable: "courts" })
-    .order("id", { referencedTable: "courts" });
-
-  const parsed = z.array(locationSchema).safeParse(data);
-  if (error || !parsed.success) {
-    logger.error({ event: "courts.public_read_failed", code: error?.code }, "Failed to load public courts");
+  void _supabase; // Retained only for fixture compatibility.
+  try {
+    const data = await listPublicLocationFacts((await getDataSource()).manager);
+    const parsed = z.array(locationSchema).safeParse(data);
+    if (!parsed.success) {
+      logger.error({ event: "courts.public_read_failed" }, "Failed to load public courts");
+      throw new Error("Unable to load courts.");
+    }
+    return parsed.data.filter((location) => isPubliclyEligible(location, publicationToday(location.timezone)))
+      .map((location) => ({
+        id: location.id, name: location.name, slug: location.slug,
+        address_line1: location.address_line1, address_line2: location.address_line2,
+        city: location.city, postal_code: location.postal_code, country_code: location.country_code,
+        timezone: location.timezone, currency: location.currency, allow_pay_at_club: location.allow_pay_at_club,
+        courts: location.courts.map((court) => ({
+          id: court.id, name: court.name, slug: court.slug, surface: court.surface,
+          environment: court.environment, has_lighting: court.has_lighting,
+        })),
+      }));
+  } catch (error: unknown) {
+    logger.error({ event: "courts.public_read_failed", code: normalizeDatabaseError(error).sqlState }, "Database projection failed");
     throw new Error("Unable to load courts.");
   }
-  return parsed.data.filter((location) => isPubliclyEligible(location, publicationToday(location.timezone)))
-    .map((location) => ({
-      id: location.id, name: location.name, slug: location.slug,
-      address_line1: location.address_line1, address_line2: location.address_line2,
-      city: location.city, postal_code: location.postal_code, country_code: location.country_code,
-      timezone: location.timezone, currency: location.currency, allow_pay_at_club: location.allow_pay_at_club,
-      courts: location.courts.map((court) => ({
-        id: court.id, name: court.name, slug: court.slug, surface: court.surface,
-        environment: court.environment, has_lighting: court.has_lighting,
-      })),
-    }));
 }

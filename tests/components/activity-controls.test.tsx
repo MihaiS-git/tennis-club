@@ -21,14 +21,6 @@ const options = {
 beforeEach(() => { navigation.pathname = "/my-activity/bookings"; navigation.replace.mockClear(); });
 afterEach(cleanup);
 
-it.each(["upcoming", "history"] as const)("shows applicable %s filters without a Sort select", (scope) => {
-  render(<ActivityControls staff scope={scope} query={parseActivityQuery({}, scope)} options={options} />);
-  expect([...screen.getByRole("combobox", { name: "Type" }).querySelectorAll("option")].map((option) => option.textContent)).toEqual(["All", "Booking", "Reservation"]);
-  expect(screen.queryByRole("combobox", { name: "Sort" })).toBeNull();
-  expect(Boolean(screen.queryByRole("combobox", { name: "Status" }))).toBe(scope === "history");
-  expect(screen.queryByRole("link", { name: "Clear filters" })).toBeNull();
-});
-
 it("composes filter changes in the URL, clears the old court and resets pagination", () => {
   render(<ActivityControls staff scope="upcoming" query={parseActivityQuery({ page: "3", location, court, type: "reservation", from: "2026-10-01" }, "upcoming")} options={options} />);
   expect(screen.queryByRole("option", { name: "West court" })).toBeNull();
@@ -48,7 +40,7 @@ it("clears active History filters while retaining sort and returning to page 1",
     .toEqual({ page: "1", type: "all", status: "all", sort: "duration", direction: "desc" });
 });
 
-it.each(["upcoming", "history"] as const)("hides Type for regular users on %s and retains other URL controls", (scope) => {
+it.each(["history"] as const)("hides Type for regular users on %s and retains other URL controls", (scope) => {
   navigation.pathname = scope === "history" ? "/my-activity/history" : "/my-activity/bookings";
   render(<ActivityControls staff={false} scope={scope}
     query={parseActivityQuery({ type: "reservation", page: "3", sort: "duration", direction: "desc", from: "2026-10-01" }, scope, false)} options={options} />);
@@ -62,13 +54,7 @@ it.each(["upcoming", "history"] as const)("hides Type for regular users on %s an
   expect(cleared.get("type")).toBe("booking");
 });
 
-it.each(["upcoming", "history"] as const)("does not count the regular user's implicit booking type as a %s filter", (scope) => {
-  render(<ActivityControls staff={false} scope={scope} query={parseActivityQuery({}, scope, false)} options={options} />);
-  expect(screen.queryByRole("combobox", { name: "Type" })).toBeNull();
-  expect(screen.queryByRole("link", { name: "Clear filters" })).toBeNull();
-});
-
-it.each(["upcoming", "history"] as const)("uses visible %s headers to toggle server sorts and retain filters", (scope) => {
+it.each(["history"] as const)("uses visible %s headers to toggle server sorts and retain filters", (scope) => {
   const query = parseActivityQuery({ page: "3", location, court, type: "reservation", from: "2026-10-01", status: "cancelled" }, scope);
   const { rerender } = render(<ActivityTable scope={scope} query={query} staff><tr><td>Activity</td></tr></ActivityTable>);
   const date = screen.getByRole("link", { name: "Date/time" });

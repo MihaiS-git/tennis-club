@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { expect, test } from "@playwright/test";
 import { localServiceRoleKey } from "./helpers/supabase";
 
-test("clicking a location row opens its edit dialog", async ({ page }) => {
+test("a location link opens its management page", async ({ page }) => {
   test.setTimeout(60_000);
   const url = process.env.SUPABASE_URL!;
   const service = createClient(url, localServiceRoleKey(), { auth: { persistSession: false, autoRefreshToken: false } });
@@ -28,14 +28,19 @@ test("clicking a location row opens its edit dialog", async ({ page }) => {
     await page.getByRole("button", { name: "Sign in" }).click();
     await expect(page).toHaveURL(/\/$/);
     await page.goto(new URL("/admin/locations", appUrl).toString());
-    const row = page.getByRole("table", { name: "Locations" }).getByRole("row", { name: `Edit location ${locationName}` });
-    await expect(row).toBeVisible();
-    await row.click();
-    const dialog = page.getByRole("dialog", { name: "Edit location" });
-    await expect(dialog).toBeVisible();
-    await expect(dialog.getByRole("textbox", { name: "Name" })).toHaveValue(locationName);
-    await expect(dialog.getByRole("textbox", { name: "Address line 1" })).toHaveValue("Fixture street 1");
-    await expect(dialog.getByRole("textbox", { name: "City" })).toHaveValue("Cluj");
+    const table = page.getByRole("table", { name: "Locations" });
+    await expect(table.getByRole("columnheader")).toHaveCount(10);
+    await table.getByRole("link", { name: locationName, exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/admin/locations/${locationId}$`));
+    await expect(page.getByRole("heading", { name: locationName, exact: true })).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Name", exact: true })).toHaveValue(locationName);
+    await expect(page.getByRole("textbox", { name: "Address line 1" })).toHaveValue("Fixture street 1");
+    await expect(page.getByRole("textbox", { name: "City", exact: true })).toHaveValue("Cluj");
+    await expect(page.getByRole("region", { name: "Opening hours", exact: true })).toBeVisible();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Manage courts" })).toHaveAttribute("href", `/admin/courts?location=${locationId}`);
+    await expect(page.getByRole("link", { name: "Configure pricing" })).toHaveAttribute("href", `/admin/pricing?location=${locationId}`);
+    await expect(page.getByRole("button", { name: "Enable public booking" })).toBeDisabled();
   } finally {
     await page.close();
     expect((await service.from("locations").delete().eq("id", locationId)).error).toBeNull();

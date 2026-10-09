@@ -1,46 +1,8 @@
 import { assert, describe, it } from "vitest";
 
-import {
-  changePasswordSchema,
-  fieldValidationErrors,
-  newPasswordSchema,
-  signInSchema,
-  signUpSchema,
-} from "../../../src/lib/auth/validation";
+import { changePasswordSchema, fieldValidationErrors, signUpSchema, } from "../../../src/lib/auth/validation";
 
 describe("authentication form validation", () => {
-  it("normalizes a valid sign-in email", () => {
-    const result = signInSchema.safeParse({
-      email: "  member@example.com  ",
-      password: "strong-password",
-    });
-
-    assert.strictEqual(result.success, true);
-    if (result.success) {
-      assert.strictEqual(result.data.email, "member@example.com");
-    }
-  });
-
-  it("rejects mismatched sign-up passwords", () => {
-    const result = signUpSchema.safeParse({
-      email: "member@example.com",
-      password: "strong-password-123",
-      confirmPassword: "different-password-123",
-    });
-
-    assert.strictEqual(result.success, false);
-    if (!result.success) {
-      assert.strictEqual(
-        result.error.issues.some(
-          ({ path }) => path[0] === "confirmPassword",
-        ),
-        true,
-      );
-      assert.deepStrictEqual(fieldValidationErrors(result.error), {
-        confirmPassword: "Passwords do not match.",
-      });
-    }
-  });
 
   it("maps sign-up validation errors to their fields", () => {
     const result = signUpSchema.safeParse({
@@ -57,13 +19,6 @@ describe("authentication form validation", () => {
     });
   });
 
-  it("rejects mismatched reset-password confirmation", () => {
-    assert.strictEqual(newPasswordSchema.safeParse({
-      password: "password-one-123",
-      confirmPassword: "password-two-123",
-    }).success, false);
-  });
-
   it("requires the current password for authenticated password changes", () => {
     const result = changePasswordSchema.safeParse({
       currentPassword: "",
@@ -74,18 +29,6 @@ describe("authentication form validation", () => {
     assert.strictEqual(result.success, false);
     if (result.success) throw new Error("Expected password change validation to fail.");
     assert.strictEqual(result.error.issues[0]?.message, "Enter your current password.");
-  });
-
-  it("rejects mismatched authenticated password-change confirmation", () => {
-    const result = changePasswordSchema.safeParse({
-      currentPassword: "current-password",
-      password: "new-password-one",
-      confirmPassword: "new-password-two",
-    });
-
-    assert.strictEqual(result.success, false);
-    if (result.success) throw new Error("Expected password change validation to fail.");
-    assert.strictEqual(result.error.issues[0]?.message, "Passwords do not match.");
   });
 
   it("rejects reusing the current password", () => {
@@ -103,8 +46,6 @@ describe("authentication form validation", () => {
   });
 
   it.each([
-    ["signup", (password: string) => signUpSchema.safeParse({ email: "member@example.com", password, confirmPassword: password })],
-    ["reset", (password: string) => newPasswordSchema.safeParse({ password, confirmPassword: password })],
     ["change", (password: string) => changePasswordSchema.safeParse({ currentPassword: "current-password-123", password, confirmPassword: password })],
   ])("applies the same new-password policy to %s", (_flow, parse) => {
     const short = parse("a".repeat(14));

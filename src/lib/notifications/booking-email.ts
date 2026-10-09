@@ -1,24 +1,33 @@
 import "server-only";
 
-import { z } from "zod";
-import type { MailMessage } from "../mail/adapter.ts";
+import { sendMail, type MailMessage } from "../mail/brevo";
 
-const schedule = z.object({ booking_date: z.iso.date(), starts_at_minute: z.number().int().min(0).max(1439),
-  ends_at_minute: z.number().int().min(1).max(1440), court_name: z.string().min(1) });
-export const bookingEmailEventSchema = z.object({
-  id: z.uuid(), lease_token: z.uuid(), recipient: z.email(),
-  event_kind: z.enum(["confirmed", "customer_cancelled", "admin_cancelled", "customer_rescheduled", "admin_rescheduled"]),
-  payload: schedule.extend({ booking_id: z.uuid(), customer_name: z.string(), location_name: z.string(), timezone: z.string(),
-    total_amount_minor: z.number().int().nonnegative(), currency: z.string().length(3), previous: schedule.nullable(), refund_status: z.literal("requested").optional() }),
-});
-export type BookingEmailEvent = z.infer<typeof bookingEmailEventSchema>;
+type BookingEmailSchedule = {
+  booking_date: string;
+  starts_at_minute: number;
+  ends_at_minute: number;
+  court_name: string;
+};
+export type BookingEmailEvent = {
+  recipient: string;
+  event_kind: "confirmed" | "customer_cancelled" | "admin_cancelled" | "customer_rescheduled" | "admin_rescheduled";
+  payload: BookingEmailSchedule & {
+    booking_id: string;
+    customer_name: string;
+    location_name: string;
+    timezone: string;
+    total_amount_minor: number;
+    currency: string;
+    previous: BookingEmailSchedule | null;
+    refund_status?: "requested";
+  };
+};
 
-export function bookingNotification(kind: BookingEmailEvent["event_kind"], key: string,
-  payload: BookingEmailEvent["payload"], recipient: string) {
-  return { kind, key, recipient, payload };
+export function bookingNotification(kind: BookingEmailEvent["event_kind"], payload: BookingEmailEvent["payload"], recipient: string) {
+  return { event_kind: kind, recipient, payload };
 }
 const time = (minute: number) => `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
-function interval(value: z.infer<typeof schedule>) {
+function interval(value: BookingEmailSchedule) {
   return `${value.booking_date}, ${time(value.starts_at_minute)}–${time(value.ends_at_minute)}, ${value.court_name}`;
 }
 export function renderBookingEmail(event: BookingEmailEvent): MailMessage {
@@ -34,5 +43,10 @@ export function renderBookingEmail(event: BookingEmailEvent): MailMessage {
   lines.push(`${rescheduled ? "New schedule" : "Schedule"}: ${interval(p)}`);
   if (!cancelled) lines.push(`Booking total: ${(p.total_amount_minor / 100).toFixed(2)} ${p.currency}`);
   if (cancelled && p.refund_status === "requested") lines.push("Your full payment refund has been requested.");
-  return { idempotencyKey: event.id, to: event.recipient, subject, text: lines.join("\n") };
+  return { to: event.recipient, subject, text: lines.join("\n") };
+}
+
+// Call only after the booking/payment transaction commits. Delivery is best-effort.
+export async function sendBookingNotification(event: BookingEmailEvent): Promise<void> {
+  await sendMail(renderBookingEmail(event));
 }

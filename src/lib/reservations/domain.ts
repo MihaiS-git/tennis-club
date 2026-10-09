@@ -14,7 +14,7 @@ const alignedInterval = (value: { startMinute: number; endMinute: number }) => v
   && value.endMinute - value.startMinute >= 60;
 const intervalIssue = { message: "Choose at least 60 minutes in 30-minute steps.", path: ["startMinute"] };
 export const reservationInputSchema = z.strictObject({ locationId: z.uuid(), ...scheduleFields }).refine(alignedInterval, intervalIssue);
-export const reservationScheduleEditSchema = z.strictObject(scheduleFields).refine(alignedInterval, intervalIssue);
+const reservationScheduleEditSchema = z.strictObject(scheduleFields).refine(alignedInterval, intervalIssue);
 
 const editIdentity = { id: z.uuid(), expectedUpdatedAt: z.iso.datetime({ offset: true }) };
 export const reservationEditSchema = z.discriminatedUnion("kind", [
@@ -88,4 +88,11 @@ export function selectReservationCell(grid: SelectionGrid, current: ReservationS
     if (row >= current.endRow) return choice(current.startRow, row + 1) ?? current;
   }
   return choice(row, row + 2) ?? choice(row - 1, row + 1) ?? current;
+}
+
+export type ReservationInterval = Pick<z.infer<typeof reservationInputSchema>,
+  "courtId" | "date" | "startMinute" | "endMinute">;
+export function reservationIntervalsOverlap(a: ReservationInterval, b: ReservationInterval): boolean {
+  return a.courtId.toLowerCase() === b.courtId.toLowerCase() && a.date === b.date
+    && a.startMinute < b.endMinute && b.startMinute < a.endMinute;
 }

@@ -28,7 +28,7 @@ function client(key = publishableKey) {
   });
 }
 
-test("account loading respects user RLS and suspension", async () => {
+test("Auth-backed TypeORM account loading preserves roles, suspension, and denied browser grants", async () => {
   const service = localFixtureClient();
   await ensureIntegrationAdminAnchor(service);
   const createdIds: string[] = [];
@@ -66,23 +66,26 @@ test("account loading respects user RLS and suspension", async () => {
       roles: [],
     });
 
+    const assignment = await admin.from("user_roles")
+      .insert({ user_id: ownUser.data.user.id, role_code: "coach" });
+    assert.strictEqual(assignment.error, null);
+    assert.deepStrictEqual(await readCurrentAccount(member), {
+      state: "active",
+      userId: ownUser.data.user.id,
+      email: ownEmail,
+      roles: ["coach"],
+    });
+
     const ownProfile = await member.from("users").select("id, email, status")
       .eq("id", ownUser.data.user.id).single();
-    assert.strictEqual(ownProfile.error, null);
-    assert.deepStrictEqual(ownProfile.data, {
-      id: ownUser.data.user.id,
-      email: ownEmail,
-      status: "active",
-    });
+    assert.strictEqual(ownProfile.error?.code, "42501");
 
     const otherProfile = await member.from("users").select("id, email, status")
       .eq("id", otherUser.data.user.id);
     const otherRoles = await member.from("user_roles").select("user_id, role_code")
       .eq("user_id", otherUser.data.user.id);
-    assert.strictEqual(otherProfile.error, null);
-    assert.deepStrictEqual(otherProfile.data, [], "A member must not read another profile.");
-    assert.strictEqual(otherRoles.error, null);
-    assert.deepStrictEqual(otherRoles.data, [], "A member must not read another user's roles.");
+    assert.strictEqual(otherProfile.error?.code, "42501");
+    assert.strictEqual(otherRoles.error?.code, "42501");
 
     const suspension = await admin.from("users").update({ status: "suspended" })
       .eq("id", ownUser.data.user.id).select("status").single();
@@ -92,11 +95,9 @@ test("account loading respects user RLS and suspension", async () => {
       state: "suspended",
       userId: ownUser.data.user.id,
       email: ownEmail,
-      roles: [],
+      roles: ["coach"],
     });
-    const roleCheck = await member.rpc("has_role", { required_role: "coach" });
-    assert.strictEqual(roleCheck.error, null);
-    assert.strictEqual(roleCheck.data, false);
+
   } finally {
     await cleanupAuthFixtures(service, createdIds);
   }

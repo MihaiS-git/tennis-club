@@ -48,20 +48,20 @@ test("customer booking persists both rows, snapshots contact and price, and roll
     assert.strictEqual((await service.from("location_pricing_rules").insert([priceRule,
       { ...priceRule, starts_at_minute: 660, ends_at_minute: 720, price_per_hour_minor: 7000 }])).error, null);
 
-    expect(await createCustomerBooking({ ...base, expectedTotalAmountMinor: 100 }, guest, service, now))
+    expect(await createCustomerBooking({ ...base, expectedTotalAmountMinor: 100 }, guest, now))
       .toEqual({ ok: false, reason: "price_changed", totalAmountMinor: 5000, currency: "RON" });
     expect(await rows()).toEqual({ bookings: [], reservations: [] });
     assert.strictEqual((await service.from("location_pricing_rules").update({ price_per_hour_minor: 6000 })
       .eq("location_id", locationId).eq("starts_at_minute", 600)).error, null);
-    expect(await createCustomerBooking(base, guest, service, now))
+    expect(await createCustomerBooking(base, guest, now))
       .toEqual({ ok: false, reason: "price_changed", totalAmountMinor: 6000, currency: "RON" });
     expect(await rows()).toEqual({ bookings: [], reservations: [] });
     assert.strictEqual((await service.from("locations").update({ currency: "EUR" }).eq("id", locationId)).error, null);
-    expect(await createCustomerBooking({ ...base, expectedTotalAmountMinor: 6000 }, guest, service, now))
+    expect(await createCustomerBooking({ ...base, expectedTotalAmountMinor: 6000 }, guest, now))
       .toEqual({ ok: false, reason: "price_changed", totalAmountMinor: 6000, currency: "EUR" });
     expect(await rows()).toEqual({ bookings: [], reservations: [] });
     const guestResult = await createCustomerBooking({ ...base, expectedTotalAmountMinor: 6000,
-      expectedCurrency: "EUR" }, guest, service, now);
+      expectedCurrency: "EUR" }, guest, now);
     assert.ok(guestResult.ok, JSON.stringify(guestResult));
     expect(guestResult.cancellationPolicy).toEqual({ noticeMinutes: 120, cutoff: null });
     const first = await rows();
@@ -96,7 +96,7 @@ test("customer booking persists both rows, snapshots contact and price, and roll
     const profileBefore = await service.from("users").select("email, first_name, last_name, phone").eq("id", memberId).single();
     expect(await createCustomerBooking({ ...base, startMinute: 660, endMinute: 720,
       customerName: "Different Customer", customerEmail: "different@example.test",
-      expectedTotalAmountMinor: 7000, expectedCurrency: "EUR" }, member, service, now)).toMatchObject({ ok: true, cancellationPolicy: { noticeMinutes: 1440, cutoff: "2099-10-14T11:00:00.000Z" } });
+      expectedTotalAmountMinor: 7000, expectedCurrency: "EUR" }, member, now)).toMatchObject({ ok: true, cancellationPolicy: { noticeMinutes: 1440, cutoff: "2099-10-14T11:00:00.000Z" } });
     const booked = await allBookings();
     expect(booked).toHaveLength(2);
     expect(booked.find((row) => row.account_user_id === memberId)).toMatchObject({
@@ -106,13 +106,13 @@ test("customer booking persists both rows, snapshots contact and price, and roll
 
     expect(booked.find((row) => row.account_user_id === null)?.cancellation_notice_minutes).toBe(120);
     for (const policyField of ["cancellation_notice_minutes", "customer_cancellation_notice_minutes", "cancellationNoticeMinutes"]) {
-      expect(await createCustomerBooking({ ...base, [policyField]: 0 }, guest, service, now)).toMatchObject({ ok: false });
+      expect(await createCustomerBooking({ ...base, [policyField]: 0 }, guest, now)).toMatchObject({ ok: false });
     }
 
     const count = async () => ({ bookings: (await allBookings()).length,
       reservations: (await service.from("court_reservations").select("id").eq("court_id", courtId)).data?.length });
     const before = await count();
-    expect(await createCustomerBooking(base, guest, service, now)).toMatchObject({ ok: false });
+    expect(await createCustomerBooking(base, guest, now)).toMatchObject({ ok: false });
     expect(await count()).toEqual(before);
     for (const intent of [
       { ...base, startMinute: 750, endMinute: 810 },
@@ -121,14 +121,14 @@ test("customer booking persists both rows, snapshots contact and price, and roll
       { ...base, startMinute: 615 },
       { ...base, endMinute: 630 },
       { ...base, courtId: inactiveCourtId },
-    ]) expect(await createCustomerBooking(intent, guest, service, now)).toMatchObject({ ok: false });
+    ]) expect(await createCustomerBooking(intent, guest, now)).toMatchObject({ ok: false });
     expect(await count()).toEqual(before);
     assert.strictEqual((await service.from("users").update({ status: "suspended" }).eq("id", memberId)).error, null);
-    expect(await createCustomerBooking({ ...base, startMinute: 720, endMinute: 780 }, member, service, now))
+    expect(await createCustomerBooking({ ...base, startMinute: 720, endMinute: 780 }, member, now))
       .toMatchObject({ ok: false });
     expect(await count()).toEqual(before);
     assert.strictEqual((await service.from("locations").update({ is_public: false }).eq("id", locationId)).error, null);
-    expect(await createCustomerBooking({ ...base, startMinute: 720, endMinute: 780 }, guest, service, now))
+    expect(await createCustomerBooking({ ...base, startMinute: 720, endMinute: 780 }, guest, now))
       .toMatchObject({ ok: false });
     expect(await count()).toEqual(before);
     assert.strictEqual((await service.from("locations").update({ is_public: true }).eq("id", locationId)).error, null);
@@ -142,7 +142,7 @@ test("customer booking persists both rows, snapshots contact and price, and roll
     expect(invalidWrite.error?.code).toBe("23514");
     expect(await count()).toEqual(orphanBefore);
     assert.strictEqual((await service.from("location_pricing_rules").delete().eq("location_id", locationId)).error, null);
-    expect(await createCustomerBooking({ ...base, startMinute: 720, endMinute: 780 }, guest, service, now))
+    expect(await createCustomerBooking({ ...base, startMinute: 720, endMinute: 780 }, guest, now))
       .toMatchObject({ ok: false });
     expect(await count()).toEqual(orphanBefore);
     expect((await allBookings()).map((row) => row.total_amount_minor).sort()).toEqual([6000, 7000]);

@@ -4,9 +4,9 @@
 
 Online payment is the default. Admin → Locations → Booking policy may enable
 `allow_pay_at_club`, which defaults OFF for existing and new locations. The public
-location read exposes this boolean, while the creation RPC rechecks it under a
+location read exposes this boolean, while TypeORM Transaction A rechecks it under a
 location row lock. Contact, amount and currency snapshots still come from the
-server-side booking service and existing public calendar pricing calculation.
+server-side booking service and existing TypeScript calendar pricing calculation using transaction-authoritative facts.
 
 `bookings.payment_method` snapshots `online` or `pay_at_club`. Historical bookings
 retain their lifecycle with a NULL payment-method snapshot and no fabricated
@@ -23,31 +23,26 @@ expiry, creation/update and completion timestamps. Online attempts require a
 snapshotted `stripe` or `netopia` provider. Admin → Payments → Settings explicitly selects
 one provider for future attempts, with no default or automatic failover. Missing
 selection or incomplete configuration makes online payment unavailable. Future
-provider changes do not modify old attempts; a database trigger also forbids
-changing an existing attempt’s method/provider. Pay at club has no provider/reference.
+provider changes do not modify old attempts; focused TypeScript commands preserve
+an existing attempt’s method/provider. Pay at club has no provider/reference.
 There is at most one pending attempt per booking, and provider references are unique
-within each provider. Payment attempts have RLS enabled and no browser-role grants.
+within each provider. Payment attempts have no browser-role grants.
 
 The initial hold duration is centralized as `paymentHoldDurationSeconds` in
 `src/lib/payments/domain.ts` (10 minutes). PostgreSQL calculates expiry from its
 wall clock. `held` and `active` reservation rows share the existing GiST overlap
 constraint. All public/staff/edit occupancy reads use database-time expiry checks,
-so expired holds disappear from availability without browser timers. A reservation
-INSERT/schedule UPDATE trigger releases expired holds before the GiST check,
-including direct staff reservations and rescheduling. Cleanup locks booking before
-reservation, skips busy rows to avoid lock inversion, and updates the booking,
-reservation and pending attempts atomically. A busy concurrent lifecycle operation
-may cause a safe overlap rejection; a subsequent attempt retries cleanup. Stale
-unlocked holds cannot permanently block a court. Cleanup is lazy; terminal expiry
-rows are persisted at the next reservation mutation, or by the service-role-only
-`expire_payment_holds` maintenance RPC. No background scheduler is required for
-availability correctness.
+so expired holds disappear from availability without browser timers. TypeScript releases
+expired pending booking/attempt/hold aggregates before reservation writes, under
+location-first TypeORM transactions. Polling uses bounded SKIP LOCKED expiry and never
+calls a SQL lifecycle function. Busy rows can cause a safe overlap rejection and a
+later attempt retries cleanup. No background scheduler is required for availability.
 
 `settleOnlinePayment` is a server-only operation for **verified** provider
 adapters. The Stripe webhook calls the common event operation, which reuses this
-settlement transaction; no browser-callable settlement action exists. Its service-role-only RPC locks
+settlement transaction; no browser-callable settlement action exists. Its TypeORM READ COMMITTED transaction locks
 booking → reservation → attempt and validates the stored provider/reference.
-A timely success confirms the same booking/reservation and enqueues one confirmation
+A timely success confirms the same booking/reservation and sends one post-commit confirmation
 email. Failure/expiry releases the same reservation and marks the booking/attempt
 failed/expired. A late success cannot reclaim a released or replaced interval.
 Duplicate settlement returns the existing terminal status and emits no extra email.
@@ -57,6 +52,29 @@ personal bookings. Pay at club emits confirmation atomically at creation.
 NETOPIA integration/refunds, credential UI, partial refunds, saved cards, deposits, subscriptions
 and packages remain unimplemented. The sections below distinguish the current
 one-time Stripe flow from future membership scope.
+
+## TypeORM checkout boundary
+
+Transaction A takes shared configuration advisory fence → location FOR UPDATE, loads
+publication/hours/coverage/pricing facts, then fences the linked active account and
+locks online provider settings FOR SHARE. TypeScript calculates policy and price. The
+reservation, booking and attempt insert atomically; Pay-at-club confirmation email follows commit.
+Guest name/email/phone remain required trimmed snapshots; email case is preserved.
+Online creation emits no confirmation email and shares one PostgreSQL +600-second deadline.
+
+Stripe initialization uses the stored attempt after commit, outside any transaction.
+Transaction B conditionally attaches provider reference/capability hash. Coupled policy
+and capability reads use TypeORM. Polling runs the TypeScript hold-expiry service;
+settlement/webhooks use Phase 7 TypeORM transactions; refunds/reconciliation use TypeORM (Phase 8), and booking emails use post-commit Brevo HTTP delivery.
+Public `/book` discovery/calendar use bounded TypeORM projections (Phase 11).
+
+There is no customer-submission idempotency key: identical same-slot submissions compete
+and GiST decides the winner. Stripe's attempt-derived idempotency key does not make booking
+submission idempotent. Provider success followed by local attachment failure has no complete
+automatic recovery/resume workflow. No client secret is exposed on initialization failure;
+the committed hold expires normally. There is no replacement booking/attempt or new recovery
+worker. A lost attachment acknowledgement may leave a registered capability unavailable to
+the caller; this limitation is preserved, not fixed.
 
 ## Provider configuration
 
@@ -86,17 +104,19 @@ selector offers configured providers and allows clearing selection to disable on
 payment. Selection applies immediately through an authenticated Server Action;
 there is no customer-facing provider choice. `payment_provider_settings` is a
 singleton starting with NULL `active_provider`; there is no environment-provider
-selection or Stripe fallback. Only active Admins can read it through user-scoped
-access. The server-only selection RPC rechecks the authoritative actor and records
-changes in `payment_provider_changes`; browser roles cannot write settings or call
-that RPC. The Next.js Admin service rejects unconfigured activation. Configuration
+selection or Stripe fallback. Only active Admins can read it through TypeORM after explicit authorization.
+The server-only READ COMMITTED transaction fences actor roles/account before locking
+the singleton FOR UPDATE and records changes atomically in `payment_provider_changes`.
+Same-value selection preserves its timestamp and creates no audit row; missing singleton
+fails safely. Stored selection remains visible even when the provider is unconfigured.
+Browser roles cannot write provider settings. The Next.js Admin service rejects unconfigured activation. Configuration
 status is always derived from current server environment, never from stored flags.
 
 Each online commit resolves the selected provider and rechecks configuration. The
-atomic creation RPC takes a shared lock on the singleton and rejects an absent or
-different selection before inserting any rows. Provider switching takes an exclusive
+TypeORM creation transaction takes a shared lock on the singleton and rejects an absent,
+unconfigured or unsupported selection before inserting any rows. Provider switching takes an exclusive
 lock on the same row, giving new attempts a consistent provider snapshot. A selection
-race returns a safe retry message; it never silently routes the payment elsewhere.
+race is serialized by the settings row lock; it never silently routes the payment elsewhere.
 Removing a selected provider’s credentials disables online payment, even when the
 other provider is configured. Existing attempts and trusted settlement keep using
 their stored provider. Pay at club availability remains independent and location-scoped.
@@ -107,7 +127,8 @@ snapshots. Genuine payment attempts must be preserved during any data correction
 
 ## Local validation
 
-Apply migrations in order with `supabase migration up --local` (no reset).
+For a fresh empty database, start Supabase infrastructure then use the guarded development rebuild.
+Existing populated databases require a separate authorized cutover; see README.md.
 Run `npm run lint` and `npm run build`, then the focused lifecycle check:
 
 ```sh
@@ -125,11 +146,12 @@ booking code never imports Stripe SDK types. The installed Stripe SDK v23 uses
 short-hold flow free of delayed bank-payment methods. See [PaymentIntent creation](https://docs.stripe.com/api/payment_intents/create)
 and [raw-body webhook verification](https://docs.stripe.com/webhooks).
 
-`commitCustomerCheckout` wraps the existing atomic booking writer. After commit,
+`commitCustomerCheckout` wraps TypeORM Transaction A. After commit,
 `startOnlineCheckout` rereads the stored attempt's provider, amount and currency,
 creates an intent with stable idempotency key `court-payment-<attempt-id>` and
 metadata `payment_attempt_id`, and registers the intent before exposing its client
-secret. It does not extend the hold. Failed/ambiguous intent creation leaves the
+secret through TypeORM Transaction B (booking FOR UPDATE → attempt FOR UPDATE). Attachment
+can retain the provider reference after expiry without reopening occupancy. It does not extend the hold. Failed/ambiguous intent creation leaves the
 unconfirmed hold to expire; no success or external total is inferred.
 
 `POST /api/payments/stripe/webhook` verifies the raw request body and Stripe signature,
@@ -186,7 +208,7 @@ Manual service-level verification used real Stripe test-mode PaymentIntents agai
 isolated local Supabase fixtures: declined card retained the intent/hold, a second
 card confirmed the same booking, terminal cancellation released occupancy, simulated
 hold expiry hid the checkout, and only cancellation after confirmation produced
-Cancelled History and a cancellation outbox event. Browser Payment Element entry and
+Cancelled History and a post-commit cancellation email. Browser Payment Element entry and
 live Stripe webhook forwarding were not exercised in that verification; focused
 integration tests cover raw signature verification and webhook handling.
 
@@ -197,12 +219,11 @@ in ignored `.env.local`, not source code or chat:
 - `STRIPE_PUBLISHABLE_KEY=pk_test_…` from the same account
 - `STRIPE_WEBHOOK_SECRET=whsec_…` from the local Stripe CLI listener
 - `APP_URL=http://localhost:3000` and the existing local Supabase variables
-- existing `BOOKING_MAIL_FROM`, `BOOKING_SMTP_HOST`, `BOOKING_SMTP_PORT` and
-  `BOOKING_SMTP_SECURE` for the separate notification worker
+- server-only `BREVO_API_KEY` and Brevo-verified `BOOKING_MAIL_FROM` for notifications
 
 For the future authorized verification, run `stripe listen --events payment_intent.succeeded,payment_intent.payment_failed,payment_intent.canceled --forward-to http://localhost:3000/api/payments/stripe/webhook`,
 copy that listener's signing secret into `.env.local`, and restart Next.js.
-Select Stripe in Admin → Payments → Settings and run `npm run mail:worker`. Book an available
+Select Stripe in Admin → Payments → Settings. Book an available
 interval: another visitor must see it blocked, and no confirmation email may exist
 before successful settlement. Use Stripe test success card `4242 4242 4242 4242`
 and decline card `4000 0000 0000 0002` with future expiry and any valid CVC.
@@ -210,7 +231,7 @@ Success must retain both internal row IDs and create one Mailpit confirmation;
 a decline must stay pending, retain occupancy and permit a different card on the
 same intent without a History row. Cancel an unpaid PaymentIntent in Stripe: the
 slot must become available immediately and both My Activity lists must omit it. Replay a captured success
-webhook with Stripe CLI/dashboard resend and verify one outbox confirmation.
+webhook with Stripe CLI/dashboard resend and verify one confirmation email.
 Leave an unpaid checkout beyond ten minutes and verify availability returns with
 no activity or cancellation email. After a successful payment, verify the booking
 appears in Bookings; cancel that confirmed booking and verify it moves to History
@@ -359,7 +380,7 @@ Credit consumption may require an atomic database operation together with bookin
 
 ## Stripe cancellation refunds
 
-Migration `20261006100000_stripe_booking_refunds.sql` adds `payment_refunds`, RLS with
+The initial TypeORM migration adds `payment_refunds` with
 no browser database access, unique booking/attempt references and immutable financial
 snapshots. Amount/currency/provider/payment ID must exactly match a succeeded original
 Stripe attempt. Historical attempt status remains succeeded; refund status is separate.
@@ -371,8 +392,10 @@ occurs. Pay-at-club and legacy unpaid cancellations create no refund.
 
 Cancellation, occupancy release, refund request and existing cancellation email commit
 in one transaction. Mail snapshots say the full refund was requested, without promising
-provider completion. The post-commit server-only service reads the refund snapshot and
-uses the original provider adapter, independent of current provider selection.
+provider completion. The post-commit server-only service locks/reads the refund snapshot
+in a short TypeORM transaction, calls the original adapter outside transactions, then
+locks only the refund in a result transaction. Automatic processing is intentionally
+unleased, retains terminal short-circuits, and never clears Admin leases or resolves events.
 
 Lifecycle:
 
@@ -412,14 +435,12 @@ a mocked provider adapter, with no fake Stripe secret keys or configuration asse
 contains the existing provider configuration/selection UI. Both use the shared
 Payments submenu and require an active Admin account.
 
-`listAdminPaymentTransactions` uses a user-scoped server client and the Admin-only
-`list_admin_payment_transactions` read RPC added by
-`20261006110000_admin_payment_transactions.sql`. No financial table SELECT grants,
-privileged transaction reader or browser Supabase client are introduced.
-The helper is needed to select one logical lifecycle, join its refund and filter/sort
-before fixed 20-row pagination. It returns only explicitly selected payment,
-customer, reservation and refund snapshots plus reconciliation outcomes/reasons.
-It never returns checkout tokens, provider event payloads or credentials.
+`listAdminPaymentTransactions` authorizes with `requireActiveAdmin`, then executes one
+parameterized TypeORM projection/count query. It preserves the installed report's attempt
+priority, joins, literal substring search, filters before 20-row pagination, count,
+page clamping and deterministic sorting. Attention/retry/late-capture decisions remain
+TypeScript. Reporting uses focused TypeORM projections. No browser financial
+SELECT grants or Supabase database client are introduced.
 
 Selection prefers the refund's original payment attempt, otherwise the earliest
 succeeded attempt, otherwise the newest attempt, with an ID tie-breaker. Legacy
@@ -453,7 +474,7 @@ npm run typecheck
 
 ## Admin Stripe refund recovery
 
-Migration `20261006120000_admin_stripe_reconciliation.sql` adds `resolved_at` and
+The initial TypeORM migration adds `resolved_at` and
 `resolved_by_user_id` to provider events, and token/until/actor lease columns on
 refunds. It extends full-refund validation only for verified late Stripe captures:
 matching original attempt/payment ID/amount/currency, succeeded provider evidence,
@@ -463,9 +484,10 @@ ineligible. Historic attempts and occupancy never change.
 
 The detail dialog offers Retry refund only for Stripe pending_retry/failed records.
 The service reauthorizes an active Admin and applies the shared TypeScript Stripe
-refund policy. `claim_refund_command` locks booking, reservation, original attempt/event
-and refund, fences the expected snapshots, validates the relationships and claims
-a lease using the duration supplied by TypeScript. Refund captured payment is offered only for the verified
+refund policy. TypeORM preparation locks booking → reservation → selected attempt →
+events ordered by provider,event_id → refund FOR UPDATE, then roles ordered by role_code →
+account FOR SHARE. It rechecks active Admin authority and financial relationships and
+claims a five-minute token/actor lease using PostgreSQL clock_timestamp(). Refund captured payment is offered only for the verified
 late-capture condition and creates/reuses the unique full-refund record. Inputs are
 IDs only. A concurrent live claim returns an in-progress error; an interrupted claim
 can be reclaimed after expiry. No transaction spans a Stripe HTTP request.
@@ -478,12 +500,20 @@ invalid Stripe refund requests persist failed, ambiguous failures persist pendin
 and accepted pending refunds persist pending. Customer/default refund behavior is
 unchanged. These actions introduce no NETOPIA flow or background retries.
 
-The service-only, token-scoped `commit_refund_result` atomically persists the supplied
-provider result and explicit event-resolution IDs selected by TypeScript after success.
-It checks immutable captured evidence and records the verified requesting Admin's identity. Refund failure
+The token-scoped TypeORM result transaction takes the same aggregate/event/refund locks
+without a fresh actor fence. It checks immutable captured evidence, matching token+actor
+and compatible provider refund ID. Lease expiry is not checked: the original owner may
+complete until takeover replaces the token, even after losing Admin authority. Stored
+success wins. Refund result, lease clearing and qualifying event resolution are atomic,
+with PostgreSQL wall-time resolution and the verified lease actor's identity. Refund failure
 or pending keeps event flags true. Repeated late-success resolution after success
 reuses the completed refund and does not rewrite resolution timestamps/actors.
-Browser database roles cannot submit provider evidence or invoke the finish RPC.
+Browser database roles cannot submit provider evidence. Lease deadlines retain microseconds;
+the busy predicate is strictly deadline > clock_timestamp(), with equality reclaimable.
+Event resolution changes only reconciliation_required/resolved_at/resolved_by_user_id,
+validates affected rows and rolls back the whole result on structural failure. Stripe
+acceptance followed by local failure returns pending_retry-style behavior; later retry
+recovers the same provider refund using its ID, metadata or stable idempotency identity.
 
 The dialog reloads its authoritative transaction after every handled action, shows
 inline feedback, disables actions while pending and refreshes the filtered table.
@@ -499,14 +529,52 @@ npm run typecheck
 
 ## TypeScript decision and persistence boundary
 
-The final command API is established by migrations `20261006130000` through
-`20261006170000`. Checkout, cancellation/refunds, payment settlement, webhook
+Application commands persist through TypeORM repositories. Checkout, cancellation/refunds, payment settlement, webhook
 interpretation, rescheduling quotes and recovery eligibility are TypeScript decisions.
-The RPCs `commit_checkout`, `commit_booking_cancellation`,
-`commit_payment_transition`, `commit_booking_reschedule`, `claim_refund_command` and
-`commit_refund_result` accept authoritative server commands and optional supplied
-outbox snapshots. They preserve row locks, expected-state/actor/configuration fences,
-financial immutability, uniqueness, GiST protection and atomic multi-row persistence.
-Webhook receipts and lifecycle changes commit together; duplicate evidence is immutable.
-All mutation commands are service-role-only. Stripe requests remain outside transactions.
-The retired workflow RPCs are dropped; there is no fallback path.
+Checkout (Phase 5) and customer/Admin cancellation and reschedule (Phase 6) now
+use TypeORM transactions and focused repositories, as do Phase 7 settlement and Phase 8
+refund execution/reconciliation. No generic booking snapshot, actor snapshot or command RPC architecture remains. Stripe requests
+remain outside transactions. Refund completion sends no email.
+
+## Customer booking mutations (Phase 6)
+
+Customer/Admin cancellation and reschedule now use TypeORM READ COMMITTED transactions.
+Reschedule holds shared configuration advisory fence then location UPDATE before booking/reservation UPDATE
+locks. Cancellation omits the configuration advisory fence and locks the selected succeeded online Stripe attempt
+(earliest created_at,id) and existing refund before ordered actor roles/account SHARE locks.
+TypeScript makes policy/pricing/refund decisions against those locked facts; snapshot notice
+uses current location timezone and post-lock database wall time. See [architecture](architecture.md#customer-booking-mutations-phase-6).
+
+Cancellation creates the full immutable attempt-derived refund request atomically; cancellation email follows commit.
+An existing-refund replay returns the same ID; cancellation without a refund is not a successful
+replay. Admin must explicitly choose refund/no refund when a qualifying payment exists.
+finishBookingCancellation/processBookingRefund remain post-commit Phase 8 operations.
+Reschedule changes booking total only, preserving attempt amount/currency/status and creating
+no financial side effects, even for price increases/decreases. Lossless browser tokens and the
+reservation monotonic timestamp remain; booking updated_at is explicitly persisted as transaction now().
+
+Booking mutations use scoped TypeORM commands; schedule-changing saves send the preserved
+old/new schedule template after commit.
+
+## TypeORM settlement boundary (Phase 7)
+
+Verified webhook input and trusted receiptless settlement share one transaction. Discover
+attempt→booking, lock booking → reservation → selected attempt FOR UPDATE, validate identity,
+read global receipt, then read PostgreSQL wall time. No configuration/resource/refund/actor
+locks or network calls occur here. Financial evidence matches the original attempt amount/currency,
+never a rescheduled booking total. Webhooks require an attached exact provider reference.
+TypeScript preserves retryable pending, success, terminal failure/cancellation, effective expiry,
+late-capture and mismatch decisions. Lossless deadline comparisons are rechecked before writes;
+the attempt UPDATE also checks clock_timestamp() against the supplied deadline and lets
+TypeScript re-evaluate expiry if crossed. Lifecycle and durable receipt are atomic; first confirmation email follows commit. Late captures keep terminal lifecycle and flag reconciliation; financial mismatch
+records evidence only and is not automatically refundable. Other outcomes emit no confirmation.
+Global provider/event PK dedupe compares attempt, payment reference, outcome, amount and normalized
+currency. Identical events replay stored result without touching Admin resolution. Concurrent
+insert conflicts read the committed winner in a separate READ COMMITTED statement; changed
+evidence rejects, rolling back provisional lifecycle writes. Distinct events preserve terminal
+success and cannot duplicate confirmation.
+Abandonment retains capability validation and retrieve/cancel/retrieve outside transactions;
+only provider-confirmed cancellation runs the receiptless local command.
+Payment/refund persistence uses TypeORM transactions with explicit authoritative locks.
+TypeScript hold expiry runs under location-first TypeORM transactions.
+Booking emails use best-effort Brevo HTTP delivery after commit, without delivery leases or retries.

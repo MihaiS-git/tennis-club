@@ -1,28 +1,10 @@
 import { expect, it } from "vitest";
-import {
-  groupedWeeklySchedule, weekdayGroupLabel, weeklyHoursMutationSchema,
-  type OpeningInterval,
-} from "../../../src/lib/admin/opening-hours-validation";
+import { groupedWeeklySchedule, weekdayGroupLabel, type OpeningInterval, } from "../../../src/lib/admin/opening-hours-validation";
 
 const location_id = "c6000000-0000-4000-8000-000000000011";
-const input = { location_id, weekdays: [0, 1, 2, 3, 4], replace_ids: [], intervals: [{ opens_at: "07:00", closes_at: "24:00" }] };
 const row = (weekday: number, opens_at_minute = 420, closes_at_minute = 1440): OpeningInterval => ({
   id: crypto.randomUUID(), location_id, weekday, opens_at_minute, closes_at_minute,
   created_at: "2026-09-29T00:00:00Z", updated_at: "2026-09-29T00:00:00Z",
-});
-
-it("validates one weekly operation and permits adjacent intervals", () => {
-  expect(weeklyHoursMutationSchema.safeParse(input).success).toBe(true);
-  expect(weeklyHoursMutationSchema.safeParse({ ...input, intervals: [
-    { opens_at: "07:00", closes_at: "16:00" }, { opens_at: "16:00", closes_at: "20:00" },
-  ] }).success).toBe(true);
-  for (const change of [
-    { weekdays: [] }, { weekdays: [0, 0] }, { weekdays: [7] }, { intervals: [{ opens_at: "24:00", closes_at: "24:00" }] },
-    { intervals: [{ opens_at: "07:00", closes_at: "07:00" }] }, { intervals: [{ opens_at: "7:00", closes_at: "12:00" }] },
-    { intervals: [{ opens_at: "07:00", closes_at: "12:00" }, { opens_at: "11:30", closes_at: "14:00" }] },
-    { created_at: "spoof" },
-  ]) expect(weeklyHoursMutationSchema.safeParse({ ...input, ...change }).success).toBe(false);
-  expect(weeklyHoursMutationSchema.safeParse({ ...input, replace_ids: [crypto.randomUUID()], intervals: [] }).success).toBe(true);
 });
 
 it("groups only complete matching schedules and preserves multiple intervals", () => {

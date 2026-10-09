@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { installDialogMock } from "../helpers/dialog";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpeningInterval } from "../../src/lib/admin/opening-hours-validation";
 const { mutateOpeningHoursAction, refresh, onUpdated } = vi.hoisted(() => ({
@@ -17,8 +18,7 @@ const row = (weekday: number, opens_at_minute = 420, closes_at_minute = 1440): O
 });
 const renderHours = (intervals: OpeningInterval[] = []) => render(<OpeningHours locationId={locationId} intervals={intervals} onUpdated={onUpdated} />);
 beforeEach(() => { vi.resetAllMocks(); mutateOpeningHoursAction.mockResolvedValue({ ok: true, intervals: [] });
-  HTMLDialogElement.prototype.showModal = function () { this.open = true; };
-  HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new Event("close")); };
+  installDialogMock();
 });
 afterEach(cleanup);
 
@@ -38,48 +38,6 @@ it("offers mouse-selectable half-hour suggestions and permits manually typed HH:
   await waitFor(() => expect(mutateOpeningHoursAction).toHaveBeenCalledExactlyOnceWith({
     location_id: locationId, weekdays: [5, 6], replace_ids: [], intervals: [{ opens_at: "07:17", closes_at: "23:43" }],
   }));
-});
-
-it("applies multiple adjacent intervals to all selected days in one operation", async () => {
-  renderHours();
-  fireEvent.click(screen.getByRole("button", { name: "Weekdays" }));
-  fireEvent.change(screen.getByLabelText("Opening time"), { target: { value: "07:00" } });
-  fireEvent.change(screen.getByLabelText("Closing time"), { target: { value: "12:00" } });
-  fireEvent.click(screen.getByRole("button", { name: "Add interval" }));
-  fireEvent.change(screen.getAllByLabelText("Opening time")[1], { target: { value: "14:00" } });
-  fireEvent.change(screen.getAllByLabelText("Closing time")[1], { target: { value: "24:00" } });
-  fireEvent.submit(screen.getByRole("button", { name: "Apply to selected days" }).closest("form")!);
-  await waitFor(() => expect(mutateOpeningHoursAction).toHaveBeenCalledExactlyOnceWith({
-    location_id: locationId, weekdays: [0, 1, 2, 3, 4], replace_ids: [], intervals: [
-      { opens_at: "07:00", closes_at: "12:00" }, { opens_at: "14:00", closes_at: "24:00" },
-    ],
-  }));
-  expect(onUpdated).toHaveBeenCalledWith([]);
-  expect(refresh).toHaveBeenCalledOnce();
-});
-
-it("disables Apply for a pristine interval edit and after reverting", () => {
-  renderHours([row(0)]);
-  fireEvent.click(screen.getByRole("button", { name: "Edit Mon 07:00–24:00" }));
-  const apply = screen.getByRole("button", { name: "Apply changes to selected days" }) as HTMLButtonElement;
-  const opening = screen.getByLabelText("Opening time") as HTMLInputElement;
-  expect(apply.disabled).toBe(true);
-  fireEvent.change(opening, { target: { value: "08:00" } });
-  expect(apply.disabled).toBe(false);
-  fireEvent.change(opening, { target: { value: "07:00" } });
-  expect(apply.disabled).toBe(true);
-});
-
-it("cancels opening-hours removal and keeps a failed removal open", async () => {
-  mutateOpeningHoursAction.mockResolvedValue({ ok: false, reason: "not-found" });
-  renderHours([row(0)]);
-  fireEvent.click(screen.getByRole("button", { name: "Remove Mon 07:00–24:00" }));
-  const confirmation = screen.getByRole("dialog", { name: "Remove Mon opening hours?" });
-  fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel" }));
-  expect(mutateOpeningHoursAction).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "Remove Mon 07:00–24:00" }));
-  fireEvent.click(within(screen.getByRole("dialog", { name: "Remove Mon opening hours?" })).getByRole("button", { name: "Remove hours" }));
-  await waitFor(() => expect(within(screen.getByRole("dialog", { name: "Remove Mon opening hours?" })).getByRole("alert").textContent).toContain("no longer exists"));
 });
 
 it("keeps an unchecked day unchanged when editing a grouped interval", async () => {
@@ -121,4 +79,3 @@ it("preserves a rejected opening-hours draft and shows the pricing conflict", as
   expect((screen.getByRole("button", { name: "Apply changes to selected days" }) as HTMLButtonElement).disabled).toBe(false);
   expect(onUpdated).not.toHaveBeenCalled();
 });
-

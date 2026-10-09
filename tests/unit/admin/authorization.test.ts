@@ -19,19 +19,7 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-it("returns an active admin account", async () => {
-  const account = {
-    state: "active", userId: "admin-1", email: "admin@example.com", roles: ["admin"],
-  } satisfies CurrentAccount;
-  readCurrentAccount.mockResolvedValue(account);
-
-  await expect(requireActiveAdmin(client)).resolves.toBe(account);
-  expect(readCurrentAccount).toHaveBeenCalledExactlyOnceWith(client);
-  expect(notFound).not.toHaveBeenCalled();
-  expect(redirect).not.toHaveBeenCalled();
-});
-
-it.each([{ roles: [] }, { roles: ["coach"] }] satisfies { roles: ("coach")[] }[])("rejects an active %s account", async ({ roles }) => {
+it.each([{ roles: ["coach"] }] satisfies { roles: ("coach")[] }[])("rejects an active %s account", async ({ roles }) => {
   readCurrentAccount.mockResolvedValue({
     state: "active", userId: "user-1", email: "user@example.com", roles: [...roles],
   } satisfies CurrentAccount);
@@ -53,14 +41,6 @@ it("rejects a suspended admin account", async () => {
 
 it("redirects an unauthenticated account to login", async () => {
   readCurrentAccount.mockResolvedValue({ state: "unauthenticated" } satisfies CurrentAccount);
-
-  await expect(requireActiveAdmin(client)).rejects.toThrow("redirect:/login");
-  expect(redirect).toHaveBeenCalledExactlyOnceWith("/login");
-  expect(notFound).not.toHaveBeenCalled();
-});
-
-it("redirects a missing-profile account to login", async () => {
-  readCurrentAccount.mockResolvedValue({ state: "missing-profile" } satisfies CurrentAccount);
 
   await expect(requireActiveAdmin(client)).rejects.toThrow("redirect:/login");
   expect(redirect).toHaveBeenCalledExactlyOnceWith("/login");

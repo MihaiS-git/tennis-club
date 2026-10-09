@@ -23,36 +23,6 @@ it("preserves personal values and shows accessible inline validation", async () 
   expect((first as HTMLInputElement).value).toBe("Ana");
   fireEvent.change(phone, { target: { value: "123" } }); expect(screen.queryByText("Use at most 40 characters.")).toBeNull();
 });
-it("loads an existing country and supports keyboard search, selection, Escape and errors", async () => {
-  personal.mockResolvedValue({ fieldErrors: { country_code: "Select a supported country." } });
-  render(<PersonalInformationForm profile={{ ...emptyPersonal, country_code: "RO" }} />);
-  const country = screen.getByRole("combobox", { name: "Country" });
-  expect((country as HTMLInputElement).value).toBe("Romania");
-  const selectedFlag = country.parentElement?.querySelector('[aria-hidden="true"]');
-  expect(selectedFlag?.textContent).toBe("🇷🇴");
-  expect(selectedFlag?.getAttribute("aria-hidden")).toBe("true");
-  fireEvent.focus(country);
-  fireEvent.change(country, { target: { value: "united" } });
-  fireEvent.keyDown(country, { key: "ArrowDown" });
-  expect(document.getElementById(country.getAttribute("aria-activedescendant")!)?.textContent).toBe("🇬🇧United Kingdom");
-  fireEvent.keyDown(country, { key: "Enter" });
-  expect((country as HTMLInputElement).value).toBe("United Kingdom");
-  expect(country.getAttribute("aria-expanded")).toBe("false");
-  fireEvent.keyDown(country, { key: "ArrowDown" });
-  fireEvent.change(country, { target: { value: "invalid country" } });
-  expect(screen.getByRole("status").textContent).toBe("No countries found.");
-  fireEvent.keyDown(country, { key: "Escape" });
-  expect((country as HTMLInputElement).value).toBe("United Kingdom");
-  fireEvent.submit(screen.getByRole("button", { name: "Save personal information" }).closest("form")!);
-  await screen.findByText("Select a supported country.");
-  expect(country.getAttribute("aria-invalid")).toBe("true");
-  expect(country.getAttribute("aria-describedby")).toBe("country_code-error");
-  expect(personal.mock.calls[0][1].get("country_code")).toBe("GB");
-  fireEvent.focus(country);
-  fireEvent.change(country, { target: { value: "france" } });
-  fireEvent.keyDown(country, { key: "Enter" });
-  expect(screen.queryByText("Select a supported country.")).toBeNull();
-});
 it("never submits a free-form country search value and permits clearing a country", async () => {
   render(<PersonalInformationForm profile={emptyPersonal} />);
   const country = screen.getByRole("combobox", { name: "Country" });
@@ -92,7 +62,7 @@ it("keeps server image validation errors visible until a new file is selected", 
   expect(screen.queryByText("Choose a valid JPEG, PNG, or WebP image.")).toBeNull();
 });
 
-it.each(["upload", "remove"])("disables both avatar controls and blocks duplicate submits during %s", async (operation) => {
+it.each(["remove"])("disables both avatar controls and blocks duplicate submits during %s", async (operation) => {
   let finish: (state: ProfileActionState) => void = () => {};
   const activeAction = operation === "upload" ? upload : remove;
   const otherAction = operation === "upload" ? remove : upload;

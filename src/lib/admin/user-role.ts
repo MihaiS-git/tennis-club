@@ -4,6 +4,15 @@ import { z } from "zod";
 
 import { requireActiveAdmin } from "@/lib/admin/authorization";
 import type { UserRole } from "@/lib/auth/account";
+import { inTransaction } from "@/lib/db/transaction";
+import { lockActiveAdminAccount } from "@/lib/db/repositories/accounts.repository";
+import { normalizeDatabaseError } from "@/lib/db/errors";
+import {
+  assignUserRole,
+  lockAdminRole, lockUserIdentityFacts, countActiveAdmins,
+  listUserRoleCodes,
+  removeUserRole,
+} from "@/lib/db/repositories/user-roles.repository";
 import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
 
@@ -15,12 +24,12 @@ export const adminUserRoleSchema = z.object({
 
 export type AdminUserRoleInput = z.infer<typeof adminUserRoleSchema>;
 
-export type AdminUserRoleSuccess = {
+type AdminUserRoleSuccess = {
   ok: true;
   user: { id: string; roles: UserRole[] };
 };
 
-export type AdminUserRoleFailure = {
+type AdminUserRoleFailure = {
   ok: false;
   reason: "not-found" | "final-active-admin" | "self-management";
 };
@@ -44,35 +53,40 @@ export async function updateAdminUserRole(
     return { ok: false, reason: "self-management" };
   }
 
-  const target = await client.from("users").select("id").eq("id", userId).maybeSingle();
-  if (target.error) failUpdate("target", target.error.code);
-  if (!target.data) return { ok: false, reason: "not-found" };
-
-  const mutation = operation === "assign"
-    ? await client.from("user_roles").upsert(
-      { user_id: userId, role_code: role },
-      { onConflict: "user_id,role_code", ignoreDuplicates: true },
-    )
-    : await client.from("user_roles").delete().eq("user_id", userId).eq("role_code", role);
-
-  if (mutation.error) {
+  let stage = "target";
+  let assignments: string[];
+  try {
+    const result = await inTransaction(async (manager) => {
+      await lockAdminRole(manager);
+      if (!await lockActiveAdminAccount(manager, actor.userId)) throw new Error("Administrator required");
+      const target = await lockUserIdentityFacts(manager, userId);
+      if (!target) return { ok: false, reason: "not-found" } as const;
+      if (operation === "revoke" && role === "admin" && target.status === "active"
+        && target.roles.includes("admin") && await countActiveAdmins(manager) <= 1) {
+        return { ok: false, reason: "final-active-admin" } as const;
+      }
+      stage = "mutation";
+      if (operation === "assign") await assignUserRole(manager, userId, role, actor.userId);
+      else await removeUserRole(manager, userId, role);
+      stage = "roles";
+      return { ok: true, roles: await listUserRoleCodes(manager, userId) } as const;
+    });
+    if (!result.ok) return result;
+    assignments = result.roles;
+  } catch (error: unknown) {
+    const databaseError = normalizeDatabaseError(error);
     if (
-      mutation.error.code === "23514" &&
-      mutation.error.message === "At least one active administrator must remain."
+      stage === "mutation" &&
+      databaseError.sqlState === "23514" &&
+      databaseError.driverMessage === "At least one active administrator must remain."
     ) {
       return { ok: false, reason: "final-active-admin" };
     }
-    failUpdate("mutation", mutation.error.code);
+    failUpdate(stage, databaseError.sqlState);
   }
 
-  const assignments = await client.from("user_roles")
-    .select("role_code")
-    .eq("user_id", userId)
-    .order("role_code");
-  if (assignments.error || !assignments.data) failUpdate("roles", assignments.error?.code);
-
   const roles = adminUserRoleSchema.shape.role.array()
-    .safeParse(assignments.data.map(({ role_code }) => role_code));
+    .safeParse(assignments);
   if (!roles.success) failUpdate("roles");
 
   return { ok: true, user: { id: userId, roles: roles.data.sort() } };

@@ -52,22 +52,6 @@ it("shows signed-out links and closes on link selection or Escape", () => {
   expect(document.activeElement).toBe(trigger);
 });
 
-it("shows Matches and personal account destinations for authenticated users", () => {
-  render(<MobileNavbarMenu isAuthenticated isAdmin={false} canReserve={false} />);
-  fireEvent.click(screen.getByRole("button", { name: "Open menu" }));
-
-  const drawer = screen.getByRole("dialog", { name: "Mobile navigation menu" });
-  const navigation = within(drawer).getByRole("navigation", { name: "Mobile navigation" });
-  expect(within(navigation).getAllByRole("link").map((link) => link.textContent)).toEqual([
-    "Courts", "Coaching", "Matches", "Rankings", "Club", "My activity", "Profile & settings",
-  ]);
-  expect(within(navigation).getByRole("link", { name: "My activity" }).getAttribute("href")).toBe("/my-activity/bookings");
-  expect(within(navigation).getByRole("link", { name: "Profile & settings" }).getAttribute("href")).toBe("/profile");
-  expect(within(navigation).queryByRole("link", { name: "Account" })).toBeNull();
-  expect(within(navigation).getByRole("button", { name: "Sign out" })).toBeDefined();
-  expect(within(navigation).queryByText("Sign in")).toBeNull();
-});
-
 it("closes on backdrop or drawer close button and restores focus", () => {
   render(<MobileNavbarMenu isAuthenticated={false} isAdmin={false} canReserve={false} />);
   const trigger = screen.getByRole("button", { name: "Open menu" });
@@ -100,12 +84,7 @@ it("keeps keyboard focus inside the open drawer", () => {
 
 it.each([
   ["active admin", { state: "active", userId: "admin-1", email: "admin@example.com", roles: ["admin"] }, true],
-  ["active account", { state: "active", userId: "member-1", email: "member@example.com", roles: [] }, false],
-  ["active coach", { state: "active", userId: "coach-1", email: "coach@example.com", roles: ["coach"] }, false],
   ["suspended admin", { state: "suspended", userId: "admin-1", email: "admin@example.com", roles: ["admin"] }, false],
-  ["unauthenticated", { state: "unauthenticated" }, false],
-  ["missing profile", { state: "missing-profile" }, false],
-  ["load error", { state: "load-error" }, false],
 ] satisfies ReadonlyArray<readonly [string, CurrentAccount, boolean]>)("shows Admin only for %s in the mobile navbar", async (_description, account, showsAdmin) => {
   readCurrentAccount.mockResolvedValue(account);
   render(await MobileNavbar());

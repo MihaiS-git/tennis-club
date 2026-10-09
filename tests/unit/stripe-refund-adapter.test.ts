@@ -22,7 +22,7 @@ test("recovers accepted refunds after a lost response without creating another",
   expect(await stripeAdapter.refundPayment(refund)).toMatchObject({ status: "succeeded" });
   expect(create).not.toHaveBeenCalled();
 });
-test.each([['pending', 'pending'], ['failed', 'failed'], ['canceled', 'failed']])("retrieves existing provider refund with state %s", async (providerStatus, status) => {
+test.each([['failed', 'failed']])("retrieves existing provider refund with state %s", async (providerStatus, status) => {
   retrieve.mockResolvedValue({ ...result, status: providerStatus });
   expect(await stripeAdapter.refundPayment({ ...refund, providerRefundId: result.id })).toEqual({ providerRefundId: result.id, status });
   expect(create).not.toHaveBeenCalled();

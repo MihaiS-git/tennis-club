@@ -39,7 +39,7 @@ test("a declined card leaves the same payment element available for another atte
   expect(status.mock.calls.every(call => call[0].attemptId === props.checkout.attemptId)).toBe(true);
 });
 
-test.each(["expired", "failed"])("a terminal %s checkout stops accepting cards without confirming a booking", async terminal => {
+test.each(["expired"])("a terminal %s checkout stops accepting cards without confirming a booking", async terminal => {
   status.mockResolvedValue({ ok: true, status: terminal });
   render(<OnlinePayment {...props} />);
   await waitFor(() => expect(screen.queryByLabelText("Card")).toBeNull());

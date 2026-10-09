@@ -1,0 +1,27 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "src/lib/db/migrations/*.ts",
+    "scripts/initialize-test-database.ts",
+    "playwright.config.ts"
+  ],
+  "project": [
+    "src/**/*.{ts,tsx,mjs,css}",
+    "scripts/*.{ts,mjs}",
+    "tests/**/*.{ts,tsx,mjs}"
+  ],
+  "vitest": {
+    "entry": [
+      "tests/{unit,components,integration}/**/*.test.{ts,tsx}"
+    ]
+  },
+  "playwright": {
+    "config": [],
+    "entry": [
+      "tests/e2e/**/*.e2e.ts"
+    ]
+  },
+  "ignoreBinaries": [
+    "psql"
+  ]
+}

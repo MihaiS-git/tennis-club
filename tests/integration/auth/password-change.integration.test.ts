@@ -45,8 +45,7 @@ function provisioningCounts(userId: string): number[] {
   const result = execFileSync(
     "psql",
     [
-      process.env.LOCAL_SUPABASE_DB_URL ??
-        "postgresql://postgres:postgres@127.0.0.1:54322/postgres",
+      process.env.LOCAL_SUPABASE_DB_URL!,
       "-At",
       "-c",
       `select
@@ -62,7 +61,7 @@ function provisioningCounts(userId: string): number[] {
 async function confirmationLinkFor(email: string): Promise<string> {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const messagesResponse = await fetch(
-      "http://127.0.0.1:54324/api/v1/messages",
+      `${process.env.MAILPIT_URL}/api/v1/messages`,
     );
     const messages = mailpitMessagesSchema.parse(await messagesResponse.json());
     const message = messages.messages.find((candidate) =>
@@ -71,7 +70,7 @@ async function confirmationLinkFor(email: string): Promise<string> {
 
     if (message) {
       const messageResponse = await fetch(
-        `http://127.0.0.1:54324/api/v1/message/${message.ID}`,
+        `${process.env.MAILPIT_URL}/api/v1/message/${message.ID}`,
       );
       const detail = mailpitMessageSchema.parse(await messageResponse.json());
       const link = detail.Text.match(/https?:\/\/[^ )]+/)?.[0];
@@ -139,7 +138,7 @@ test("signup provisions the application profile and zero roles", async () => {
 
     await confirmSignUp(email, client);
 
-    const profile = await client
+    const profile = await service
       .from("users")
       .select("id, email, status")
       .eq("id", signUp.data.user.id)
@@ -151,13 +150,15 @@ test("signup provisions the application profile and zero roles", async () => {
       status: "active",
     });
 
-    const roles = await client
+    const roles = await service
       .from("user_roles")
       .select("role_code")
       .eq("user_id", signUp.data.user.id);
     assert.strictEqual(roles.error, null);
     assert.deepStrictEqual(roles.data, []);
 
+    assert.strictEqual((await client.from("users").select("id")).error?.code, "42501");
+    assert.strictEqual((await client.from("user_roles").select("role_code")).error?.code, "42501");
     await client.auth.signOut({ scope: "local" });
   } finally {
     await cleanupAuthFixtures(service, createdIds);

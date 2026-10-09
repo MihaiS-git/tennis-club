@@ -20,3 +20,8 @@ export type CoverageMutationResult =
   | { ok: true; id: string }
   | { ok: false; reason: "invalid-input"; fieldErrors: Record<string, string> }
   | { ok: false; reason: "overlap" | "outdoor-only" | "not-found" };
+
+// ISO dates sort chronologically. Coverage endpoints both belong to the period.
+export function coveragePeriodsOverlap(a: CoverageDates, b: CoverageDates): boolean {
+  return a.starts_on <= b.ends_on && b.starts_on <= a.ends_on;
+}

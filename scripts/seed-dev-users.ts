@@ -1,24 +1,15 @@
 // Development fixtures only. Never imported by application code.
-import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { z } from "zod";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { getDataSource } from "../src/lib/db/data-source.ts";
+import { UserEntity } from "../src/lib/db/entities/user.entity.ts";
+import { UserRoleEntity } from "../src/lib/db/entities/user-role.entity.ts";
+import { assertLocalDatabase, localAuthClient } from "./local-dev.ts";
 import { seedDevData } from "./seed-dev-data.ts";
 
-export const DEV_USER_PASSWORD = "Local-Tennis-Dev-2026!";
+const DEV_USER_PASSWORD = "Local-Tennis-Dev-2026!";
 
-export function localSupabaseUrl(value: string | undefined, environment: string | undefined) {
-  // Exact origins avoid alternate ports, URL credentials, paths, and disguised hosts.
-  const allowed = ["http://127.0.0.1:54321", "http://localhost:54321", "http://[::1]:54321"];
-  const origin = value?.replace(/\/$/, "");
-  if (environment === "production" || !origin || !allowed.includes(origin)) {
-    throw new Error("User seeding requires development mode and local Supabase on port 54321.");
-  }
-  // Pin localhost to the loopback address rather than depending on DNS.
-  return origin === "http://localhost:54321" ? "http://127.0.0.1:54321" : origin;
-}
-
-export const devUsers = [
+const devUsers = [
   { email: "dev-admin@example.test", roles: ["admin"] },
   { email: "dev-coach@example.test", roles: ["coach"] },
   ...Array.from({ length: 8 }, (_, index) => ({
@@ -29,20 +20,9 @@ export const devUsers = [
   })),
 ];
 
-function localServiceRoleKey() {
-  if (process.env.LOCAL_SUPABASE_SERVICE_ROLE_KEY?.trim()) {
-    return process.env.LOCAL_SUPABASE_SERVICE_ROLE_KEY;
-  }
-  try {
-    return z.object({ SERVICE_ROLE_KEY: z.string().min(1) }).parse(
-      JSON.parse(execFileSync("supabase", ["status", "-o", "json"], { encoding: "utf8" })),
-    ).SERVICE_ROLE_KEY;
-  } catch {
-    throw new Error("Unable to read local Supabase credentials. Start local Supabase or set LOCAL_SUPABASE_SERVICE_ROLE_KEY.");
-  }
-}
-
-export async function seedDevUsers(service: SupabaseClient) {
+async function seedDevUsers(service: SupabaseClient) {
+  assertLocalDatabase();
+  const database = await getDataSource();
   // Read Auth once (paginated), including accounts without an application row.
   const existing = new Set<string>();
   for (let page = 1; ; page += 1) {
@@ -72,36 +52,28 @@ export async function seedDevUsers(service: SupabaseClient) {
     }
     const id = result.data.user.id;
     created.push(id);
-    const additionalRoles = fixture.roles;
-    if (additionalRoles.length) {
-      const roles = await service.from("user_roles").insert(
-        additionalRoles.map((role_code) => ({ user_id: id, role_code })),
-      );
-      if (roles.error) throw new Error(`Unable to assign fixture roles to ${fixture.email}.`);
-    }
   }
 
-  const result = await service.from("users")
-    .select("email, status, user_roles!user_roles_user_id_fkey(role_code)")
-    .in("email", devUsers.map((user) => user.email));
-  if (result.error) throw new Error("Unable to verify development fixtures.");
-  const parsed = z.array(z.object({
-    email: z.string(),
-    status: z.enum(["active", "suspended"]),
-    user_roles: z.array(z.object({ role_code: z.enum(["coach", "admin"]) })),
-  })).safeParse(result.data);
-  if (!parsed.success || parsed.data.length !== devUsers.length) {
-    throw new Error(`Expected ${devUsers.length} provisioned development accounts.`);
-  }
-  for (const fixture of devUsers) {
-    const row = parsed.data.find((user) => user.email === fixture.email);
-    const roles = row?.user_roles.map((role) => role.role_code).sort().join(",");
-    if (!row || row.status !== "active" || roles !== fixture.roles.join(",")) {
-      throw new Error(`Fixture verification failed for ${fixture.email}. Existing accounts were preserved; inspect its status/roles manually.`);
+  // Repair an interrupted role assignment on rerun, without changing existing accounts.
+  await database.transaction("READ COMMITTED", async (manager) => {
+    for (const fixture of devUsers) {
+      const account = await manager.findOneBy(UserEntity, { email: fixture.email });
+      if (!account || account.status !== "active") {
+        throw new Error(`Expected an active provisioned account for ${fixture.email}.`);
+      }
+      for (const roleCode of fixture.roles) {
+        await manager.createQueryBuilder().insert().into(UserRoleEntity)
+          .values({ userId: account.id, roleCode, assignedAt: new Date(), assignedBy: null })
+          .orIgnore().execute();
+      }
+      const roles = await manager.findBy(UserRoleEntity, { userId: account.id });
+      if (roles.map((role) => role.roleCode).sort().join(",") !== fixture.roles.join(",")) {
+        throw new Error(`Unexpected roles for ${fixture.email}; inspect the local fixture.`);
+      }
     }
-  }
+  });
   console.log(JSON.stringify({
-    created: created.length, reused, verified: parsed.data.length,
+    created: created.length, reused, verified: devUsers.length,
     roles: {
       noRoles: devUsers.filter((user) => user.roles.length === 0).length,
       coach: devUsers.filter((user) => user.roles.includes("coach")).length,
@@ -111,14 +83,14 @@ export async function seedDevUsers(service: SupabaseClient) {
 }
 
 async function main() {
-  const url = localSupabaseUrl(process.env.SUPABASE_URL, process.env.NODE_ENV);
-  const service = createClient(url, localServiceRoleKey(), {
-    auth: { autoRefreshToken: false, detectSessionInUrl: false, persistSession: false },
-    // Never follow an HTTP redirect to another origin with the privileged credential.
-    global: { fetch: (input, init) => fetch(input, { ...init, redirect: "error" }) },
-  });
-  await seedDevUsers(service);
-  if (!process.argv.includes("--users-only")) await seedDevData(service);
+  const service = localAuthClient();
+  const database = await getDataSource();
+  try {
+    await seedDevUsers(service);
+    if (!process.argv.includes("--users-only")) await seedDevData();
+  } finally {
+    await database.destroy();
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

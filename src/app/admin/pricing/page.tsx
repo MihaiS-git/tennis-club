@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { z } from "zod";
 import { AdminPageHeader, AdminToolbar } from "@/components/admin-page-controls";
 import { listAdminLocations } from "@/lib/admin/locations";
@@ -21,6 +22,7 @@ export default async function AdminPricingPage({ searchParams }: {
   const courts = allCourts.filter((court) => court.location_id === selected?.id);
   return <>
     <AdminPageHeader title="Pricing" description="Manage hourly pricing for specific courts, operational states, days and dates." />
+    {selected && <Link href={`/admin/locations/${selected.id}`} className="mb-4 inline-block text-sm font-medium text-primary underline focus-visible:outline-2 focus-visible:outline-focus">Back to {selected.name} setup</Link>}
     {selected ? <PricingRules key={selected.id} location={selected} locations={locations} courts={courts} rules={rules} openingHours={openingHours} />
       : locations.length > 0 ? <>
         <AdminToolbar primary={<PricingLocationSelect locations={locations} />} />

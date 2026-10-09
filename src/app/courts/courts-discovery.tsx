@@ -1,6 +1,9 @@
+import { connection } from "next/server";
+
 import { listPublicLocationsWithCourts } from "@/lib/courts/public";
 
 export async function CourtsDiscovery() {
+  await connection();
   const locations = await listPublicLocationsWithCourts();
   const courtCount = locations.reduce((total, location) => total + location.courts.length, 0);
 

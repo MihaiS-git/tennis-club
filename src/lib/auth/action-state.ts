@@ -8,6 +8,7 @@ export type AuthActionState = {
   success?: string;
   fieldErrors?: Partial<Record<AuthFieldName, string>>;
   formError?: string;
+  emailUnconfirmed?: boolean;
 };
 
 export const initialAuthActionState: AuthActionState = {};

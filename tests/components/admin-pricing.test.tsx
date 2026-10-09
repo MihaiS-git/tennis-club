@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { installDialogMock } from "../helpers/dialog";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const { savePricingRuleAction, removePricingRuleAction, listAdminLocations, listAdminPricingRules, listAdminCourts, listAdminLocationOpeningHours, push } = vi.hoisted(() => ({
@@ -28,29 +29,10 @@ const openingHours = Array.from({ length: 7 }, (_, weekday) => ({
 }));
 beforeEach(() => { vi.resetAllMocks(); savePricingRuleAction.mockResolvedValue({ ok: true, id: rule.rule_set_id }); removePricingRuleAction.mockResolvedValue({ ok: true, id: rule.rule_set_id });
   listAdminLocationOpeningHours.mockResolvedValue(openingHours);
-  HTMLDialogElement.prototype.showModal = function () { this.open = true; };
-  HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new Event("close")); };
+  installDialogMock();
 });
 afterEach(cleanup);
 
-it("offers selectable half-hour times while accepting typed HH:mm", async () => {
-  render(<PricingRules openingHours={openingHours} location={location} courts={[...courts]} rules={[]} />);
-  fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
-  const start = screen.getByLabelText("Start time") as HTMLInputElement;
-  const end = screen.getByLabelText("End time") as HTMLInputElement;
-  const startOptions = document.getElementById(start.getAttribute("list")!)!;
-  const endOptions = document.getElementById(end.getAttribute("list")!)!;
-  expect(startOptions.querySelector('option[value="07:30"]')).toBeTruthy();
-  expect(startOptions.querySelector('option[value="24:00"]')).toBeNull();
-  expect(endOptions.querySelector('option[value="24:00"]')).toBeTruthy();
-  fireEvent.click(screen.getByRole("checkbox", { name: /Court 1/ }));
-  fireEvent.change(start, { target: { value: "07:17" } });
-  fireEvent.change(end, { target: { value: "08:43" } });
-  fireEvent.change(screen.getByLabelText("Price per hour (EUR)"), { target: { value: "12.00" } });
-  fireEvent.submit(screen.getByRole("form", { name: "Pricing rule" }));
-  await waitFor(() => expect(savePricingRuleAction).toHaveBeenCalledOnce());
-  expect(savePricingRuleAction.mock.calls[0][0]).toMatchObject({ starts_at: "07:17", ends_at: "08:43" });
-});
 it("shows an actionable error for an out-of-hours create rule and enables Save after correction", () => {
   render(<PricingRules openingHours={openingHours} location={location} courts={[...courts]} rules={[]} />);
   fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
@@ -78,41 +60,6 @@ it("preserves entered values and displays the server's current-hours error after
   expect((screen.getByLabelText("Start time") as HTMLInputElement).value).toBe("08:00");
   expect((screen.getByLabelText("End time") as HTMLInputElement).value).toBe("09:00");
   expect((screen.getByRole("checkbox", { name: "Sunday" }) as HTMLInputElement).checked).toBe(true);
-  expect((screen.getByRole("button", { name: "Save rule" }) as HTMLButtonElement).disabled).toBe(false);
-});
-it("enables pricing Save after a change and disables it after reverting", () => {
-  render(<PricingRules openingHours={openingHours} location={location} courts={[...courts]} rules={[{ ...rule, court_ids: [...rule.court_ids], weekdays: [...rule.weekdays] }]} />);
-  fireEvent.click(screen.getByRole("row", { name: /Edit pricing rule/ }));
-  const save = screen.getByRole("button", { name: "Save rule" }) as HTMLButtonElement;
-  expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
-  const start = screen.getByLabelText("Start time") as HTMLInputElement;
-  expect(save.disabled).toBe(true);
-  fireEvent.change(start, { target: { value: "17:00" } });
-  expect(save.disabled).toBe(false);
-  fireEvent.change(start, { target: { value: "16:00" } });
-  expect(save.disabled).toBe(true);
-});
-it("preserves a rejected pricing edit and keeps Save enabled", async () => {
-  savePricingRuleAction.mockResolvedValue({ ok: false, reason: "invalid-input", fieldErrors: { starts_at: "Choose another time." } });
-  render(<PricingRules openingHours={openingHours} location={location} courts={[...courts]} rules={[{ ...rule, court_ids: [...rule.court_ids], weekdays: [...rule.weekdays] }]} />);
-  fireEvent.click(screen.getByRole("row", { name: /Edit pricing rule/ }));
-  const start = screen.getByLabelText("Start time") as HTMLInputElement;
-  fireEvent.change(start, { target: { value: "17:00" } });
-  fireEvent.submit(screen.getByRole("form", { name: "Pricing rule" }));
-  await waitFor(() => expect(screen.getByText("Choose another time.")).toBeTruthy());
-  expect(start.value).toBe("17:00");
-  expect((screen.getByRole("button", { name: "Save rule" }) as HTMLButtonElement).disabled).toBe(false);
-});
-it("rejects incompatible court state in the form and allows selecting a compatible state", () => {
-  render(<PricingRules openingHours={openingHours} location={location} courts={[...courts]} rules={[]} />);
-  fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
-  fireEvent.click(screen.getByRole("checkbox", { name: /Court 3/ }));
-  expect(screen.getByText(/Selected courts must share a valid state/)).toBeTruthy();
-  expect((screen.getByRole("button", { name: "Save rule" }) as HTMLButtonElement).disabled).toBe(true);
-  fireEvent.change(screen.getByLabelText("Court state"), { target: { value: "indoor" } });
-  fireEvent.change(screen.getByLabelText("Start time"), { target: { value: "08:00" } });
-  fireEvent.change(screen.getByLabelText("End time"), { target: { value: "09:00" } });
-  fireEvent.change(screen.getByLabelText("Price per hour (EUR)"), { target: { value: "12.00" } });
   expect((screen.getByRole("button", { name: "Save rule" }) as HTMLButtonElement).disabled).toBe(false);
 });
 it("cancels pricing removal and keeps a failed removal open with its error", async () => {

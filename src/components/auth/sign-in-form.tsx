@@ -3,6 +3,7 @@
 import { useActionState } from "react";
 
 import { signInAction } from "@/app/(auth)/actions";
+import { ResendConfirmation } from "@/components/auth/resend-confirmation";
 import { FormMessage } from "@/components/auth-form";
 import { useActionErrors } from "@/components/auth-action-errors";
 import { FormField } from "@/components/form-field";
@@ -18,6 +19,12 @@ export function SignInForm() {
   return (
     <form ref={formRef} action={action} className="space-y-4" noValidate>
       <FormMessage>{formError}</FormMessage>
+      {state.emailUnconfirmed && formError ? (
+        <ResendConfirmation getEmail={() => {
+          const email = formRef.current?.elements.namedItem("email");
+          return email instanceof HTMLInputElement ? email.value : "";
+        }} />
+      ) : null}
       <FormField label="Email" htmlFor="signin-email" error={fieldError("email")} errorId="signin-email-error">
         <Input
           id="signin-email"

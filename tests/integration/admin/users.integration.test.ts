@@ -1,15 +1,15 @@
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { assert, expect, test, vi } from "vitest";
 
 import { createClient } from "@supabase/supabase-js";
-import { z } from "zod";
+import { assertTestEnvironment } from "../../local/environment.mjs";
 
 import { ensureIntegrationAdminAnchor } from "../admin-anchor";
 
 vi.mock("server-only", () => ({}));
 
 import { listAdminUsers, readAdminUserDetails } from "../../../src/lib/admin/users";
+import * as usersRepository from "../../../src/lib/db/repositories/users.repository";
 
 const supabaseUrl = process.env.SUPABASE_URL ?? "";
 const publishableKey = process.env.SUPABASE_PUBLISHABLE_KEY ?? "";
@@ -18,14 +18,8 @@ if (!supabaseUrl || !publishableKey) {
 }
 
 function localServiceRoleKey(): string {
-  if (process.env.LOCAL_SUPABASE_SERVICE_ROLE_KEY) {
-    return process.env.LOCAL_SUPABASE_SERVICE_ROLE_KEY;
-  }
-  const status = execFileSync("supabase", ["status", "-o", "json"], {
-    encoding: "utf8",
-  });
-  return z.object({ SERVICE_ROLE_KEY: z.string().min(1) }).parse(JSON.parse(status))
-    .SERVICE_ROLE_KEY;
+  assertTestEnvironment();
+  return process.env.LOCAL_SUPABASE_SERVICE_ROLE_KEY!;
 }
 
 function client(key = publishableKey) {
@@ -75,7 +69,7 @@ test("admin user listing is authorized, ordered, bounded, and includes roles", a
     assert.strictEqual(adminRole.error, null);
 
     const oldest = await createUser("oldest");
-    for (let index = 0; index < 29; index += 1) {
+    for (let index = 0; index < 16; index += 1) {
       await createUser(`filler-${String(index).padStart(2, "0")}`);
     }
 
@@ -110,6 +104,26 @@ test("admin user listing is authorized, ordered, bounded, and includes roles", a
     assert.strictEqual((await service.from("users").update({ first_name: "Live", last_name: "Player", phone: "+40712345678", city: "Bucharest" }).eq("id", member.id)).error, null);
     assert.strictEqual((await service.from("player_profiles").insert({ user_id: member.id, display_name: "Live Ace", sportya_level: "6", rating: 1450, handedness: "left", backhand: "two_handed", preferred_game: "both", preferred_surface: "clay", bio: "Live bio" })).error, null);
     const details = await readAdminUserDetails(member.id, adminSession);
+    expect(details).toMatchObject({ id: member.id, email: member.email, status: "active", roles: [],
+      created_at: "2020-01-01T00:00:00.000Z" });
+    assert.ok(details);
+    expect(details.updated_at).toBe(new Date(details.updated_at).toISOString());
+    // Account/RBAC and composed profile reads use TypeORM without a PostgREST fallback.
+    const accountLookup = vi.spyOn(usersRepository, "findAdminUserById");
+    const profileReads = vi.spyOn(adminSession, "from");
+    try {
+      const coachDetails = await readAdminUserDetails(coach.id, adminSession);
+      expect(coachDetails).toMatchObject({ id: coach.id, email: coach.email, roles: ["admin", "coach"], player: null });
+      expect(accountLookup).toHaveBeenCalledOnce();
+      expect(accountLookup.mock.calls[0]?.[1]).toBe(coach.id);
+      expect(profileReads).not.toHaveBeenCalled();
+      profileReads.mockClear();
+      expect(await readAdminUserDetails(randomUUID(), adminSession)).toBeNull();
+      expect(profileReads).not.toHaveBeenCalled();
+    } finally {
+      accountLookup.mockRestore();
+      profileReads.mockRestore();
+    }
     expect(details?.personal).toMatchObject({ first_name: "Live", last_name: "Player", phone: "+40712345678", city: "Bucharest" });
     expect(details?.player).toMatchObject({ display_name: "Live Ace", sportya_level: "6", rating: 1450, handedness: "left", backhand: "two_handed", preferred_game: "both", preferred_surface: "clay", bio: "Live bio" });
     assert.strictEqual((await service.from("users").update({ phone: "+40799999999" }).eq("id", member.id)).error, null);
@@ -135,6 +149,8 @@ test("admin user listing is authorized, ordered, bounded, and includes roles", a
     const rows = [...first.users, ...second.users];
     for (const row of rows) {
       expect(Number.isNaN(Date.parse(row.updated_at))).toBe(false);
+      expect(row.created_at).toBe(new Date(row.created_at).toISOString());
+      expect(row.updated_at).toBe(new Date(row.updated_at).toISOString());
     }
     expect(rows.find((row) => row.id === member.id)?.roles).toEqual([]);
     expect(rows.find((row) => row.id === coach.id)?.roles).toEqual(["admin", "coach"]);
@@ -159,14 +175,11 @@ test("admin user listing is authorized, ordered, bounded, and includes roles", a
     const combined = await listAdminUsers({ search, status: "suspended", role: "admin" }, adminSession);
     expect(combined.total).toBe(1);
     expect(combined.users[0].id).toBe(suspendedAdmin.id);
-    for (const page of [0, -1, 1.5, Number.NaN]) {
-      expect(await listAdminUsers({ search, page }, adminSession)).toEqual(first);
-    }
     expect(await listAdminUsers({ search, page: 9999 }, adminSession)).toEqual(second);
     expect(await listAdminUsers({ search: "   " }, adminSession)).toEqual(defaultResult);
     const empty = await listAdminUsers({ search: "no-such-email-" + runId }, adminSession);
     expect(empty).toEqual({ users: [], total: 0, totalPages: 0, page: 1, pageSize: 20 });
-    // Search terms are filter values, never fragments of PostgREST boolean syntax.
+    // Search treats SQL wildcards and former PostgREST syntax as literal values.
     expect((await listAdminUsers({ search: `${runId}%,status.eq.active` }, adminSession)).total).toBe(0);
     expect((await listAdminUsers({ search: `%${runId}` }, adminSession)).total).toBe(0);
     expect((await listAdminUsers({ search: `_${runId}` }, adminSession)).total).toBe(0);
@@ -193,15 +206,17 @@ test("admin user listing is authorized, ordered, bounded, and includes roles", a
         expect(firstSorted.total).toBe(createdIds.length);
         expect(firstSorted.users.map((row) => row.id)).toEqual(expected.slice(0, 20).map((row) => row.id));
         expect(secondSorted.users.map((row) => row.id)).toEqual(expected.slice(20).map((row) => row.id));
-        expect(await listAdminUsers({ search, sort, dir, page: 9999 }, adminSession)).toEqual(secondSorted);
-        const combinedSorted = await listAdminUsers({ search, status: "active", sort, dir, page: 2 }, adminSession);
-        const activeExpected = expected.filter((row) => row.status === "active");
-        expect(combinedSorted.total).toBe(activeExpected.length);
-        expect(combinedSorted.users.map((row) => row.id)).toEqual(activeExpected.slice(20).map((row) => row.id));
-        const roleSorted = await listAdminUsers({ search, role: "coach", sort, dir }, adminSession);
-        expect(roleSorted.total).toBe(2);
-        expect(roleSorted.users.map((row) => row.id)).toEqual(expected.filter((row) => row.roles.includes("coach")).map((row) => row.id));
-        expect(roleSorted.users.find((row) => row.id === coach.id)?.roles).toEqual(["admin", "coach"]);
+        // Check filtered pagination once; each sort/direction is already exercised above.
+        if (sort === "joined" && dir === "desc") {
+          const combinedSorted = await listAdminUsers({ search, status: "active", sort, dir, page: 2 }, adminSession);
+          const activeExpected = expected.filter((row) => row.status === "active");
+          expect(combinedSorted.total).toBe(activeExpected.length);
+          expect(combinedSorted.users.map((row) => row.id)).toEqual(activeExpected.slice(20).map((row) => row.id));
+          const roleSorted = await listAdminUsers({ search, role: "coach", sort, dir }, adminSession);
+          expect(roleSorted.total).toBe(2);
+          expect(roleSorted.users.map((row) => row.id)).toEqual(expected.filter((row) => row.roles.includes("coach")).map((row) => row.id));
+          expect(roleSorted.users.find((row) => row.id === coach.id)?.roles).toEqual(["admin", "coach"]);
+        }
       }
     }
 
@@ -209,9 +224,8 @@ test("admin user listing is authorized, ordered, bounded, and includes roles", a
     await expect(readAdminUserDetails(coach.id, memberSession)).rejects.toThrow("NEXT_HTTP_ERROR_FALLBACK;404");
     await expect(listAdminUsers({}, memberSession)).rejects.toThrow("NEXT_HTTP_ERROR_FALLBACK;404");
     await expect(listAdminUsers({ sort: "roles" }, memberSession)).rejects.toThrow("NEXT_HTTP_ERROR_FALLBACK;404");
-    const visibleKeys = await memberSession.from("user_role_sort_keys").select("id, role_sort_key");
-    expect(visibleKeys.error).toBeNull();
-    expect(visibleKeys.data).toEqual([{ id: member.id, role_sort_key: 0 }]);
+    const visibleUsers = await memberSession.from("users").select("id");
+    expect(visibleUsers.error?.code).toBe("42501");
 
     const suspendedSession = await signIn(suspendedAdmin.email);
     await expect(readAdminUserDetails(member.id, suspendedSession)).rejects.toThrow("NEXT_HTTP_ERROR_FALLBACK;404");

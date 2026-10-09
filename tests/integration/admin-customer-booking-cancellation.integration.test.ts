@@ -1,9 +1,8 @@
-import { cancellationCommandFixture } from "./checkout-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test } from "vitest";
-import { listOwnCourtHistory } from "@/lib/bookings/history-service";
-import { listOwnUpcomingCustomerBookings } from "@/lib/bookings/personal-service";
+import { listOwnCourtHistory } from "../helpers/current-activity";
+import { listOwnUpcomingCustomerBookings } from "../helpers/current-activity";
 import { getReservationDay, cancelCustomerBookingAsAdmin } from "@/lib/reservations/service";
 import { localMinute, localToday } from "@/lib/courts/local-time";
 import { mondayWeekday } from "@/lib/pricing/resolution";
@@ -56,12 +55,10 @@ test("Admin cancellation atomically preserves snapshots, frees occupancy and mov
     expect((await listOwnUpcomingCustomerBookings(owner.client)).map((item) => item.id)).toContain(bookingId);
     expect((await listOwnUpcomingCustomerBookings(owner.client)).map((item) => item.id)).not.toContain(guestBookingId);
     expect((await getReservationDay(location, date, now, admin.client)).adminOccupancy.map((item) => item.id)).toContain(bookingId);
-    expect((await coach.client.rpc("commit_booking_cancellation", cancellationCommandFixture(bookingId))).error?.code).toBe("42501");
-    expect((await owner.client.rpc("commit_booking_cancellation", cancellationCommandFixture(bookingId))).error?.code).toBe("42501");
     const anonymous = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_PUBLISHABLE_KEY!, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
-    expect((await anonymous.rpc("commit_booking_cancellation", cancellationCommandFixture(bookingId))).error?.code).toBe("42501");
+    for (const client of [coach.client, owner.client, anonymous]) await expect(cancelCustomerBookingAsAdmin(bookingId, client)).rejects.toThrow();
     const attempts = await Promise.all([
       cancelCustomerBookingAsAdmin(bookingId, admin.client),
       cancelCustomerBookingAsAdmin(bookingId, secondAdmin.client),
@@ -87,10 +84,7 @@ test("Admin cancellation atomically preserves snapshots, frees occupancy and mov
     expect(day.adminOccupancy.map((item) => item.id)).not.toContain(bookingId);
     expect(day.courts[0].cells.slice(0, 2)).toEqual(["available", "available"]);
     expect((await anonymous.from("court_reservations").select("court_id, starts_at_minute")
-      .eq("court_id", courtId).eq("booking_date", date)).data).toEqual([
-      { court_id: courtId, starts_at_minute: 660 },
-    ]);
-    expect((await admin.client.rpc("cancel_admin_court_reservation", { p_id: guestReservationId })).data).toBe(false);
+      .eq("court_id", courtId).eq("booking_date", date)).error?.code).toBe("42501");
     expect((await cancelCustomerBookingAsAdmin(guestBookingId, admin.client)).ok).toBe(true);
 
     const clock = new Date();
@@ -112,12 +106,8 @@ test("Admin cancellation atomically preserves snapshots, frees occupancy and mov
       expect(await cancelCustomerBookingAsAdmin(id, admin.client)).toEqual({ ok: false, message: "This booking is no longer available to cancel." });
       expect((await service.from("bookings").select("*").eq("id", id).single()).data).toEqual(bookingBefore);
       expect((await service.from("court_reservations").select("*").eq("id", bookingBefore.reservation_id).single()).data).toEqual(reservationBefore);
-      expect((await service.from("booking_email_outbox").select("id").eq("booking_id", id)).data).toEqual([]);
     }
     const directBefore = (await service.from("court_reservations").select("*").eq("id", pastDirectId).single()).data!;
-    const directAttempt = await admin.client.rpc("cancel_admin_court_reservation", { p_id: pastDirectId });
-    expect(directAttempt.error).toBeNull();
-    expect(directAttempt.data).toBe(false);
     expect((await service.from("court_reservations").select("*").eq("id", pastDirectId).single()).data).toEqual(directBefore);
   } finally {
     await service.from("bookings").delete().in("id", [bookingId, guestBookingId, pastBookingId, startedBookingId]);

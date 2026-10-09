@@ -85,6 +85,6 @@ player B rating history
 
 Never leave a partially applied rating update.
 
-Use a transaction/RPC only for the atomic persistence step; keep the rating algorithm itself in TypeScript.
+Use a TypeORM transaction for the atomic persistence step; keep the rating algorithm itself in TypeScript.
 
 Unit-test the calculation independently of database persistence.

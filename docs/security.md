@@ -52,26 +52,21 @@ Both elevated roles are optional. Normal authenticated accounts have no roles; o
 
 ## Role and status administration
 
-Ordinary authenticated users cannot assign or revoke roles or change account status. Active administrators may insert/delete role assignments and update another account’s `status` through the user-scoped client. Active owners may update only their own permitted personal/contact fields. Column grants and field-specific security triggers keep these UPDATE policy boundaries separate; identity/email/timestamps remain unavailable for direct updates. The role-assignment trigger records the actual authenticated administrator as `assigned_by`.
+Ordinary users cannot assign roles or change account status. Next.js Admin services
+validate verified actors and self-management restrictions, then serialize authoritative
+role/account facts in TypeORM transactions. TypeScript rejects loss of the final active
+Admin and explicitly persists assignment attribution and user timestamps. Suspended
+accounts cannot receive active authorization. No role/status policy triggers are installed.
 
-A suspended user may retain role rows but must not receive active admin authorization.
+## Database permissions
 
-Database triggers protect the final active administrator against suspension or admin-role revocation. RLS prevents self-status changes and self-admin assignment/revocation. Initial administrator assignment requires a trusted database operation.
-
-## RLS expectations
-
-Typical boundaries:
-
-- members can access their own private data;
-- members cannot access another member's private data;
-- members can manage only permitted bookings;
-- coaches can manage their own availability;
-- coaches can access sessions assigned to them;
-- admins can manage club resources according to role;
-- player-profile tennis data is visible only to active authenticated users;
-- account/payment/private information remains restricted.
-
-When adding a private or user-owned table, design its RLS policies as part of the same change.
+Application tables are accessed only by the trusted server TypeORM connection.
+Anon/authenticated have no table, column or sequence grants. The integration migration
+also revokes public-schema default grants for its owner and `postgres`, and no application
+RLS policies are installed. Next.js is the application authorization boundary: private
+reads require explicit verified owner filters and public reads enforce parent visibility.
+New private tables must preserve these grant restrictions. Native Supabase Auth and
+private Storage retain their own security; no browser table access is restored for avatars.
 
 ## Public and private player data
 
@@ -97,13 +92,13 @@ This separation matters because PostgreSQL RLS primarily controls rows, not arbi
 
 ## Player avatar storage
 
-`profile-avatars` is private, with active-user reads and owner-only writes to `<user-id>/avatar.jpg`, `.png`, or `.webp`. Next.js validates MIME, signature and a 5 MiB maximum before upload. The authenticated `/profile/avatar` endpoint checks active account status and downloads the current user’s image on the server, with private, no-store response headers. No browser-to-Supabase access or privileged application client is used. See `profiles.md` for compensation and failure limitations.
+`profile-avatars` is private, with active-user reads and owner-only writes to the sole canonical `<user-id>/avatar.webp` path; the bucket accepts only `image/webp`. Next.js preserves JPEG/PNG/WebP validation, the 5 MiB input limit and Sharp normalization. Verified active owners alone mutate their existing profile; active Admins may retrieve a requested target's avatar but cannot mutate it. TypeORM reads references and navigation metadata and rechecks the active owner/profile inside short mutation transactions; persisted paths must exactly match the owner/target canonical path. Auth and Storage remain user-scoped Supabase operations under unchanged policies. Secure GET retains 401/403/404/503, private no-store and nosniff responses. No public/signed URLs or browser Supabase access is introduced. No runtime avatar lease or replacement backup remains; first uploads use best-effort cleanup on DB failure, removal clears DB before best-effort Storage deletion, and non-atomic Storage/database outcomes can leave rare orphans or ambiguous races.  See `profiles.md`.
 
 ## User-scoped Supabase client
 
 Use the authenticated user session for normal application operations.
 
-RLS remains active.
+Storage retains RLS; application persistence uses TypeORM after Next.js authorization.
 
 This is the default access mode.
 

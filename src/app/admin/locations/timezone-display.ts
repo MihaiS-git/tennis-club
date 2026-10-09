@@ -1,4 +1,4 @@
-export function timezoneUtcOffset(zone: string, at: Date): string {
+function timezoneUtcOffset(zone: string, at: Date): string {
   const offset = new Intl.DateTimeFormat("en", { timeZone: zone, timeZoneName: "longOffset" })
     .formatToParts(at).find((part) => part.type === "timeZoneName")?.value;
   if (!offset?.startsWith("GMT")) throw new Error("Unable to display timezone offset.");

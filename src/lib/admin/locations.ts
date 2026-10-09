@@ -1,12 +1,19 @@
 import "server-only";
 
 import { z } from "zod";
+import type { EntityManager } from "typeorm";
 import { cancellationNoticeMinutesSchema } from "@/lib/bookings/cancellation-policy";
 import { requireActiveAdmin } from "@/lib/admin/authorization";
 import { generateLocationSlug, locationArchiveSchema, locationCurrencies, locationMutationSchema, type LocationMutationResult } from "@/lib/admin/locations-validation";
 import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
-import { createBookingWriter } from "@/lib/supabase/booking-writer";
+import { getDataSource } from "@/lib/db/data-source";
+import { lockActiveAdminAccount } from "@/lib/db/repositories/accounts.repository";
+import { inTransaction } from "@/lib/db/transaction";
+import { normalizeDatabaseError } from "@/lib/db/errors";
+import * as clubs from "@/lib/db/repositories/clubs.repository";
+import { listLocationPublicationPricing } from "@/lib/db/repositories/pricing.repository";
+import type { LocationEntity } from "@/lib/db/entities/location.entity";
 import { publicationError, publicationReadiness, publicationToday, type PublicationConfiguration } from "@/lib/locations/publication";
 
 const locationSchema = z.object({
@@ -20,27 +27,29 @@ const locationSchema = z.object({
   created_at: z.iso.datetime({ offset: true }), updated_at: z.iso.datetime({ offset: true }),
 });
 export type AdminLocation = z.infer<typeof locationSchema>;
-const columns = "allow_pay_at_club, id, name, slug, address_line1, address_line2, city, postal_code, country_code, timezone, currency, is_active, is_public, archived_at, display_order, created_at, updated_at";
+function locationDto(row: LocationEntity) {
+  return {
+    id: row.id, name: row.name, slug: row.slug,
+    address_line1: row.addressLine1, address_line2: row.addressLine2,
+    city: row.city, postal_code: row.postalCode, country_code: row.countryCode,
+    timezone: row.timezone, currency: row.currency, is_active: row.isActive,
+    is_public: row.isPublic, archived_at: row.archivedAt?.toISOString() ?? null,
+    display_order: row.displayOrder, allow_pay_at_club: row.allowPayAtClub,
+    customer_cancellation_notice_minutes: row.customerCancellationNoticeMinutes,
+    created_at: row.createdAt.toISOString(), updated_at: row.updatedAt.toISOString(),
+  };
+}
 
 export async function listAdminLocations(supabase?: Awaited<ReturnType<typeof createClient>>, view: "current" | "archived" = "current"): Promise<AdminLocation[]> {
-  const client = supabase ?? await createClient();
-  await requireActiveAdmin(client);
-  const query = client.from("locations").select(columns);
-  const [{ data, error }, policies] = await Promise.all([
-    (view === "archived" ? query.not("archived_at", "is", null) : query.is("archived_at", null))
-      .order("display_order").order("name").order("id"),
-    // The policy column has no authenticated SELECT grant, including for Admins.
-    createBookingWriter().from("locations").select("id, customer_cancellation_notice_minutes"),
-  ]);
-  const parsed = z.array(locationSchema).safeParse(data?.map((row) => ({ ...row,
-    customer_cancellation_notice_minutes: policies.data
-      ?.find((policy) => policy.id === row.id)?.customer_cancellation_notice_minutes,
-  })));
-  if (error || policies.error || !parsed.success) {
-    logger.error({ event: "admin.locations_list_failed", code: error?.code ?? policies.error?.code }, "Failed to load locations");
+  await requireActiveAdmin(supabase ?? await createClient());
+  try {
+    const rows = await clubs.listAdminLocations((await getDataSource()).manager, view);
+    return z.array(locationSchema).parse(rows.map(locationDto));
+  } catch (error) {
+    const failure = normalizeDatabaseError(error);
+    logger.error({ event: "admin.locations_list_failed", kind: failure.kind, code: failure.sqlState }, "Failed to load locations");
     throw new Error("Unable to load locations.");
   }
-  return parsed.data;
 }
 
 export async function saveAdminLocation(input: unknown, supabase?: Awaited<ReturnType<typeof createClient>>): Promise<LocationMutationResult> {
@@ -55,52 +64,53 @@ export async function saveAdminLocation(input: unknown, supabase?: Awaited<Retur
     return { ok: false, reason: "invalid-input", fieldErrors };
   }
   const { id, fields } = parsed.data;
-  const slug = id ? undefined : generateLocationSlug(fields.name);
+  const slug = id ? "" : generateLocationSlug(fields.name);
   if (!id && !slug) return { ok: false, reason: "invalid-input", fieldErrors: { name: "Use a name containing letters A–Z or numbers to generate a location slug." } };
 
-  if (fields.is_public) {
-    if (!id) return { ok: false, reason: "not-ready", message: publicationError(["opening hours, an active court, and pricing"]) };
-    const [locationResult, hoursResult, courtsResult, pricingResult] = await Promise.all([
-      client.from("locations").select("slug, archived_at").eq("id", id).maybeSingle(),
-      client.from("location_opening_hours").select("id").eq("location_id", id),
-      client.from("courts").select("id, environment").eq("location_id", id).eq("is_active", true),
-      client.from("location_pricing_rules").select("court_id, court_state, ends_on").eq("location_id", id),
-    ]);
-    if (locationResult.error || hoursResult.error || courtsResult.error || pricingResult.error) {
-      logger.error({ event: "admin.location_readiness_failed", actorId: actor.userId, locationId: id }, "Failed to check public booking readiness");
-      throw new Error("Unable to check public booking readiness.");
+  const values: clubs.LocationFields = {
+    name: fields.name, addressLine1: fields.address_line1, addressLine2: fields.address_line2,
+    city: fields.city, postalCode: fields.postal_code, countryCode: fields.country_code,
+    timezone: fields.timezone, currency: fields.currency, isActive: fields.is_active,
+    isPublic: id ? fields.is_public : false, displayOrder: fields.display_order,
+    allowPayAtClub: fields.allow_pay_at_club,
+    customerCancellationNoticeMinutes: fields.customer_cancellation_notice_minutes,
+  };
+  let failureMessage = id && fields.is_public ? "Unable to check public booking readiness." : "Unable to save location.";
+  let result: LocationMutationResult;
+  try {
+    if (!id) {
+      const createdId = await inTransaction(async (manager) => {
+        await clubs.lockConfigurationForWrite(manager);
+        if (!await lockActiveAdminAccount(manager, actor.userId)) throw new Error("Administrator required");
+        return clubs.insertLocation(manager, values, slug, new Date());
+      });
+      result = createdId ? { ok: true, id: createdId } : { ok: false, reason: "not-found" };
+    } else {
+      result = await inTransaction<LocationMutationResult>(async (manager) => {
+        await clubs.lockConfigurationForWrite(manager);
+        const [location] = await clubs.lockLocations(manager, [id]);
+        if (!await lockActiveAdminAccount(manager, actor.userId)) throw new Error("Administrator required");
+        if (!location || location.archivedAt) return { ok: false, reason: "not-found" };
+        if (fields.is_public) {
+          failureMessage = "Unable to check public booking readiness.";
+          const missing = await locationPublicationMissing(manager, id, { ...fields, slug: location.slug, archived_at: null });
+          if (missing.length) return { ok: false, reason: "not-ready", message: publicationError(missing) };
+          failureMessage = "Unable to save location.";
+        }
+        const savedId = await clubs.updateUnarchivedLocation(manager, id, values, new Date());
+        return savedId ? { ok: true, id: savedId } : { ok: false, reason: "not-found" };
+      });
     }
-    if (!locationResult.data || locationResult.data.archived_at) return { ok: false, reason: "not-found" };
-    const configuration: PublicationConfiguration = {
-      ...fields, slug: locationResult.data.slug, archived_at: locationResult.data.archived_at,
-      location_opening_hours: hoursResult.data ?? [],
-      courts: (courtsResult.data ?? []).map((court) => ({ ...court,
-        environment: court.environment === "indoor" ? "indoor" : "outdoor",
-        location_pricing_rules: (pricingResult.data ?? []).filter((rule) => rule.court_id === court.id).map((rule) => ({
-          court_state: rule.court_state === "indoor" ? "indoor" : rule.court_state === "covered" ? "covered" : "outdoor",
-          ends_on: rule.ends_on,
-        })),
-      })),
-    };
-    const missing = publicationReadiness(configuration, publicationToday(fields.timezone));
-    if (missing.length) return { ok: false, reason: "not-ready", message: publicationError(missing) };
+  } catch (error) {
+    const failure = normalizeDatabaseError(error);
+    if (failure.sqlState === "23505") return { ok: false, reason: "duplicate-slug" };
+    logger.error({ event: failureMessage === "Unable to save location." ? "admin.location_save_failed" : "admin.location_readiness_failed",
+      actorId: actor.userId, locationId: id, kind: failure.kind, code: failure.sqlState }, "Failed to save location");
+    throw new Error(failureMessage);
   }
-
-  // The strict schema contains only editable fields. Identity, slug on edit,
-  // creation time, and update time cannot be assigned by the caller.
-  const values = { ...fields, updated_at: new Date().toISOString() };
-  const query = id
-    ? client.from("locations").update(values).eq("id", id).is("archived_at", null)
-    : client.from("locations").insert({ ...values, slug });
-  const { data, error } = await query.select("id").maybeSingle();
-  if (error) {
-    if (error.code === "23505") return { ok: false, reason: "duplicate-slug" };
-    logger.error({ event: "admin.location_save_failed", actorId: actor.userId, locationId: id, code: error.code }, "Failed to save location");
-    throw new Error("Unable to save location.");
-  }
-  if (!data) return { ok: false, reason: "not-found" };
-  const locationId = z.uuid().parse(data.id);
-  logger.info({ event: id ? "admin.location_updated" : "admin.location_created", actorId: actor.userId, locationId, active: fields.is_active, public: fields.is_public }, "Location saved");
+  if (!result.ok) return result;
+  const locationId = result.id;
+  logger.info({ event: id ? "admin.location_updated" : "admin.location_created", actorId: actor.userId, locationId, active: fields.is_active, public: values.isPublic }, "Location saved");
   return { ok: true, id: locationId };
 }
 
@@ -110,15 +120,79 @@ export async function setAdminLocationArchived(input: unknown, supabase?: Awaite
   const parsed = locationArchiveSchema.safeParse(input);
   if (!parsed.success) return { ok: false, reason: "invalid-input", fieldErrors: { form: "Choose a valid location." } };
   const { id, archived } = parsed.data;
-  const query = client.from("locations").update({ archived_at: archived ? new Date().toISOString() : null,
-    is_active: false, updated_at: new Date().toISOString() }).eq("id", id);
-  const { data, error } = await (archived ? query.is("archived_at", null) : query.not("archived_at", "is", null))
-    .select("id").maybeSingle();
-  if (error) {
-    logger.error({ event: "admin.location_archive_failed", actorId: actor.userId, locationId: id, archived, code: error.code }, "Failed to change location archive state");
+  let savedId: string | null;
+  try {
+    savedId = await inTransaction(async (manager) => {
+      await clubs.lockConfigurationForWrite(manager);
+      await clubs.lockLocations(manager, [id]);
+      if (!await lockActiveAdminAccount(manager, actor.userId)) throw new Error("Administrator required");
+      return clubs.setLocationArchived(manager, id, archived, new Date());
+    });
+  } catch (error) {
+    const failure = normalizeDatabaseError(error);
+    logger.error({ event: "admin.location_archive_failed", actorId: actor.userId, locationId: id, archived,
+      kind: failure.kind, code: failure.sqlState }, "Failed to change location archive state");
     throw new Error("Unable to change location archive state.");
   }
-  if (!data) return { ok: false, reason: "not-found" };
+  if (!savedId) return { ok: false, reason: "not-found" };
   logger.info({ event: archived ? "admin.location_archived" : "admin.location_restored", actorId: actor.userId, locationId: id }, "Location archive state changed");
   return { ok: true, id };
+}
+
+const publicationFactsSchema = z.array(z.object({
+  id: z.uuid(), location_opening_hours: z.array(z.object({ id: z.uuid() })),
+  courts: z.array(z.object({ id: z.uuid(), environment: z.enum(["indoor", "outdoor"]),
+    location_pricing_rules: z.array(z.object({ court_state: z.enum(["indoor", "outdoor", "covered"]), ends_on: z.iso.date().nullable() })),
+  })),
+}));
+
+export async function listAdminLocationsWithReadiness(view: "current" | "archived" = "current", locationId?: string, supabase?: Awaited<ReturnType<typeof createClient>>) {
+  await requireActiveAdmin(supabase ?? await createClient());
+  const manager = (await getDataSource()).manager;
+  const entities = locationId
+    ? [await clubs.findAdminLocation(manager, z.uuid().parse(locationId))].filter((location) => location !== null)
+    : await clubs.listAdminLocations(manager, view);
+  const locations = z.array(locationSchema).parse(entities.map(locationDto));
+  const facts = publicationFactsSchema.parse(await clubs.listAdminPublicationFacts(manager, locations.map(({ id }) => id)));
+  const byId = new Map(facts.map((fact) => [fact.id, fact]));
+  return locations.map((location) => {
+    const fact = byId.get(location.id);
+    if (!fact) throw new Error("Unable to load location configuration.");
+    return { ...location, missing: publicationReadiness({ ...location, ...fact }, publicationToday(location.timezone)) };
+  });
+}
+
+async function locationPublicationMissing(manager: EntityManager, id: string,
+  location: Omit<PublicationConfiguration, "location_opening_hours" | "courts">) {
+  const hours = await clubs.listLocationOpeningHoursFacts(manager, id);
+  const courts = await clubs.listActiveLocationCourts(manager, id);
+  const pricing = await listLocationPublicationPricing(manager, id);
+  const configuration: PublicationConfiguration = { ...location, location_opening_hours: hours,
+    courts: courts.map((court) => ({ id: court.id, environment: court.environment,
+      location_pricing_rules: pricing.filter((rule) => rule.courtId === court.id)
+        .map((rule) => ({ court_state: rule.courtState, ends_on: rule.endsOn })),
+    })),
+  };
+  return publicationReadiness(configuration, publicationToday(location.timezone));
+}
+
+export async function setAdminLocationPublication(input: unknown, supabase?: Awaited<ReturnType<typeof createClient>>): Promise<LocationMutationResult> {
+  const actor = await requireActiveAdmin(supabase ?? await createClient());
+  const parsed = z.strictObject({ id: z.uuid(), is_public: z.boolean() }).safeParse(input);
+  if (!parsed.success) return { ok: false, reason: "invalid-input", fieldErrors: { form: "Choose a valid location." } };
+  const { id, is_public } = parsed.data;
+  return inTransaction(async (manager): Promise<LocationMutationResult> => {
+    await clubs.lockConfigurationForWrite(manager);
+    const [location] = await clubs.lockLocations(manager, [id]);
+    if (!await lockActiveAdminAccount(manager, actor.userId)) throw new Error("Administrator required");
+    if (!location || location.archivedAt) return { ok: false, reason: "not-found" };
+    if (is_public) {
+      const missing = await locationPublicationMissing(manager, id, locationDto(location));
+      if (missing.length) return { ok: false, reason: "not-ready", message: publicationError(missing) };
+      if (!location.isActive) return { ok: false, reason: "not-ready", message: "Activate this location before enabling public booking." };
+    }
+    // Persist only publication intent; concurrent details edits must not be overwritten.
+    await clubs.setLocationPublication(manager, id, is_public, new Date());
+    return { ok: true, id };
+  });
 }

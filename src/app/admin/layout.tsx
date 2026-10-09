@@ -7,7 +7,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   return <AdminAuthorizedShell>{children}</AdminAuthorizedShell>;
 }
 
-export async function AdminAuthorizedShell({ children }: { children: React.ReactNode }) {
+async function AdminAuthorizedShell({ children }: { children: React.ReactNode }) {
   await requireActiveAdmin();
 
   return (

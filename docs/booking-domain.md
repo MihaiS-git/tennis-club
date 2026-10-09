@@ -218,9 +218,9 @@ Prevent:
 
 Admin cancellation of customer bookings and direct reservations is permitted only
 strictly before the location-local start. The details dialog hides cancellation
-for started or past intervals. Both cancellation RPCs check wall-clock time after
+for started or past intervals. Both cancellation transactions check wall-clock time after
 acquiring row locks; rejected attempts preserve all booking/reservation snapshots
-and do not enqueue cancellation notifications.
+and do not send cancellation notifications.
 
 ## Booking UI
 

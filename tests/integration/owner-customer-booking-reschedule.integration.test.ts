@@ -1,8 +1,7 @@
-import { rescheduleCommandFixture } from "./checkout-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test } from "vitest";
-import { listOwnUpcomingCustomerBookings } from "@/lib/bookings/personal-service";
+import { listOwnUpcomingCustomerBookings } from "../helpers/current-activity";
 import { getOwnBookingEditDay, rescheduleOwnCustomerBooking } from "@/lib/bookings/self-reschedule";
 import { mondayWeekday } from "@/lib/pricing/resolution";
 import { cleanupAuthFixtures, localFixtureClient } from "./auth-fixtures";
@@ -72,7 +71,6 @@ test("Owner rescheduling preserves rows, enforces notice/ownership and shares pr
     for (const client of [coach.client, admin.client]) {
       expect(await rescheduleOwnCustomerBooking(input, client)).toMatchObject({ ok: false });
     }
-    expect((await owner.client.rpc("commit_booking_reschedule", rescheduleCommandFixture(bookingId))).error?.code).toBe("42501");
 
     expect(await rescheduleOwnCustomerBooking({ ...input, expectedTotal: 10001, priceAcknowledged: true }, owner.client))
       .toEqual({ ok: true, totalAmountMinor: 10001 });

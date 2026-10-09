@@ -6,7 +6,7 @@ import { countries, countryFlag } from "@/lib/profile/countries";
 import { locationCurrencies, locationFieldsSchema } from "@/lib/admin/locations-validation";
 import { timezoneDisplayLabel } from "./timezone-display";
 
-export const locationControlClass = "min-h-10 w-full rounded-control border border-border bg-surface px-2.5 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-focus/20";
+const locationControlClass = "min-h-10 w-full rounded-control border border-border bg-surface px-2.5 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-focus/20";
 
 type SelectProps = {
   id: string;

@@ -70,13 +70,25 @@ This is **not a multi-tenant SaaS platform**. One tennis club owns and operates 
 
 ### Database access
 
-Use `supabase-js` as the normal database access layer.
+All production application persistence uses server-only TypeORM through `DATABASE_URL`.
+Supabase runtime access is limited to verified Auth and private Storage. TypeORM is
+also the sole application migration system. Application tables have no browser-role
+grants or application RLS policies; Next.js checks authoritative accounts, roles,
+ownership and public visibility before trusted persistence. Storage retains RLS.
+Development seeds use TypeORM for application data and Supabase Auth Admin APIs for
+accounts. Local-only test fixtures may use privileged Supabase database APIs and reject
+production. PostgreSQL retains structural constraints, indexes and overlap exclusions.
 
-Supabase access is **server-first**. The browser does not access Supabase directly by default. Server Components, Server Actions, Route Handlers, and server-side application services use the user-scoped Supabase server client so RLS remains active.
+Configuration writes acquire an exclusive transaction-scoped advisory fence before
+ordered location locks; booking configuration readers acquire its shared counterpart.
+TypeScript handles publication, pricing/hours compatibility, hold expiry, lifecycle,
+refund integrity and explicit timestamps. See [architecture](docs/architecture.md#resource-persistence).
+
+Supabase access is **server-first**. The browser does not access Supabase directly.
 
 A browser Supabase client should be introduced only for a concrete browser-specific requirement, such as Supabase Realtime.
 
-No ORM is required initially.
+TypeORM is the approved persistence layer; do not introduce another ORM.
 
 No separate NestJS or Express backend is required initially.
 
@@ -105,22 +117,19 @@ TypeScript application/domain logic
    │             Stripe Webhooks
    │                  │
    ▼                  │
-Supabase server client ◄───┘
-   │
-   ▼
-PostgREST
+TypeORM repositories ◄────┘
    │
    ▼
 PostgreSQL
-├── RLS
+├── restricted application table grants / Storage RLS
 ├── constraints
 ├── indexes
-└── transactional RPCs where required
+└── transactions and Auth integration hooks
 ```
 
 The main architectural rule is:
 
-> **Next.js is the complete primary application authorization boundary, TypeScript decides business behavior, PostgreSQL guarantees data integrity, RLS provides defense-in-depth as secondary security, and Stripe owns payment processing.**
+> **Next.js is the complete primary application authorization boundary, TypeScript decides business behavior, PostgreSQL guarantees data integrity, Storage RLS protects private objects and application table grants deny direct browser access, and Stripe owns payment processing.**
 
 Direct browser-to-Supabase access is not part of the initial architecture. It may be added later only for a concrete feature that benefits from it.
 
@@ -176,7 +185,7 @@ The RBAC roles are `admin` and `coach`; both are optional and may be combined. N
 
 ## Security model
 
-Next.js is the complete primary application authorization boundary. Supabase RLS remains active as defense-in-depth and secondary security.
+Next.js is the complete primary application authorization boundary. Application tables deny direct browser-role access; Storage retains RLS.
 
 Typical authorization rules include:
 
@@ -215,17 +224,14 @@ The initial application does not create a browser Supabase client. Normal applic
 
 ### User-scoped server client
 
-Use the authenticated user's Supabase session whenever an operation is performed on behalf of a user.
-
-RLS remains active. This is the default access mode.
+Use the authenticated user’s Supabase session for Auth and private Storage. PostgreSQL operations use TypeORM after explicit application authorization and owner/visibility checks. Application tables deny direct browser-role access.
 
 ```text
 Authenticated user
 → Next.js
-→ user-scoped Supabase server client
-→ PostgREST
-→ PostgreSQL
-→ RLS
+→ verified Supabase Auth identity
+→ TypeORM application persistence
+→ PostgreSQL invariants
 ```
 
 Current server-only environment variables:
@@ -248,29 +254,18 @@ Do not introduce a browser Supabase client by default.
 
 If a future feature has a concrete browser-side requirement, such as Supabase Realtime, add the browser client intentionally and expose only the browser-safe project URL and publishable key required for that feature.
 
-### Privileged server client
+### Local privileged tooling
 
-A privileged server client uses a Supabase server-only secret credential and bypasses normal RLS protections.
+Supabase secret/service-role credentials are limited to guarded local seed and test
+fixtures. Production application persistence, Stripe webhooks use TypeORM.
 
-Use it only for trusted system operations such as:
-
-- Stripe webhook processing;
-- controlled server-side synchronization;
-- narrowly scoped system operations that genuinely require elevated access.
-
-`SUPABASE_SECRET_KEY` is used by the server-side customer booking writer and the
-booking email outbox worker. The writer calls atomic checkout and trusted payment lifecycle RPCs after
-server validation; the worker calls service-role-only delivery RPCs.
-The personal direct-reservation read also uses this server-only client after
-`requireReservationRole` authorization, with mandatory verified-owner and active-status
-SELECT filters. Personal upcoming customer-booking reads use the same server-only
-client after active-account authorization, with verified-owner, confirmed-booking and
-active-reservation filters; TypeScript composes results and filters by location-local time.
-Personal history uses bounded owner-filtered privileged SELECTs after active-account
-authorization; direct-reservation history is included only for Admins and Coaches.
-TypeScript classifies completion with location time, merges, sorts, and paginates the results.
-Public occupancy grants and RLS remain unchanged.
-Internal timetable occupancy uses bounded privileged SELECTs after `requireReservationRole`,
+`SUPABASE_SECRET_KEY` has no production persistence consumer. Checkout creation and initialization use TypeORM; settlement and Phase 8 refund/reconciliation use TypeORM transactions; booking emails use post-commit Brevo HTTP delivery, without a Supabase secret.
+The coupled personal direct-reservation list and edit reads use TypeORM after
+`requireReservationRole`, with verified-owner filters. Live personal activity/history uses bounded joined TypeORM projections after active-account
+authorization, with the verified booking owner or staff direct-reservation creator UUID.
+TypeScript classifies completion using location-local time, merges, sorts and paginates.
+Public occupancy is served only through explicit TypeORM projections.
+Internal timetable occupancy uses bounded TypeORM SELECTs after `requireReservationRole`,
 restricted to requested courts/date and active or held reservations at active, unarchived
 resources. TypeScript includes held rows only while their persisted deadline is later than
 one shared `now`; reads never expire holds. Coach occupancy remains generic, with
@@ -284,7 +279,7 @@ Never expose the secret key to:
 - logs;
 - responses.
 
-Running code on the server does **not** automatically justify using the privileged client.
+No privileged Supabase database writer remains in the application.
 
 ---
 
@@ -301,7 +296,7 @@ Server Action / Route Handler
 ↓
 Application/domain service
 ↓
-Supabase / Stripe adapter
+TypeORM / Stripe adapter
 ↓
 PostgreSQL / Stripe
 ```
@@ -352,8 +347,8 @@ A coach may work at multiple locations.
 Customer cancellation notice is configured in Admin → Locations → Create/Edit,
 under Booking policy. `locations.customer_cancellation_notice_minutes` stores
 0–43,200 elapsed minutes (up to 30 days), defaulting to 1,440 (24 hours).
-The incremental migration also assigns 1,440 to existing locations and bookings.
-The checkout service supplies the selected location policy snapshot; `commit_checkout` verifies and stores
+The final schema stores the configured location default and the authoritative booking snapshot.
+The TypeORM checkout transaction reads and stores the selected location policy as
 `bookings.cancellation_notice_minutes`; later location changes leave that snapshot
 unchanged. Personal upcoming/history and Admin operational reads return the booking's
 own snapshot. The configuration read is Admin-only; public location reads retain
@@ -363,9 +358,10 @@ minus the booking's elapsed-minute snapshot, allowing `now <= cutoff` and reject
 `now > cutoff`, while always requiring `now < booking start`. Active authenticated owners may now self-cancel future confirmed customer bookings
 from their details dialog on `/my-activity/bookings`, after explicit confirmation.
 The server-only cancellation service verifies ownership and uses the shared TypeScript
-cutoff/staff-bypass policy. `commit_booking_cancellation` locks the linked rows,
-checks the expected booking/configuration/actor snapshots and supplied deadline after
-waiting, and atomically cancels both rows with any supplied refund and notification.
+cutoff/staff-bypass policy. A TypeORM transaction locks location, booking, reservation,
+selected payment and existing refund, then fences actor roles/account. Post-lock database
+wall time controls eligibility; both lifecycle rows, any refund request and notification
+commit atomically. External refund execution remains post-commit.
 Repeated Stripe refund requests reuse the existing refund without changing cancellation
 metadata; other duplicate cancellations return a safe failure.
 Upcoming refreshes in place; cancelled bookings enter History and free occupancy.
@@ -575,11 +571,11 @@ timestamps are preserved. Both stale tokens, server pricing with explicit change
 acknowledgement/reconfirmation, and the active-row GiST constraint remain authoritative.
 Owner-scoped availability excludes its own reservation and returns only active courts,
 opening hours and occupancy for its fixed location, independent of public publication.
-Booking command/read RPCs are service-role-only; owner and Admin services retain
-separate authorization boundaries, also checked during persistence. Success calls `revalidateCourtActivity("edit")`
+Focused TypeORM edit reads and commands retain separate owner and Admin authorization
+boundaries, checked against locked actor and aggregate facts. Success calls `revalidateCourtActivity("edit")`
 for `/book`, `/reservations`, and `/my-activity/bookings`. Payment lifecycle/holds, Stripe checkout and full Stripe cancellation refunds are implemented;
-guest self-management is not implemented. Booking lifecycle emails use the durable
-outbox described in [Booking notifications](docs/booking-notifications.md).
+guest self-management is not implemented. Booking lifecycle emails use best-effort
+post-commit delivery described in [Booking notifications](docs/booking-notifications.md).
 
 ---
 
@@ -761,11 +757,11 @@ Personal and tennis forms independently compare editable values against their la
 
 `/my-activity` redirects to `/my-activity/bookings`, which contains current and upcoming personal court activity. `/my-activity/history` contains completed/cancelled owned bookings and staff-owned direct reservations. The retired `/my-activity/bookings/history` URL redirects with its search parameters. Both pages preserve the My Activity heading and reuse Admin's submenu component, active styling and mobile overflow behavior. Avatar and mobile menus link directly to Bookings.
 
-Both lists authorize the active account before bounded, owner-filtered SELECTs through the server-only privileged Supabase client. TypeScript combines owned bookings and Admin/Coach-owned direct reservations, applies type/location/court/date filters (plus History status), sorts globally, and then returns 20 rows per page. Date/time defaults to ascending for Bookings and descending for History; kind/ID tie-breakers make ordering deterministic. Location, court, type, duration and History status are also sortable. URL controls reset page 1 when changed; pagination preserves the query. Controls derive location/court choices from the full owner-scoped eligible dataset, with courts narrowed to the selected location. Bookings require an active physical interval that has not ended in the location's timezone. Details preserve contact and price snapshots; guest and other users' bookings remain excluded without granting booking-table SELECT. Existing cancellation/rescheduling services, mutation RPCs and lifecycle rules remain unchanged.
+Both lists authorize the active account before bounded, owner-filtered TypeORM projections. TypeScript combines owned bookings and Admin/Coach-owned direct reservations, applies type/location/court/date filters (plus History status), sorts globally, and then returns 20 rows per page. Date/time defaults to ascending for Bookings and descending for History; kind/ID tie-breakers make ordering deterministic. Location, court, type, duration and History status are also sortable. URL controls reset page 1 when changed; pagination preserves the query. Controls derive location/court choices from the full owner-scoped eligible dataset, with courts narrowed to the selected location. Bookings require an active physical interval that has not ended in the location's timezone. Details preserve contact and price snapshots; guest and other users' bookings remain excluded without granting booking-table SELECT. Customer cancellation/rescheduling use the Phase 6 TypeORM commands; direct reservations use the TypeORM transactions described below.
 
-A direct-reservation details dialog lets the owner edit or cancel an active Upcoming reservation; archive details are read-only. Future direct reservations keep their location fixed and use the direct-reservation timetable to choose a date, active court at that location, and interval; a server read excludes the edited row from occupancy while preserving other booked cells. In-progress direct reservations can change only reason. Editing updates the same row through a personal RPC that locks the row, verifies ownership, `updated_at`, and the unchanged location, and leaves the original intact on a stale edit or GiST conflict. A role-checked database function binds direct-reservation reads to `auth.uid()` and keeps private reservation metadata out of public occupancy reads.
+A direct-reservation details dialog lets the owner edit or cancel an active Upcoming reservation; archive details are read-only. Future direct reservations keep their location fixed and use the direct-reservation timetable to choose a date, active court at that location, and interval; a server read excludes the edited row from occupancy while preserving other booked cells. In-progress direct reservations can change only reason. Editing updates the same row through a TypeORM transaction; TypeScript verifies ownership, lifecycle, the lossless `updated_at` token and fixed location before persistence. Stale edits and GiST conflicts preserve the original. Reads bind explicitly to the verified actor UUID; private reservation metadata stays out of public occupancy reads.
 
-Avatar upload and removal share one UI pending state. A user-scoped database lease serializes each owner's Storage, persistence, and compensation workflow across server instances. Token-checked RPCs acquire/release the lease and persist the avatar path; bounded HTTP requests stop stale workers before abandoned leases can be reclaimed. See [Avatar workflow](docs/profiles.md#avatar-workflow).
+Avatar upload and removal share one UI pending state. Phase 10 uses focused TypeORM persistence for avatar references and navigation metadata, with authenticated Supabase Storage at one canonical private object per user. No runtime lease or replacement backup/restore remains. Initial-upload database failure attempts object cleanup; removal clears the database first, then best-effort deletes Storage. Storage/PostgreSQL are not atomic; rare orphan objects and ambiguous network/race outcomes are accepted. See [Avatar workflow](docs/profiles.md#avatar-workflow).
 
 ### Tennis information for active authenticated users
 
@@ -819,7 +815,7 @@ The application must never leave a partially applied rating update.
 
 ## Transactional operations
 
-Using `supabase-js` does not mean every workflow should consist of independent PostgREST requests.
+Application database operations use TypeORM repositories.
 
 Some operations require database transactions.
 
@@ -831,7 +827,7 @@ Examples:
 - recording match results and rating changes;
 - certain payment/refund state transitions.
 
-Where required, use small PostgreSQL functions exposed through Supabase RPC.
+Use the existing TypeORM `inTransaction` helper for atomic application persistence. TypeScript owns hold expiry; PostgreSQL enforces structural constraints and overlap exclusions.
 
 The responsibility split remains:
 
@@ -1009,15 +1005,57 @@ Court 2
 
 ## Local development database tooling
 
-The development schema starts with four consolidated migrations for Auth/RBAC, player profiles and avatars, club resources, and pricing rules, followed by focused booking-read, reservation, and publication migrations. Replaying rewritten migration history requires an explicitly approved local database reset; it deletes local data. Do not apply the consolidated files to an existing database as incremental migrations.
+Fresh schema initialization uses Supabase infrastructure startup followed by TypeORM migrations; see Application migrations and fresh local setup below.
 
-Run `npm run db:dev:seed` for four confirmed Auth users, two locations, weekly opening hours, six courts, and one outdoor coverage period. The shared development password is `Local-Tennis-Dev-2026!`. `npm run seed:users` remains available to seed only the four users.
+Run `npm run db:dev:seed` for 100 confirmed Auth accounts: `dev-admin@example.test`
+(Admin), `dev-coach@example.test` plus `dev-coach-002@example.test` through
+`dev-coach-009@example.test` (9 Coaches), and `dev-player-001@example.test` through
+`dev-player-090@example.test` (90 players without elevated roles). The shared password
+is `Local-Tennis-Dev-2026!`. `npm run seed:users` seeds only those accounts/roles.
+Auth provisioning creates active application accounts; player profiles remain absent
+until users save them. Reruns preserve existing Auth passwords and account metadata,
+repair missing fixture roles, and reject suspended accounts or unexpected roles.
 
-The accounts are `dev-admin@example.test` (Admin), `dev-coach@example.test` (Coach), and `dev-player-001@example.test` and `dev-player-002@example.test` (no role). Existing accounts are never modified. A conflicting account status or role fails verification for manual inspection.
+The seed preserves two active București locations, `dev-central-club` and
+`dev-riverside-club`, in `Europe/Bucharest` with RON currency. Central opens daily
+07:00–22:00; Riverside opens Monday–Friday 08:00–12:00 and 14:00–21:00, weekends
+08:00–20:00 (19 weekly intervals). Central has three outdoor clay courts and one
+indoor hard court; Riverside has outdoor clay and hard courts, with Court 2 inactive.
+Central Court 1 is covered from 2026-10-01 through 2027-03-31.
 
-The location slugs are `dev-central-club` and `dev-riverside-club`. Both are active, in București, use `Europe/Bucharest` and RON. Central opens daily 07:00–22:00. Riverside opens Monday–Friday 08:00–12:00 and 14:00–21:00, weekends 08:00–20:00. Central has three outdoor clay courts and one indoor hard court; Riverside has one outdoor clay and one outdoor hard court. Riverside Court 2 is inactive. Central Court 1 has coverage from 2026-10-01 through 2027-03-31.
+Both locations are published after readiness validation. Six pricing definitions
+expand to 73 court/day rows matching opening intervals: outdoor 50 RON/hour, covered
+70 RON/hour and indoor 80 RON/hour, with unbounded pricing dates. Covered pricing
+applies to Central outdoor courts; only Court 1 currently has coverage. Pay at club
+is enabled at both locations so local checkout works without Stripe credentials;
+the cancellation notice is 1,440 minutes. No reservations, bookings, payment attempts,
+refunds, email events or Storage objects are seeded. The migrations provide the
+Admin/Coach roles and the payment-settings singleton with no online provider selected.
 
-The seed scripts require a local HTTP loopback Supabase API on port 54321 and reject `NODE_ENV=production`. The seed uses the local Auth Admin API and the service credential from `LOCAL_SUPABASE_SERVICE_ROLE_KEY` or `supabase status -o json`; credentials are never printed. Reruns reuse Auth users by email, locations by slug, courts by location and slug, and hours and coverage by exact values. Existing divergent location or court fixtures cause an error. No cleanup or reset command is provided. Previously seeded `dev-user-001` through `dev-user-060` accounts are left untouched.
+Seeds require non-production mode, a loopback Supabase API on port 54321 and the
+trusted local `postgres` database on port 54322. Auth uses the local service credential
+from `LOCAL_SUPABASE_SERVICE_ROLE_KEY` or captured `supabase status -o json`; it is
+never printed. All application fixture writes use TypeScript/TypeORM. Configuration
+seeding runs atomically under the exclusive configuration fence and ordered location
+locks. Reruns reuse records and stable pricing definition IDs; divergent fixtures
+fail rather than overwrite user edits.
+
+To discard this project's disposable local data and recreate the environment:
+
+```bash
+npx supabase start
+npm run db:dev:rebuild -- --discard-local-data
+npm run db:dev:seed
+```
+
+The explicit discard flag is mandatory. The rebuild checks database/API endpoints
+against this project's Supabase status, empties/removes the avatar bucket through
+Storage, drops obsolete `public` application schema and `supabase_migrations` history,
+removes Auth users through Auth Admin APIs, then applies all three TypeORM migrations
+without seeding. Run `npm run db:dev:seed` separately. Native Auth, Storage and extension schemas and their infrastructure
+migration ledgers remain. This is local-only; remote/shared/production databases are
+rejected. Stop the app before rebuilding. Do not use `supabase db reset`
+for application initialization. No backup or data reconciliation is performed.
 
 ## Admin UI
 
@@ -1026,14 +1064,12 @@ Active administrators create, edit, move, and activate/deactivate courts through
 user-scoped Server Actions. Each court has a clay/hard/grass/carpet surface, an
 outdoor/indoor environment, and a lighting flag. Counts are derived from records.
 Slugs are generated on creation, preserved on edits (including moves), and unique
-within the selected location. Court RLS grants the required SELECT/INSERT/UPDATE
-access with no hard deletion. Temporary balloon capability/installation flags have
+within the selected location. Next.js authorizes Admin mutations and TypeORM persists them. Temporary balloon capability/installation flags have
 been removed. Outdoor courts have exact, inclusive calendar-date coverage periods
 managed within `/admin/courts` (add, edit, remove). Coverage periods for active
 public courts are readable for the public calendar; writes remain admin-only. A GiST exclusion
-constraint prevents overlaps for the same court. A generated outdoor discriminator
-and composite foreign key reject indoor coverage and prevent changing a court to
-indoor until its periods are removed, including concurrent writes. `updated_at`
+constraint prevents overlaps for the same court. TypeScript validates outdoor coverage and rejects changing a court to indoor until
+its periods are removed, under the shared configuration/location locking protocol. `updated_at`
 is application-controlled; configuration intervals may be hard deleted.
 `getCourtStateForDate(environment, periods, date)` in `src/lib/courts/state.ts`
 returns indoor, outdoor, or covered from inclusive date intervals, with no seasonal
@@ -1050,17 +1086,16 @@ Current admin selectors omit archived locations. These operations use user-scope
 Server Actions. Each location stores its IANA timezone and one currency (EUR, USD, GBP, RON, or CHF;
 default EUR). Slugs are generated from names on creation and preserved on edits;
 collisions require a different name. Location counts are derived from records.
-Location RLS grants active administrators SELECT/INSERT/UPDATE, with no deletion
-access. The database prevents an archived location from being active. Public discovery
+Next.js authorizes active administrators before TypeORM persistence. The database prevents an archived location from being active. Public discovery
 requires explicit publication and derived configuration readiness. Enabling Public booking is checked server-side and returns a useful missing-configuration error; disabling it retains all Admin configuration.
 
 Location opening hours are managed from Edit Location through an explicit Manage opening hours action. The compact weekly editor groups weekdays only when their complete
 interval sets match. One form selects weekdays, supports multiple intervals, and
-creates, replaces, or removes grouped intervals together. A server-only transactional
-command commits each multi-day change atomically. TypeScript supplies which pricing
-rules remain applicable; PostgreSQL checks structural containment under a configuration
-revision and stores those dependencies. RLS remains active; browser roles cannot write hours.
-Archived locations cannot have opening hours changed through the RPC or direct admin writes; admins can still read their hours. Restoring a location leaves it inactive and allows hours editing again.
+creates, replaces, or removes grouped intervals together. A server-only TypeORM transaction
+commits each multi-day change atomically under configuration advisory then location locks.
+TypeScript checks applicable pricing against the candidate schedule under configuration/location
+locks; PostgreSQL retains interval checks and overlap exclusion. Browser roles cannot write hours.
+Archived locations cannot have opening hours changed through the application transaction; admins can still read their hours. Restoring a location leaves it inactive and allows hours editing again.
 `location_opening_hours` stores local minute-of-day boundaries (0–1440, including
 `24:00`), with Monday = 0 and Sunday = 6. A GiST exclusion constraint prevents
 overlaps for the same location and weekday while allowing adjacent intervals.
@@ -1074,11 +1109,11 @@ for outdoor courts; indoor for indoor courts), weekdays, a half-open local minut
 interval `[start, end)`, optional inclusive calendar-date bounds, and a price in
 the location's currency. The same form creates and edits a whole definition. One
 `rule_set_id` joins its atomic court/day rows, and the admin table shows one row
-per definition. A user-scoped transactional RPC creates, replaces or removes the
-entire set; the per-court/state/day GiST exclusion constraint prevents overlapping
+per definition. An active-Admin-authorized TypeORM transaction creates, replaces or
+removes the entire set under configuration advisory then location locks; the per-court/state/day GiST exclusion constraint prevents overlapping
 date/time applicability and permits adjacent intervals. Next.js validates every
-selected court and weekday against environment and configured opening hours before
-calling the RPC. RLS remains active. Later opening-hours edits do not rewrite
+selected court and weekday against environment and configured opening hours inside
+that transaction before persistence. Direct browser grants are denied. Later opening-hours edits do not rewrite
 pricing; consumers must still check opening hours independently. The resolver uses
 court, derived state, date, weekday and local minute. Public `/courts` discovers
 only eligible locations and courts. See [Pricing](docs/pricing.md).
@@ -1119,18 +1154,18 @@ non-expired payment holds block occupancy. Active Admins
 and Coaches can create direct reservations at `/reservations` for active courts at
 structurally ready locations, including unpublished locations.
 The Server Action checks the account, resources, location-local time, opening hours,
-duration and required trimmed reason before a user-scoped insert. The GiST
+duration and required trimmed reason before a TypeORM transaction rechecks locked facts and inserts. The GiST
 constraint resolves concurrent overlaps; the UI shows a contextual conflict error.
 Customer booking persistence is available through `/book`. `bookings` stores one unique reservation reference, an optional
 application account ID, required contact snapshot, payment-method snapshot, booking lifecycle status, and
 an integer price/currency snapshot. Guests have no account link; active authenticated
 users are resolved server-side, including Admins and Coaches. The service reuses the
-public location and calendar pricing rules and validates the entire interval before
-calling a service-role-only RPC. The RPC inserts the physical reservation, booking and payment attempt in one
-transaction: online creates a temporary hold/pending booking; allowed Pay at club
-confirms immediately. GiST overlap errors roll back both rows and
+publication and calendar pricing helpers using transaction-authoritative facts. TypeORM Transaction A locks
+the shared configuration advisory fence, then location FOR UPDATE, active account when linked, and online provider settings FOR SHARE.
+It inserts the physical reservation, booking, payment attempt atomically, then sends Pay-at-club confirmation email after commit: online creates a temporary hold/pending booking; allowed Pay at club
+confirms immediately. GiST overlap errors roll back the complete creation write set and
 return a safe availability message. Browser roles have no booking table read/write
-grants or RPC access; public occupancy remains limited to court and interval fields.
+grants; public occupancy remains limited to court and interval fields.
 See [payment lifecycle foundation](docs/payments-memberships.md) for the centralized
 10-minute hold, provider snapshots, expiry cleanup and trusted same-row settlement.
 Admin → Payments displays Stripe/NETOPIA configuration status and selects one active
@@ -1140,18 +1175,21 @@ choice. Stripe configuration requires `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_K
 and `STRIPE_WEBHOOK_SECRET`; only the publishable key is browser-safe. NETOPIA uses
 server-only `NETOPIA_API_KEY`, `NETOPIA_POS_SIGNATURE` and `NETOPIA_ENVIRONMENT`
 and has no checkout adapter yet. Stripe Payment Element uses the existing ten-minute
-hold and a server-created PaymentIntent. Verified webhooks settle the same internal
+hold and a server-created PaymentIntent outside database transactions. TypeORM Transaction B locks booking then attempt
+and attaches the provider reference/capability before exposing payment presentation. Polling/capability and confirmation-policy
+reads use TypeORM; polling invokes the TypeScript hold-expiry service. Customer submissions have no idempotency key.
+Provider success followed by attachment failure has no complete automatic recovery/resume workflow; the hold expires normally.
+Settlement/webhooks use TypeORM transactions (Phase 7); refund execution/reconciliation use TypeORM (Phase 8), and email uses post-commit Brevo HTTP delivery. Public `/book` loaders use bounded TypeORM projections (Phase 11). Verified webhooks settle the same internal
 rows; duplicate events cannot duplicate confirmation, and late success is recorded
 for reconciliation. Existing attempt providers are immutable. Historical bookings retain
 an unknown (NULL) payment method, with no fabricated payment debt. Pay at club defaults OFF per location and is edited in Booking policy.
-Direct reservations have no price or payment flow. RLS permits only active Admins
-and Coaches to insert rows with a reason and their own authenticated user ID as
-creator. Existing rows can have a null creator. `/reservations` reads active occupancy
-for all staff; active Admins additionally receive a narrow Admin-only RPC projection
+Direct reservations have no price or payment flow. Next.js permits only active Admins
+and Coaches to create rows with a reason and their verified user ID as creator. Existing rows can have a null creator. `/reservations` reads active occupancy
+for all staff; active Admins additionally receive a narrow Admin-authorized TypeORM projection
 of active reservation identity, reason, and creator display name. Admin occupied
 cells open one details dialog for the whole reservation. After explicit confirmation,
-an active Admin may cancel any active direct reservation through a dedicated
-Admin-only RPC. Its conditional lifecycle update records the Admin as canceller,
+an active Admin may cancel an active direct reservation strictly before its start
+through a TypeORM transaction. Its lifecycle update records the Admin as canceller,
 preserves the creator and reservation row, and releases occupancy. A missing or
 already-cancelled row returns a safe result. Coaches see generic booked cells and
 receive no operational details or Admin management IDs or actions.
@@ -1160,8 +1198,8 @@ availability read resolves the active reservation's fixed location, reads active
 courts and opening hours there, and excludes that reservation from occupancy while
 leaving other active reservations blocked. Future reservations can preview another
 date, court, time, and reason; in-progress reservations can save reason only. A
-dedicated Admin-only RPC locks and updates the same row, checks its `updated_at`
-token and fixed location, and leaves it unchanged on a stale edit or GiST conflict.
+TypeORM transaction locks and updates the same row; TypeScript checks its microsecond `updated_at`
+token and fixed location, leaving it unchanged on a stale edit or GiST conflict.
 The creator and lifecycle fields remain intact. The personal owner-only edit
 mutation remains separate.
 
@@ -1170,20 +1208,21 @@ dialog on `/reservations`. The booking-specific timetable keeps the location fix
 preselects the current interval and excludes its own reservation from occupancy.
 Contact snapshots remain read-only. The shared TypeScript rescheduling service reuses
 public-calendar court-state, pricing and rounding functions, then evaluates price
-acknowledgement. `commit_booking_reschedule` locks and updates the same rows using
-expected versions, actor facts and a configuration revision. Configuration writes
-advance that revision under a shared lock protocol; intervening pricing, coverage,
-hours or resource changes reject the supplied decision and trigger a fresh quote.
+acknowledgement. The TypeORM transaction locks shared configuration advisory fence,
+location FOR UPDATE, booking then reservation FOR UPDATE, and actor roles/account
+FOR SHARE. It compares both browser tokens losslessly in PostgreSQL after lifecycle
+and policy checks. Configuration writers serialize against those locks so pricing,
+coverage, hours and resource reads remain coherent throughout quote/save.
 Changed totals require explicit acknowledgement; a changed save quote returns
 `price_changed` without writing. Rescheduling preserves identity,
 contact and cancellation-policy snapshots, and invalidates `/book`, `/reservations`
 and `/my-activity/bookings`, without invalidating History. The owner-scoped
 self-rescheduling workflow above reuses this implementation. Stripe one-time checkout
-and full Stripe cancellation refunds are implemented. Booking lifecycle notifications use a durable outbox.
+and full Stripe cancellation refunds are implemented. Booking lifecycle notifications use best-effort post-commit Brevo delivery.
 
 On `/my-activity/bookings`, active Admins and Coaches can cancel only their own active Upcoming
 reservations after explicit confirmation. The Server Action rechecks staff authorization,
-and the atomic database update requires ownership and an active court and location.
+and the TypeORM transaction fences staff status/roles, verifies ownership and requires an active court and location. Owner cancellation remains allowed during the interval until its end.
 A missing, elapsed, or already-cancelled row returns a safe error. Cancellation preserves the row, creator,
 and original details while recording the authenticated canceller and time; it releases
 the occupied interval. The public `/book` server read can select only court ID, booking
@@ -1192,7 +1231,7 @@ reservation identity, reason, creator, canceller, and timestamps remain private.
 ordinary authenticated users cannot insert or cancel direct reservations. Every active reservation row marks
 overlapping 30-minute cells booked on `/book`, which remains read-only.
 
-`/admin/users` uses server-side queries with RLS-enforced access. Search, filtering,
+`/admin/users` uses TypeORM reads after authoritative active-Admin authorization. Search, filtering,
 sorting, and pagination are URL-driven and applied before pagination. Interactive
 filter controls update the URL without introducing direct browser-to-Supabase access.
 
@@ -1303,7 +1342,7 @@ Do not introduce prematurely:
 - multi-tenancy;
 - microservices;
 - separate NestJS backend;
-- ORM;
+- another ORM;
 - event sourcing;
 - AI partner matching;
 - complex dynamic pricing;
@@ -1428,18 +1467,45 @@ The goal is to prove the difficult architectural constraints before adding secon
 
 ## Migration history
 
-The database is currently development-only. Maintain clean migrations by scope: extend unreleased foundation schema in its owning migration, and add focused migrations for new domains/infrastructure. Released production migrations remain immutable. Rebuilding rewritten local history requires `supabase db reset`; obtain explicit approval first because it deletes local data.
+The three pre-production TypeORM migrations define the intended final schema.
+Changes to these definitions require a later explicitly authorized local rebuild;
+existing local records are not migrated automatically. Application schema changes use
+reviewed TypeORM migrations. Applied remote/shared migrations remain immutable. Validate initial schema changes in a separate disposable Supabase project; populated remote/shared databases require an explicitly authorized cutover.
 
 ## Local validation
 
-`npm test` runs unit, component, and local Supabase integration suites sequentially in separate Vitest processes. Run them individually with `npm run test:unit`, `npm run test:components`, or `npm run test:integration`. Integration files are serialized because final-admin tests temporarily modify shared administrator statuses. Start local Supabase beforehand; the test command does not reset or restart it. Playwright E2E remains separate: `npm run test:e2e:auth` builds and starts the production application on port 3000 without reusing an existing server. Stop any server on that port before running the suite. See [auth testing](docs/testing.md).
+`npm test` runs the unit and component suites. Integration and E2E tests use only the
+separate disposable `tennis-club-tests` Supabase project in `tests/local/`, with its
+own PostgreSQL, Auth users, Storage volumes, JWT credentials and Mailpit. The
+normal development project and `.env.local` remain unchanged.
+
+From the repository root, initialize once (or after recreating the test stack):
+
+```bash
+npx supabase start --workdir tests/local
+node --conditions=react-server --import=./scripts/ts-loader.mjs scripts/initialize-test-database.ts
+```
+
+Then run the suites sequentially:
+
+```bash
+npm run test:integration
+npm run test:e2e
+```
+
+Both commands discover and verify test credentials automatically. Integration files
+are serialized because final-admin tests modify shared test administrator statuses.
+Playwright builds and starts its own production Next.js server on port 3000 with
+those same isolated connections; stop any application server on that port first.
+Existing servers cannot be reused. No development seed or rebuild command is needed.
+See [test setup and safeguards](docs/testing.md).
 
 Before expanding the platform, prove the following cases locally:
 
 - a member cannot access another member's private information;
 - browser payload manipulation cannot change authoritative prices;
 - browser payload manipulation cannot grant roles or discounts;
-- admin, coach, and normal-user RLS policies behave correctly;
+- Admin, Coach, and normal-user authorization boundaries behave correctly;
 - two concurrent users cannot successfully reserve the same court/time;
 - two overlapping bookings cannot use the same coach;
 - abandoned checkout releases its booking hold;
@@ -1467,14 +1533,14 @@ Before expanding the platform, prove the following cases locally:
 - Stripe is the payment provider.
 - Supabase Auth is the authentication provider.
 - PostgreSQL is the primary application database.
-- `supabase-js` is the primary database access mechanism.
+- TypeORM is the production PostgreSQL persistence mechanism; `supabase-js` handles Auth and Storage.
 - Supabase access is server-first; no browser Supabase client is used initially.
 - TanStack Query will be introduced when interactive client-side server state justifies it, and it will call the Next.js server boundary rather than Supabase directly.
-- No ORM is required initially.
+- TypeORM is the approved persistence layer; do not introduce another ORM.
 - No separate backend framework is required initially.
-- Next.js is the complete primary application authorization boundary; RLS provides defense-in-depth as secondary security.
+- Next.js is the complete primary application authorization boundary; Storage RLS protects private objects and application table grants deny direct browser access.
 - Domain algorithms remain in TypeScript.
-- PostgreSQL RPCs are used only where database-level atomicity or integrity requires them.
+- All application persistence uses TypeORM; TypeScript handles hold expiry, with PostgreSQL enforcing structural constraints and overlap exclusions.
 
 ---
 
@@ -1485,7 +1551,7 @@ Before expanding the platform, prove the following cases locally:
 3. **Database constraints protect invariants that application checks alone cannot guarantee.**
 4. **Payments and bookings have separate state machines.**
 5. **Stripe webhooks must be idempotent.**
-6. **RLS remains active for normal authenticated user operations.**
+6. **Application tables deny direct browser access; private Storage retains RLS.**
 7. **Privileged Supabase access is narrowly scoped.**
 8. **Supabase access is server-first; direct browser access is introduced only for a concrete requirement.**
 9. **Features are added incrementally from real workflows instead of speculative schema design.**
@@ -1495,12 +1561,72 @@ Before expanding the platform, prove the following cases locally:
 
 ## Booking email notifications
 
-Confirmation, customer/Admin cancellation, and customer/Admin rescheduling enqueue
-email snapshots in the booking transaction. A separate server-only worker delivers
-them through a provider-independent mail adapter, using local Mailpit SMTP in
-development. Run `npm run mail:worker` alongside the app, or
-`npm run mail:worker -- --once` to drain eligible work once. Supabase Auth email
-configuration remains independent. See [Booking notifications](docs/booking-notifications.md)
-for configuration, retry guarantees, and local verification.
+Booking confirmation, customer/Admin cancellation and customer/Admin rescheduling
+capture the booking contact and schedule within the successful transaction, then
+send the preserved text template through Brevo's transactional HTTP API after commit.
+Use only the snapshotted `bookings.customer_email`, never the current account email.
+Quote, stale, failed and unchanged-schedule saves send no rescheduling email;
+pending/failed/expired checkout sends no confirmation. Transition and webhook receipt
+checks prevent replayed operations from sending again. Delivery is best-effort with
+a 10-second HTTP timeout, sanitized error logging, and no persistent queue or retries.
+Email failure cannot change committed booking/payment state. Server-only
+`BREVO_API_KEY` and a Brevo-verified `BOOKING_MAIL_FROM` are required.
+Supabase Auth confirmation/recovery emails remain independent.
 
-The `/book` confirmation UI reads only the selected eligible public location’s cancellation-notice value through the server-only booking client. After atomic creation, a read bound to the returned booking ID retrieves its stored policy snapshot; authenticated success uses the existing TypeScript timezone utility for start instant and cutoff display. Guest success shows the stored notice without inferring a timezone-resolved cutoff. Failed post-commit display reads are logged and never report the committed booking as a failed submission. No browser database access or public database grants are added.
+See [Booking notifications](docs/booking-notifications.md).
+
+The `/book` confirmation UI reads only the selected eligible public location’s cancellation-notice value through a narrow TypeORM projection. After atomic creation, a read bound to the returned booking ID retrieves its stored policy snapshot; authenticated success uses the existing TypeScript timezone utility for start instant and cutoff display. Guest success shows the stored notice without inferring a timezone-resolved cutoff. Failed post-commit display reads are logged and never report the committed booking as a failed submission. No browser database access or public database grants are added.
+
+## Refund persistence (Phase 8)
+
+Automatic post-cancellation refund preparation/result persistence uses short TypeORM
+transactions locking only the refund; automatic processing intentionally remains unleased.
+Admin retry/reconciliation uses aggregate transactions and a five-minute token+actor lease,
+with transaction-time active-Admin fencing during preparation. Stripe runs after commit.
+The result transaction uses the lease identity without fresh authorization or expiry checks;
+stored success wins and qualifying provider-event resolution commits atomically with the
+refund result and lease clearing. Original attempt/refund snapshots remain financial authority.
+No new refund notifications are written.
+
+## Application migrations and fresh local setup
+
+TypeORM migrations in `src/lib/db/migrations/` are the only application schema history.
+Supabase CLI starts native PostgreSQL, Auth and Storage infrastructure; application
+SQL migrations and automatic SQL seeding are disabled in `supabase/config.toml`.
+
+For a **fresh, empty** local project:
+
+1. Run `npx supabase start` and verify the project/ports with `npx supabase status`.
+2. Set server-only `DATABASE_URL` to that database's trusted `postgres` connection,
+   plus the Auth URL/publishable key from status in `.env.local`.
+3. Run `npm run db:dev:rebuild -- --discard-local-data` to initialize the local application schema.
+4. Run `npm run db:dev:seed` separately if fixtures are needed.
+
+The initial migration creates all 17 entity tables. The native integrity migration
+installs `btree_gist`, four overlap exclusions, the case-insensitive email index,
+the Auth user FK, `admin`/`coach` roles and the provider-settings singleton. The
+Supabase integration migration installs the two Auth provisioning/email-sync hooks,
+explicit email-change timestamps, private WebP avatar bucket and Storage policies.
+A secured active-account boolean helper keeps Storage working without browser
+SELECT on `public.users`. Ordinary accounts receive no RBAC roles.
+
+The three final-state migrations and their DataSource registry remain the schema
+source. The guarded development rebuild applies them; there are no npm migration
+management commands. Production migration execution will be addressed with deployment.
+Schema synchronization and automatic runtime migrations are off.
+
+The local development data is disposable. Use the guarded
+`npm run db:dev:rebuild -- --discard-local-data` workflow above when replacing the
+legacy local schema. Populated remote/shared databases still require a separately
+authorized data-preserving cutover; the development rebuild cannot target them.
+
+Configuration fencing now uses advisory key `(1791462257, 1)`: exclusive for
+configuration writes, shared for configuration-dependent booking/reservation writes,
+always before location locks. Occupancy writes lock location FOR UPDATE before
+booking/reservation/payment rows; read-only configuration uses location SHARE.
+Changed-parent discovery retries in at most three fresh transactions. TypeScript
+expires pending hold aggregates before occupancy writes and uses bounded location-first
+SKIP LOCKED expiry for polling. Services preserve original financial snapshots and
+terminal refund success; all network calls remain outside transactions.
+
+See [focused disposable validation](docs/testing.md#typeorm-cutover-validation).

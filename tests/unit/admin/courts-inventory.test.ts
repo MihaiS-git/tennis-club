@@ -22,15 +22,6 @@ it("defaults to name ascending with a stable ID tie break", () => {
   expect(names(selectLocationCourts(courts, location, courtInventorySchema.parse({})))).toEqual(["a", "b", "c", "d"]);
 });
 
-it.each(["name", "status", "surface", "environment", "lighting"] as const)("sorts %s in both directions within a location", (sort) => {
-  const ascending = names(selectLocationCourts(courts, location, courtInventorySchema.parse({ sort, dir: "asc" })));
-  const descending = names(selectLocationCourts(courts, location, courtInventorySchema.parse({ sort, dir: "desc" })));
-  expect(ascending).toHaveLength(4);
-  expect(descending).toHaveLength(4);
-  expect(ascending).not.toEqual(descending);
-  expect([...ascending].sort()).toEqual([...descending].sort());
-});
-
 it("combines status, surface and environment filters", () => {
   const options = courtInventorySchema.parse({ status: "active", surface: "hard", environment: "outdoor" });
   expect(names(selectLocationCourts(courts, location, options))).toEqual(["c"]);

@@ -5,6 +5,6 @@ import { mutateAdminOpeningHours } from "@/lib/admin/opening-hours";
 
 export async function mutateOpeningHoursAction(input: unknown) {
   const result = await mutateAdminOpeningHours(input);
-  if (result.ok) revalidatePath("/admin/locations");
+  if (result.ok) revalidatePath("/admin/locations", "layout");
   return result;
 }

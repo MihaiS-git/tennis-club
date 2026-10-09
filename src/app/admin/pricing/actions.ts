@@ -5,11 +5,17 @@ import { saveAdminPricingRule, removeAdminPricingRule } from "@/lib/admin/pricin
 
 export async function savePricingRuleAction(input: unknown) {
   const result = await saveAdminPricingRule(input);
-  if (result.ok) revalidatePath("/admin/pricing");
+  if (result.ok) {
+    revalidatePath("/admin/pricing");
+    revalidatePath("/admin/locations", "layout");
+  }
   return result;
 }
 export async function removePricingRuleAction(input: unknown) {
   const result = await removeAdminPricingRule(input);
-  if (result.ok) revalidatePath("/admin/pricing");
+  if (result.ok) {
+    revalidatePath("/admin/pricing");
+    revalidatePath("/admin/locations", "layout");
+  }
   return result;
 }

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
-import { assert, expect, test } from "vitest";
+import { assert, expect, test, vi } from "vitest";
+import * as clubs from "../../../src/lib/db/repositories/clubs.repository";
 import { listAdminCourts, saveAdminCourt } from "../../../src/lib/admin/courts";
 import { listPublicLocationsWithCourts } from "../../../src/lib/courts/public";
 import { cleanupAuthFixtures, localFixtureClient } from "../auth-fixtures";
@@ -39,7 +40,7 @@ test("court administration persists edits, moves and status with real authorizat
     assert.ok(original); expect(original.slug).toBe("court-one");
     expect(original).not.toHaveProperty("supports_balloon"); expect(original).not.toHaveProperty("balloon_installed");
     expect(await saveAdminCourt({ fields }, admin.client)).toEqual({ ok: false, reason: "duplicate-slug" });
-    const sameSlug = await saveAdminCourt({ fields: { ...fields, location_id: locationIds[1] } }, admin.client);
+    const sameSlug = await saveAdminCourt({ fields: { ...fields, location_id: locationIds[1].toUpperCase() } }, admin.client);
     assert.ok(sameSlug.ok);
     expect((await listAdminCourts(admin.client)).find((row) => row.id === sameSlug.id)?.slug).toBe(original.slug);
     expect(await saveAdminCourt({ fields: { ...fields, surface: "sand" } }, admin.client)).toMatchObject({ ok: false, reason: "invalid-input" });
@@ -60,6 +61,24 @@ test("court administration persists edits, moves and status with real authorizat
     expect(await saveAdminCourt({ id: result.id, fields: { ...edited, location_id: locationIds[1] } }, admin.client))
       .toEqual({ ok: false, reason: "duplicate-slug" });
     expect((await listAdminCourts(admin.client)).find((row) => row.id === result.id)?.location_id).toBe(locationIds[2]);
+    // The TypeScript relationship checks reject before UPDATE; SQL FKs remain.
+    const hours = await service.from("location_opening_hours").insert({ location_id: locationIds[2], weekday: 0,
+      opens_at_minute: 480, closes_at_minute: 1200 });
+    assert.strictEqual(hours.error, null);
+    const ruleSet = await service.from("pricing_rule_sets").insert({ location_id: locationIds[2] }).select("id").single();
+    assert.strictEqual(ruleSet.error, null); assert.ok(ruleSet.data);
+    assert.strictEqual((await service.from("location_pricing_rules").insert({ rule_set_id: ruleSet.data.id,
+      location_id: locationIds[2], court_id: result.id, court_state: "indoor", weekday: 0,
+      starts_at_minute: 480, ends_at_minute: 1200, price_per_hour_minor: 1200 })).error, null);
+    const writer = vi.spyOn(clubs, "updateCourt");
+    expect(await saveAdminCourt({ id: result.id, fields: { ...edited, location_id: locationIds[0] } }, admin.client))
+      .toEqual({ ok: false, reason: "has-pricing" });
+    expect(await saveAdminCourt({ id: result.id, fields: { ...edited, environment: "outdoor" } }, admin.client))
+      .toEqual({ ok: false, reason: "has-pricing" });
+    expect(writer).not.toHaveBeenCalled();
+    writer.mockRestore();
+    expect((await listAdminCourts(admin.client)).find((row) => row.id === result.id))
+      .toMatchObject({ location_id: locationIds[2], environment: "indoor" });
     expect(await saveAdminCourt({ id: randomUUID(), fields }, admin.client)).toEqual({ ok: false, reason: "not-found" });
     expect((await admin.client.from("courts").delete().eq("id", result.id)).error?.code).toBe("42501");
 
@@ -71,7 +90,7 @@ test("court administration persists edits, moves and status with real authorizat
     }
     for (const session of [member.client, coach.client]) {
       const denied = await session.from("courts").update({ name: "Spoof" }).eq("id", result.id).select("id");
-      expect(denied.error).toBeNull(); expect(denied.data).toEqual([]);
+      expect(denied.error?.code).toBe("42501");
     }
     const suspended = await account("admin");
     assert.strictEqual((await service.from("users").update({ status: "suspended" }).eq("id", suspended.id)).error, null);
@@ -80,6 +99,8 @@ test("court administration persists edits, moves and status with real authorizat
     assert.strictEqual((await service.from("courts").update({ is_active: false }).eq("id", result.id)).error, null);
     expect((await listPublicLocationsWithCourts(admin.client)).some((row) => locationIds.includes(row.id))).toBe(false);
   } finally {
+    assert.strictEqual((await service.from("pricing_rule_sets").delete().in("location_id", locationIds)).error, null);
+    assert.strictEqual((await service.from("location_opening_hours").delete().in("location_id", locationIds)).error, null);
     assert.strictEqual((await service.from("courts").delete().in("location_id", locationIds)).error, null);
     assert.strictEqual((await service.from("locations").delete().in("id", locationIds)).error, null);
     await cleanupAuthFixtures(service, userIds);

@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test } from "vitest";
-import { listOwnUpcomingCustomerBookings } from "@/lib/bookings/personal-service";
+import { listOwnUpcomingActivity } from "@/lib/bookings/activity-service";
+async function listOwnUpcomingCustomerBookings(client: Parameters<typeof listOwnUpcomingActivity>[1]) {
+  return (await listOwnUpcomingActivity({}, client)).bookings;
+}
 import { localMinute, localToday } from "@/lib/courts/local-time";
-import { listPersonalReservations } from "@/lib/reservations/personal-service";
 import { cleanupAuthFixtures, localFixtureClient } from "./auth-fixtures";
 
 test("upcoming customer booking reads are owner scoped for members and staff", async () => {
@@ -96,11 +98,11 @@ test("upcoming customer booking reads are owner scoped for members and staff", a
           created_by_user_id: staff.id, reason: "Own training" })).error, null);
       }
       expect((await listOwnUpcomingCustomerBookings(staff.client)).map((row) => row.id)).toEqual([first, middle, last]);
-      const direct = (await listPersonalReservations(staff.client)).upcoming;
+      const direct = (await listOwnUpcomingActivity({}, staff.client)).upcoming;
       expect(direct.map((row) => row.id)).toEqual([...ownReservations].reverse());
       expect(direct.every((row) => row.created_by_user_id === staff.id)).toBe(true);
     }
-    await expect(listPersonalReservations(member.client)).rejects.toThrow();
+    expect((await listOwnUpcomingActivity({}, member.client)).upcoming).toEqual([]);
     expect((await member.client.from("bookings").select("id")).error?.code).toBe("42501");
   } finally {
     if (reservationIds.length) assert.strictEqual((await service.from("bookings").delete().in("reservation_id", reservationIds)).error, null);

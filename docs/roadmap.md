@@ -131,6 +131,6 @@ Do not introduce prematurely:
 - no browser Supabase client is used by default;
 - no ORM is required;
 - no separate backend framework is required;
-- Next.js is the complete primary application authorization boundary; RLS provides defense-in-depth as secondary security;
+- Next.js is the complete primary application authorization boundary; application table grants deny direct browser access and Storage RLS protects private objects;
 - domain algorithms remain in TypeScript;
-- PostgreSQL RPCs are used only where atomicity/integrity requires them.
+- TypeORM transactions persist application changes; PostgreSQL constraints and triggers enforce integrity.

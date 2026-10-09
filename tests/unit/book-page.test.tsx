@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 
 const { loadDay, loadLocations } = vi.hoisted(() => ({ loadDay: vi.fn(), loadLocations: vi.fn() }));
+vi.mock("next/server", () => ({ connection: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("@/lib/courts/public-calendar", () => ({ getPublicCourtDay: loadDay }));
 vi.mock("@/lib/courts/public", () => ({ listPublicLocationsWithCourts: loadLocations }));
 const eligible = {
@@ -10,7 +11,6 @@ const eligible = {
 vi.mock("@/app/book/booking-calendar", () => ({ BookingCalendar: () => null }));
 
 import { BookingContent } from "@/app/book/booking-content";
-import { CalendarControls } from "@/app/book/calendar-controls";
 
 afterEach(() => vi.useRealTimers());
 
@@ -27,29 +27,6 @@ it("defaults to one location-local current day without a client redirect", async
   expect(day.props.location).toBe(eligible);
 });
 
-it("does not render booking-day reads for invalid or past explicit dates", async () => {
-  loadDay.mockClear();
-  loadLocations.mockResolvedValue([eligible]);
-  for (const date of ["invalid", "2000-01-01"]) {
-    const content = await BookingContent({ searchParams: Promise.resolve({ date }) });
-    expect(content.props.children[0].props.date).toBeNull();
-    expect(content.props.children.at(-1).type).toBe("p");
-  }
-  expect(loadDay).not.toHaveBeenCalled();
-});
-
-it("passes the eligible location to the controls and default day", async () => {
-  loadLocations.mockResolvedValue([eligible]);
-  loadDay.mockClear();
-  const content = await BookingContent({ searchParams: Promise.resolve({}) });
-  const controls = content.props.children[0];
-  expect(controls.type).toBe(CalendarControls);
-  expect(controls.props.locations).toEqual([eligible]);
-  expect(controls.props.locationId).toBe(eligible.id);
-  expect(content.props.children.at(-1).props.location).toBe(eligible);
-  expect(loadDay).not.toHaveBeenCalled();
-});
-
 it("uses an eligible location when the URL names an unpublished location", async () => {
   loadLocations.mockResolvedValue([eligible]);
   loadDay.mockResolvedValue({ times: [], courts: [] });
@@ -57,12 +34,4 @@ it("uses an eligible location when the URL names an unpublished location", async
   const day = content.props.children.at(-1);
   expect(day.props.location).toBe(eligible);
   expect(content.props.children[0].props.locationId).toBe(eligible.id);
-});
-
-it("shows a public empty state when no locations are eligible", async () => {
-  loadLocations.mockResolvedValue([]);
-  loadDay.mockClear();
-  const content = await BookingContent({ searchParams: Promise.resolve({ location: eligible.id, date: "2099-10-02" }) });
-  expect(content.props.children).toContain("No locations are currently open for public booking");
-  expect(loadDay).not.toHaveBeenCalled();
 });

@@ -1,6 +1,6 @@
 import "server-only";
 
-import type { PaymentProvider } from "../domain";
+import type { PaymentProvider, PaymentPresentation } from "../domain";
 
 export interface PaymentProviderConfiguration {
   readonly id: PaymentProvider;
@@ -14,7 +14,7 @@ export interface OnlinePaymentAdapter {
   cancelPayment(attempt: { id: string; providerPaymentId: string }): Promise<"cancelled" | "succeeded" | "processing">;
   createPayment(attempt: { id: string; amountMinor: number; currency: string }): Promise<{
     providerPaymentId: string;
-    presentation: import("../domain").PaymentPresentation;
+    presentation: PaymentPresentation;
   }>;
 }
 

@@ -4,20 +4,14 @@ import { z } from "zod";
 import { readCurrentAccount } from "@/lib/auth/account";
 import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
-import { listOwnUpcomingCustomerBookings } from "./personal-service";
-import { customerBookingNoticeBypass, customerCancellationEligibility } from "./self-cancellation";
 import { loadBookingEditDay, runBookingReschedule, type BookingRescheduleResult } from "./reschedule";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
 
 async function checkOwnEditableBooking(id: unknown, client: Client) {
-  const bookingId = z.uuid().parse(id);
+  z.uuid().parse(id);
   const account = await readCurrentAccount(client);
   if (account.state !== "active") return { ok: false as const, message: "An active account is required to edit a booking." };
-  const booking = (await listOwnUpcomingCustomerBookings(client)).find((row) => row.id === bookingId);
-  if (!booking) return { ok: false as const, message: "This booking is no longer available to edit." };
-  if (customerCancellationEligibility(booking, customerBookingNoticeBypass(account.roles)) !== "eligible")
-    return { ok: false as const, message: "The rescheduling window for this booking has closed." };
   return { ok: true as const, account };
 }
 

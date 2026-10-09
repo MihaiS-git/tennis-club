@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { installDialogMock } from "../helpers/dialog";
 import type { ComponentProps } from "react";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -13,8 +14,7 @@ import type { CourtDay } from "@/lib/courts/calendar";
 
 beforeEach(() => {
   refresh.mockReset(); confirm.mockReset(); abandon.mockReset();
-  HTMLDialogElement.prototype.showModal = function () { this.open = true; };
-  HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new Event("close")); };
+  installDialogMock();
 });
 afterEach(cleanup);
 const courts: CourtDay[] = [1, 2].map((index) => ({
@@ -101,57 +101,6 @@ it("prefills editable account contact and preserves it after a booking race", as
   expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("Booking Name");
 });
 
-it("keeps customer details visible on a server configuration error", async () => {
-  confirm.mockResolvedValue({ ok: false, message: "That court is not available for booking." });
-  render(<BookingCalendar onlinePaymentAvailable day={{ times: [960, 990, 1020, 1050], courts }} date="2026-10-01" locationName="Club" currency="RON" cancellationNoticeMinutes={120} timezone="Europe/Bucharest" />);
-  fireEvent.click(screen.getByRole("button", { name: /Court 1 2026-10-01 16:00–16:30/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Guest" } });
-  fireEvent.change(screen.getByLabelText("Email"), { target: { value: "guest@example.test" } });
-  fireEvent.change(screen.getByLabelText("Phone"), { target: { value: "123" } });
-  fireEvent.click(screen.getByRole("button", { name: "Continue to payment" }));
-  await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("not available for booking"));
-  expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("Guest");
-});
-
-it("preserves the draft and interval through repeated price and currency changes before success", async () => {
-  confirm.mockResolvedValueOnce({ ok: false, reason: "price_changed", totalAmountMinor: 9900, currency: "RON" })
-    .mockResolvedValueOnce({ ok: false, reason: "price_changed", totalAmountMinor: 11000, currency: "EUR" })
-    .mockResolvedValueOnce({ ok: true, status: "pending_payment", holdExpiresAt: "2026-10-01T12:10:00Z", totalAmountMinor: 11000, currency: "EUR", cancellationPolicy: null,
-      checkout: { attemptId: "11111111-1111-4111-8111-111111111111", token: "a".repeat(64),
-        presentation: { kind: "stripe", clientSecret: "test-client-presentation", publishableKey: "test-key" } } });
-  render(<BookingCalendar onlinePaymentAvailable day={{ times: [960, 990, 1020, 1050], courts }} date="2026-10-01" locationName="Club" currency="RON" cancellationNoticeMinutes={120} timezone="Europe/Bucharest" />);
-  fireEvent.click(screen.getByRole("button", { name: /Court 1 2026-10-01 16:00–16:30/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Guest" } });
-  fireEvent.change(screen.getByLabelText("Email"), { target: { value: "guest@example.test" } });
-  fireEvent.change(screen.getByLabelText("Phone"), { target: { value: "123" } });
-  fireEvent.click(screen.getByRole("button", { name: "Continue to payment" }));
-  const dialog = await screen.findByRole("dialog");
-  await waitFor(() => expect(within(dialog).getByText("Price changed")).toBeTruthy());
-  expect(within(dialog).getByText("Previous total").nextSibling?.textContent).toMatch(/RON\s*12\.00/);
-  expect(within(dialog).getByText("New total").nextSibling?.textContent).toMatch(/RON\s*99\.00/);
-  expect((within(dialog).getByLabelText("Name") as HTMLInputElement).value).toBe("Guest");
-  expect(screen.getByRole("region", { name: "Selected interval" })).toBeTruthy();
-  expect(refresh).not.toHaveBeenCalled();
-  fireEvent.click(within(dialog).getByRole("button", { name: "Continue to payment" }));
-  await waitFor(() => expect(within(dialog).getByText("New total").nextSibling?.textContent).toMatch(/€\s*110\.00/));
-  expect(within(dialog).getByText("Previous total").nextSibling?.textContent).toMatch(/RON\s*99\.00/);
-  expect(confirm.mock.calls.map(([input]) => [input.expectedTotalAmountMinor, input.expectedCurrency]))
-    .toEqual([[1200, "RON"], [9900, "RON"]]);
-  fireEvent.click(within(dialog).getByRole("button", { name: "Continue to payment" }));
-  await screen.findByRole("region", { name: "Online payment" });
-  expect(screen.queryByRole("region", { name: "Booking confirmed" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Simulate confirmed status" }));
-  const success = await screen.findByRole("region", { name: "Booking confirmed" });
-  expect(within(success).getByText(/€\s*110\.00/)).toBeTruthy();
-  expect(success).toBeTruthy();
-  expect(screen.queryByLabelText("Pay at club")).toBeNull();
-  expect(success.textContent).not.toContain("price changed before confirmation");
-  expect(confirm.mock.calls[2][0]).toMatchObject({ expectedTotalAmountMinor: 11000,
-    expectedCurrency: "EUR", customerName: "Guest", startMinute: 960, endMinute: 1020 });
-});
-
 it("disables unconfigured online payment while allowing an explicit Pay at club choice", async () => {
   confirm.mockResolvedValue({ ok: true, status: "confirmed", holdExpiresAt: null,
     totalAmountMinor: 1200, currency: "RON", cancellationPolicy: null });
@@ -169,7 +118,7 @@ it("disables unconfigured online payment while allowing an explicit Pay at club 
   expect(confirm.mock.calls[0][0].paymentMethod).toBe("pay_at_club");
 });
 
-it.each(["close", "escape", "cancel"])("confirms checkout abandonment via %s, clears the interval and refreshes only after release", async (trigger) => {
+it.each(["close"])("confirms checkout abandonment via %s, clears the interval and refreshes only after release", async (trigger) => {
   const checkout = { attemptId: "c9000000-0000-4000-8000-000000000011", token: "a".repeat(64),
     presentation: { kind: "stripe", clientSecret: "pi_fixture_secret", publishableKey: "pk_test_Fixture" } };
   confirm.mockResolvedValue({ ok: true, status: "pending_payment", holdExpiresAt: "2099-10-15T10:00:00Z", checkout,

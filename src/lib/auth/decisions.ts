@@ -5,7 +5,7 @@ export const RECOVERY_SUCCESS_MESSAGE =
 
 type AuthContext = "signin" | "signup" | "password" | "callback";
 
-export const WEAK_NEW_PASSWORD_ERROR =
+const WEAK_NEW_PASSWORD_ERROR =
   "This password is too common or has appeared in a data breach. Choose another.";
 
 export function weakPasswordMessage(
