@@ -15,7 +15,9 @@ export async function listLocationPublicationPricing(manager: EntityManager, loc
 export async function listLocationHoursCompatibilityPricing(manager: EntityManager, locationId: string) {
   return manager.getRepository(LocationPricingRuleEntity).find({
     where: { locationId },
-    select: { id: true, weekday: true, startsAtMinute: true, endsAtMinute: true, startsOn: true, endsOn: true },
+    relations: { court: true },
+    select: { id: true, ruleSetId: true, courtState: true, weekday: true, startsAtMinute: true, endsAtMinute: true,
+      startsOn: true, endsOn: true, court: { name: true } },
     order: { weekday: "ASC", startsAtMinute: "ASC", endsAtMinute: "ASC", id: "ASC" },
   });
 }

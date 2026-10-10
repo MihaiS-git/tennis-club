@@ -1,7 +1,8 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { Input } from "@/components/input";
+import { SearchableCombobox } from "@/components/searchable-combobox";
 import { Button } from "@/components/button";
 import { useEditableFormBaseline } from "@/components/use-editable-form-baseline";
 import type { AdminLocation } from "@/lib/admin/locations";
@@ -9,19 +10,24 @@ import type { AdminCourt } from "@/lib/admin/courts";
 import { courtSurfaceLabels, courtEnvironmentLabels } from "@/lib/admin/courts-validation";
 import { groupedWeeklySchedule, minuteToTime, timeToMinute, weekdayGroupLabel, weekdays, type OpeningInterval } from "@/lib/admin/opening-hours-validation";
 import { courtStates, courtStateLabels, pricingDefinitionSchema, type PricingRuleSet } from "@/lib/pricing/validation";
+import { useProfileFormDirty } from "@/app/profile/unsaved-changes";
 import { minorToMajor } from "@/lib/pricing/money";
 import { pricingOpeningHoursError } from "@/lib/pricing/resolution";
 
 export type PricingCourt = Pick<AdminCourt, "id" | "location_id" | "name" | "surface" | "environment">;
 const timeSuggestions = Array.from({ length: 48 }, (_, index) => minuteToTime(index * 30));
+const startTimeOptions = timeSuggestions.map((time) => ({ value: time, label: time }));
+const endTimeOptions = [...startTimeOptions, { value: "24:00", label: "24:00" }];
 
-export function PricingRuleForm({ location, courts, rule, openingHours, pending, fieldErrors, onSave, onRemove }: {
+export function PricingRuleForm({ location, courts, rule, openingHours, pending, fieldErrors, onSave, onRemove, onEdit }: {
   location: Pick<AdminLocation, "id" | "currency">; courts: PricingCourt[]; rule?: PricingRuleSet;
   openingHours: OpeningInterval[];
   pending: boolean; fieldErrors: Record<string, string>; onSave: (input: unknown) => void;
   onRemove?: (trigger: HTMLButtonElement) => void;
+  onEdit?: () => void;
 }) {
   const prefix = useId();
+  const formRef = useRef<HTMLFormElement | null>(null);
   const [selectedDays, setSelectedDays] = useState(rule?.weekdays ?? [0]);
   const [selectedCourts, setSelectedCourts] = useState(rule?.court_ids ?? []);
   const [state, setState] = useState(rule?.court_state ?? "outdoor");
@@ -54,12 +60,14 @@ export function PricingRuleForm({ location, courts, rule, openingHours, pending,
     },
     (form) => parsedDefinition(form).success && !hoursError(form),
   );
+  useProfileFormDirty("Pricing", dirty);
   const incompatible = courts.filter((court) => selectedCourts.includes(court.id))
     .some((court) => (court.environment === "indoor") !== (state === "indoor"));
   const stateError = fieldErrors.court_state ?? (incompatible
     ? "Selected courts must share a valid state: indoor courts use Indoor; outdoor courts use Outdoor or Covered." : "");
   function update(form: HTMLFormElement) { sync(); setLocalHoursError(hoursError(form) ?? ""); }
-  return <form aria-label="Pricing rule" ref={attach} onInput={(event) => update(event.currentTarget)} onChange={(event) => update(event.currentTarget)}
+  return <form aria-label="Pricing rule" ref={(form) => { formRef.current = form; attach(form); }}
+    onInput={(event) => { onEdit?.(); update(event.currentTarget); }} onChange={(event) => { onEdit?.(); update(event.currentTarget); }}
     onSubmit={(event) => {
       event.preventDefault();
       const currentHoursError = hoursError(event.currentTarget);
@@ -126,19 +134,28 @@ export function PricingRuleForm({ location, courts, rule, openingHours, pending,
         ["price_per_hour", `Price per hour (${location.currency})`, "text", rule ? minorToMajor(rule.price_per_hour_minor) : ""],
       ] as const).map(([field, label, type, initial]) => <div key={field}>
         <label htmlFor={`${prefix}-${field}`} className="mb-1 block text-sm font-medium">{label}</label>
-        <Input id={`${prefix}-${field}`} name={field} type={type} defaultValue={initial}
-          list={field === "starts_at" || field === "ends_at" ? `${prefix}-${field}-suggestions` : undefined}
+        {field === "starts_at" || field === "ends_at" ? <SearchableCombobox
+          id={`${prefix}-${field}`} name={field} defaultValue={initial} allowCustomValue required
+          options={field === "starts_at" ? startTimeOptions : endTimeOptions}
+          placeholder="HH:mm" listLabel={`${label} suggestions`} emptyMessage="No matching times. You can type a time manually."
+          pattern={field === "starts_at" ? "([01][0-9]|2[0-3]):[0-5][0-9]" : "([01][0-9]|2[0-3]):[0-5][0-9]|24:00"}
+          onValueChange={() => {
+            onEdit?.();
+            // Option selection updates the input on React's next render, without a native change event.
+            requestAnimationFrame(() => { if (formRef.current) update(formRef.current); });
+          }}
+          aria-invalid={Boolean(fieldErrors[field] || (field === "ends_at" && localHoursError))}
+          aria-describedby={fieldErrors[field] || (field === "ends_at" && localHoursError) ? `${prefix}-${field}-error` : undefined}
+        /> : <Input id={`${prefix}-${field}`} name={field} type={type} defaultValue={initial}
           required={field !== "starts_on" && field !== "ends_on"} inputMode={field === "price_per_hour" ? "decimal" : undefined}
-          placeholder={field === "price_per_hour" ? "19.00" : type === "text" ? "HH:mm" : undefined}
-          pattern={field === "starts_at" ? "([01][0-9]|2[0-3]):[0-5][0-9]" : field === "ends_at" ? "([01][0-9]|2[0-3]):[0-5][0-9]|24:00" : field === "price_per_hour" ? "[0-9]+([.][0-9]{1,2})?" : undefined}
-          aria-invalid={Boolean(fieldErrors[field] || (field === "ends_at" && localHoursError))} aria-describedby={fieldErrors[field] || (field === "ends_at" && localHoursError) ? `${prefix}-${field}-error` : undefined} />
+          placeholder={field === "price_per_hour" ? "19.00" : undefined}
+          pattern={field === "price_per_hour" ? "[0-9]+([.][0-9]{1,2})?" : undefined}
+          aria-invalid={Boolean(fieldErrors[field])} aria-describedby={fieldErrors[field] ? `${prefix}-${field}-error` : undefined} />}
         {(fieldErrors[field] || (field === "ends_at" && localHoursError)) && <p id={`${prefix}-${field}-error`} className="mt-1 text-sm text-danger">{fieldErrors[field] || localHoursError}</p>}
       </div>)}
-      <datalist id={`${prefix}-starts_at-suggestions`}>{timeSuggestions.map((time) => <option key={time} value={time} />)}</datalist>
-      <datalist id={`${prefix}-ends_at-suggestions`}>{[...timeSuggestions, "24:00"].map((time) => <option key={time} value={time} />)}</datalist>
       <div className="flex items-center justify-between gap-4 border-t border-border pt-4 sm:col-span-2">
         {rule && onRemove ? <Button type="button" variant="destructive" size="small" disabled={pending} onClick={(event) => onRemove(event.currentTarget)}>Remove rule</Button> : <span />}
-        <Button type="submit" fullWidth={false} disabled={pending || incompatible || (rule ? !dirty : !valid)} aria-busy={pending}>{pending ? "Saving…" : "Save rule"}</Button>
+        <Button type="submit" fullWidth={false} disabled={pending || incompatible || !valid || Boolean(rule && !dirty)} aria-busy={pending}>{pending ? "Saving…" : "Save rule"}</Button>
       </div>
     </fieldset>
     <p className="mt-3 text-sm text-muted-foreground">Times include the start and exclude the end; adjacent intervals are valid. Use HH:mm; end time may be 24:00. Date boundaries are inclusive. Prices accept up to two decimal places.</p>

@@ -6,7 +6,9 @@ import { Input } from "@/components/input";
 import { Button } from "@/components/button";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { useEditableFormBaseline } from "@/components/use-editable-form-baseline";
-import type { CoverageMutationResult, CoveragePeriod } from "@/lib/courts/coverage-validation";
+import { coverageDatesSchema, type CoverageMutationResult, type CoveragePeriod } from "@/lib/courts/coverage-validation";
+import { useLocationPanelActive } from "../locations/location-workspace";
+import { useProfileFormDirty } from "@/app/profile/unsaved-changes";
 import { saveCoverageAction, removeCoverageAction } from "./actions";
 
 const dateLabel = (date: string) => new Intl.DateTimeFormat("en-GB", {
@@ -14,6 +16,7 @@ const dateLabel = (date: string) => new Intl.DateTimeFormat("en-GB", {
 }).format(new Date(`${date}T00:00:00Z`));
 
 export function CoveragePeriods({ courtId, courtName, periods }: { courtId: string; courtName?: string; periods: CoveragePeriod[] }) {
+  const panelActive = useLocationPanelActive();
   const prefix = useId();
   const [editing, setEditing] = useState<CoveragePeriod | "new" | null>(null);
   const [error, setError] = useState("");
@@ -22,7 +25,13 @@ export function CoveragePeriods({ courtId, courtName, periods }: { courtId: stri
   const [pending, startTransition] = useTransition();
   const pendingRef = useRef(false);
   const removeTriggerRef = useRef<HTMLButtonElement>(null);
-  const { attach, dirty, sync, reset } = useEditableFormBaseline(["starts_on", "ends_on"]);
+  const { attach, dirty, valid, sync, reset } = useEditableFormBaseline(["starts_on", "ends_on"],
+    (_, value) => value.trim(), (form) => {
+      const data = new FormData(form);
+      return coverageDatesSchema.safeParse({ starts_on: data.get("starts_on"), ends_on: data.get("ends_on") }).success;
+    });
+
+  useProfileFormDirty(`Courts ${prefix}`, editing !== null && dirty);
 
   function mutate(operation: () => Promise<CoverageMutationResult>) {
     if (pendingRef.current) return;
@@ -55,13 +64,14 @@ export function CoveragePeriods({ courtId, courtName, periods }: { courtId: stri
       </li>)}
     </ul>
     {error && !removing && <p role="alert" className="mt-3 text-sm text-danger">{error}</p>}
-    <ConfirmationDialog open={removing !== null} title={`Remove coverage period${courtName ? ` from ${courtName}` : ""}?`}
+    <ConfirmationDialog open={panelActive && removing !== null} title={`Remove coverage period${courtName ? ` from ${courtName}` : ""}?`}
       message={removing ? `Coverage from ${dateLabel(removing.starts_on)} to ${dateLabel(removing.ends_on)} will no longer apply to ${courtName ?? "this court"}.` : ""}
       confirmLabel="Remove period" pending={pending} error={error} returnFocusRef={removeTriggerRef}
       onClose={() => { if (!pendingRef.current) { setRemoving(null); setError(""); } }}
       onConfirm={() => { if (removing) mutate(() => removeCoverageAction({ id: removing.id, court_id: courtId })); }} />
     {editing ? <form key={editing === "new" ? "new" : editing.id} ref={attach} onInput={sync} onChange={sync} className="mt-3" onSubmit={(event) => {
       event.preventDefault();
+      if (pendingRef.current || !dirty || !valid) return;
       const data = new FormData(event.currentTarget);
       mutate(() => saveCoverageAction({ ...(editing === "new" ? {} : { id: editing.id }), court_id: courtId,
         dates: { starts_on: data.get("starts_on"), ends_on: data.get("ends_on") } }));
@@ -73,7 +83,7 @@ export function CoveragePeriods({ courtId, courtName, periods }: { courtId: stri
             aria-invalid={Boolean(fieldErrors[field])} aria-describedby={fieldErrors[field] ? `${prefix}-${field}-error` : undefined} />
           {fieldErrors[field] && <p id={`${prefix}-${field}-error`} className="mt-1 text-sm text-danger">{fieldErrors[field]}</p>}
         </div>)}
-        <Button type="submit" variant="primary" size="small" fullWidth={false} disabled={pending || (editing !== "new" && !dirty)} aria-busy={pending}>{pending ? "Saving…" : "Save period"}</Button>
+        <Button type="submit" variant="primary" size="small" fullWidth={false} disabled={pending || !dirty || !valid} aria-busy={pending}>{pending ? "Saving…" : "Save period"}</Button>
         <Button type="button" variant="secondary" size="small" onClick={() => { reset(); setEditing(null); setError(""); setFieldErrors({}); }}>Cancel</Button>
       </fieldset>
     </form> : <Button type="button" variant="subtle" size="small" className="mt-1 gap-1" aria-label="Add coverage period" disabled={pending} onClick={() => { reset(); setEditing("new"); setError(""); setFieldErrors({}); }}><Plus size={14} aria-hidden="true" /> Add period</Button>}

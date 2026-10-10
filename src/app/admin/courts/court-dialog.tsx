@@ -10,6 +10,8 @@ import { ModalDialog } from "@/components/modal-dialog";
 import type { AdminCourt } from "@/lib/admin/courts";
 import type { AdminLocation } from "@/lib/admin/locations";
 import { courtSurfaces, courtEnvironments, courtSurfaceLabels, courtEnvironmentLabels, courtFieldsSchema } from "@/lib/admin/courts-validation";
+import { useLocationPanelActive } from "../locations/location-workspace";
+import { useProfileFormDirty } from "@/app/profile/unsaved-changes";
 import { saveCourtAction } from "./actions";
 
 type LocationChoice = Pick<AdminLocation, "id" | "name" | "is_active">;
@@ -29,6 +31,7 @@ export function CourtDialog({ court, locations, locationId, triggerLabel = "Crea
   court?: AdminCourt; locations: LocationChoice[]; locationId?: string; triggerLabel?: string;
   open?: boolean; onOpenChange?: (open: boolean) => void;
 }) {
+  const panelActive = useLocationPanelActive();
   const prefix = useId();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const pendingRef = useRef(false);
@@ -42,6 +45,8 @@ export function CourtDialog({ court, locations, locationId, triggerLabel = "Crea
   const [formError, setFormError] = useState("");
   const [deactivating, setDeactivating] = useState(false);
   const { attach, dirty, valid, sync, submitted, commit } = useEditableFormBaseline(editableFields, undefined, validCourtCreate);
+
+  useProfileFormDirty(`Courts ${prefix}`, open && dirty);
 
   function errorProps(field: string) {
     return { "aria-invalid": Boolean(fieldErrors[field]), "aria-describedby": fieldErrors[field] ? `${prefix}-${field}-error` : undefined };
@@ -89,8 +94,8 @@ export function CourtDialog({ court, locations, locationId, triggerLabel = "Crea
     }
   }
 
-  const dialog = <ModalDialog ref={dialogRef} active={open} aria-labelledby={`${prefix}-title`}
-      onClose={() => setOpen(false)} onCancel={(event) => { if (pendingRef.current) event.preventDefault(); }}
+  const dialog = <ModalDialog ref={dialogRef} active={open && panelActive} aria-labelledby={`${prefix}-title`}
+      onClose={() => { if (panelActive) setOpen(false); }} onCancel={(event) => { if (pendingRef.current) event.preventDefault(); }}
       className="fixed inset-0 m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-lg overflow-y-auto rounded-card border border-border bg-surface p-0 text-foreground shadow-floating backdrop:bg-foreground/50">
       {open && <div className="p-5 sm:p-6">
         <header className="mb-5 flex items-start justify-between gap-4 border-b border-border pb-5">
@@ -146,7 +151,7 @@ export function CourtDialog({ court, locations, locationId, triggerLabel = "Crea
               </select>{fieldError("is_active")}
             </div>
             <div className="flex justify-end border-t border-border pt-4">
-              <Button ref={saveTriggerRef} type="submit" fullWidth={false} disabled={pending || (court ? !dirty : !valid)} aria-busy={pending}>
+              <Button ref={saveTriggerRef} type="submit" fullWidth={false} disabled={pending || !valid || (court ? !dirty : false)} aria-busy={pending}>
                 {pending ? "Saving…" : "Save court"}
               </Button>
             </div>
@@ -159,7 +164,7 @@ export function CourtDialog({ court, locations, locationId, triggerLabel = "Crea
       setFieldErrors({}); setFormError(""); setOpen(true);
     }}>{triggerLabel}</Button>}
     {dialog}
-    <ConfirmationDialog open={deactivating} title={`Deactivate ${court?.name ?? "court"}?`}
+    <ConfirmationDialog open={deactivating && panelActive} title={`Deactivate ${court?.name ?? "court"}?`}
       message={`${court?.name ?? "This court"} will become unavailable for normal use until reactivated.`}
       confirmLabel="Deactivate court" pending={pending} error={formError} returnFocusRef={saveTriggerRef}
       onClose={() => { if (!pendingRef.current) setDeactivating(false); }}

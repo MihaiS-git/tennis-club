@@ -9,6 +9,7 @@ import { ensureIntegrationAdminAnchor } from "../admin-anchor";
 
 vi.mock("server-only", () => ({}));
 
+import { readAdminUserDetails } from "../../../src/lib/admin/users";
 import { updateAdminUserRole } from "../../../src/lib/admin/user-role";
 import * as userRolesRepository from "../../../src/lib/db/repositories/user-roles.repository";
 
@@ -117,6 +118,7 @@ test("admin TypeORM role changes are idempotent, authorized, and preserve the fi
     expect(await updateAdminUserRole({ userId: member.id, role: "coach", operation: "assign" }, adminSession))
       .toEqual({ ok: true, user: { id: member.id, roles: ["coach"] } });
     expect(await hasRole(member.id, "coach")).toBe(1);
+    expect((await readAdminUserDetails(member.id, adminSession))?.roles).toEqual(["coach"]);
     const attributed = await service.from("user_roles").select("assigned_by").eq("user_id", member.id).eq("role_code", "coach").single();
     expect(attributed.error).toBeNull();
     expect(attributed.data?.assigned_by).toBe(admin.id);
@@ -129,6 +131,7 @@ test("admin TypeORM role changes are idempotent, authorized, and preserve the fi
     expect(await updateAdminUserRole({ userId: member.id, role: "coach", operation: "revoke" }, adminSession))
       .toEqual({ ok: true, user: { id: member.id, roles: [] } });
     expect(await hasRole(member.id, "coach")).toBe(0);
+    expect((await readAdminUserDetails(member.id, adminSession))?.roles).toEqual([]);
 
     const reload = vi.spyOn(userRolesRepository, "listUserRoleCodes")
       .mockResolvedValueOnce(["unsupported-role"]);

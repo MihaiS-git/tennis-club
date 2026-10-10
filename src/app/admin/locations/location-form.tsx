@@ -4,10 +4,9 @@ import { useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Input } from "@/components/input";
-import { Button, DialogCloseButton } from "@/components/button";
+import { Button } from "@/components/button";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { useEditableFormBaseline } from "@/components/use-editable-form-baseline";
-import { ModalDialog } from "@/components/modal-dialog";
 import type { AdminLocation } from "@/lib/admin/locations";
 import { defaultCustomerCancellationNoticeMinutes } from "@/lib/bookings/cancellation-policy";
 import { locationFieldsSchema } from "@/lib/admin/locations-validation";
@@ -19,7 +18,8 @@ import {
 } from "./location-controls";
 import { saveLocationAction } from "./actions";
 import { LocationArchiveControl } from "./location-archive-control";
-
+import { useLocationPanelActive } from "./location-workspace";
+import { useProfileFormDirty } from "@/app/profile/unsaved-changes";
 
 const textFields = [
   ["name", "Name", 100],
@@ -28,7 +28,7 @@ const textFields = [
   ["city", "City", 100],
   ["postal_code", "Postal code", 20],
 ] as const;
-const editableFields = ["name", "address_line1", "address_line2", "city", "postal_code", "country_code", "timezone", "currency", "is_active", "is_public", "allow_pay_at_club", "customer_cancellation_notice_minutes"];
+const editableFields = ["name", "address_line1", "address_line2", "city", "postal_code", "country_code", "timezone", "currency", "is_active", "allow_pay_at_club", "customer_cancellation_notice_minutes"];
 function validLocationCreate(form: HTMLFormElement) {
   const data = new FormData(form);
   const text = (field: string) => String(data.get(field) ?? "");
@@ -43,34 +43,30 @@ function validLocationCreate(form: HTMLFormElement) {
   }).success;
 }
 
-export function LocationDialog({
-  location,
-  inline = false,
-  open: controlledOpen,
-  onOpenChange,
-}: {
-  location?: AdminLocation;
-  inline?: boolean;
-  open?: boolean;
-  onOpenChange?: (open: boolean) => void;
-}) {
+export function LocationForm({ location }: { location?: AdminLocation }) {
+  const panelActive = useLocationPanelActive();
   const router = useRouter();
   const prefix = useId();
-  const dialogRef = useRef<HTMLDialogElement>(null);
   const pendingRef = useRef(false);
   const saveTriggerRef = useRef<HTMLButtonElement>(null);
   const pendingSaveFormRef = useRef<HTMLFormElement>(null);
-  const [internalOpen, setInternalOpen] = useState(false);
-  const open = inline || (controlledOpen ?? internalOpen);
-  const setOpen = onOpenChange ?? setInternalOpen;
+  const [source, setSource] = useState(location);
   const [pending, setPending] = useState(false);
   const archived = location?.archived_at != null;
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState("");
   const [deactivating, setDeactivating] = useState(false);
-  const { attach, dirty, valid, sync, submitted, commit } = useEditableFormBaseline(
+  const { attach, dirty, valid, sync, submitted, commit, reset } = useEditableFormBaseline(
     editableFields, (field, value) => field === "country_code" ? value.trim().toUpperCase() : value.trim(), validLocationCreate,
   );
+
+  // A sibling mutation may update location metadata. Never replace a dirty
+  // Details form; apply refreshed defaults only once its draft is clean.
+  if (location !== source && !dirty && !pending) {
+    setSource(location);
+    reset();
+  }
+  useProfileFormDirty("Details", dirty);
 
   function errorProps(field: string) {
     return {
@@ -125,8 +121,7 @@ export function LocationDialog({
         commit(saved);
         setDeactivating(false);
         toast.success(location ? "Location updated." : "Location created.");
-        dialogRef.current?.close();
-        if (!location) { setOpen(false); router.push(`/admin/locations/${result.id}`); }
+        if (!location) router.push(`/admin/locations/${result.id}`);
         else router.refresh();
       } else if (result.reason === "invalid-input") {
         setFieldErrors(result.fieldErrors);
@@ -145,21 +140,16 @@ export function LocationDialog({
     } finally {
       pendingRef.current = false;
       setPending(false);
+      requestAnimationFrame(sync);
     }
   }
 
-  const content = open && (
-    <div className="p-4 sm:p-6">
-      <header className="mb-5 flex items-start justify-between gap-4 border-b border-border pb-4">
-        <h2
-          id={`${prefix}-title`}
-          className="font-heading text-xl font-semibold"
-        >
-          {location ? "Edit location" : "Create location"}
-        </h2>
-        {!inline && <DialogCloseButton disabled={pending} onClick={() => dialogRef.current?.close()} />}
-      </header>
+  return (
+    <>
       <form
+        className="w-full min-w-0"
+        key={source?.updated_at ?? "new"}
+        aria-label={location ? "Edit location" : "Create location"}
         ref={attach}
         onInput={sync}
         onChange={sync}
@@ -184,7 +174,7 @@ export function LocationDialog({
             Restore this location to edit its details.
           </p>
         )}
-        <fieldset disabled={pending || archived}>
+        <fieldset className="min-w-0" disabled={pending || archived}>
           <div className="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2">
             {textFields.map(([field, label, maxLength]) => (
               <div
@@ -206,7 +196,7 @@ export function LocationDialog({
                   name={field}
                   maxLength={maxLength}
                   required={field === "name"}
-                  autoFocus={field === "name"}
+                  autoFocus={!location && field === "name"}
                   {...errorProps(field)}
                   defaultValue={location?.[field] ?? ""}
                 />
@@ -280,46 +270,53 @@ export function LocationDialog({
           </div>
           <section className="mt-4 border-t border-border pt-4" aria-labelledby={`${prefix}-booking-policy`}>
             <h3 id={`${prefix}-booking-policy`} className="mb-3 text-sm font-semibold">Booking policy</h3>
-            <label htmlFor={`${prefix}-allow_pay_at_club`} className="mb-1.5 block text-sm font-medium">Pay at club</label>
-            <select id={`${prefix}-allow_pay_at_club`} name="allow_pay_at_club" defaultValue={String(location?.allow_pay_at_club ?? false)}
-              className="mb-3 min-h-10 w-full rounded-control border border-border-strong bg-surface px-3 text-sm text-foreground" {...errorProps("allow_pay_at_club")}>
-              <option value="false">Disabled</option><option value="true">Enabled</option>
-            </select>
-            {fieldError("allow_pay_at_club")}
-            <label htmlFor={`${prefix}-customer_cancellation_notice_minutes`} className="mb-1.5 block text-sm font-medium">
-              Customer cancellation notice
-            </label>
-            <select id={`${prefix}-customer_cancellation_notice_minutes`} name="customer_cancellation_notice_minutes"
-              defaultValue={location?.customer_cancellation_notice_minutes ?? defaultCustomerCancellationNoticeMinutes}
-              className="min-h-10 w-full rounded-control border border-border-strong bg-surface px-3 text-sm text-foreground"
-              aria-invalid={Boolean(fieldErrors.customer_cancellation_notice_minutes)}
-              aria-describedby={`${prefix}-policy-help${fieldErrors.customer_cancellation_notice_minutes ? ` ${prefix}-customer_cancellation_notice_minutes-error` : ""}`}>
-              <option value={0}>Until booking start</option>
-              {[60, 120, 240, 720, 1440, 2880].map((minutes) => (
-                <option key={minutes} value={minutes}>{minutes / 60} {minutes === 60 ? "hour" : "hours"}</option>
-              ))}
-              {location && ![0, 60, 120, 240, 720, 1440, 2880].includes(location.customer_cancellation_notice_minutes) && (
-                <option value={location.customer_cancellation_notice_minutes}>{location.customer_cancellation_notice_minutes} minutes</option>
-              )}
-            </select>
-            <p id={`${prefix}-policy-help`} className="mt-1 text-sm text-muted-foreground">
-              Customers may cancel only when at least this amount of time remains before the booking starts.
-            </p>
-            {fieldError("customer_cancellation_notice_minutes")}
+            <div className="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2">
+              <div>
+                <label htmlFor={`${prefix}-allow_pay_at_club`} className="mb-1.5 block text-sm font-medium">Pay at club</label>
+                <select id={`${prefix}-allow_pay_at_club`} name="allow_pay_at_club" defaultValue={String(location?.allow_pay_at_club ?? false)}
+                  className="min-h-10 w-full rounded-control border border-border-strong bg-surface px-3 text-sm text-foreground" {...errorProps("allow_pay_at_club")}>
+                  <option value="false">Disabled</option><option value="true">Enabled</option>
+                </select>
+                {fieldError("allow_pay_at_club")}
+              </div>
+              <div>
+                <label htmlFor={`${prefix}-customer_cancellation_notice_minutes`} className="mb-1.5 block text-sm font-medium">
+                  Customer cancellation notice
+                </label>
+                <select id={`${prefix}-customer_cancellation_notice_minutes`} name="customer_cancellation_notice_minutes"
+                  defaultValue={location?.customer_cancellation_notice_minutes ?? defaultCustomerCancellationNoticeMinutes}
+                  className="min-h-10 w-full rounded-control border border-border-strong bg-surface px-3 text-sm text-foreground"
+                  aria-invalid={Boolean(fieldErrors.customer_cancellation_notice_minutes)}
+                  aria-describedby={`${prefix}-policy-help${fieldErrors.customer_cancellation_notice_minutes ? ` ${prefix}-customer_cancellation_notice_minutes-error` : ""}`}>
+                  <option value={0}>Until booking start</option>
+                  {[60, 120, 240, 720, 1440, 2880].map((minutes) => (
+                    <option key={minutes} value={minutes}>{minutes / 60} {minutes === 60 ? "hour" : "hours"}</option>
+                  ))}
+                  {location && ![0, 60, 120, 240, 720, 1440, 2880].includes(location.customer_cancellation_notice_minutes) && (
+                    <option value={location.customer_cancellation_notice_minutes}>{location.customer_cancellation_notice_minutes} minutes</option>
+                  )}
+                </select>
+                <p id={`${prefix}-policy-help`} className="mt-1 text-sm text-muted-foreground">
+                  Customers may cancel only when at least this amount of time remains before the booking starts.
+                </p>
+                {fieldError("customer_cancellation_notice_minutes")}
+              </div>
+            </div>
           </section>
         </fieldset>
         <div className="mt-5 flex items-center justify-between gap-3 border-t border-border pt-4">
-          {location && <LocationArchiveControl
-            id={location.id}
-            name={location.name}
-            archived={location.archived_at !== null}
-            onSuccess={() => dialogRef.current?.close()}
-          />}
-          <div className="justify-self-end">
+          {location && <div className="flex items-center gap-3">
+            <LocationArchiveControl
+              id={location.id}
+              name={location.name}
+              archived={location.archived_at !== null}
+            />
+          </div>}
+          <div className="ml-auto">
             {!archived && <Button
               ref={saveTriggerRef}
               type="submit"
-              disabled={pending || (location ? !dirty : !valid)}
+              disabled={pending || !valid || (location ? !dirty : false)}
               aria-busy={pending}
               fullWidth={false}
             >
@@ -328,38 +325,7 @@ export function LocationDialog({
           </div>
         </div>
       </form>
-    </div>
-  );
-  return (
-    <>
-      {!location && controlledOpen === undefined && (
-        <Button
-          type="button"
-          variant="secondary" size="small"
-          onClick={() => {
-            setFieldErrors({});
-            setFormError("");
-            setOpen(true);
-          }}
-        >
-          Create location
-        </Button>
-      )}
-      {inline ? content : <ModalDialog
-        ref={dialogRef}
-        active={open}
-        aria-labelledby={`${prefix}-title`}
-        onClose={() => {
-          if (!dialogRef.current?.open) setOpen(false);
-        }}
-        onCancel={(event) => {
-          if (pendingRef.current) event.preventDefault();
-        }}
-        className="fixed inset-0 m-auto w-[calc(100%-1.5rem)] max-w-2xl rounded-card border border-border bg-surface p-0 text-foreground shadow-floating backdrop:bg-foreground/50 sm:w-[calc(100%-2rem)]"
-      >
-        {content}
-      </ModalDialog>}
-      <ConfirmationDialog open={deactivating} title={`Deactivate ${location?.name ?? "location"}?`}
+      <ConfirmationDialog open={deactivating && panelActive} title={`Deactivate ${location?.name ?? "location"}?`}
         message={`${location?.name ?? "This location"} will become unavailable for normal use until reactivated.`}
         confirmLabel="Deactivate location" pending={pending} error={formError} returnFocusRef={saveTriggerRef}
         onClose={() => { if (!pendingRef.current) setDeactivating(false); }}

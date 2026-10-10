@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { Button } from "@/components/button";
 import { ModalDialog } from "@/components/modal-dialog";
 
-export function ConfirmationDialog({ open, title, message, confirmLabel, cancelLabel = "Cancel", pending = false, error = "", onConfirm, onClose, returnFocusRef, children }: {
+export function ConfirmationDialog({ open, title, message, confirmLabel, cancelLabel = "Cancel", pending = false, confirmDisabled = false, error = "", onConfirm, onClose, returnFocusRef, children }: {
   children?: ReactNode;
   open: boolean;
   title: string;
@@ -13,6 +13,7 @@ export function ConfirmationDialog({ open, title, message, confirmLabel, cancelL
   confirmLabel: string;
   cancelLabel?: string;
   pending?: boolean;
+  confirmDisabled?: boolean;
   error?: string;
   onConfirm: () => void;
   onClose: () => void;
@@ -38,7 +39,7 @@ export function ConfirmationDialog({ open, title, message, confirmLabel, cancelL
       <p role={error ? "alert" : undefined} className="min-h-5 pt-2 text-sm text-danger">{error}</p>
       <div className="mt-4 flex justify-end gap-2">
         <Button type="button" variant="secondary" size="small" disabled={pending} onClick={() => dialogRef.current?.close()}>{cancelLabel}</Button>
-        <Button type="button" variant="destructive" size="small" disabled={pending} aria-busy={pending} onClick={() => { if (!pending) onConfirm(); }}>{confirmLabel}</Button>
+        <Button type="button" variant="destructive" size="small" disabled={pending || confirmDisabled} aria-busy={pending} onClick={() => { if (!pending && !confirmDisabled) onConfirm(); }}>{confirmLabel}</Button>
       </div>
     </ModalDialog>, document.body,
   );

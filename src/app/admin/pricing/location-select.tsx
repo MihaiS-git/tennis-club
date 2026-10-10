@@ -8,5 +8,5 @@ export function PricingLocationSelect({ locations, selectedId }: {
 }) {
   const router = useRouter();
   return <AdminLocationSelect locations={locations} selectedId={selectedId ?? ""}
-    onChange={(value) => router.push(`/admin/pricing?location=${encodeURIComponent(value)}`)} />;
+    onChange={(value) => router.push(value ? `/admin/locations/${encodeURIComponent(value)}?tab=pricing` : "/admin/locations")} />;
 }

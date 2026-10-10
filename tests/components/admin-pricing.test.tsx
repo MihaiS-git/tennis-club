@@ -33,6 +33,52 @@ beforeEach(() => { vi.resetAllMocks(); savePricingRuleAction.mockResolvedValue({
 });
 afterEach(cleanup);
 
+it.each(["create", "edit"])("reopens time suggestions after an opening-hours error in %s and preserves the form", async (mode) => {
+  const hours = openingHours.map((interval) => ({ ...interval, closes_at_minute: 1200 }));
+  render(<PricingRules openingHours={hours} location={location} courts={[...courts]}
+    rules={mode === "edit" ? [{ ...rule, court_ids: [...rule.court_ids], weekdays: [...rule.weekdays] }] : []} />);
+  if (mode === "edit") fireEvent.click(screen.getByRole("row", { name: /Edit pricing rule/ }));
+  else {
+    fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /Court 1/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /Court 2/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Tuesday" }));
+  }
+  fireEvent.change(screen.getByLabelText("Start time"), { target: { value: "08:15" } });
+  fireEvent.change(screen.getByLabelText("Valid from (optional)"), { target: { value: "2026-10-01" } });
+  fireEvent.change(screen.getByLabelText("Valid until (optional)"), { target: { value: "2026-10-31" } });
+  fireEvent.change(screen.getByLabelText("Price per hour (EUR)"), { target: { value: "15.50" } });
+  const end = screen.getByRole("combobox", { name: "End time" }) as HTMLInputElement;
+  fireEvent.change(end, { target: { value: "21:15" } });
+  expect(screen.getByText(/outside .* opening hours/)).toBeTruthy();
+  expect(end.getAttribute("aria-invalid")).toBe("true");
+  expect((screen.getByRole("button", { name: "Save rule" }) as HTMLButtonElement).disabled).toBe(true);
+
+  // Blur and focus must show the full list even when the typed value has no matching suggestion.
+  fireEvent.blur(end);
+  fireEvent.focus(end);
+  expect(end.value).toBe("21:15");
+  expect(within(screen.getByRole("listbox", { name: "End time suggestions" })).getByRole("option", { name: "19:00" })).toBeTruthy();
+  fireEvent.keyDown(end, { key: "Escape" });
+  fireEvent.click(end);
+  fireEvent.click(within(screen.getByRole("listbox", { name: "End time suggestions" })).getByRole("option", { name: "19:00" }));
+  await waitFor(() => expect(screen.queryByText(/outside .* opening hours/)).toBeNull());
+  expect(end.value).toBe("19:00");
+  expect(end.getAttribute("aria-invalid")).toBe("false");
+  expect((screen.getByRole("button", { name: "Save rule" }) as HTMLButtonElement).disabled).toBe(false);
+  expect(screen.getByRole("dialog", { name: mode === "edit" ? "Edit pricing" : "Add pricing" })).toBeTruthy();
+  expect((screen.getByLabelText("Start time") as HTMLInputElement).value).toBe("08:15");
+  expect((screen.getByLabelText("Valid from (optional)") as HTMLInputElement).value).toBe("2026-10-01");
+  expect((screen.getByLabelText("Valid until (optional)") as HTMLInputElement).value).toBe("2026-10-31");
+  expect((screen.getByLabelText("Price per hour (EUR)") as HTMLInputElement).value).toBe("15.50");
+  for (const name of [/Court 1/, /Court 2/, "Monday", "Tuesday"]) {
+    expect((screen.getByRole("checkbox", { name }) as HTMLInputElement).checked).toBe(true);
+  }
+  const start = screen.getByRole("combobox", { name: "Start time" });
+  fireEvent.focus(start);
+  expect(within(screen.getByRole("listbox", { name: "Start time suggestions" })).getByRole("option", { name: "08:00" })).toBeTruthy();
+});
+
 it("shows an actionable error for an out-of-hours create rule and enables Save after correction", () => {
   render(<PricingRules openingHours={openingHours} location={location} courts={[...courts]} rules={[]} />);
   fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
@@ -61,6 +107,12 @@ it("preserves entered values and displays the server's current-hours error after
   expect((screen.getByLabelText("End time") as HTMLInputElement).value).toBe("09:00");
   expect((screen.getByRole("checkbox", { name: "Sunday" }) as HTMLInputElement).checked).toBe(true);
   expect((screen.getByRole("button", { name: "Save rule" }) as HTMLButtonElement).disabled).toBe(false);
+  const end = screen.getByRole("combobox", { name: "End time" });
+  fireEvent.focus(end);
+  fireEvent.click(within(screen.getByRole("listbox", { name: "End time suggestions" })).getByRole("option", { name: "09:30" }));
+  await waitFor(() => expect(screen.queryByText(/Sunday is closed. Remove Sunday/)).toBeNull());
+  expect((end as HTMLInputElement).value).toBe("09:30");
+  expect((screen.getByRole("checkbox", { name: "Sunday" }) as HTMLInputElement).checked).toBe(true);
 });
 it("cancels pricing removal and keeps a failed removal open with its error", async () => {
   removePricingRuleAction.mockResolvedValue({ ok: false, reason: "not-found" });

@@ -6,13 +6,19 @@ import { saveAdminCourtCoverage, removeAdminCourtCoverage } from "@/lib/admin/co
 
 export async function saveCoverageAction(input: unknown) {
   const result = await saveAdminCourtCoverage(input);
-  if (result.ok) revalidatePath("/admin/courts");
+  if (result.ok) {
+    revalidatePath("/admin/courts");
+    revalidatePath("/admin/locations", "layout");
+  }
   return result;
 }
 
 export async function removeCoverageAction(input: unknown) {
   const result = await removeAdminCourtCoverage(input);
-  if (result.ok) revalidatePath("/admin/courts");
+  if (result.ok) {
+    revalidatePath("/admin/courts");
+    revalidatePath("/admin/locations", "layout");
+  }
   return result;
 }
 

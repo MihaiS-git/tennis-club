@@ -40,7 +40,10 @@ export async function updateUserStatusAction(input: AdminUserStatusInput): Promi
   if (!parsed.success) return { ok: false, reason: "invalid-input" };
 
   const result = await updateAdminUserStatus(parsed.data);
-  if (result.ok) revalidatePath("/admin/users");
+  if (result.ok) {
+    revalidatePath("/admin/users");
+    revalidatePath(`/admin/users/${parsed.data.userId}`);
+  }
   return result;
 }
 
@@ -49,6 +52,9 @@ export async function updateUserRoleAction(input: AdminUserRoleInput): Promise<U
   if (!parsed.success) return { ok: false, reason: "invalid-input" };
 
   const result = await updateAdminUserRole(parsed.data);
-  if (result.ok) revalidatePath("/admin/users");
+  if (result.ok) {
+    revalidatePath("/admin/users");
+    revalidatePath(`/admin/users/${parsed.data.userId}`);
+  }
   return result;
 }

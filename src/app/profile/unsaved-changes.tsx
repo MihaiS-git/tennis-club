@@ -1,16 +1,23 @@
 "use client";
 
 import { createContext, useCallback, useContext, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { useProfileDepartureRegistration } from "@/components/profile-departure-navigation";
 import styles from "./unsaved-changes.module.css";
 
-type FormName = "personal" | "tennis";
+type FormName = string;
+const profileLabels: Readonly<Record<string, string>> = { personal: "Personal information", tennis: "Tennis profile" };
 const DirtyFormsContext = createContext<((form: FormName, dirty: boolean) => void) | null>(null);
 const DirtySectionsContext = createContext<readonly FormName[]>([]);
 type Confirmation = { id: string | number; proceed: () => void };
 
-export function ProfileUnsavedChanges({ children, onDeparture }: { children: ReactNode; onDeparture: () => void }) {
+export function ProfileUnsavedChanges({ children, onDeparture, sectionLabels = profileLabels, captureLinksFrom }: {
+  children: ReactNode; onDeparture: () => void;
+  sectionLabels?: Readonly<Record<string, string>>;
+  captureLinksFrom?: string;
+}) {
+  const router = useRouter();
   const registrationRef = useProfileDepartureRegistration();
   const dirtyForms = useRef(new Set<FormName>());
   const [dirtySections, setDirtySections] = useState<readonly FormName[]>([]);
@@ -40,10 +47,11 @@ export function ProfileUnsavedChanges({ children, onDeparture }: { children: Rea
       }
       const session: Confirmation = { id: 0, proceed };
       confirmation.current = session;
-      const section = dirtyForms.current.has("personal") ? "Personal information" : "Tennis profile";
-      const message = dirtyForms.current.size === 1
-        ? `You have unsaved changes in ${section}.`
-        : "You have unsaved changes in 2 sections.";
+      const sections = [...new Set([...dirtyForms.current].map((form) =>
+        sectionLabels[form] ?? Object.keys(sectionLabels).find((label) => form.startsWith(`${label} `)) ?? form))];
+      const message = sections.length === 1
+        ? `You have unsaved changes in ${sections[0]}.`
+        : `You have unsaved changes in ${sections.length} sections.`;
       session.id = toast.warning(message, {
         className: styles.confirmation,
         closeButton: false,
@@ -69,7 +77,7 @@ export function ProfileUnsavedChanges({ children, onDeparture }: { children: Rea
       if (registrationRef.current === handler) registrationRef.current = null;
       dismissConfirmation();
     };
-  }, [registrationRef, onDeparture, dismissConfirmation]);
+  }, [registrationRef, onDeparture, dismissConfirmation, sectionLabels]);
 
   useLayoutEffect(() => {
     if (!dirty) {
@@ -83,6 +91,29 @@ export function ProfileUnsavedChanges({ children, onDeparture }: { children: Rea
     window.addEventListener("beforeunload", beforeUnload);
     return () => window.removeEventListener("beforeunload", beforeUnload);
   }, [dirty, dismissConfirmation]);
+
+  // Admin links use ordinary Next Links. Route them through the same registered
+  // departure handler; changes within a retained workspace do not discard drafts.
+  useLayoutEffect(() => {
+    if (!captureLinksFrom || !registrationRef) return;
+    const click = (event: MouseEvent) => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const anchor = event.target instanceof Element ? event.target.closest("a[href]") : null;
+      if (!(anchor instanceof HTMLAnchorElement) || anchor.download || (anchor.target && anchor.target !== "_self")) return;
+      const target = new URL(anchor.href);
+      if (target.origin === window.location.origin && target.pathname === captureLinksFrom) return;
+      const proceed = () => {
+        if (target.origin === window.location.origin) router.push(`${target.pathname}${target.search}${target.hash}`);
+        else window.location.assign(target.href);
+      };
+      if (registrationRef.current?.(proceed)) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+    document.addEventListener("click", click, true);
+    return () => document.removeEventListener("click", click, true);
+  }, [captureLinksFrom, registrationRef, router]);
 
   return <DirtyFormsContext value={report}>
     <DirtySectionsContext value={dirtySections}>{children}</DirtySectionsContext>

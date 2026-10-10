@@ -146,7 +146,7 @@ it("edits a future reservation in the details dialog and shows refreshed details
   fireEvent.change(within(dialog).getByRole("textbox", { name: "Reason" }), { target: { value: "   " } });
   fireEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
   expect(edit).not.toHaveBeenCalled();
-  expect(within(dialog).getByText("Enter a reason.")).toBeDefined();
+  expect(within(dialog).getByRole("button", { name: "Save changes" })).toHaveProperty("disabled", true);
   expect(within(dialog).getByText("Court 3 · 14:00–16:00 · 120 min")).toBeDefined();
   fireEvent.change(within(dialog).getByRole("textbox", { name: "Reason" }), { target: { value: "Training" } });
   fireEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
@@ -204,9 +204,10 @@ it("refreshes changed details after a stale edit instead of overwriting them", a
   fireEvent.click(within(screen.getByRole("dialog", { name: "Reservation details" })).getByRole("button", { name: "Edit reservation" }));
   const form = screen.getByRole("dialog", { name: "Edit reservation" });
   await within(form).findByText("Current reservation");
+  fireEvent.change(within(form).getByLabelText("Reason"), { target: { value: "My draft" } });
   fireEvent.click(within(form).getByRole("button", { name: "Save changes" }));
   await waitFor(() => expect(edit).toHaveBeenCalledWith({ kind: "reason", id: active.id,
-    expectedUpdatedAt: active.updated_at, reason: "Practice" }));
+    expectedUpdatedAt: active.updated_at, reason: "My draft" }));
   const details = await screen.findByRole("dialog", { name: "Reservation details" });
   expect(within(details).getByText("Newer update")).toBeDefined();
   expect(within(details).getByRole("alert").textContent).toContain("changed since you opened it");

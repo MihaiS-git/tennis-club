@@ -24,7 +24,8 @@ function editInput(id: string, context: BookingEditContext, draft: ReservationEd
     endMinute: draft.selection?.endMinute };
 }
 
-function BookingPrice({ id, context, draft, currency, quote, acknowledged, onQuote, onAcknowledge, actions }: {
+function BookingPrice({ id, context, draft, currency, quote, acknowledged, onQuote, onAcknowledge, actions, pending }: {
+  pending: boolean;
   actions: BookingEditActions;
   id: string; context: BookingEditContext; draft: ReservationEditDraft; currency: AdminBooking["currency"];
   quote: Quote | null; acknowledged: boolean; onQuote: (quote: Quote | null) => void; onAcknowledge: (value: boolean) => void;
@@ -51,7 +52,7 @@ function BookingPrice({ id, context, draft, currency, quote, acknowledged, onQuo
     <p>New total: {currentQuote ? formatMoney(currentQuote.total, currency) : draft.selection ? "Calculating…" : "Choose an interval"}</p>
     {error && <p role="alert" className="text-danger">{error}</p>}
     {currentQuote && (currentQuote.total !== context.total_amount_minor || currentQuote.requiresConfirmation) && <label className="mt-2 flex items-center gap-2">
-      <input type="checkbox" checked={acknowledged} onChange={(event) => onAcknowledge(event.target.checked)} />
+      <input type="checkbox" checked={acknowledged} disabled={pending} onChange={(event) => onAcknowledge(event.target.checked)} />
       I confirm the new total of {formatMoney(currentQuote.total, currency)}.
     </label>}
   </section>;
@@ -81,8 +82,10 @@ export function BookingEditForm({ booking, location, onCancel, onSaved, onPendin
     location_name: fixedLocation.name, court_name: fixedLocation.courts.find((c) => c.id === context.court_id)?.name ?? "Court" }}
     inProgress={false} scheduleOnly loadAvailability={actions.load}
     onCancel={onCancel} onPendingChange={onPendingChange}
-    renderScheduleDetails={(draft) => <BookingPrice id={booking.id} context={context} draft={draft} currency={booking.currency}
-      actions={actions} quote={quote} acknowledged={acknowledged} onQuote={receiveQuote} onAcknowledge={setAcknowledged} />}
+    canSave={(draft) => quote?.key === draftKey(draft)
+      && (!(quote.total !== context.total_amount_minor || quote.requiresConfirmation) || acknowledged)}
+    renderScheduleDetails={(draft, pending) => <BookingPrice id={booking.id} context={context} draft={draft} currency={booking.currency}
+      actions={actions} pending={pending} quote={quote} acknowledged={acknowledged} onQuote={receiveQuote} onAcknowledge={setAcknowledged} />}
     onSave={async (draft) => {
       if (!quote || quote.key !== draftKey(draft)) return { ok: false, message: "Wait for the recalculated total before saving." };
       if ((quote.total !== context.total_amount_minor || quote.requiresConfirmation) && !acknowledged)

@@ -1,12 +1,9 @@
 import { RouteSubmenu } from "./route-submenu";
 
 const sections = [
-  { label: "Overview", href: "/admin" },
-  { label: "Locations", href: "/admin/locations" },
-  { label: "Courts", href: "/admin/courts" },
-  { label: "Pricing", href: "/admin/pricing" },
-  { label: "Payments", href: "/admin/payments" },
-  { label: "Users", href: "/admin/users" },
+  { label: "Locations", href: "/admin/locations", matchDescendants: true },
+  { label: "Payments", href: "/admin/payments", matchDescendants: true },
+  { label: "Users", href: "/admin/users", matchDescendants: true },
 ] as const;
 
 export function AdminNavigation() {

@@ -5,18 +5,19 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import type { UserRole } from "../../../src/lib/auth/account";
 
-const { readUserDetailsAction, updateUserStatusAction, updateUserRoleAction, success, error } = vi.hoisted(() => ({
-  readUserDetailsAction: vi.fn(),
+const { updateUserStatusAction, updateUserRoleAction, success, error, refresh } = vi.hoisted(() => ({
   updateUserStatusAction: vi.fn(),
   updateUserRoleAction: vi.fn(),
+  refresh: vi.fn(),
   success: vi.fn(),
   error: vi.fn(),
 }));
 
-vi.mock("../../../src/app/admin/users/actions", () => ({ readUserDetailsAction, updateUserStatusAction, updateUserRoleAction }));
-vi.mock("sonner", () => ({ toast: { success, error } }));
+vi.mock("../../../src/app/admin/users/actions", () => ({ updateUserStatusAction, updateUserRoleAction }));
+vi.mock("sonner", () => ({ toast: { success, error, refresh } }));
 
-import { UserItem } from "../../../src/app/admin/users/user-item";
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
+import { UserAccessControls } from "../../../src/app/admin/users/user-access-controls";
 import type { AdminUserListItem } from "../../../src/lib/admin/users";
 
 const userId = "84c64ef2-6925-4901-a137-f01395541411";
@@ -29,19 +30,12 @@ const user = {
   roles: [] as UserRole[],
 };
 
-function userTree(props: AdminUserListItem = user, currentAdminId = "other-admin") {
-  return <table><tbody><UserItem currentAdminId={currentAdminId} user={props} /></tbody></table>;
-}
-
 async function openDialog(props: AdminUserListItem = user, currentAdminId = "other-admin") {
-  readUserDetailsAction.mockResolvedValueOnce({ ok: true, user: { ...props, personal: {
+  const view = render(<UserAccessControls currentAdminId={currentAdminId} user={{ ...props, personal: {
     first_name: null, last_name: null, phone: null, date_of_birth: null,
     address_line1: null, address_line2: null, city: null, postal_code: null, country_code: null,
-  }, player: null } });
-  render(userTree(props, currentAdminId));
-  fireEvent.click(screen.getByRole("row", { name: `Manage user ${props.email}` }));
-  await waitFor(() => expect(screen.queryByText("Loading user details…")).toBeNull());
-  return screen.getByRole("dialog");
+  }, player: null }} />);
+  return view.container;
 }
 
 function roleRow(dialog: HTMLElement, label: string) {
@@ -57,25 +51,20 @@ function confirm(label: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  readUserDetailsAction.mockImplementation(async () => ({ ok: true, user: { ...user, personal: {
-    first_name: null, last_name: null, phone: null, date_of_birth: null,
-    address_line1: null, address_line2: null, city: null, postal_code: null, country_code: null,
-  }, player: null } }));
   HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", ""); };
   HTMLDialogElement.prototype.close = function () { this.removeAttribute("open"); this.dispatchEvent(new Event("close")); };
 });
 
 afterEach(cleanup);
 
-it("keeps Manage User open when suspension is cancelled and restores focus", async () => {
+it("keeps account controls available when suspension is cancelled and restores focus", async () => {
   const dialog = await openDialog();
   const trigger = within(dialog).getByRole("button", { name: "Suspend user" });
   fireEvent.click(trigger);
-  expect(screen.getAllByRole("dialog")).toHaveLength(2);
+  expect(screen.getAllByRole("dialog")).toHaveLength(1);
   expect(updateUserStatusAction).not.toHaveBeenCalled();
   fireEvent.click(within(confirmation()).getByRole("button", { name: "Cancel" }));
-  expect(screen.getAllByRole("dialog")).toHaveLength(1);
-  expect(dialog.hasAttribute("open")).toBe(true);
+  expect(screen.queryByRole("dialog")).toBeNull();
   expect(document.activeElement).toBe(trigger);
   expect(updateUserStatusAction).not.toHaveBeenCalled();
 });
@@ -89,6 +78,7 @@ it("requires confirmation for either role removal while assignments stay direct"
   expect(updateUserRoleAction).not.toHaveBeenCalled();
   confirm("Remove Coach role");
   await waitFor(() => expect(updateUserRoleAction).toHaveBeenCalledExactlyOnceWith({ userId, role: "coach", operation: "revoke" }));
+  expect(refresh).toHaveBeenCalledOnce();
 });
 
 it("keeps state unchanged for final-active-admin", async () => {
@@ -100,7 +90,6 @@ it("keeps state unchanged for final-active-admin", async () => {
   await waitFor(() => expect(error).toHaveBeenCalledWith("At least one active administrator must remain."));
   expect(within(dialog).getByText("Active")).toBeTruthy();
   expect(within(dialog).getByRole("button", { name: "Suspend user" })).toBeTruthy();
-  expect(dialog.hasAttribute("open")).toBe(true);
   expect(within(confirmation()).getByRole("alert").textContent).toBe("At least one active administrator must remain.");
   expect(within(dialog).getByRole("heading", { name: "Roles" }).closest("section")?.querySelector('[role="alert"]')).toBeNull();
 });
@@ -153,39 +142,3 @@ it("blocks own status and admin controls while keeping coach manageable ", async
   await waitFor(() => expect(updateUserRoleAction).toHaveBeenLastCalledWith({ userId, role: "coach", operation: "revoke" }));
 });
 
-it("opens a fresh populated profile without expanding the table", async () => {
-  const details = { ...user, email: "live@example.com", personal: {
-    first_name: "Alex", last_name: "Player", phone: "+40712345678", date_of_birth: "1990-05-10",
-    address_line1: "10 Court Street", address_line2: "Apartment 2", city: "Bucharest", postal_code: "010101", country_code: "RO",
-  }, player: { display_name: "Ace Alex", avatar_path: `${userId}/avatar.webp`, sportya_level: "6",
-    rating: 1450, handedness: "left", backhand: "two_handed", preferred_game: "both", preferred_surface: "clay",
-    bio: "Enjoys competitive tennis.", updated_at: user.updated_at } };
-  readUserDetailsAction.mockResolvedValue({ ok: true, user: details });
-  render(userTree());
-  expect(screen.queryByText("Sportya level")).toBeNull();
-  fireEvent.click(screen.getByRole("row", { name: `Manage user ${user.email}` }));
-  const dialog = screen.getByRole("dialog");
-  await waitFor(() => expect(within(dialog).getByText("Alex Player")).toBeTruthy());
-  for (const value of ["live@example.com", "+40712345678", "10 May 1990", "10 Court Street", "Apartment 2",
-    "Bucharest", "010101", "Romania", "6", "1450", "Left-handed", "Two-handed", "Both", "Clay", "Enjoys competitive tennis."]) {
-    expect(within(dialog).getByText(value)).toBeTruthy();
-  }
-  const avatar = within(dialog).getByRole("img", { name: "User avatar" });
-  expect(avatar.getAttribute("src")).toContain(`/admin/users/${userId}/avatar?v=`);
-  fireEvent.error(avatar);
-  expect(within(dialog).queryByRole("img")).toBeNull();
-  fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
-  fireEvent.click(screen.getByRole("row", { name: `Manage user ${user.email}` }));
-  await waitFor(() => expect(readUserDetailsAction).toHaveBeenCalledTimes(2));
-});
-
-it("keeps a failed details read visible and supports retry", async () => {
-  readUserDetailsAction.mockResolvedValueOnce({ ok: false, error: "Unable to load user details. Please try again." });
-  render(userTree());
-  fireEvent.click(screen.getByRole("row", { name: `Manage user ${user.email}` }));
-  const dialog = screen.getByRole("dialog");
-  await waitFor(() => expect(within(dialog).getByRole("alert")).toBeTruthy());
-  expect(within(dialog).getByRole("button", { name: "Suspend user" }).hasAttribute("disabled")).toBe(true);
-  fireEvent.click(within(dialog).getByRole("button", { name: "Retry" }));
-  await waitFor(() => expect(within(dialog).getByRole("button", { name: "Suspend user" }).hasAttribute("disabled")).toBe(false));
-});

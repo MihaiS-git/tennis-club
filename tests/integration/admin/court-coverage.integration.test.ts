@@ -71,6 +71,8 @@ test("coverage services preserve dates, court scope, FK restrictions, overlap an
       .toEqual({ ok: false, reason: "not-found" });
     expect(await saveAdminCourtCoverage({ ...input, id: created.id, dates: { starts_on: "2099-01-02", ends_on: "2099-01-30" } }, admin.client))
       .toEqual({ ok: true, id: created.id });
+    expect((await listAdminCourtCoverage(admin.client)).filter((row) => row.court_id === courtIds[0]))
+      .toEqual(expect.arrayContaining([expect.objectContaining({ id: created.id, starts_on: "2099-01-02", ends_on: "2099-01-30" })]));
     const courtWriter = vi.spyOn(clubs, "updateCourt");
     expect(await saveAdminCourt({ id: courtIds[0], fields: {
       location_id: locationId, name: "Court 0", surface: "clay", environment: "indoor", has_lighting: false, is_active: true,
@@ -87,6 +89,7 @@ test("coverage services preserve dates, court scope, FK restrictions, overlap an
     assert.strictEqual((await service.from("users").update({ status: "active" }).eq("id", admin.id)).error, null);
     expect(await removeAdminCourtCoverage({ court_id: courtIds[0], id: created.id }, admin.client)).toEqual({ ok: true, id: created.id });
     expect(await removeAdminCourtCoverage({ court_id: courtIds[0], id: created.id }, admin.client)).toEqual({ ok: false, reason: "not-found" });
+    expect((await listAdminCourtCoverage(admin.client)).some((row) => row.id === created.id)).toBe(false);
   } finally {
     assert.strictEqual((await service.from("court_coverage_periods").delete().in("court_id", courtIds)).error, null);
     assert.strictEqual((await service.from("courts").delete().in("id", courtIds)).error, null);

@@ -4,19 +4,19 @@ import { useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/button";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
+import { useLocationPanelActive } from "./location-workspace";
 import { archiveLocationAction } from "./actions";
 
 export function LocationArchiveControl({
   id,
   name,
   archived,
-  onSuccess,
 }: {
   id: string;
   name: string;
   archived: boolean;
-  onSuccess?: () => void;
 }) {
+  const panelActive = useLocationPanelActive();
   const router = useRouter();
   const errorId = useId();
   const pendingRef = useRef(false);
@@ -36,7 +36,6 @@ export function LocationArchiveControl({
       if (result.ok) {
         setDone(true);
         setConfirming(false);
-        onSuccess?.();
         router.refresh();
       } else
         setError(
@@ -80,7 +79,7 @@ export function LocationArchiveControl({
           {done ? "Archived" : "Archive"}
         </Button>
       )}
-      <ConfirmationDialog open={confirming && !archived} title={`Archive ${name}`}
+      <ConfirmationDialog open={panelActive && confirming && !archived} title={`Archive ${name}`}
         message={`${name} will become inactive and unavailable in normal management and use.`}
         confirmLabel={pending ? "Archiving…" : "Archive location"} pending={pending} error={error}
         onConfirm={() => void mutate()} onClose={() => setConfirming(false)} returnFocusRef={triggerRef} />

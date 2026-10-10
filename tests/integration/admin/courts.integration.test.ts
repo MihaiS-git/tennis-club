@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test, vi } from "vitest";
 import * as clubs from "../../../src/lib/db/repositories/clubs.repository";
 import { listAdminCourts, saveAdminCourt } from "../../../src/lib/admin/courts";
+import { selectLocationCourts } from "../../../src/app/admin/courts/inventory";
 import { listPublicLocationsWithCourts } from "../../../src/lib/courts/public";
 import { cleanupAuthFixtures, localFixtureClient } from "../auth-fixtures";
 import { ensureIntegrationAdminAnchor } from "../admin-anchor";
@@ -54,6 +55,11 @@ test("court administration persists edits, moves and status with real authorizat
       const saved = (await listAdminCourts(admin.client)).find((row) => row.id === result.id);
       assert.ok(saved);
       expect(saved).toMatchObject({ ...edited, slug: original.slug, is_active });
+      const inventory = await listAdminCourts(admin.client);
+      const options = { sort: "name", dir: "asc" } as const;
+      expect(selectLocationCourts(inventory, locationIds[0], options).some((row) => row.id === result.id)).toBe(false);
+      expect(selectLocationCourts(inventory, locationIds[2], options).find((row) => row.id === result.id))
+        .toMatchObject({ name: "Renamed", is_active });
       expect(Date.parse(saved.updated_at)).toBeGreaterThan(Date.parse("2000-01-01T00:00:00Z"));
       const visible = (await listPublicLocationsWithCourts(publicClient())).filter((row) => locationIds.includes(row.id));
       expect(visible).toEqual([]);

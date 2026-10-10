@@ -2,7 +2,6 @@ import Link from "next/link";
 import { AdminPageHeader, AdminToolbar } from "@/components/admin-page-controls";
 import { listAdminLocationsWithReadiness } from "@/lib/admin/locations";
 import { countries } from "@/lib/profile/countries";
-import { LocationDialog } from "./location-dialog";
 import { LocationItem } from "./location-item";
 
 export const instant = false;
@@ -22,7 +21,7 @@ export default async function AdminLocationsPage({ searchParams }: {
     <AdminToolbar primary={<Link href={archived ? "/admin/locations" : "/admin/locations?view=archived"}
         className="inline-flex min-h-9 items-center rounded-control px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-surface-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">
         {archived ? "Current locations" : "Archived"}
-      </Link>} action={!archived ? <LocationDialog /> : undefined} />
+      </Link>} action={!archived ? <Link href="/admin/locations/new" className="inline-flex min-h-9 items-center justify-center rounded-control border border-border-strong bg-surface px-3 py-1.5 text-sm font-semibold text-primary hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">Create location</Link> : undefined} />
     {rows.length === 0 ? <p className="rounded-control border border-border bg-surface px-4 py-6 text-sm text-muted-foreground">
       {archived ? "No archived locations." : "No locations found."}
     </p> : <>

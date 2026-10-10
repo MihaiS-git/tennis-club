@@ -276,7 +276,9 @@ export async function listAdminOperationalProjection(manager: EntityManager, cou
       r.starts_at_minute, r.ends_at_minute,
       case when b.id is null then r.reason else null end AS reason,
       case when b.id is null then r.created_by_user_id else null end AS created_by_user_id,
-      case when b.id is null then nullif(concat_ws(' ', u.first_name, u.last_name), '') else null end AS creator_name,
+      case when b.id is null and u.id is not null then coalesce(
+        nullif(btrim(concat_ws(' ', nullif(btrim(u.first_name), ''), nullif(btrim(u.last_name), ''))), ''),
+        nullif(btrim(p.display_name), ''), u.email) else null end AS creator_name,
       b.customer_name, b.customer_email, b.customer_phone,
       b.total_amount_minor, b.currency, b.cancellation_notice_minutes,
       coalesce((select jsonb_agg(to_jsonb(p) order by p.created_at,p.id) from public.payment_attempts p where p.booking_id=b.id),'[]'::jsonb) AS payment_facts
@@ -285,6 +287,7 @@ export async function listAdminOperationalProjection(manager: EntityManager, cou
     join public.locations l on l.id = c.location_id and l.is_active and l.archived_at is null
     left join public.bookings b on b.reservation_id = r.id
     left join public.users u on u.id = r.created_by_user_id and b.id is null
+    left join public.player_profiles p on p.user_id = u.id
     where r.court_id = any($1::uuid[]) and r.booking_date = $2::date
       and r.status = 'active' and (b.id is null or b.status = 'confirmed');`, [courtIds,date]);
 }

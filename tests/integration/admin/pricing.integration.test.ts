@@ -70,6 +70,8 @@ test("multi-court rule-set lifecycle is atomic and scoped to active admins", asy
       .toEqual({ ok: true, id: setId });
     atomic = await service.from("location_pricing_rules").select("court_id, weekday, starts_at_minute, ends_at_minute").eq("rule_set_id", setId);
     assert.strictEqual(atomic.error, null); expect(atomic.data).toHaveLength(8);
+    expect((await listAdminPricingRules(pricingLocationId, admin)).find((row) => row.rule_set_id === setId))
+      .toMatchObject({ location_id: pricingLocationId, court_ids: [court1, court3].sort(), weekdays: [0, 1, 2, 3], ends_at_minute: 1200 });
     expect(new Set(atomic.data!.map((row) => row.court_id))).toEqual(new Set([court1, court3]));
     expect(new Set(atomic.data!.map((row) => row.weekday))).toEqual(new Set([0, 1, 2, 3]));
     expect((await service.from("pricing_rule_sets").select("id, location_id, created_at").eq("id", setId).single()).data).toEqual(parent.data);
@@ -134,6 +136,7 @@ test("multi-court rule-set lifecycle is atomic and scoped to active admins", asy
     expect(await removeAdminPricingRule({ location_id, rule_set_id: setId }, admin)).toEqual({ ok: true, id: setId });
     expect((await service.from("location_pricing_rules").select("id").eq("rule_set_id", setId)).data).toEqual([]);
     expect((await service.from("pricing_rule_sets").select("id").eq("id", setId)).data).toEqual([]);
+    expect((await listAdminPricingRules(pricingLocationId, admin)).some((row) => row.rule_set_id === setId)).toBe(false);
     expect(await removeAdminPricingRule({ location_id, rule_set_id: setId }, admin)).toEqual({ ok: false, reason: "not-found" });
   } finally {
     if (location_id) {

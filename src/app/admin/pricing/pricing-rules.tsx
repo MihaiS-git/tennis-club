@@ -14,6 +14,7 @@ import { formatMoney } from "@/lib/pricing/money";
 import { formatWeekdays } from "@/lib/pricing/resolution";
 import { PricingRuleForm, type PricingCourt } from "./pricing-rule-form";
 import { savePricingRuleAction, removePricingRuleAction } from "./actions";
+import { useLocationPanelActive } from "../locations/location-workspace";
 import { PricingLocationSelect } from "./location-select";
 
 function displayDate(date: string) {
@@ -31,6 +32,7 @@ export function PricingRules({ location, locations = [], courts, rules, openingH
   locations?: Pick<AdminLocation, "id" | "name" | "is_active">[];
   courts: PricingCourt[]; rules: PricingRuleSet[]; openingHours: OpeningInterval[];
 }) {
+  const panelActive = useLocationPanelActive();
   const pendingRef = useRef(false);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const removeTriggerRef = useRef<HTMLButtonElement>(null);
@@ -106,8 +108,8 @@ export function PricingRules({ location, locations = [], courts, rules, openingH
         </table>
         <p className="sr-only">Times include their start and exclude their end. {weekdays[0]} starts the week.</p>
       </div></>}
-    {editing && createPortal(<ModalDialog ref={dialogRef} active aria-labelledby="pricing-dialog-title"
-      onClose={close} onCancel={(event) => { if (pendingRef.current) event.preventDefault(); }}
+    {editing && createPortal(<ModalDialog ref={dialogRef} active={panelActive} aria-labelledby="pricing-dialog-title"
+      onClose={() => { if (panelActive) close(); }} onCancel={(event) => { if (pendingRef.current) event.preventDefault(); }}
       className="fixed inset-0 m-auto w-[calc(100%-1.5rem)] max-w-3xl rounded-card border border-border bg-surface p-0 text-foreground shadow-floating backdrop:bg-foreground/50 sm:w-[calc(100%-2rem)]">
       <div className="p-4 sm:p-6">
         <header className="mb-5 flex items-start justify-between gap-4 border-b border-border pb-4">
@@ -117,8 +119,9 @@ export function PricingRules({ location, locations = [], courts, rules, openingH
         {error && !removing && <p role="alert" className="mb-4 text-danger">{error}</p>}
         <PricingRuleForm key={editing.rule?.rule_set_id ?? "new"} location={location} courts={courts} rule={editing.rule} openingHours={openingHours}
           pending={pending} fieldErrors={fieldErrors} onSave={(input) => void mutate(() => savePricingRuleAction(input))}
+          onEdit={() => { setError(""); setFieldErrors({}); }}
           onRemove={editing.rule ? (trigger) => { removeTriggerRef.current = trigger; setError(""); setRemoving(true); } : undefined} />
-        <ConfirmationDialog open={removing && Boolean(editing.rule)} title="Remove pricing rule?"
+        <ConfirmationDialog open={panelActive && removing && Boolean(editing.rule)} title="Remove pricing rule?"
           message={editing.rule ? `Pricing for ${courts.filter((court) => editing.rule?.court_ids.includes(court.id)).map((court) => court.name).join(", ")} on ${formatWeekdays(editing.rule.weekdays)} will no longer apply.` : ""}
           confirmLabel="Remove rule" pending={pending} error={error} returnFocusRef={removeTriggerRef}
           onClose={() => { if (!pendingRef.current) { setRemoving(false); setError(""); } }}

@@ -29,7 +29,60 @@ it.each([
   saveCoverageAction.mockResolvedValue(result);
   render(<CoveragePeriods courtId={courtId} periods={[period]} />);
   fireEvent.click(screen.getByRole("button", { name: "Edit period" }));
+  fireEvent.change(screen.getByLabelText("End date"), { target: { value: "2027-04-16" } });
   fireEvent.submit(screen.getByRole("button", { name: "Save period" }).closest("form")!);
   await waitFor(() => expect(screen.getByRole("alert").textContent).toBe(message));
   expect((screen.getByLabelText("Start date") as HTMLInputElement).value).toBe(period.starts_on);
+});
+
+it("initializes persisted dates and rejects incomplete or reversed edits", () => {
+  render(<CoveragePeriods courtId={courtId} periods={[period]} />);
+  fireEvent.click(screen.getByRole("button", { name: "Edit period" }));
+  expect(screen.getByLabelText("Start date")).toHaveProperty("value", period.starts_on);
+  expect(screen.getByLabelText("End date")).toHaveProperty("value", period.ends_on);
+  const save = screen.getByRole("button", { name: "Save period" });
+  fireEvent.change(screen.getByLabelText("End date"), { target: { value: "" } });
+  expect(save).toHaveProperty("disabled", true);
+  fireEvent.change(screen.getByLabelText("End date"), { target: { value: "2026-10-14" } });
+  expect(save).toHaveProperty("disabled", true);
+  fireEvent.submit(save.closest("form")!);
+  expect(saveCoverageAction).not.toHaveBeenCalled();
+});
+
+it("validates new periods and resets on cancellation and successful save", async () => {
+  render(<CoveragePeriods courtId={courtId} periods={[]} />);
+  fireEvent.click(screen.getByRole("button", { name: "Add coverage period" }));
+  const save = screen.getByRole("button", { name: "Save period" });
+  expect(save).toHaveProperty("disabled", true);
+  fireEvent.change(screen.getByLabelText("Start date"), { target: { value: period.starts_on } });
+  expect(save).toHaveProperty("disabled", true);
+  fireEvent.change(screen.getByLabelText("End date"), { target: { value: period.starts_on } });
+  expect(save).toHaveProperty("disabled", false);
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add coverage period" }));
+  expect(screen.getByLabelText("Start date")).toHaveProperty("value", "");
+  fireEvent.change(screen.getByLabelText("Start date"), { target: { value: period.starts_on } });
+  fireEvent.change(screen.getByLabelText("End date"), { target: { value: period.ends_on } });
+  fireEvent.click(screen.getByRole("button", { name: "Save period" }));
+  await waitFor(() => expect(screen.queryByLabelText("Start date")).toBeNull());
+});
+
+it("prevents duplicate saves while pending and preserves failed changes for retry", async () => {
+  let fail!: (value: { ok: false; reason: "overlap" }) => void;
+  saveCoverageAction.mockReturnValueOnce(new Promise((resolve) => { fail = resolve; }));
+  render(<CoveragePeriods courtId={courtId} periods={[period]} />);
+  fireEvent.click(screen.getByRole("button", { name: "Edit period" }));
+  fireEvent.change(screen.getByLabelText("End date"), { target: { value: "2027-04-16" } });
+  const form = screen.getByRole("button", { name: "Save period" }).closest("form")!;
+  fireEvent.submit(form);
+  expect(screen.getByRole("button", { name: "Saving…" })).toHaveProperty("disabled", true);
+  fireEvent.submit(form);
+  expect(saveCoverageAction).toHaveBeenCalledTimes(1);
+  fail({ ok: false, reason: "overlap" });
+  await screen.findByRole("alert");
+  expect(screen.getByLabelText("End date")).toHaveProperty("value", "2027-04-16");
+  await waitFor(() => expect(screen.getByRole("button", { name: "Save period" })).toHaveProperty("disabled", false));
+  fireEvent.click(screen.getByRole("button", { name: "Save period" }));
+  await waitFor(() => expect(screen.queryByLabelText("End date")).toBeNull());
+  expect(saveCoverageAction).toHaveBeenCalledTimes(2);
 });

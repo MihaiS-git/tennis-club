@@ -12,6 +12,7 @@ vi.mock("server-only", () => ({}));
 import * as authorization from "../../../src/lib/admin/authorization";
 import * as identity from "../../../src/lib/db/repositories/user-roles.repository";
 import { updateAdminUserRole } from "../../../src/lib/admin/user-role";
+import { readAdminUserDetails } from "../../../src/lib/admin/users";
 import { updateAdminUserStatus } from "../../../src/lib/admin/user-status";
 import { getDataSource } from "../../../src/lib/db/data-source";
 import { updateUserStatus } from "../../../src/lib/db/repositories/users.repository";
@@ -104,10 +105,13 @@ test("admin TypeORM status changes preserve authorization, denied browser grants
     expect(await updateAdminUserStatus({ userId: member.id, status: "suspended" }, adminSession))
       .toEqual({ ok: true, user: { id: member.id, status: "suspended" } });
     expect(await statusOf(member.id)).toBe("suspended");
+    expect((await readAdminUserDetails(member.id, adminSession))?.status).toBe("suspended");
 
     expect(await updateAdminUserStatus({ userId: member.id, status: "active" }, adminSession))
       .toEqual({ ok: true, user: { id: member.id, status: "active" } });
     expect(await statusOf(member.id)).toBe("active");
+
+    expect((await readAdminUserDetails(member.id, adminSession))?.status).toBe("active");
 
     expect(await updateAdminUserStatus({ userId: anotherAdmin.id, status: "suspended" }, adminSession))
       .toEqual({ ok: true, user: { id: anotherAdmin.id, status: "suspended" } });

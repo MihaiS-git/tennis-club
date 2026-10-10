@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ReservationEditForm } from "@/app/my-activity/bookings/reservation-edit-form";
 import type { PersonalReservation } from "@/lib/reservations/personal";
 
 const { availability, edit } = vi.hoisted(() => ({ availability: vi.fn(), edit: vi.fn() }));
 vi.mock("@/app/my-activity/bookings/actions", () => ({ loadReservationEditDayAction: availability, editOwnReservationAction: edit }));
-beforeEach(() => { availability.mockReset(); edit.mockReset(); });
+beforeEach(() => { vi.clearAllMocks(); availability.mockReset(); edit.mockReset(); });
 afterEach(cleanup);
 
 const reservation: PersonalReservation = {
@@ -27,6 +27,126 @@ function day(date: string, courtBCells: string[] = ["available", "available", "a
     ] } };
 }
 const callbacks = { onCancel: vi.fn(), onSaved: vi.fn(async () => {}), onStale: vi.fn(async () => {}), onPendingChange: vi.fn() };
+
+const saveButton = () => screen.getByRole("button", { name: "Save changes" });
+const changeReason = (value: string) => fireEvent.change(screen.getByLabelText("Reason"), { target: { value } });
+
+it("keeps unchanged and normalized reason edits pristine, and requires a valid changed reason", async () => {
+  availability.mockResolvedValue(day(reservation.booking_date));
+  render(<ReservationEditForm reservation={reservation} inProgress={false} {...callbacks} />);
+  await screen.findByText("Current reservation");
+  expect(saveButton()).toHaveProperty("disabled", true);
+  fireEvent.focus(screen.getByLabelText("Reason")); fireEvent.blur(screen.getByLabelText("Reason"));
+  expect(saveButton()).toHaveProperty("disabled", true);
+  changeReason(" Practice "); expect(saveButton()).toHaveProperty("disabled", true);
+  changeReason("Training"); expect(saveButton()).toHaveProperty("disabled", false);
+  changeReason("Practice"); expect(saveButton()).toHaveProperty("disabled", true);
+  changeReason("   "); expect(saveButton()).toHaveProperty("disabled", true);
+  changeReason("x".repeat(256)); expect(saveButton()).toHaveProperty("disabled", true);
+});
+
+it("disables Save after reverting the court and interval", async () => {
+  availability.mockResolvedValue(day(reservation.booking_date));
+  render(<ReservationEditForm reservation={reservation} inProgress={false} {...callbacks} />);
+  await screen.findByText("Current reservation");
+  fireEvent.click(screen.getByRole("button", { name: /Court B 2099-10-15 10:00–10:30/ }));
+  expect(saveButton()).toHaveProperty("disabled", false);
+  fireEvent.click(screen.getByRole("button", { name: /Court A 2099-10-15 10:00–10:30/ }));
+  expect(saveButton()).toHaveProperty("disabled", false);
+  fireEvent.click(screen.getByRole("button", { name: /Court A 2099-10-15 11:00–11:30/ }));
+  expect(saveButton()).toHaveProperty("disabled", true);
+});
+
+it("requires availability and an interval when changing and reverting dates", async () => {
+  availability.mockImplementation(async (_id, date) => day(date));
+  render(<ReservationEditForm reservation={reservation} inProgress={false} {...callbacks} />);
+  await screen.findByText("Current reservation");
+  fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2099-10-16" } });
+  expect(saveButton()).toHaveProperty("disabled", true);
+  await screen.findByRole("rowheader", { name: "Court A" });
+  expect(saveButton()).toHaveProperty("disabled", true);
+  fireEvent.click(screen.getByRole("button", { name: /Court A 2099-10-16 10:00–10:30/ }));
+  expect(saveButton()).toHaveProperty("disabled", false);
+  fireEvent.change(screen.getByLabelText("Date"), { target: { value: reservation.booking_date } });
+  await screen.findByRole("rowheader", { name: "Court A" });
+  fireEvent.click(screen.getByRole("button", { name: /Court A 2099-10-15 10:00–10:30/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Court A 2099-10-15 11:00–11:30/ }));
+  expect(saveButton()).toHaveProperty("disabled", true);
+  fireEvent.change(screen.getByLabelText("Date"), { target: { value: "" } });
+  changeReason("Training"); expect(saveButton()).toHaveProperty("disabled", true);
+});
+
+it("disables Save while availability is pending or its required interval is unavailable", async () => {
+  let finish: (value: ReturnType<typeof day>) => void = () => { throw new Error("Not loading"); };
+  availability.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+  render(<ReservationEditForm reservation={reservation} inProgress={false} {...callbacks} />);
+  changeReason("Training");
+  expect(saveButton()).toHaveProperty("disabled", true);
+  expect(screen.getByRole("status").textContent).toContain("Loading court availability");
+  await act(async () => finish(day(reservation.booking_date)));
+  expect(saveButton()).toHaveProperty("disabled", false);
+});
+
+it.each([630, 675])("rejects an invalid persisted interval ending at %s", async (ends_at_minute) => {
+  availability.mockResolvedValue(day(reservation.booking_date));
+  render(<ReservationEditForm reservation={{ ...reservation, ends_at_minute }} inProgress={false} {...callbacks} />);
+  await screen.findByRole("rowheader", { name: "Court A" });
+  changeReason("Training");
+  expect(saveButton()).toHaveProperty("disabled", true);
+  fireEvent.submit(saveButton().closest("form")!);
+  expect(edit).not.toHaveBeenCalled();
+});
+
+it("allows valid reason-only changes in progress without availability", async () => {
+  edit.mockResolvedValue({ ok: true });
+  render(<ReservationEditForm reservation={reservation} inProgress {...callbacks} />);
+  expect(saveButton()).toHaveProperty("disabled", true);
+  changeReason(" Training "); expect(saveButton()).toHaveProperty("disabled", false);
+  changeReason("Practice"); expect(saveButton()).toHaveProperty("disabled", true);
+  changeReason(" "); expect(saveButton()).toHaveProperty("disabled", true);
+  changeReason("Training"); fireEvent.click(saveButton());
+  await waitFor(() => expect(callbacks.onSaved).toHaveBeenCalledOnce());
+  expect(edit).toHaveBeenCalledWith({ kind: "reason", id: reservation.id,
+    expectedUpdatedAt: reservation.updated_at, reason: "Training" });
+  expect(availability).not.toHaveBeenCalled();
+});
+
+it("locks pending submission, prevents duplicates, preserves failures and allows retry", async () => {
+  availability.mockResolvedValue(day(reservation.booking_date));
+  let finish: (value: { ok: false; message: string }) => void = () => { throw new Error("Not saving"); };
+  edit.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }))
+    .mockResolvedValueOnce({ ok: true });
+  render(<ReservationEditForm reservation={reservation} inProgress={false} {...callbacks} />);
+  await screen.findByText("Current reservation");
+  changeReason("Training");
+  const form = saveButton().closest("form")!;
+  act(() => { fireEvent.submit(form); fireEvent.submit(form); });
+  expect(edit).toHaveBeenCalledOnce();
+  expect(screen.getByRole("button", { name: "Saving…" })).toHaveProperty("disabled", true);
+  expect(screen.getByLabelText("Reason")).toHaveProperty("disabled", true);
+  expect(callbacks.onPendingChange).toHaveBeenLastCalledWith(true);
+  await act(async () => finish({ ok: false, message: "Unable to save. Try again." }));
+  expect(screen.getByRole("alert").textContent).toContain("Try again");
+  expect(screen.getByLabelText("Reason")).toHaveProperty("value", "Training");
+  expect(saveButton()).toHaveProperty("disabled", false);
+  expect(callbacks.onPendingChange).toHaveBeenLastCalledWith(false);
+  fireEvent.click(saveButton());
+  await waitFor(() => expect(callbacks.onSaved).toHaveBeenCalledOnce());
+  expect(edit).toHaveBeenCalledTimes(2);
+});
+
+it("preserves the draft and enables retry after a thrown save error", async () => {
+  availability.mockResolvedValue(day(reservation.booking_date));
+  edit.mockRejectedValueOnce(new Error("Network failure")).mockResolvedValueOnce({ ok: true });
+  render(<ReservationEditForm reservation={reservation} inProgress={false} {...callbacks} />);
+  await screen.findByText("Current reservation");
+  changeReason("Training"); fireEvent.click(saveButton());
+  await screen.findByText(/Unable to save this reservation/);
+  expect(screen.getByLabelText("Reason")).toHaveProperty("value", "Training");
+  expect(saveButton()).toHaveProperty("disabled", false);
+  fireEvent.click(saveButton());
+  await waitFor(() => expect(callbacks.onSaved).toHaveBeenCalledOnce());
+});
 
 it("shows fixed location, visible availability and current selection, then reloads the same location for a date change", async () => {
   availability.mockImplementation(async (_id, date) => day(date));
@@ -66,4 +186,29 @@ it("keeps reason and reports a conflict while refreshing newly blocked availabil
   expect(screen.getByRole("textbox", { name: "Reason" })).toHaveProperty("value", "Training");
   expect(screen.queryByRole("region", { name: "Selected reservation" })).toBeNull();
   expect(screen.queryByRole("button", { name: /Court B 2099-10-15 10:00–10:30/ })).toBeNull();
+  expect(saveButton()).toHaveProperty("disabled", true);
+  fireEvent.click(screen.getByRole("button", { name: /Court B 2099-10-15 11:00–11:30/ }));
+  expect(saveButton()).toHaveProperty("disabled", false);
+});
+
+it("keeps misaligned timetable intervals invalid using the existing schedule schema", async () => {
+  const result = day(reservation.booking_date);
+  availability.mockResolvedValue({ ...result, day: { ...result.day, times: [615, 645, 675, 705, 735] } });
+  render(<ReservationEditForm reservation={reservation} inProgress={false} {...callbacks} />);
+  await screen.findByRole("rowheader", { name: "Court B" });
+  fireEvent.click(screen.getByRole("button", { name: /Court B 2099-10-15 10:15–10:45/ }));
+  expect(saveButton()).toHaveProperty("disabled", true);
+});
+
+it("retains reason changes after availability fails and allows retry", async () => {
+  availability.mockRejectedValueOnce(new Error("Network failure")).mockResolvedValueOnce(day(reservation.booking_date));
+  render(<ReservationEditForm reservation={reservation} inProgress={false} {...callbacks} />);
+  changeReason("Training");
+  await screen.findByText(/Unable to load court availability/);
+  expect(saveButton()).toHaveProperty("disabled", true);
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  expect(saveButton()).toHaveProperty("disabled", true);
+  await screen.findByText("Current reservation");
+  expect(screen.getByLabelText("Reason")).toHaveProperty("value", "Training");
+  expect(saveButton()).toHaveProperty("disabled", false);
 });

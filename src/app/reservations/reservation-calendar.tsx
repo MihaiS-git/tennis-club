@@ -166,6 +166,7 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
         </div> : selectedReservation && editing ? <ReservationEditForm key={selectedReservation.id} reservation={{ ...selectedReservation,
           location_name: location.name, location_timezone: location.timezone, court_name: selectedCourtName }}
           inProgress={editInProgress} loadAvailability={loadAdminReservationEditDayAction}
+          onPendingChange={setCancelPending}
           onCancel={() => setEditing(false)}
           onSave={async ({ date: targetDate, selection: targetSelection, reason: targetReason, inProgress }) => {
             if (!editToken) return { ok: false, message: "Reload this reservation before saving." };

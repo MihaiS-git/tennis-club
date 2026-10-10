@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { PricingRule } from "@/lib/pricing/validation";
 
 export const weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
 
@@ -45,12 +46,21 @@ export const weeklyHoursMutationSchema = z.strictObject({
   }
 });
 
+export type OpeningHoursPricingConflict = Pick<PricingRule,
+  "id" | "rule_set_id" | "court_state" | "weekday" | "starts_at_minute" | "ends_at_minute" | "starts_on" | "ends_on"
+> & { court_name: string };
+
 export type OpeningHoursMutationResult =
   | { ok: true; intervals: OpeningInterval[] }
   | { ok: false; reason: "invalid-input"; fieldErrors: Record<string, string> }
   | { ok: false; reason: "overlap"; weekdays: number[] }
-  | { ok: false; reason: "pricing-conflict"; message: string }
-  | { ok: false; reason: "not-found" | "archived" };
+  | { ok: false; reason: "pricing-conflict"; message: string; conflicts?: OpeningHoursPricingConflict[] }
+  | { ok: false; reason: "not-found" | "archived" | "unchanged" };
+
+export function openingHoursScheduleKey(intervals: readonly Pick<OpeningInterval, "weekday" | "opens_at_minute" | "closes_at_minute">[]) {
+  return JSON.stringify(intervals.map((interval) => [interval.weekday, interval.opens_at_minute, interval.closes_at_minute])
+    .sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2]));
+}
 
 function weeklySchedule(locationId: string, intervals: readonly OpeningInterval[]) {
   return weekdays.map((label, weekday) => ({

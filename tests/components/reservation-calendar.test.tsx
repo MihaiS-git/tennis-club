@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { installDialogMock } from "../helpers/dialog";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { ReservationCalendar } from "@/app/reservations/reservation-calendar";
 import { localMinute, localToday } from "@/lib/courts/local-time";
@@ -85,6 +85,7 @@ it("reuses the edit timetable for another user's reservation with fixed location
     day={{ times: [750, 780, 810], courts: [{ court: location.courts[0], cells: ["booked", "booked", "booked"] }] }}
     adminOccupancy={[{ ...reservation, kind: "reservation" }]} />);
   fireEvent.click(screen.getByRole("button", { name: /12:30–14:00, Reservation/ }));
+  expect(screen.getByText("Mihai Stan")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Edit reservation" }));
   const editDialog = screen.getByRole("dialog", { name: "Edit reservation" });
   await waitFor(() => expect(adminAvailability).toHaveBeenCalledWith(reservation.id, reservation.booking_date));
@@ -100,7 +101,7 @@ it("reuses the edit timetable for another user's reservation with fixed location
   expect(within(editDialog).getAllByRole("button", { name: /Court 1.*selected/ })).toHaveLength(3);
   expect(within(within(editDialog).getAllByRole("row")[1]).getAllByLabelText(/, Booked/)).toHaveLength(1);
   expect(within(editDialog).getByRole("rowheader", { name: "Court 2" })).toBeTruthy();
-  expect(within(editDialog).getByRole("button", { name: "Save changes" })).toHaveProperty("disabled", false);
+  expect(within(editDialog).getByRole("button", { name: "Save changes" })).toHaveProperty("disabled", true);
   fireEvent.change(within(editDialog).getByLabelText("Date"), { target: { value: "2099-10-16" } });
   await waitFor(() => expect(adminAvailability).toHaveBeenLastCalledWith(reservation.id, "2099-10-16"));
   expect(within(editDialog).queryByText("Current reservation")).toBeNull();
@@ -130,8 +131,42 @@ it("keeps an in-progress Admin edit to reason only", async () => {
   expect(within(editDialog).queryByLabelText("Date")).toBeNull();
   expect(within(editDialog).queryByRole("region", { name: /timetable/ })).toBeNull();
   expect(within(editDialog).getByRole("textbox", { name: "Reason" })).toHaveProperty("value", "Training");
+  expect(within(editDialog).getByRole("button", { name: "Save changes" })).toHaveProperty("disabled", true);
+  fireEvent.change(within(editDialog).getByLabelText("Reason"), { target: { value: "Updated training" } });
   expect(within(editDialog).getByRole("button", { name: "Save changes" })).toHaveProperty("disabled", false);
+  fireEvent.change(within(editDialog).getByLabelText("Reason"), { target: { value: " Training " } });
+  expect(within(editDialog).getByRole("button", { name: "Save changes" })).toHaveProperty("disabled", true);
   expect(adminAvailability).toHaveBeenCalledOnce();
+});
+
+it("locks the Admin direct-reservation dialog during Save and preserves a failed draft for retry", async () => {
+  const court = { id: "22222222-2222-4222-8222-222222222222", name: "Court 1" };
+  const location = { id: "11111111-1111-4111-8111-111111111111", name: "Club", timezone: "UTC", courts: [court] };
+  const reservation = { kind: "reservation" as const, id: "33333333-3333-4333-8333-333333333333", court_id: court.id,
+    booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660,
+    reason: "Practice", created_by_user_id: null, creator_name: null };
+  adminAvailability.mockResolvedValue({ reservation: { ...reservation, updated_at: "2026-10-01T12:00:00Z" },
+    day: { times: [600, 630, 660], courts: [{ court, cells: ["available", "available", "available"] }] } });
+  let finish: (result: { ok: false; message: string }) => void = () => { throw new Error("Not saving"); };
+  editAction.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }))
+    .mockResolvedValueOnce({ ok: true, reservation });
+  render(<ReservationCalendar date={reservation.booking_date} location={location}
+    day={{ times: [600, 630], courts: [{ court, cells: ["booked", "booked"] }] }} adminOccupancy={[reservation]} />);
+  fireEvent.click(screen.getByRole("button", { name: /Reservation · Unknown creator/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Edit reservation" }));
+  const dialog = screen.getByRole("dialog", { name: "Edit reservation" });
+  await within(dialog).findByText("Current reservation");
+  expect(within(dialog).getByRole("button", { name: "Save changes" })).toHaveProperty("disabled", true);
+  fireEvent.change(within(dialog).getByLabelText("Reason"), { target: { value: "Training" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+  expect(within(dialog).getByRole("button", { name: "Close dialog" })).toHaveProperty("disabled", true);
+  expect(fireEvent(dialog, new Event("cancel", { cancelable: true }))).toBe(false);
+  await act(async () => finish({ ok: false, message: "Try again." }));
+  expect(within(dialog).getByLabelText("Reason")).toHaveProperty("value", "Training");
+  expect(within(dialog).getByRole("button", { name: "Save changes" })).toHaveProperty("disabled", false);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+  await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+  expect(editAction).toHaveBeenCalledTimes(2);
 });
 
 it("keeps the confirmation open with a clear error on stale cancellation", async () => {
@@ -144,6 +179,7 @@ it("keeps the confirmation open with a clear error on stale cancellation", async
       booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660,
       reason: "Maintenance", created_by_user_id: null, creator_name: null }]} />);
   fireEvent.click(screen.getByRole("button", { name: /Reservation · Unknown creator/ }));
+  expect(within(screen.getByRole("dialog", { name: "Reservation details" })).getByText("Unknown creator")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Cancel reservation" }));
   fireEvent.click(within(screen.getByRole("dialog", { name: "Cancel reservation?" }))
     .getByRole("button", { name: "Cancel reservation" }));

@@ -99,7 +99,7 @@ it.each([
     expect(links.map((link) => link.textContent)).toEqual([
       "Courts", "Coaching", "Matches", "Rankings", "Club", "Admin", "Reservations", "My activity", "Profile & settings",
     ]);
-    expect(adminLink?.getAttribute("href")).toBe("/admin");
+    expect(adminLink?.getAttribute("href")).toBe("/admin/locations");
   } else {
     expect(adminLink).toBeNull();
   }

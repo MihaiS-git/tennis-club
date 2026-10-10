@@ -2,7 +2,7 @@ import "server-only";
 
 import { z } from "zod";
 import { requireActiveAdmin } from "./authorization";
-import { weeklyHoursMutationSchema, openingIntervalSchema, timeToMinute, minuteToTime, weekdays, type OpeningHoursMutationResult } from "./opening-hours-validation";
+import { weeklyHoursMutationSchema, openingIntervalSchema, openingHoursScheduleKey, timeToMinute, minuteToTime, weekdays, type OpeningHoursMutationResult } from "./opening-hours-validation";
 import { createClient } from "@/lib/supabase/server";
 import { logger } from "@/lib/logger";
 import { getDataSource } from "@/lib/db/data-source";
@@ -59,7 +59,7 @@ export async function listAdminLocationOpeningHours(locationId: string, supabase
   return readAdminHours(locationId);
 }
 
-export async function mutateAdminOpeningHours(input: unknown, supabase?: Client): Promise<OpeningHoursMutationResult> {
+async function processAdminOpeningHours(input: unknown, supabase?: Client, checkRemoval = false): Promise<OpeningHoursMutationResult> {
   const actor = await requireActiveAdmin(supabase ?? await createClient());
   const parsed = weeklyHoursMutationSchema.safeParse(input);
   if (!parsed.success) {
@@ -68,6 +68,9 @@ export async function mutateAdminOpeningHours(input: unknown, supabase?: Client)
     return { ok: false, reason: "invalid-input", fieldErrors };
   }
   const { location_id, weekdays, replace_ids, intervals } = parsed.data;
+  if (checkRemoval && (intervals.length !== 0 || replace_ids.length === 0)) {
+    return { ok: false, reason: "invalid-input", fieldErrors: { form: "Select opening hours to remove." } };
+  }
   let failureMessage = "Unable to change opening hours.";
   let result: OpeningHoursMutationResult;
   try {
@@ -93,6 +96,12 @@ export async function mutateAdminOpeningHours(input: unknown, supabase?: Client)
         opensAtMinute: timeToMinute(interval.opens_at), closesAtMinute: timeToMinute(interval.closes_at),
       })));
       const retained = current.filter((row) => !selected.has(row.id));
+      const scheduleKey = (rows: readonly clubs.OpeningHoursFields[]) => openingHoursScheduleKey(rows.map((row) => ({
+        weekday: row.weekday, opens_at_minute: row.opensAtMinute, closes_at_minute: row.closesAtMinute,
+      })));
+      if (scheduleKey(current.filter((row) => selected.has(row.id))) === scheduleKey(replacements)) {
+        return { ok: false, reason: "unchanged" };
+      }
       const candidate = [...retained, ...replacements];
       const conflictDays = [...new Set(replacements.filter((proposed) => retained.some((row) =>
         row.weekday === proposed.weekday && row.opensAtMinute < proposed.closesAtMinute
@@ -110,12 +119,19 @@ export async function mutateAdminOpeningHours(input: unknown, supabase?: Client)
       const conflicts = applicable.filter((rule) => !fitsOpeningHours(schedule, {
         location_id: location.id, weekday: rule.weekday,
         starts_at_minute: rule.startsAtMinute, ends_at_minute: rule.endsAtMinute,
-      })).map((rule) => ({ weekday: rule.weekday, starts_at_minute: rule.startsAtMinute, ends_at_minute: rule.endsAtMinute }));
+      }));
       if (conflicts.length) {
         // Match the safeguard's ordered, distinct examples and four-item limit.
-        const examples = [...new Map(conflicts.map((item) => [JSON.stringify(item), item])).values()].slice(0, 4);
-        return { ok: false, reason: "pricing-conflict", message: pricingConflictMessage(JSON.stringify(examples)) };
+        const times = conflicts.map((rule) => ({ weekday: rule.weekday, starts_at_minute: rule.startsAtMinute, ends_at_minute: rule.endsAtMinute }));
+        const examples = [...new Map(times.map((item) => [JSON.stringify(item), item])).values()].slice(0, 4);
+        return { ok: false, reason: "pricing-conflict", message: pricingConflictMessage(JSON.stringify(examples)),
+          conflicts: conflicts.map((rule) => ({ id: rule.id, rule_set_id: rule.ruleSetId, court_name: rule.court.name,
+            court_state: rule.courtState, weekday: rule.weekday, starts_at_minute: rule.startsAtMinute,
+            ends_at_minute: rule.endsAtMinute, starts_on: rule.startsOn, ends_on: rule.endsOn })) };
       }
+      // A preview uses exactly the mutation's locked dependency checks, without
+      // deleting rows. Confirmation always runs the same checks again.
+      if (checkRemoval) return { ok: true, intervals: current.map(openingHoursDto) };
       failureMessage = "Unable to change opening hours.";
       await clubs.deleteSelectedOpeningHours(manager, location.id, [...selected]);
       await clubs.insertOpeningHours(manager, replacements);
@@ -135,6 +151,14 @@ export async function mutateAdminOpeningHours(input: unknown, supabase?: Client)
       actorId: actor.userId, locationId: location_id, code: failure.sqlState }, "Failed to change opening hours");
     throw new Error(failureMessage);
   }
-  if (result.ok) logger.info({ event: "admin.opening_hours_changed", actorId: actor.userId, locationId: location_id, weekdayCount: weekdays.length }, "Opening hours changed");
+  if (result.ok && !checkRemoval) logger.info({ event: "admin.opening_hours_changed", actorId: actor.userId, locationId: location_id, weekdayCount: weekdays.length }, "Opening hours changed");
   return result;
+}
+
+export async function mutateAdminOpeningHours(input: unknown, supabase?: Client) {
+  return processAdminOpeningHours(input, supabase);
+}
+
+export async function checkAdminOpeningHoursRemoval(input: unknown, supabase?: Client) {
+  return processAdminOpeningHours(input, supabase, true);
 }

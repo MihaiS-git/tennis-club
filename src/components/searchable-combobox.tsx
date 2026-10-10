@@ -5,7 +5,7 @@ import { useEffect, useId, useRef, useState, type PointerEvent } from "react";
 export type ComboboxOption = { value: string; label: string; searchText?: string };
 
 export function SearchableCombobox({ id, name, options, value, defaultValue = "", onValueChange, disabled,
-  placeholder, listLabel, emptyMessage, required, "aria-invalid": invalid, "aria-describedby": describedBy }: {
+  placeholder, listLabel, emptyMessage, required, allowCustomValue = false, pattern, "aria-invalid": invalid, "aria-describedby": describedBy }: {
   id: string;
   name?: string;
   options: readonly ComboboxOption[];
@@ -17,6 +17,8 @@ export function SearchableCombobox({ id, name, options, value, defaultValue = ""
   listLabel: string;
   emptyMessage: string;
   required?: boolean;
+  allowCustomValue?: boolean;
+  pattern?: string;
   "aria-invalid"?: boolean;
   "aria-describedby"?: string;
 }) {
@@ -61,7 +63,7 @@ export function SearchableCombobox({ id, name, options, value, defaultValue = ""
   }, [open, active, search, matches]);
 
   function showOptions() {
-    if (disabled || open) return;
+    if (disabled || (open && !allowCustomValue)) return;
     const rect = inputRef.current?.getBoundingClientRect();
     if (rect) {
       const below = window.innerHeight - rect.bottom - 8;
@@ -102,23 +104,34 @@ export function SearchableCombobox({ id, name, options, value, defaultValue = ""
 
   // Keep focus on the input while an option is clicked.
   function keepInputFocus(event: PointerEvent<HTMLButtonElement>) {
-    if (event.pointerType === "mouse") event.preventDefault();
+    if (allowCustomValue || event.pointerType === "mouse") event.preventDefault();
   }
 
   return <div ref={rootRef} className="relative min-w-0">
-    {name && <input type="hidden" name={name} value={selected} />}
+    {name && !allowCustomValue && <input type="hidden" name={name} value={selected} />}
     <input ref={inputRef} id={id} role="combobox" type="text" autoComplete="off"
+      name={allowCustomValue ? name : undefined} required={allowCustomValue && required} pattern={pattern}
       aria-autocomplete="list" aria-expanded={open} aria-controls={open ? listId : undefined}
       aria-activedescendant={open && matches[active] ? `${listId}-option-${active}` : undefined}
       aria-invalid={invalid} aria-describedby={describedBy} aria-required={required}
       disabled={disabled} placeholder={placeholder}
       className="min-h-10 w-full rounded-control border border-border bg-surface px-2.5 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-focus/20 disabled:opacity-60"
-      value={open ? search : selectedOption?.label ?? ""}
+      value={allowCustomValue ? selected : open ? search : selectedOption?.label ?? ""}
       onFocus={() => {
         if (restoringFocus.current) restoringFocus.current = false;
         else showOptions();
       }} onClick={showOptions}
-      onChange={(event) => { setSearch(event.currentTarget.value); setActive(0); setOpen(true); }}
+      onChange={(event) => {
+        const next = event.currentTarget.value;
+        if (allowCustomValue) {
+          if (value === undefined) setInternalValue(next);
+          onValueChange?.(next);
+        }
+        setSearch(next); setActive(0); setOpen(true);
+      }}
+      onBlur={(event) => {
+        if (allowCustomValue && !rootRef.current?.contains(event.relatedTarget)) closeOptions();
+      }}
       onKeyDown={(event) => {
         if (event.key === "ArrowDown" || event.key === "ArrowUp") {
           event.preventDefault(); move(event.key === "ArrowDown" ? 1 : -1);

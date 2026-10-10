@@ -16,14 +16,20 @@ Future `coach_profiles` will be a sibling entity. A user may have player/coach p
 
 ## Profile presentation
 
-Admin → Users keeps its compact account table. Opening Manage user fetches current
-account and personal/tennis details through the Admin-only server read, reusing
-`loadProfile()` and user-scoped Supabase access. It never reads booking contact
+Admin → Users keeps its searchable, sortable, paginated account table. User rows
+navigate to `/admin/users/[userId]`, with URL-backed Account & access (default),
+Personal profile and Tennis profile tabs. Back to users retains the table query.
+The page fetches current account and personal/tennis details through the existing
+Admin-only TypeORM read, reusing `loadProfile()`. It never reads booking contact
 snapshots or lists guest contacts. Missing profile values show placeholders. The
 Admin-only `/admin/users/[userId]/avatar` route reuses the authenticated avatar
 reader, verifies the selected user's canonical path, and serves private, no-store
-WebP responses through the existing Storage RLS policy. Management controls retain
-their existing authorization and confirmations.
+WebP responses through the existing Storage RLS policy. The Admin Tennis profile
+shows the full stored image with its intrinsic aspect ratio, `object-contain`, and
+no circular clipping; upload normalization continues to resize inside 512 × 512
+without cropping. Personal and tennis fields remain read-only. Management controls
+retain their existing authorization and confirmations, and successful status/role
+changes revalidate the table and selected user's page and refresh its server data.
 
 The four full-label section buttons display one section at a time while keeping forms mounted to preserve unsaved edits. Below `sm` (640px), the selector uses one horizontal row of nonshrinking buttons, scrolling when needed. At `sm` (640px) and above, the selector uses four equal-width columns. Country selection searches English names derived locally with `Intl.DisplayNames` from the application-owned 249 ISO alpha-2 codes in `src/lib/profile/countries.ts`. Only canonical codes are submitted; server validation checks membership in that set.
 

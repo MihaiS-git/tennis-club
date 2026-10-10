@@ -156,7 +156,7 @@ export function MobileNavbarControls({ isAuthenticated, isAdmin, canReserve, ava
             Club
           </Link>
           {isAdmin && (
-            <Link onClick={closeMenu} href="/admin" className="flex min-h-12 items-center text-sm font-medium text-foreground hover:text-accent">
+            <Link onClick={closeMenu} href="/admin/locations" className="flex min-h-12 items-center text-sm font-medium text-foreground hover:text-accent">
               Admin
             </Link>
           )}

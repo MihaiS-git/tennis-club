@@ -27,7 +27,7 @@ test("Admin Users shows live profiles and private avatars while preserving manag
     expect((await service.from("user_roles").insert({ user_id: admin.id, role_code: "admin" })).error).toBeNull();
     expect((await service.from("users").update({ first_name: "Alex", last_name: "Player", phone: "+40712345678",
       date_of_birth: "1990-05-10", address_line1: "10 Court Street", address_line2: "Apartment 2", city: "Bucharest", postal_code: "010101", country_code: "RO" }).eq("id", populated.id)).error).toBeNull();
-    const avatar = await sharp({ create: { width: 32, height: 32, channels: 3, background: "green" } }).webp().toBuffer();
+    const avatar = await sharp({ create: { width: 32, height: 48, channels: 3, background: "green" } }).webp().toBuffer();
     expect((await service.storage.from("profile-avatars").upload(`${populated.id}/avatar.webp`, avatar, { contentType: "image/webp" })).error).toBeNull();
     expect((await service.from("player_profiles").insert({ user_id: populated.id, display_name: "Ace Alex", avatar_path: `${populated.id}/avatar.webp`,
       sportya_level: "6", rating: 1450, handedness: "left", backhand: "two_handed", preferred_game: "both", preferred_surface: "clay", bio: "Enjoys competitive tennis." })).error).toBeNull();
@@ -45,94 +45,101 @@ test("Admin Users shows live profiles and private avatars while preserving manag
     // Change contact data after the table read; opening must fetch current data.
     expect((await service.from("users").update({ phone: "+40799999999" }).eq("id", populated.id)).error).toBeNull();
     await page.getByRole("row", { name: `Manage user ${populated.email}` }).click();
-    const dialog = page.getByRole("dialog", { name: "Manage user", exact: true });
-    for (const value of ["Alex Player", "+40799999999", "10 May 1990", "10 Court Street", "Apartment 2", "Bucharest", "010101", "Romania",
-      "6", "1450", "Left-handed", "Two-handed", "Both", "Clay", "Enjoys competitive tennis."]) {
-      await expect(dialog.getByText(value, { exact: true })).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`/admin/users/${populated.id}`));
+    const tabs = page.getByRole("navigation", { name: "User management" });
+    const account = page.getByRole("region", { name: "Account & access", exact: true });
+    await expect(page.getByRole("heading", { name: "Alex Player", exact: true })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Admin navigation" }).getByRole("link", { name: "Users", exact: true })).toHaveAttribute("aria-current", "page");
+    await expect(tabs.getByRole("link")).toHaveCount(3);
+    await expect(account).toBeVisible();
+    await tabs.getByRole("link", { name: "Personal profile", exact: true }).click();
+    const personal = page.getByRole("region", { name: "Personal profile", exact: true });
+    for (const value of ["Alex Player", "+40799999999", "10 May 1990", "10 Court Street", "Apartment 2", "Bucharest", "010101", "Romania"]) {
+      await expect(personal.getByText(value, { exact: true })).toBeVisible();
     }
-    const image = dialog.getByRole("img", { name: "User avatar" });
-    await expect(image).toBeVisible();
+    for (const width of [1440, 768, 375]) {
+      await page.setViewportSize({ width, height: 900 });
+      const layout = await personal.evaluate((element) => {
+        const sections = [...element.querySelectorAll("section")].map((section) => section.getBoundingClientRect());
+        return { sameRow: sections[0].y === sections[1].y, overflow: element.scrollWidth > element.clientWidth };
+      });
+      expect(layout.sameRow).toBe(width >= 768);
+      expect(layout.overflow).toBe(false);
+    }
+    await tabs.getByRole("link", { name: "Tennis profile", exact: true }).click();
+    const tennis = page.getByRole("region", { name: "Tennis profile", exact: true });
+    for (const value of ["Ace Alex", "6", "1450", "Left-handed", "Two-handed", "Both", "Clay", "Enjoys competitive tennis."]) {
+      await expect(tennis.getByText(value, { exact: true })).toBeVisible();
+    }
+    await page.reload();
+    await expect(tennis).toBeVisible();
+    await page.goBack();
+    await expect(personal).toBeVisible();
+    await page.goForward();
+    await expect(tennis).toBeVisible();
+    const image = tennis.getByRole("img", { name: "User avatar" });
     await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true);
+    for (const width of [1440, 768, 375]) {
+      await page.setViewportSize({ width, height: 900 });
+      const imageStyle = await image.evaluate((element: HTMLImageElement) => ({
+        fit: getComputedStyle(element).objectFit,
+        radius: getComputedStyle(element).borderRadius,
+        clip: getComputedStyle(element).clipPath,
+        naturalRatio: element.naturalWidth / element.naturalHeight,
+        ratio: element.getBoundingClientRect().width / element.getBoundingClientRect().height,
+      }));
+      expect(imageStyle.fit).toBe("contain");
+      expect(imageStyle.radius).toBe("0px");
+      expect(imageStyle.clip).toBe("none");
+      expect(imageStyle.ratio).toBeCloseTo(imageStyle.naturalRatio, 2);
+      expect(await tennis.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    }
     const avatarResponse = await page.request.get(`/admin/users/${populated.id}/avatar`);
     expect(avatarResponse.status()).toBe(200);
     expect(avatarResponse.headers()["cache-control"]).toBe("private, no-store");
-
-    async function verifyLayout(width: number) {
-      await page.setViewportSize({ width, height: 900 });
-      const layout = await dialog.evaluate((element) => {
-        const headings = [...element.querySelectorAll("h3")];
-        const rect = (title: string) => {
-          const section = headings.find((heading) => heading.textContent === title)!.parentElement!;
-          const { x, y, width } = section.getBoundingClientRect();
-          return { x, y, width };
-        };
-        return {
-          identity: rect("Profile"), address: rect("Address"), tennis: rect("Tennis profile"), account: rect("Account"),
-          width: element.getBoundingClientRect().width,
-          overflowX: element.scrollWidth > element.clientWidth,
-          overflowY: element.scrollHeight > element.clientHeight,
-        };
-      });
-      expect(layout.overflowX).toBe(false);
-      expect(layout.width).toBeLessThanOrEqual(width - 32);
-      expect(layout.account.y).toBeGreaterThan(layout.tennis.y);
-      if (width >= 1280) {
-        expect(layout.width).toBe(1024);
-        expect(layout.identity.y).toBe(layout.address.y);
-        expect(layout.address.y).toBe(layout.tennis.y);
-        expect(layout.identity.x).toBeLessThan(layout.address.x);
-        expect(layout.address.x).toBeLessThan(layout.tennis.x);
-        expect(layout.overflowY).toBe(false);
-      } else if (width >= 768) {
-        expect(layout.identity.y).toBe(layout.address.y);
-        expect(layout.identity.x).toBeLessThan(layout.address.x);
-        expect(layout.tennis.y).toBeGreaterThan(layout.address.y);
-      } else {
-        expect(layout.identity.x).toBe(layout.address.x);
-        expect(layout.address.x).toBe(layout.tennis.x);
-        expect(layout.address.y).toBeGreaterThan(layout.identity.y);
-        expect(layout.tennis.y).toBeGreaterThan(layout.address.y);
-      }
-      await page.screenshot({ path: test.info().outputPath(`manage-user-${width}.png`) });
-    }
-    for (const width of [1440, 1920, 768, 1024, 375]) await verifyLayout(width);
-    const avatarSize = await image.boundingBox();
-    expect(avatarSize?.width).toBe(144);
-    expect(avatarSize?.height).toBe(144);
-    await page.setViewportSize({ width: 1440, height: 900 });
-
+    // A landscape photograph uses the same full-image presentation.
+    const landscape = await sharp({ create: { width: 64, height: 32, channels: 3, background: "green" } }).webp().toBuffer();
+    expect((await service.storage.from("profile-avatars").upload(`${populated.id}/avatar.webp`, landscape, { contentType: "image/webp", upsert: true })).error).toBeNull();
+    await page.reload();
+    await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth / element.naturalHeight)).toBe(2);
+    const landscapeSize = await image.boundingBox();
+    expect(landscapeSize!.width / landscapeSize!.height).toBeCloseTo(2, 2);
+    await tabs.getByRole("link", { name: "Account & access", exact: true }).click();
     for (const role of ["Admin", "Coach"]) {
-      const row = dialog.getByRole("listitem").filter({ has: page.getByText(role, { exact: true }) });
+      const row = account.getByRole("listitem").filter({ has: page.getByText(role, { exact: true }) });
       await row.getByRole("button", { name: "Assign", exact: true }).click();
+      await expect(row.getByText("Assigned", { exact: true })).toBeVisible();
+      await page.reload();
       await expect(row.getByText("Assigned", { exact: true })).toBeVisible();
       await row.getByRole("button", { name: "Remove", exact: true }).click();
       await page.getByRole("dialog", { name: `Remove ${role} role?`, exact: true }).getByRole("button", { name: `Remove ${role} role`, exact: true }).click();
       await expect(row.getByText("Not assigned", { exact: true })).toBeVisible();
     }
-    await dialog.getByRole("button", { name: "Suspend user", exact: true }).click();
+    await account.getByRole("button", { name: "Suspend user", exact: true }).click();
     await page.getByRole("dialog", { name: `Suspend ${populated.email}?`, exact: true }).getByRole("button", { name: "Suspend user", exact: true }).click();
-    await expect(dialog.getByText("Suspended", { exact: true })).toBeVisible();
-    await dialog.getByRole("button", { name: "Reactivate user", exact: true }).click();
-    await expect(dialog.getByText("Active", { exact: true })).toBeVisible();
-    await dialog.getByRole("button", { name: "Close", exact: true }).click();
+    await expect(account.getByText("Suspended", { exact: true })).toBeVisible();
+    await page.reload();
+    await expect(account.getByText("Suspended", { exact: true })).toBeVisible();
+    await account.getByRole("button", { name: "Reactivate user", exact: true }).click();
+    await expect(account.getByText("Active", { exact: true })).toBeVisible();
     const longBio = "Enjoys competitive tennis and meeting new players. ".repeat(9) + "LongWord".repeat(30);
     expect((await service.from("player_profiles").update({ bio: longBio }).eq("user_id", populated.id)).error).toBeNull();
-    await page.getByRole("row", { name: `Manage user ${populated.email}` }).click();
-    await expect(dialog.getByText(longBio, { exact: true })).toBeVisible();
+    await tabs.getByRole("link", { name: "Tennis profile", exact: true }).click();
+    await expect(tennis.getByText(longBio, { exact: true })).toBeVisible();
     for (const width of [1440, 768, 375]) {
       await page.setViewportSize({ width, height: 900 });
-      expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-      await dialog.getByRole("button", { name: "Suspend user", exact: true }).scrollIntoViewIfNeeded();
-      await expect(dialog.getByRole("button", { name: "Suspend user", exact: true })).toBeVisible();
+      expect(await tennis.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
     }
-    await dialog.getByRole("button", { name: "Close", exact: true }).click();
+    await expect(page.getByRole("link", { name: "Back to users", exact: true })).toHaveCount(0);
+    await page.getByRole("navigation", { name: "Admin navigation" }).getByRole("link", { name: "Users", exact: true }).click();
+    await expect(page).toHaveURL(/\/admin\/users$/);
+    await page.goto(`/admin/users?q=${encodeURIComponent(`admin-details-${runId}`)}`);
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.getByRole("row", { name: `Manage user ${incomplete.email}` }).click();
-    await expect(dialog.getByRole("heading", { name: "Tennis profile" })).toBeVisible();
-    await expect(dialog.getByRole("img")).toHaveCount(0);
-    expect(await dialog.getByText("—", { exact: true }).count()).toBeGreaterThan(10);
-    await expect(dialog.getByRole("button", { name: "Suspend user", exact: true })).toBeEnabled();
-    for (const width of [1440, 1024, 375]) await verifyLayout(width);
+    await expect(account.getByRole("button", { name: "Suspend user", exact: true })).toBeEnabled();
+    await tabs.getByRole("link", { name: "Tennis profile", exact: true }).click();
+    await expect(tennis.getByRole("img")).toHaveCount(0);
+    await expect(tennis.getByText("No avatar uploaded", { exact: true })).toBeVisible();
     // The same route never serves private avatars without an authenticated Admin.
     const anonymous = await page.context().browser()!.newContext();
     try { expect((await anonymous.request.get(`${test.info().project.use.baseURL}/admin/users/${populated.id}/avatar`)).status()).toBe(401); }

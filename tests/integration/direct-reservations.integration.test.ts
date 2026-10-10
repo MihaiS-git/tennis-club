@@ -8,6 +8,10 @@ import { mondayWeekday } from "@/lib/pricing/resolution";
 import { localMinute, localToday } from "@/lib/courts/local-time";
 import { cleanupAuthFixtures, localFixtureClient } from "./auth-fixtures";
 import { ensureIntegrationAdminAnchor } from "./admin-anchor";
+import { getDataSource } from "@/lib/db/data-source";
+import { UserEntity } from "@/lib/db/entities/user.entity";
+import { PlayerProfileEntity } from "@/lib/db/entities/player-profile.entity";
+import { CourtReservationEntity } from "@/lib/db/entities/court-reservation.entity";
 
 test("Admin cancellation preserves the creator and reservation, releases occupancy, and denies non-Admins", async () => {
   const service = localFixtureClient();
@@ -133,6 +137,8 @@ test("Admin edits another creator's row atomically while preserving owner-only e
       startMinute: 600, endMinute: 660, reason: "Coach training" }, coach.client, now)).toEqual({ ok: true });
     expect(await createDirectReservation({ locationId: ids.location, courtId: ids.secondCourt, date: nextDate,
       startMinute: 720, endMinute: 780, reason: "Occupied" }, coach.client, now)).toEqual({ ok: true });
+    const manager = (await getDataSource()).manager;
+    await manager.update(UserEntity, { id: coach.id }, { firstName: "Original", lastName: "Coach" });
     const original = (await listOwnUpcomingReservations(coach.client, now)).upcoming.find((row) => row.court_id === ids.court)!;
     const row = async () => {
       const result = await service.from("court_reservations")
@@ -176,7 +182,8 @@ test("Admin edits another creator's row atomically while preserving owner-only e
     const location = { id: ids.location, name: "Operations", timezone: "UTC",
       courts: [{ id: ids.court, name: "Court 1" }, { id: ids.secondCourt, name: "Court 2" }] };
     expect((await getReservationDay(location, date, now, admin.client)).courts[0].cells.slice(0, 2)).toEqual(["available", "available"]);
-    expect((await getReservationDay(location, nextDate, now, admin.client)).adminOccupancy.map((item) => item.id)).toContain(original.id);
+    expect((await getReservationDay(location, nextDate, now, admin.client)).adminOccupancy).toContainEqual(
+      expect.objectContaining({ id: original.id, created_by_user_id: coach.id, creator_name: "Original Coach" }));
     const racing = await Promise.all(["First", "Second"].map((reason) => editDirectReservationAsAdmin({
       kind: "reason", id: original.id, expectedUpdatedAt: moved.updated_at, reason,
     }, admin.client, now)));
@@ -531,6 +538,23 @@ test("direct reservations require active staff, opening hours and an available a
       expect.objectContaining({ court_id: courtId, reason: "Sportya tournament", created_by_user_id: admin.id }),
       expect.objectContaining({ court_id: courtId, reason: "Course with Andrej", created_by_user_id: coach.id }),
     ]));
+    const manager = (await getDataSource()).manager;
+    const readCreators = async () => (await getReservationDay(locations.find((location) => location.id === locationId)!, date, now, admin.client)).adminOccupancy;
+    const storedAdmin = await manager.findOneByOrFail(UserEntity, { id: admin.id });
+    expect(await readCreators()).toContainEqual(expect.objectContaining({ created_by_user_id: admin.id, creator_name: storedAdmin.email }));
+    await manager.upsert(PlayerProfileEntity, { userId: admin.id, displayName: "Administrator display name" }, ["userId"]);
+    expect(await readCreators()).toContainEqual(expect.objectContaining({ created_by_user_id: admin.id, creator_name: "Administrator display name" }));
+    await manager.delete(PlayerProfileEntity, { userId: admin.id });
+    await manager.update(UserEntity, { id: admin.id }, { firstName: "  Actual ", lastName: "Administrator " });
+    await manager.update(UserEntity, { id: coach.id }, { firstName: "Actual", lastName: "Coach" });
+    expect(await readCreators()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ created_by_user_id: admin.id, creator_name: "Actual Administrator" }),
+      expect.objectContaining({ created_by_user_id: coach.id, creator_name: "Actual Coach" }),
+    ]));
+    // Historical rows may genuinely have no creator; never substitute the viewing Admin.
+    await manager.update(CourtReservationEntity, { id: rows.data![0].id }, { createdByUserId: null });
+    expect(await readCreators()).toContainEqual(expect.objectContaining({ id: rows.data![0].id, created_by_user_id: null, creator_name: null }));
+    await manager.update(CourtReservationEntity, { id: rows.data![0].id }, { createdByUserId: admin.id });
     const coachDay = await getReservationDay(locations.find((location) => location.id === locationId)!, date, now, coach.client);
     expect(coachDay.adminOccupancy).toEqual([]);
     expect(coachDay.courts[0].cells.filter((cell) => cell === "booked")).toHaveLength(4);
@@ -626,6 +650,7 @@ test("direct reservations require active staff, opening hours and an available a
     assert.strictEqual((await service.from("location_opening_hours").delete().in("location_id", [locationId, otherLocationId])).error, null);
     assert.strictEqual((await service.from("courts").delete().in("location_id", [locationId, otherLocationId])).error, null);
     assert.strictEqual((await service.from("locations").delete().in("id", [locationId, otherLocationId])).error, null);
+    for (const userId of userIds) await (await getDataSource()).manager.delete(PlayerProfileEntity, { userId });
     await cleanupAuthFixtures(service, userIds);
   }
 }, 30000);

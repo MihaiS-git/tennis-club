@@ -14,7 +14,7 @@ export const instant = false;
 export default async function AdminUsersPage({ searchParams }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const actor = await requireActiveAdmin();
+  await requireActiveAdmin();
   const params = await searchParams;
   const filters = adminUserFiltersSchema.parse({ search: params.q, status: params.status, role: params.role, page: params.page, sort: params.sort, dir: params.dir });
   const { users, page, totalPages } = await listAdminUsers(filters);
@@ -47,7 +47,7 @@ export default async function AdminUsersPage({ searchParams }: {
       ) : (
         <>
           <div className="space-y-3 lg:hidden">
-            {users.map((user) => <UserItem key={user.id} user={user} currentAdminId={actor.userId} mobile />)}
+            {users.map((user) => <UserItem key={user.id} user={user} mobile />)}
           </div>
 
           <div className="hidden overflow-hidden rounded-card border border-border bg-surface lg:block">
@@ -77,7 +77,7 @@ export default async function AdminUsersPage({ searchParams }: {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {users.map((user) => <UserItem key={user.id} user={user} currentAdminId={actor.userId} />)}
+                {users.map((user) => <UserItem key={user.id} user={user} />)}
               </tbody>
             </table>
           </div>
