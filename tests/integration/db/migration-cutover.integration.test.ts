@@ -134,17 +134,20 @@ smoke("Admin configuration services persist and publication readiness still gate
   const court = await saveAdminCourt({ fields: { location_id: location.id, name: "Court 1", surface: "clay",
     environment: "outdoor", has_lighting: false, is_active: true } }, admin);
   expect(court.ok).toBe(true); if (!court.ok) throw new Error(JSON.stringify(court));
-  expect((await mutateAdminOpeningHours({ location_id: location.id, weekdays: [0,1,2,3,4,5,6], replace_ids: [],
-    intervals: [{ opens_at: "08:00", closes_at: "22:00" }] }, admin)).ok).toBe(true);
+  const openingHours = await mutateAdminOpeningHours({ operation: "create", starts_on: "0001-01-01", location_id: location.id, weekdays: [0,1,2,3,4,5,6], replace_ids: [],
+    intervals: [{ opens_at: "08:00", closes_at: "22:00" }] }, admin);
+  expect(openingHours.ok).toBe(true);
+  if (!openingHours.ok || !openingHours.schedules?.[0]) throw new Error("Opening-hours fixture failed.");
+  const schedule = openingHours.schedules[0];
   const pricing = await saveAdminPricingRule({ location_id: location.id, court_ids: [court.id], court_state: "outdoor",
     weekdays: [0,1,2,3,4,5,6], starts_at: "08:00", ends_at: "22:00", starts_on: "", ends_on: "", price_per_hour: "50" }, admin);
   expect(pricing.ok).toBe(true);
   expect(await setAdminLocationPublication({ id: location.id, is_public: true }, admin)).toEqual({ ok: true, id: location.id });
   expect((await listPublicLocationsWithCourts()).some((row) => row.id === location.id)).toBe(true);
   const hours = await database.query("SELECT id FROM public.location_opening_hours WHERE location_id=$1", [location.id]);
-  expect((await mutateAdminOpeningHours({ location_id: location.id, weekdays: [0,1,2,3,4,5,6],
+  expect((await mutateAdminOpeningHours({ operation: "update", schedule_id: schedule.id, revision: schedule.revision, location_id: location.id, weekdays: [0,1,2,3,4,5,6],
     replace_ids: hours.map((row: { id: string }) => row.id), intervals: [{ opens_at: "09:00", closes_at: "22:00" }] }, admin)))
-    .toMatchObject({ ok: false, reason: "pricing-conflict" });
+    .toMatchObject({ ok: true, pricingAdjusted: true });
 });
 
 smoke("native overlap, partial payment uniqueness and refund constraints reject invalid persistence", async () => {
@@ -159,7 +162,7 @@ smoke("native overlap, partial payment uniqueness and refund constraints reject 
     const locationId = randomUUID(), courtId = randomUUID(), setId = randomUUID(), reservationId = randomUUID(), bookingId = randomUUID();
     await runner.query("INSERT INTO public.locations(id,name,slug,timezone) VALUES($1,'Integrity',$2,'UTC')", [locationId, `integrity-${locationId}`]);
     await runner.query("INSERT INTO public.courts(id,location_id,name,slug,surface,environment) VALUES($1,$2,'Court','court','clay','outdoor')", [courtId, locationId]);
-    const hours = "INSERT INTO public.location_opening_hours(location_id,weekday,opens_at_minute,closes_at_minute) VALUES($1,0,$2,$3)";
+    const hours = "WITH baseline AS (INSERT INTO public.opening_hours_schedules(location_id,starts_on) SELECT $1,DATE '0001-01-01' WHERE NOT EXISTS (SELECT 1 FROM public.opening_hours_schedules WHERE location_id=$1) RETURNING id) INSERT INTO public.location_opening_hours(schedule_id,location_id,weekday,opens_at_minute,closes_at_minute) VALUES(coalesce((SELECT id FROM public.opening_hours_schedules WHERE location_id=$1 LIMIT 1),(SELECT id FROM baseline)),$1,0,$2,$3)";
     await runner.query(hours, [locationId, 480, 600]);
     await rejects(hours, [locationId, 540, 660], "23P01");
     await runner.query(hours, [locationId, 600, 720]);

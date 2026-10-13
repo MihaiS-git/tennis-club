@@ -7,6 +7,25 @@ import { stripeConfig } from "./config";
 import type { OnlinePaymentAdapter, OnlinePaymentEvent } from "../types";
 
 export const stripeAdapter: OnlinePaymentAdapter = {
+  async resumePayment(attempt) {
+    const intent = await stripeClient().paymentIntents.retrieve(attempt.providerPaymentId);
+    if (intent.id !== attempt.providerPaymentId || intent.metadata.payment_attempt_id !== attempt.id || !intent.client_secret)
+      throw new StripeProviderError("creation");
+    return { kind: "stripe", clientSecret: intent.client_secret, publishableKey: stripeConfig().publishableKey };
+  },
+  async readPayment(attempt) {
+    const intent = await stripeClient().paymentIntents.retrieve(attempt.providerPaymentId, {}, {
+      timeout: 3000, maxNetworkRetries: 0,
+    });
+    if (intent.id !== attempt.providerPaymentId || intent.metadata.payment_attempt_id !== attempt.id)
+      throw new StripeProviderError("cancellation");
+    return {
+      status: intent.status === "succeeded" ? "succeeded" : intent.status === "canceled" ? "cancelled"
+        : intent.status === "processing" || intent.status === "requires_capture" || intent.status === "requires_action" ? "processing" : "pending",
+      amountMinor: intent.status === "succeeded" ? intent.amount_received : intent.amount,
+      currency: intent.currency.toUpperCase(),
+    };
+  },
   async refundPayment(refund) {
     try {
       const client = stripeClient();
@@ -19,7 +38,7 @@ export const stripeAdapter: OnlinePaymentAdapter = {
           payment_intent: refund.providerPaymentId,
           limit: 100,
         })) {
-          if (existing.metadata?.payment_refund_id === refund.id) {
+          if (existing.metadata?.payment_refund_id === refund.id && Number(existing.metadata.refund_generation ?? 0) === (refund.generation ?? 0)) {
             result = existing;
             break;
           }
@@ -28,9 +47,9 @@ export const stripeAdapter: OnlinePaymentAdapter = {
           {
             payment_intent: refund.providerPaymentId,
             amount: refund.amountMinor,
-            metadata: { payment_refund_id: refund.id },
+            metadata: { payment_refund_id: refund.id, ...(refund.generation ? { refund_generation: String(refund.generation) } : {}) },
           },
-          { idempotencyKey: `court-payment-refund-${refund.id}` },
+          { idempotencyKey: `court-payment-refund-${refund.id}${refund.generation ? `-retry-${refund.generation}` : ""}` },
         );
       }
       if (
@@ -60,12 +79,8 @@ export const stripeAdapter: OnlinePaymentAdapter = {
       );
       if (intent.status === "canceled") return "cancelled";
       if (intent.status === "succeeded") return "succeeded";
-      // This checkout is card-only with automatic capture. Do not introduce refunds.
-      if (
-        intent.status === "processing" ||
-        intent.status === "requires_capture"
-      )
-        return "processing";
+      // Stripe permits cancellation in some processing states. Attempt it;
+      // retrieve again on failure rather than assuming the request succeeded.
       try {
         const cancelled = await client.paymentIntents.cancel(
           attempt.providerPaymentId,

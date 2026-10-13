@@ -17,7 +17,7 @@ const hours = { id: id(4), location_id: id(1), weekday: 3, opens_at_minute: 600,
   created_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-01T00:00:00Z" };
 let detailRows: unknown[] = [];
 const common = { court_id: id(2), booking_date: date, starts_at_minute: 600, ends_at_minute: 660,
-  cancellation_notice_minutes: null, total_amount_minor: null, currency: null, payment_facts: [] };
+  cancellation_notice_minutes: null, total_amount_minor: null, currency: null, payment_facts: [], creator_email: null, creator_phone: null, account_user_id: null, payment_method: null };
 const direct = { ...common, kind: "reservation", id: id(5), reason: "Practice", created_by_user_id: id(6),
   creator_name: "Own Name", customer_name: null, customer_email: null, customer_phone: null };
 const booking = { ...common, kind: "booking", id: id(7), starts_at_minute: 660, ends_at_minute: 720,
@@ -41,7 +41,7 @@ test.each<CurrentAccount>([
   expect(query).not.toHaveBeenCalled();
 });
 
-test.each(["coach"])("authorizes %s before bounded exact-resource reads", async (role) => {
+test.each(["admin", "coach"])("authorizes %s before bounded exact-resource reads", async (role) => {
   account.mockResolvedValue({ state: "active", userId: id(6), roles: [role] });
   const result = await getReservationDay(location, date, now, client);
   expect(account).toHaveBeenCalledWith(client);
@@ -54,7 +54,9 @@ test.each(["coach"])("authorizes %s before bounded exact-resource reads", async 
   expect(sql).not.toMatch(/UPDATE|DELETE|INSERT/);
   expect(result.occupancy).toEqual([{ court_id: id(2), starts_at_minute: 600, ends_at_minute: 660 }]);
   expect(result.courts[0].cells.slice(0, 2)).toEqual(["booked", "booked"]);
-  if (role === "coach") { expect(result.adminOccupancy).toEqual([]); }
+  expect(result.adminOccupancy).toHaveLength(2);
+  expect(result.canManage).toBe(role === "admin");
+  expect(result.actorUserId).toBe(id(6));
 });
 
 test("includes live held rows with microseconds, excludes equal/expired/null deadlines and never writes", async () => {

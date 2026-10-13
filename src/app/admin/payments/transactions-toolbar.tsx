@@ -28,7 +28,7 @@ export function TransactionsToolbar() {
   }
   const control = "min-h-10 rounded-control border border-border-strong bg-surface px-3 py-2 text-foreground";
   return <AdminToolbar primary={<label className="flex w-full flex-col gap-1.5 font-medium text-primary sm:max-w-sm">
-    Search<input type="search" value={text} maxLength={200} placeholder="Customer, booking or payment ID" className={control}
+    Search<input type="search" value={text} maxLength={200} placeholder="Customer, booking or transaction ID" className={control}
       onChange={(event) => {
         const next = event.target.value; setDraft({ queryString, text: next }); cancelSearch();
         const scheduled = currentQuery.current;
@@ -36,7 +36,7 @@ export function TransactionsToolbar() {
       }} />
   </label>} filters={<>
     {([
-      ["status", "Payment status", paymentStatusLabels], ["provider", "Provider", paymentProviderLabels],
+      ["status", "Transaction status", { ...paymentStatusLabels, succeeded: "Succeeded" }], ["provider", "Provider", paymentProviderLabels],
       ["method", "Method", paymentMethodLabels], ["attention", "Attention", { required: "Needs attention" }],
     ] as const).map(([key, label, options]) => <label key={key} className="flex flex-col gap-1.5 font-medium text-primary">
       {label}<select value={filters[key]} className={control} onChange={(event) => navigate(key, event.target.value)}>

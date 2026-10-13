@@ -27,7 +27,7 @@ export async function processBookingRefund(id: string,
   let lastError: string | null = null;
   try {
     const result = await (await onlinePaymentAdapter(refund.provider)).refundPayment({
-      id: refund.id, providerPaymentId: refund.provider_payment_id, providerRefundId,
+      id: refund.id, ...(refund.provider_generation ? { generation: refund.provider_generation } : {}), providerPaymentId: refund.provider_payment_id, providerRefundId,
       amountMinor: refund.amount_minor, currency: refund.currency,
     });
     providerRefundId = result.providerRefundId;
@@ -50,7 +50,7 @@ export async function processBookingRefund(id: string,
 }
 
 export async function finishBookingCancellation(data: unknown, unavailableMessage = "This booking is no longer available for cancellation."): Promise<BookingCancellationResult> {
-  const result = z.object({ outcome: z.string(), refund_id: z.uuid().nullable() }).safeParse(data);
+  const result = z.object({ outcome: z.string(), refund_id: z.uuid().nullable(), refund_ids: z.array(z.uuid()).optional() }).safeParse(data);
   if (!result.success) return { ok: false, message: "Unable to cancel this booking. Try again." };
   if (result.data.outcome !== "cancelled") {
     const messages: Record<string, string> = {
@@ -60,5 +60,9 @@ export async function finishBookingCancellation(data: unknown, unavailableMessag
     };
     return { ok: false, message: messages[result.data.outcome] ?? unavailableMessage };
   }
-  return result.data.refund_id ? { ok: true, refundStatus: await processBookingRefund(result.data.refund_id) } : { ok: true };
+  const ids = result.data.refund_ids ?? (result.data.refund_id ? [result.data.refund_id] : []);
+  const statuses = await Promise.all(ids.map(id => processBookingRefund(id)));
+  const refundStatus = statuses.includes("failed") ? "failed" : statuses.includes("pending_retry") ? "pending_retry"
+    : statuses.includes("pending") ? "pending" : statuses.length ? "succeeded" : undefined;
+  return refundStatus ? { ok: true, refundStatus } : { ok: true };
 }

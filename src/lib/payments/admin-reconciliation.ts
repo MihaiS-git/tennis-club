@@ -63,6 +63,7 @@ async function execute(
     parseAdminPaymentQuery({}),
     client,
     bookingId,
+    { kind: "refund", id: prepared.outcome === "ready" ? prepared.claim.refund.id : prepared.refundId },
   );
   const transaction = page.rows.find((row) => row.booking_id === bookingId);
   if (!transaction)
@@ -94,8 +95,8 @@ async function execute(
     message:
       status === "succeeded"
         ? resolved
-          ? "Full refund succeeded. Reconciliation resolved."
-          : "Full refund succeeded."
+          ? "Refund succeeded. Reconciliation resolved."
+          : "Refund succeeded."
         : status === "failed"
           ? "The refund failed. Review the refund error before retrying."
           : `The refund is awaiting completion or retry.${unresolved ? " Reconciliation remains unresolved." : ""}`,
@@ -109,4 +110,26 @@ export async function resolveAdminPaymentReconciliation(
   reader?: Reader,
 ) {
   return execute("reconcile", id, reader);
+}
+
+
+// Financial recovery remains available after the booking edit window closes.
+export async function recoverAdminBookingAdjustment(id: unknown, reader?: Reader): Promise<AdminRefundActionResult> {
+  const client = reader ?? await createClient();
+  await requireActiveAdmin(client);
+  const adjustmentId = z.uuid().parse(id);
+  const { getDataSource } = await import("@/lib/db/data-source");
+  const { findAdjustment, bookingFinancials } = await import("@/lib/db/repositories/booking-adjustments.repository");
+  const { adjustmentPresentation } = await import("./booking-adjustments");
+  const adjustment = await findAdjustment((await getDataSource()).manager,adjustmentId);
+  if (!adjustment) return {ok:false,message:"Modification payment unavailable."};
+  await adjustmentPresentation(adjustmentId);
+  const facts = await bookingFinancials((await getDataSource()).manager, adjustment.bookingId);
+  const payment = facts.payments.find(p => p.adjustmentId === adjustmentId);
+  if (!payment) return { ok: false, message: "Unable to refresh the payment details." };
+  const records = await listAdminPaymentTransactions(parseAdminPaymentQuery({}),client,adjustment.bookingId,
+    { kind: "payment", id: payment.id });
+  const transaction = records.rows[0];
+  return transaction ? {ok:true,transaction,message:"Modification payment checked against the provider. Review its current status."}
+    : {ok:false,message:"Unable to refresh the payment details."};
 }

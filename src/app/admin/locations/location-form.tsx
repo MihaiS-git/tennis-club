@@ -54,7 +54,6 @@ export function LocationForm({ location }: { location?: AdminLocation }) {
   const [pending, setPending] = useState(false);
   const archived = location?.archived_at != null;
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const [formError, setFormError] = useState("");
   const [deactivating, setDeactivating] = useState(false);
   const { attach, dirty, valid, sync, submitted, commit, reset } = useEditableFormBaseline(
     editableFields, (field, value) => field === "country_code" ? value.trim().toUpperCase() : value.trim(), validLocationCreate,
@@ -91,13 +90,13 @@ export function LocationForm({ location }: { location?: AdminLocation }) {
     pendingRef.current = true;
     setPending(true);
     setFieldErrors({});
-    setFormError("");
     const data = new FormData(form);
     const saved = submitted(form);
     const text = (field: string) => {
       const value = data.get(field);
       return typeof value === "string" ? value : "";
     };
+    const notification = toast.loading("Saving location…");
     try {
       const result = await saveLocationAction({
         ...(location ? { id: location.id } : {}),
@@ -120,23 +119,21 @@ export function LocationForm({ location }: { location?: AdminLocation }) {
       if (result.ok) {
         commit(saved);
         setDeactivating(false);
-        toast.success(location ? "Location updated." : "Location created.");
+        toast.success(location ? "Location updated." : "Location created.", { id: notification });
         if (!location) router.push(`/admin/locations/${result.id}`);
         else router.refresh();
       } else if (result.reason === "invalid-input") {
-        setFieldErrors(result.fieldErrors);
-        setFormError("Check the location details below.");
+        toast.dismiss(notification); setFieldErrors(result.fieldErrors);
+      } else if (result.reason === "duplicate-slug") {
+        toast.dismiss(notification);
+        setFieldErrors({ name: "A location with this generated slug already exists. Use a different name." });
       } else if (result.reason === "not-ready") {
-        setFormError(result.message);
+        toast.error(result.message, { id: notification });
       } else {
-        setFormError(
-          result.reason === "duplicate-slug"
-            ? "A location with this generated slug already exists. Use a different name."
-            : "This location no longer exists.",
-        );
+        toast.error("This location no longer exists.", { id: notification });
       }
     } catch {
-      setFormError("Unable to save location. Please try again.");
+      toast.error("Unable to save location. Please try again.", { id: notification });
     } finally {
       pendingRef.current = false;
       setPending(false);
@@ -157,18 +154,13 @@ export function LocationForm({ location }: { location?: AdminLocation }) {
           event.preventDefault();
           if (location?.is_active && new FormData(event.currentTarget).get("is_active") === "false") {
             pendingSaveFormRef.current = event.currentTarget;
-            setFormError("");
             setDeactivating(true);
             return;
           }
           void submit(event.currentTarget);
         }}
       >
-        {formError && (
-          <p role="alert" className="mb-4 text-sm text-danger">
-            {formError}
-          </p>
-        )}
+
         {archived && (
           <p className="mb-4 text-sm text-muted-foreground">
             Restore this location to edit its details.
@@ -327,7 +319,7 @@ export function LocationForm({ location }: { location?: AdminLocation }) {
       </form>
       <ConfirmationDialog open={deactivating && panelActive} title={`Deactivate ${location?.name ?? "location"}?`}
         message={`${location?.name ?? "This location"} will become unavailable for normal use until reactivated.`}
-        confirmLabel="Deactivate location" pending={pending} error={formError} returnFocusRef={saveTriggerRef}
+        confirmLabel="Deactivate location" pending={pending} returnFocusRef={saveTriggerRef}
         onClose={() => { if (!pendingRef.current) setDeactivating(false); }}
         onConfirm={() => { if (pendingSaveFormRef.current) void submit(pendingSaveFormRef.current); }} />
     </>

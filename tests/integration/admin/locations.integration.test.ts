@@ -1,3 +1,4 @@
+import { insertOpeningHoursFixture } from "../opening-hours-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test } from "vitest";
@@ -80,15 +81,37 @@ test("admin location workflow uses real authorization, RLS and persistence", asy
 
     // Public discovery still requires an active court, even for an active admin.
     expect((await listPublicLocationsWithCourts(admin.client)).some((row) => row.id === result.id)).toBe(false);
+    // A stale publication value in Details must neither publish nor validate readiness.
     expect(await saveAdminLocation({ id: result.id, fields: { ...fields, is_public: true } }, admin.client))
-      .toMatchObject({ ok: false, reason: "not-ready", message: expect.stringContaining("opening hours") });
+      .toEqual({ ok: true, id: result.id });
+    expect((await listAdminLocations(admin.client)).find((row) => row.id === result.id)?.is_public).toBe(false);
     const court = await service.from("courts").insert({ location_id: result.id, name: "Public fixture court",
       slug: "public-fixture", surface: "clay", environment: "outdoor" }).select("id").single();
     assert.strictEqual(court.error, null);
-    expect((await service.from("location_opening_hours").insert({ location_id: result.id, weekday: 0,
+    expect((await insertOpeningHoursFixture(service, { location_id: result.id, weekday: 0,
       opens_at_minute: 480, closes_at_minute: 1200 })).error).toBeNull();
-    expect(await saveAdminLocation({ id: result.id, fields: { ...fields, is_public: true } }, admin.client))
+    const editedFields = { ...fields, name: "Renamed location", address_line1: "Updated street",
+      address_line2: "Building 2", city: "Brasov", postal_code: "500000", country_code: "GB",
+      timezone: "Europe/London", currency: "RON", customer_cancellation_notice_minutes: 120,
+      allow_pay_at_club: true };
+    for (const update of [
+      { ...fields, name: editedFields.name, address_line1: editedFields.address_line1 },
+      editedFields,
+    ]) {
+      expect(await saveAdminLocation({ id: result.id, fields: update }, admin.client)).toEqual({ ok: true, id: result.id });
+      expect((await listAdminLocations(admin.client)).find((row) => row.id === result.id))
+        .toMatchObject({ ...update, address_line2: update.address_line2 || null, is_public: false });
+    }
+    expect(await saveAdminLocation({ id: result.id, fields: { ...editedFields, name: "Retry location", timezone: "Invalid/Zone" } }, admin.client))
+      .toMatchObject({ ok: false, reason: "invalid-input" });
+    expect((await listAdminLocations(admin.client)).find((row) => row.id === result.id)?.name).toBe(editedFields.name);
+    expect(await saveAdminLocation({ id: result.id, fields: { ...editedFields, name: "Retry location" } }, admin.client))
+      .toEqual({ ok: true, id: result.id });
+    expect((await listAdminLocations(admin.client)).find((row) => row.id === result.id)?.name).toBe("Retry location");
+    expect(await saveAdminLocation({ id: result.id, fields: editedFields }, admin.client)).toEqual({ ok: true, id: result.id });
+    expect(await setAdminLocationPublication({ id: result.id, is_public: true }, admin.client))
       .toMatchObject({ ok: false, reason: "not-ready", message: expect.stringContaining("pricing") });
+    expect((await listAdminLocations(admin.client)).find((row) => row.id === result.id)?.is_public).toBe(false);
     const ruleSet = await service.from("pricing_rule_sets").insert({ location_id: result.id }).select("id").single();
     assert.strictEqual(ruleSet.error, null);
     expect((await service.from("location_pricing_rules").insert({ location_id: result.id, rule_set_id: ruleSet.data!.id,
@@ -99,10 +122,20 @@ test("admin location workflow uses real authorization, RLS and persistence", asy
     expect((await listAdminLocations(admin.client)).find((row) => row.id === result.id))
       .toMatchObject({ name: "Renamed location", currency: "RON", is_public: true, customer_cancellation_notice_minutes: 120 });
     expect((await listPublicLocationsWithCourts(publicClient())).some((row) => row.id === result.id)).toBe(true);
-    expect(await saveAdminLocation({ id: result.id, fields: { ...fields, is_public: false } }, admin.client)).toEqual({ ok: true, id: result.id });
+    // Readiness can become incomplete after publication; ordinary edits still work.
+    expect((await service.from("location_pricing_rules").delete().eq("location_id", result.id)).error).toBeNull();
+    expect((await listAdminLocationsWithReadiness("current", result.id, admin.client))[0].missing)
+      .toContain("pricing for every active court");
+    for (const is_public of [true, false]) {
+      expect(await saveAdminLocation({ id: result.id, fields: { ...editedFields, is_public, city: "Updated city" } }, admin.client))
+        .toEqual({ ok: true, id: result.id });
+      expect((await listAdminLocations(admin.client)).find((row) => row.id === result.id))
+        .toMatchObject({ city: "Updated city", is_public: true });
+    }
+    expect(await setAdminLocationPublication({ id: result.id, is_public: false }, admin.client)).toEqual({ ok: true, id: result.id });
     expect((await listPublicLocationsWithCourts(publicClient())).some((row) => row.id === result.id)).toBe(false);
     expect(await saveAdminLocation({ id: result.id, fields: { ...fields, is_public: true, currency: "GBP" } }, admin.client)).toEqual({ ok: true, id: result.id });
-    expect((await listAdminLocations(admin.client)).find((row) => row.id === result.id)?.currency).toBe("GBP");
+    expect((await listAdminLocations(admin.client)).find((row) => row.id === result.id)).toMatchObject({ currency: "GBP", is_public: false });
     expect(await setAdminLocationArchived({ id: result.id, archived: true }, admin.client)).toEqual({ ok: true, id: result.id });
     expect((await listAdminLocations(admin.client)).some((row) => row.id === result.id)).toBe(false);
     expect((await listAdminLocations(admin.client, "archived")).find((row) => row.id === result.id)).toMatchObject({ is_active: false, archived_at: expect.any(String) });

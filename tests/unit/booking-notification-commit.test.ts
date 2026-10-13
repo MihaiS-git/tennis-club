@@ -2,6 +2,7 @@ import { DataSource, EntityManager } from "typeorm";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { inTransaction } from "@/lib/db/transaction";
 import { LocationEntity } from "@/lib/db/entities/location.entity";
+import * as adjustments from "@/lib/db/repositories/booking-adjustments.repository";
 import * as payments from "@/lib/db/repositories/payments.repository";
 import * as bookings from "@/lib/db/repositories/bookings.repository";
 import * as reservations from "@/lib/db/repositories/reservations.repository";
@@ -17,6 +18,7 @@ import { processOnlinePaymentEvent } from "@/lib/payments/service";
 
 vi.mock("@/lib/db/transaction");
 vi.mock("@/lib/db/repositories/accounts.repository");
+vi.mock("@/lib/db/repositories/booking-adjustments.repository");
 vi.mock("@/lib/db/repositories/pricing.repository");
 vi.mock("@/lib/payments/hold-expiry");
 vi.mock("@/lib/db/repositories/payments.repository");
@@ -34,6 +36,8 @@ let committed: boolean;
 const request = vi.fn();
 beforeEach(() => {
   vi.resetAllMocks(); committed = false;
+  vi.mocked(adjustments.bookingFinancials).mockResolvedValue({ payments: [], refunds: [], captures: [],
+    captured: 0, refunded: 0, obligated: 0, netPaid: 0, refundable: 0 });
   vi.stubEnv("BREVO_API_KEY", "private-key"); vi.stubEnv("BOOKING_MAIL_FROM", "bookings@example.test");
   vi.stubGlobal("fetch", request);
   request.mockImplementation(async () => {
@@ -44,15 +48,24 @@ beforeEach(() => {
     const result = await work(manager); committed = true; return result;
   });
   vi.mocked(payments.discoverSettlementParent).mockResolvedValue({ booking_id: id, reservation_id: id, location_id: id });
-  vi.mocked(lockLocations).mockResolvedValue([Object.assign(new LocationEntity(), { id })]);
+  vi.mocked(lockLocations).mockResolvedValue([Object.assign(new LocationEntity(), { id, timezone: "UTC", currency: "RON", isActive: true, isPublic: true, archivedAt: null, customerCancellationNoticeMinutes: 1440 })]);
   vi.mocked(bookings.lockSettlementBooking).mockResolvedValue({ id, reservation_id: id, status: "pending_payment",
-    customer_name: "Customer", customer_email: "snapshot@example.test", total_amount_minor: 5000, currency: "RON" });
+    customer_name: "Customer", customer_email: "snapshot@example.test", cancellation_notice_minutes: 1440, total_amount_minor: 5000, currency: "RON" });
   vi.mocked(reservations.findReservationForUpdate).mockResolvedValue({ id, court_id: id, booking_date: "2099-10-15",
     starts_at_minute: 600, ends_at_minute: 660, reason: null, created_by_user_id: null, status: "held",
     created_at: "2099-10-14T10:00:00Z", updated_at: "2099-10-14T10:00:00Z", cancelled_at: null,
     cancelled_by_user_id: null, hold_expires_at: "2099-10-14T10:10:00Z", token_matches: null });
   vi.mocked(payments.lockSettlementAttempt).mockResolvedValue({ id, booking_id: id, method: "online", provider: "stripe",
     provider_payment_id: "pi_test", amount_minor: 5000, currency: "RON", status: "pending", expires_at: "2099-10-14T10:10:00Z" });
+  vi.mocked(listCheckoutLocationCourts).mockResolvedValue([Object.assign(new CourtEntity(), { id, name: "Court", slug: "court", surface: "clay", environment: "outdoor", hasLighting: false })]);
+  vi.mocked(listCheckoutCourtCoverage).mockResolvedValue([]);
+  vi.mocked(reservations.listReservationOpeningHours).mockResolvedValue([{ id, location_id: id, weekday: 3,
+    opens_at_minute: 0, closes_at_minute: 1440, created_at: "2099-10-14T10:00:00Z", updated_at: "2099-10-14T10:00:00Z" }]);
+  vi.mocked(listCheckoutPricing).mockResolvedValue([Object.assign(new LocationPricingRuleEntity(), {
+    id, ruleSetId: id, locationId: id, courtId: id, courtState: "outdoor", weekday: 3,
+    startsAtMinute: 0, endsAtMinute: 1440, startsOn: null, endsOn: null, pricePerHourMinor: 5000,
+    createdAt: new Date("2099-10-14T10:00:00Z"), updatedAt: new Date("2099-10-14T10:00:00Z"),
+  })]);
   vi.mocked(reservations.findReservationResourceFacts).mockResolvedValue({ court_id: id, court_name: "Court", court_active: true,
     location_id: id, location_name: "Club", location_timezone: "UTC", location_active: true, archived_at: null });
   vi.mocked(reservations.readReservationClockTime).mockResolvedValue("2099-10-14T10:00:00Z");
@@ -119,7 +132,7 @@ async function confirmedBooking() {
   })]);
   vi.mocked(bookings.findBookingForUpdate).mockResolvedValue({ id, reservation_id: id, account_user_id: id,
     status: "confirmed", customer_name: "Customer", customer_email: "snapshot@example.test", customer_phone: "123",
-    total_amount_minor: 5000, currency: "RON", cancellation_notice_minutes: 0, updated_at: "2099-10-14T10:00:00Z", token_matches: true });
+    total_amount_minor: 5000, currency: "RON", payment_method: "pay_at_club", cancellation_notice_minutes: 0, updated_at: "2099-10-14T10:00:00Z", token_matches: true });
   const reservation = await reservations.findReservationForUpdate(manager, id);
   if (!reservation) throw new Error("Missing test reservation");
   vi.mocked(reservations.findReservationForUpdate).mockResolvedValue({ ...reservation, status: "active", hold_expires_at: null, token_matches: true });

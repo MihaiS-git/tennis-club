@@ -16,6 +16,8 @@ vi.mock("@/lib/logger", () => ({ logger: { error: logError } }));
 
 vi.mock("@/lib/auth/account", () => ({ readCurrentAccount: accountRead }));
 
+import { bookingContactPrefill } from "@/lib/bookings/prefill";
+
 import { personalInformationSchema, tennisProfileSchema } from "@/lib/profile/validation";
 import { loadProfile, savePersonalInformation, saveTennisProfile } from "@/lib/profile/profile";
 
@@ -109,4 +111,37 @@ it.each([workflows[1]])("sanitizes $name repository and connection errors", asyn
       event: `profile.${name}_save_failed`, kind: "serialization_failure", code: "40001",
     }, message);
   }
+});
+
+
+it("prefills booking contact from the verified owner's personal profile and account email", async () => {
+  expect(await bookingContactPrefill(client)).toEqual({
+    customerName: "Ana Player", customerEmail: "owner@example.test", customerPhone: "+40 123",
+  });
+  expect(personalRead).toHaveBeenCalledExactlyOnceWith(manager, userId);
+  expect(personalWrite).not.toHaveBeenCalled();
+});
+
+it("leaves missing booking profile values empty without substituting a tennis display name", async () => {
+  personalRead.mockResolvedValue({ ...personal, firstName: null, lastName: null, phone: null });
+  expect(await bookingContactPrefill(client)).toEqual({
+    customerName: "", customerEmail: "owner@example.test", customerPhone: "",
+  });
+  personalRead.mockResolvedValue({ ...personal, lastName: null, phone: null });
+  expect(await bookingContactPrefill(client)).toEqual({
+    customerName: "Ana", customerEmail: "owner@example.test", customerPhone: "",
+  });
+  personalRead.mockRejectedValue(new Error("Profile unavailable"));
+  expect(await bookingContactPrefill(client)).toEqual({
+    customerName: "", customerEmail: "owner@example.test", customerPhone: "",
+  });
+});
+
+it("does not load private booking profile information for guests or inactive accounts", async () => {
+  for (const state of ["unauthenticated", "missing-profile", "load-error", "suspended"]) {
+    accountRead.mockResolvedValue({ state, userId });
+    expect(await bookingContactPrefill(client)).toEqual({ customerName: "", customerEmail: "", customerPhone: "" });
+  }
+  expect(personalRead).not.toHaveBeenCalled();
+  expect(playerRead).not.toHaveBeenCalled();
 });

@@ -10,7 +10,14 @@ vi.mock("next/navigation", () => ({
   usePathname: () => navigation.pathname,
   useRouter: () => ({ replace: navigation.replace }),
 }));
-vi.mock("next/link", () => ({ default: ({ href, children, ...props }: import("react").ComponentProps<"a">) => <a href={href} {...props}>{children}</a> }));
+vi.mock("next/link", () => ({ default: ({ href, children, ...props }:
+  import("react").ComponentProps<"a"> & Pick<import("react").ComponentProps<typeof import("next/link").default>, "scroll" | "transitionTypes" | "onNavigate">) =>
+  {
+    delete props.scroll;
+    delete props.transitionTypes;
+    delete props.onNavigate;
+    return <a href={href} {...props}>{children}</a>;
+  } }));
 const location = "11111111-1111-4111-8111-111111111111";
 const otherLocation = "22222222-2222-4222-8222-222222222222";
 const court = "33333333-3333-4333-8333-333333333333";

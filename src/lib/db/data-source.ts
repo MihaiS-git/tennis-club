@@ -22,7 +22,13 @@ import { LocationOpeningHoursEntity } from "./entities/location-opening-hours.en
 import { LocationPricingRuleEntity } from "./entities/location-pricing-rule.entity";
 import { PricingRuleSetEntity } from "./entities/pricing-rule-set.entity";
 
+import { OpeningHoursScheduleEntity } from "./entities/opening-hours-schedule.entity";
+
+import { BookingAdjustmentEntity } from "./entities/booking-adjustment.entity";
+
 const entities = {
+  BookingAdjustmentEntity,
+  OpeningHoursScheduleEntity,
   BookingEntity, PaymentAttemptEntity, PaymentProviderChangeEntity, PaymentProviderEventEntity,
   PaymentProviderSettingEntity, PaymentRefundEntity, CourtReservationEntity,
   UserEntity, RoleEntity, UserRoleEntity, PlayerProfileEntity, LocationEntity, CourtEntity,

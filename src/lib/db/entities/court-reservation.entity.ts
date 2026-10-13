@@ -11,7 +11,7 @@ import { CourtEntity } from "./court.entity";
 @Check("court_reservation_cancellation_check", "(((status = ANY (ARRAY['active'::public.court_reservation_status, 'held'::public.court_reservation_status, 'released'::public.court_reservation_status])) AND (cancelled_at IS NULL) AND (cancelled_by_user_id IS NULL)) OR ((status = 'cancelled'::public.court_reservation_status) AND (cancelled_at IS NOT NULL) AND (cancelled_by_user_id IS NOT NULL)))")
 @Check("court_reservation_hold_check", "(((status = 'held'::public.court_reservation_status) AND (hold_expires_at IS NOT NULL) AND isfinite(hold_expires_at)) OR ((status <> 'held'::public.court_reservation_status) AND (hold_expires_at IS NULL)))")
 @Check("court_reservation_reason_check", "((reason IS NULL) OR ((char_length(reason) <= 255) AND (char_length(btrim(reason)) > 0)))")
-@Check("court_reservation_time_check", "(((starts_at_minute % 30) = 0) AND ((ends_at_minute % 30) = 0) AND ((ends_at_minute - starts_at_minute) >= 60))")
+@Check("court_reservation_time_check", "(((starts_at_minute % 30) = 0) AND ((ends_at_minute % 30) = 0) AND ((ends_at_minute - starts_at_minute) >= CASE WHEN adjustment_id IS NULL THEN 60 ELSE 30 END))")
 @Check("court_reservations_booking_date_check", "isfinite(booking_date)")
 @Check("court_reservations_ends_at_minute_check", "((ends_at_minute >= 1) AND (ends_at_minute <= 1440))")
 @Check("court_reservations_starts_at_minute_check", "((starts_at_minute >= 0) AND (starts_at_minute <= 1439))")
@@ -21,6 +21,9 @@ import { CourtEntity } from "./court.entity";
 // Explicit SQL and a final cutover decision are required; no entity overlap hooks.
 @Exclusion("court_reservation_no_overlap", "USING gist (court_id WITH =, booking_date WITH =, int4range(starts_at_minute, ends_at_minute, '[)') WITH &&) WHERE (status IN ('active', 'held'))")
 export class CourtReservationEntity {
+  @Column({ name: "adjustment_id", type: "uuid", nullable: true })
+  adjustmentId!: string | null;
+
   @PrimaryColumn({ name: "id", type: "uuid", default: () => "gen_random_uuid()", primaryKeyConstraintName: "court_reservations_pkey" })
   id!: string;
 

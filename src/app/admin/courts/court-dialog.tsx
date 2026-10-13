@@ -42,7 +42,6 @@ export function CourtDialog({ court, locations, locationId, triggerLabel = "Crea
   const setOpen = onOpenChange ?? setInternalOpen;
   const [pending, setPending] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const [formError, setFormError] = useState("");
   const [deactivating, setDeactivating] = useState(false);
   const { attach, dirty, valid, sync, submitted, commit } = useEditableFormBaseline(editableFields, undefined, validCourtCreate);
 
@@ -58,10 +57,11 @@ export function CourtDialog({ court, locations, locationId, triggerLabel = "Crea
   async function submit(form: HTMLFormElement) {
     if (pendingRef.current) return;
     pendingRef.current = true;
-    setPending(true); setFieldErrors({}); setFormError("");
+    setPending(true); setFieldErrors({});
     const data = new FormData(form);
     const saved = submitted(form);
     const text = (field: string) => { const value = data.get(field); return typeof value === "string" ? value : ""; };
+    const notification = toast.loading("Saving court…");
     try {
       const result = await saveCourtAction({
         ...(court ? { id: court.id } : {}),
@@ -73,22 +73,24 @@ export function CourtDialog({ court, locations, locationId, triggerLabel = "Crea
       if (result.ok) {
         commit(saved);
         setDeactivating(false);
-        toast.success(court ? "Court updated." : "Court created.");
+        toast.success(court ? "Court updated." : "Court created.", { id: notification });
         dialogRef.current?.close();
       } else if (result.reason === "invalid-input") {
-        setFieldErrors(result.fieldErrors);
-        setFormError("Check the court details below.");
+        toast.dismiss(notification); setFieldErrors(result.fieldErrors);
+      } else if (result.reason === "duplicate-slug") {
+        toast.dismiss(notification);
+        setFieldErrors(court ? { location_id: "This court’s slug already exists at the selected location. Choose a different location." }
+          : { name: "A court with this generated slug already exists at the selected location. Use a different name." });
+      } else if (result.reason === "invalid-location") {
+        toast.dismiss(notification);
+        setFieldErrors({ location_id: "This location no longer exists. Select another location." });
       } else {
-        setFormError(result.reason === "duplicate-slug"
-          ? court ? "This court’s slug already exists at the selected location. Choose a different location."
-            : "A court with this generated slug already exists at the selected location. Use a different name."
-          : result.reason === "has-coverage" ? "Remove this court’s coverage periods before changing it to indoor."
+        toast.error(result.reason === "has-coverage" ? "Remove this court’s coverage periods before changing it to indoor."
           : result.reason === "has-pricing" ? "This court cannot be changed in that way while pricing rules still depend on it. Update or remove those rules first."
-          : result.reason === "invalid-location" ? "This location no longer exists. Select another location."
-            : "This court no longer exists.");
+          : "This court no longer exists.", { id: notification });
       }
     } catch {
-      setFormError("Unable to save court. Please try again.");
+      toast.error("Unable to save court. Please try again.", { id: notification });
     } finally {
       pendingRef.current = false; setPending(false);
     }
@@ -106,13 +108,12 @@ export function CourtDialog({ court, locations, locationId, triggerLabel = "Crea
           event.preventDefault();
           if (court?.is_active && new FormData(event.currentTarget).get("is_active") === "false") {
             pendingSaveFormRef.current = event.currentTarget;
-            setFormError("");
             setDeactivating(true);
             return;
           }
           void submit(event.currentTarget);
         }}>
-          {formError && <p role="alert" className="mb-4 text-sm text-danger">{formError}</p>}
+
           <fieldset disabled={pending} className="space-y-4">
             <div>
               <label htmlFor={`${prefix}-location_id`} className="mb-1.5 block text-sm font-medium">Location</label>
@@ -161,12 +162,12 @@ export function CourtDialog({ court, locations, locationId, triggerLabel = "Crea
     </ModalDialog>;
   return <>
     {!court && controlledOpen === undefined && <Button type="button" variant="secondary" size="small" disabled={locations.length === 0} onClick={() => {
-      setFieldErrors({}); setFormError(""); setOpen(true);
+      setFieldErrors({}); setOpen(true);
     }}>{triggerLabel}</Button>}
     {dialog}
     <ConfirmationDialog open={deactivating && panelActive} title={`Deactivate ${court?.name ?? "court"}?`}
       message={`${court?.name ?? "This court"} will become unavailable for normal use until reactivated.`}
-      confirmLabel="Deactivate court" pending={pending} error={formError} returnFocusRef={saveTriggerRef}
+      confirmLabel="Deactivate court" pending={pending} returnFocusRef={saveTriggerRef}
       onClose={() => { if (!pendingRef.current) setDeactivating(false); }}
       onConfirm={() => { if (pendingSaveFormRef.current) void submit(pendingSaveFormRef.current); }} />
   </>;

@@ -24,13 +24,15 @@ type Client = Awaited<ReturnType<typeof createClient>>;
 const occupancySchema = z.object({ court_id: z.uuid(), starts_at_minute: z.number().int(), ends_at_minute: z.number().int() });
 const adminOccupancyRowSchema = occupancySchema.extend({ kind: z.enum(["reservation", "booking"]), id: z.uuid(),
   booking_date: z.iso.date(), reason: z.string().nullable(), created_by_user_id: z.uuid().nullable(),
-  creator_name: z.string().nullable(), customer_name: z.string().nullable(), customer_email: z.string().nullable(),
+  creator_name: z.string().nullable(), creator_email: z.string().nullable(), creator_phone: z.string().nullable(),
+  account_user_id: z.uuid().nullable(), payment_method: z.enum(["online", "pay_at_club"]).nullable(), customer_name: z.string().nullable(), customer_email: z.string().nullable(),
   customer_phone: z.string().nullable(), cancellation_notice_minutes: cancellationNoticeMinutesSchema.nullable(), total_amount_minor: z.number().int().nullable(), currency: z.enum(locationCurrencies).nullable(), payment_facts: z.array(paymentFactSchema) });
 export type AdminReservation = Pick<z.infer<typeof adminOccupancyRowSchema>,
-  "id" | "court_id" | "booking_date" | "starts_at_minute" | "ends_at_minute" | "reason" | "created_by_user_id" | "creator_name"> & { kind: "reservation" };
+  "id" | "court_id" | "booking_date" | "starts_at_minute" | "ends_at_minute" | "reason" | "created_by_user_id" | "creator_name"> & { kind: "reservation"; creator_email?: string | null; creator_phone?: string | null };
 export type AdminBooking = Pick<z.infer<typeof adminOccupancyRowSchema>,
   "id" | "court_id" | "booking_date" | "starts_at_minute" | "ends_at_minute"> & {
-    kind: "booking"; stripe_refund_available?: boolean; customer_name: string; customer_email: string; customer_phone: string;
+    kind: "booking"; account_user_id?: string | null; payment_method?: "online" | "pay_at_club" | null;
+    payments?: Pick<z.infer<typeof paymentFactSchema>, "id" | "method" | "provider" | "status">[]; stripe_refund_available?: boolean; customer_name: string; customer_email: string; customer_phone: string;
     cancellation_notice_minutes: number; total_amount_minor: number; currency: LocationCurrency;
   };
 export type AdminOperationalOccupancy = AdminReservation | AdminBooking;
@@ -42,7 +44,7 @@ export async function listInternalLocations(supabase?: Client): Promise<Internal
   await requireReservationRole(client);
   try {
     const rows = await reservations.listInternalReservationLocations((await getDataSource()).manager);
-    return rows.filter((location) => isStructurallyReady(location, publicationToday(location.timezone)))
+    return rows.filter((location) => isStructurallyReady(location, publicationToday(location.timezone)) || location.has_reservations)
       .map((location) => ({ id: location.id, name: location.name, timezone: location.timezone,
         courts: location.courts.map(({ id, name }) => ({ id, name })) }));
   } catch (error: unknown) {
@@ -95,39 +97,40 @@ export async function getReservationDay(location: InternalLocation, date: string
     readInternalOccupancy({ courtIds: location.courts.map((court) => court.id) }, date, now),
   ]);
   const adminOccupancy: AdminOperationalOccupancy[] = [];
-  if (actor.roles.includes("admin")) {
-    let data: unknown;
-    try {
-      data = await reservations.listAdminOperationalProjection((await getDataSource()).manager,
-        location.courts.map((court) => court.id), date);
-    } catch (error: unknown) {
-      logger.error({ event: "reservations.admin_read_failed", code: normalizeDatabaseError(error).sqlState }, "Failed to load admin reservation details");
-      throw new Error("Unable to load reservation details.");
-    }
-    const parsed = z.array(adminOccupancyRowSchema).safeParse(data);
-    if (!parsed.success) {
-      logger.error({ event: "reservations.admin_read_failed" }, "Failed to load admin reservation details");
-      throw new Error("Unable to load reservation details.");
-    }
-    for (const row of parsed.data) {
-      if (row.kind === "reservation") {
-        adminOccupancy.push({ kind: "reservation", id: row.id, court_id: row.court_id, booking_date: row.booking_date,
-          starts_at_minute: row.starts_at_minute, ends_at_minute: row.ends_at_minute,
-          reason: row.reason, created_by_user_id: row.created_by_user_id, creator_name: row.creator_name });
-      } else if (row.customer_name && row.customer_email && row.customer_phone && row.total_amount_minor && row.currency && row.cancellation_notice_minutes !== null) {
-        adminOccupancy.push({ kind: "booking", id: row.id, court_id: row.court_id, booking_date: row.booking_date,
-          starts_at_minute: row.starts_at_minute, ends_at_minute: row.ends_at_minute,
-          customer_name: row.customer_name, customer_email: row.customer_email, customer_phone: row.customer_phone,
-          cancellation_notice_minutes: row.cancellation_notice_minutes,
-          stripe_refund_available: successfulRefundPayment(row.payment_facts) !== null, total_amount_minor: row.total_amount_minor, currency: row.currency });
-      } else {
-        logger.error({ event: "reservations.admin_booking_invalid", bookingId: row.id }, "Invalid operational booking snapshot");
-        throw new Error("Unable to load booking details.");
-      }
+  let data: unknown;
+  try {
+    data = await reservations.listAdminOperationalProjection((await getDataSource()).manager,
+      location.courts.map((court) => court.id), date);
+  } catch (error: unknown) {
+    logger.error({ event: "reservations.admin_read_failed", code: normalizeDatabaseError(error).sqlState }, "Failed to load admin reservation details");
+    throw new Error("Unable to load reservation details.");
+  }
+  const parsed = z.array(adminOccupancyRowSchema).safeParse(data);
+  if (!parsed.success) {
+    logger.error({ event: "reservations.admin_read_failed" }, "Failed to load admin reservation details");
+    throw new Error("Unable to load reservation details.");
+  }
+  for (const row of parsed.data) {
+    if (row.kind === "reservation") {
+      adminOccupancy.push({ kind: "reservation", id: row.id, court_id: row.court_id, booking_date: row.booking_date,
+        starts_at_minute: row.starts_at_minute, ends_at_minute: row.ends_at_minute,
+        reason: row.reason, created_by_user_id: row.created_by_user_id, creator_name: row.creator_name, creator_email: row.creator_email, creator_phone: row.creator_phone });
+    } else if (row.customer_name && row.customer_email && row.customer_phone && row.total_amount_minor && row.currency && row.cancellation_notice_minutes !== null) {
+      adminOccupancy.push({ kind: "booking", id: row.id, court_id: row.court_id, booking_date: row.booking_date,
+        starts_at_minute: row.starts_at_minute, ends_at_minute: row.ends_at_minute,
+        account_user_id: row.account_user_id, payment_method: row.payment_method,
+        payments: row.payment_facts.map(({ id, method, provider, status }) => ({ id, method, provider, status })),
+        customer_name: row.customer_name, customer_email: row.customer_email, customer_phone: row.customer_phone,
+        cancellation_notice_minutes: row.cancellation_notice_minutes,
+        stripe_refund_available: successfulRefundPayment(row.payment_facts) !== null, total_amount_minor: row.total_amount_minor, currency: row.currency });
+    } else {
+      logger.error({ event: "reservations.admin_booking_invalid", bookingId: row.id }, "Invalid operational booking snapshot");
+      throw new Error("Unable to load booking details.");
     }
   }
   return { ...buildReservationDay({ date, today: localToday(location.timezone, now), currentMinute: localMinute(location.timezone, now),
-    courts: location.courts, hours, reservations: occupancy }), occupancy, adminOccupancy };
+    courts: location.courts, hours, reservations: occupancy }), occupancy, adminOccupancy,
+    actorUserId: actor.userId, canManage: actor.roles.includes("admin") };
 }
 
 export async function createDirectReservation(input: unknown, supabase?: Client, now = new Date()): Promise<ReservationResult> {

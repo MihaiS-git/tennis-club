@@ -6,14 +6,14 @@ const { push } = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
 
 import { CalendarControls } from "@/app/book/calendar-controls";
-import { ReservationControls } from "@/app/reservations/reservation-controls";
+import { ReservationControls } from "@/app/admin/reservations/reservation-controls";
 
 afterEach(() => { cleanup(); push.mockClear(); });
 const locations = [{ id: "rivus", name: "RIVUS" }, { id: "second", name: "Second" }];
 
 it.each([
   ["book", CalendarControls, "/book?location=second"],
-  ["reservations", ReservationControls, "/reservations?location=second"],
+  ["reservations", ReservationControls, "/admin/reservations?location=second"],
 ])("%s changes location through the shared selector and clears the prior date", (_name, Controls, expected) => {
   render(<Controls locations={locations} locationId="rivus" date="2026-10-03" today="2026-10-02" />);
   fireEvent.change(screen.getByRole("combobox", { name: "Location" }), { target: { value: "second" } });

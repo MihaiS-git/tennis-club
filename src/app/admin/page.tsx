@@ -1,10 +1,11 @@
 import { redirect } from "next/navigation";
 
-import { requireActiveAdmin } from "@/lib/admin/authorization";
+import { requireReservationRole } from "@/lib/reservations/authorization";
+import { createClient } from "@/lib/supabase/server";
 
 export const instant = false;
 
 export default async function AdminPage() {
-  await requireActiveAdmin();
-  redirect("/admin/locations");
+  const account = await requireReservationRole(await createClient());
+  redirect(account.roles.includes("admin") ? "/admin/locations" : "/admin/reservations");
 }

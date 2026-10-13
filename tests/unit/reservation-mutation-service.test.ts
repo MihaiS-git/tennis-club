@@ -61,3 +61,10 @@ test("validates before persistence and trims reason without altering the token",
   expect(await createDirectReservation({ ...schedule, reason: " " }, client, now)).toEqual({ ok: false, message: "Enter a reason." });
   expect(mocks.create).not.toHaveBeenCalled();
 });
+
+test("Coach owner cancellation passes only verified user ID to the owner transaction", async () => {
+  mocks.account.mockResolvedValue({ state: "active", userId: id, roles: ["coach"] });
+  mocks.cancel.mockResolvedValue({ ok: true });
+  expect(await cancelOwnDirectReservation(id, client)).toEqual({ ok: true });
+  expect(mocks.cancel).toHaveBeenCalledExactlyOnceWith(id, id, "owner");
+});

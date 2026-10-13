@@ -38,3 +38,11 @@ it("requires containment within one opening interval for the same location and d
   expect(fitsOpeningHours([hours], { ...rule, starts_at_minute: 419 })).toBe(false);
   expect(fitsOpeningHours([{ ...hours, closes_at_minute: 600 }, { ...hours, opens_at_minute: 600 }], rule)).toBe(false);
 });
+
+it("formats zero financial balances without accepting zero prices or invalid display amounts", async () => {
+  const { formatMoney, minorAmountSchema, majorAmountSchema } = await import("@/lib/pricing/money");
+  expect(formatMoney(0, "RON")).toBe("RON 0.00");
+  expect(minorAmountSchema.safeParse(0).success).toBe(false);
+  expect(majorAmountSchema.safeParse("0.00").success).toBe(false);
+  for (const amount of [-1, 0.5, NaN, Infinity, 2147483648]) expect(() => formatMoney(amount, "RON")).toThrow();
+});

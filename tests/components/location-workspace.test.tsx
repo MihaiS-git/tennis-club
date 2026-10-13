@@ -10,15 +10,15 @@ import type { AdminCourt } from "../../src/lib/admin/courts";
 const mocks = vi.hoisted(() => ({
   locations: vi.fn(), readiness: vi.fn(), courts: vi.fn(), coverage: vi.fn(), hours: vi.fn(), pricing: vi.fn(),
   saveLocation: vi.fn(), publication: vi.fn(), archive: vi.fn(), saveCourt: vi.fn(), saveCoverage: vi.fn(), removeCoverage: vi.fn(),
-  savePricing: vi.fn(), removePricing: vi.fn(), saveHours: vi.fn(), checkHoursRemoval: vi.fn(), push: vi.fn(), refresh: vi.fn(),
+  savePricing: vi.fn(), removePricing: vi.fn(), saveHours: vi.fn(), push: vi.fn(), refresh: vi.fn(),
 }));
 vi.mock("../../src/lib/admin/locations", () => ({ listAdminLocations: mocks.locations, listAdminLocationsWithReadiness: mocks.readiness }));
 vi.mock("../../src/lib/admin/courts", () => ({ listAdminCourts: mocks.courts }));
 vi.mock("../../src/lib/admin/court-coverage", () => ({ listAdminCourtCoverage: mocks.coverage }));
-vi.mock("../../src/lib/admin/opening-hours", () => ({ listAdminLocationOpeningHours: mocks.hours }));
+vi.mock("../../src/lib/admin/opening-hours", () => ({ listAdminLocationOpeningHours: mocks.hours, listAdminOpeningHoursSchedules: async () => [schedule] }));
 vi.mock("../../src/lib/admin/pricing", () => ({ listAdminPricingRules: mocks.pricing }));
 vi.mock("../../src/app/admin/locations/actions", () => ({ saveLocationAction: mocks.saveLocation, setLocationPublicationAction: mocks.publication, archiveLocationAction: mocks.archive }));
-vi.mock("../../src/app/admin/locations/opening-hours-actions", () => ({ mutateOpeningHoursAction: mocks.saveHours, checkOpeningHoursRemovalAction: mocks.checkHoursRemoval }));
+vi.mock("../../src/app/admin/locations/opening-hours-actions", () => ({ mutateOpeningHoursAction: mocks.saveHours }));
 vi.mock("../../src/app/admin/courts/actions", () => ({ saveCourtAction: mocks.saveCourt, saveCoverageAction: mocks.saveCoverage, removeCoverageAction: mocks.removeCoverage }));
 vi.mock("../../src/app/admin/pricing/actions", () => ({ savePricingRuleAction: mocks.savePricing, removePricingRuleAction: mocks.removePricing }));
 vi.mock("next/navigation", () => ({
@@ -47,9 +47,10 @@ const court: AdminCourt = {
   is_active: true, surface: "clay", environment: "outdoor", has_lighting: false,
   created_at: location.created_at, updated_at: location.updated_at,
 };
-const hours = [{ id: "a1000000-0000-4000-8000-000000000004", location_id: location.id, weekday: 0,
+const schedule = { id: "a1000000-0000-4000-8000-000000000099", location_id: location.id, starts_on: "0001-01-01", ends_on: null, revision: 1 };
+const hours = [{ id: "a1000000-0000-4000-8000-000000000004", location_id: location.id, schedule_id: schedule.id, starts_on: schedule.starts_on, ends_on: schedule.ends_on, weekday: 0,
   opens_at_minute: 480, closes_at_minute: 1200, created_at: location.created_at, updated_at: location.updated_at }];
-const rule = { rule_set_id: "a1000000-0000-4000-8000-000000000005", location_id: location.id, court_ids: [court.id],
+const rule = { revision: "fixture-revision", rule_set_id: "a1000000-0000-4000-8000-000000000005", location_id: location.id, court_ids: [court.id],
   court_state: "outdoor", weekdays: [0], starts_at_minute: 480, ends_at_minute: 600, starts_on: null, ends_on: null,
   price_per_hour_minor: 1200, created_at: location.created_at, updated_at: location.updated_at };
 const url = `/admin/locations/${location.id}`;
@@ -155,38 +156,26 @@ it("uses the existing Stay/Leave protection for ordinary links leaving dirty for
 it("edits opening hours inline and retains its unsaved interval across tabs", async () => {
   mocks.saveHours.mockResolvedValue({ ok: true, intervals: [{ ...hours[0], opens_at_minute: 540 }] });
   await workspace(); tab("Opening hours");
-  fireEvent.click(screen.getByRole("button", { name: "Edit Mon 08:00–20:00" }));
   const opening = screen.getByLabelText("Opening time");
   fireEvent.change(opening, { target: { value: "09:00" } });
   tab("Details"); tab("Opening hours");
   expect(screen.getByLabelText("Opening time")).toBe(opening);
   expect(opening).toHaveProperty("value", "09:00");
   expect(unload()).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: "Apply changes to selected days" }));
-  await screen.findByRole("button", { name: "Edit Mon 09:00–20:00" });
-  expect(mocks.saveHours).toHaveBeenCalledWith({ location_id: location.id, weekdays: [0], replace_ids: [hours[0].id], intervals: [{ opens_at: "09:00", closes_at: "20:00" }] });
+  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Save changes" })).toHaveProperty("disabled", true));
+  expect(mocks.saveHours).toHaveBeenCalledWith(expect.objectContaining({ location_id: location.id, weekdays: [], intervals: [], replace_ids: [hours[0].id], rows: [{ weekdays: [0], opens_at: "09:00", closes_at: "20:00" }] }));
   expect(unload()).toBe(false);
 });
 
-it("navigates from blocked hours deletion to the current Pricing tab and hides the deletion dialog", async () => {
-  mocks.checkHoursRemoval.mockResolvedValue({ ok: false, reason: "pricing-conflict", message: "Update pricing before deleting opening hours.",
-    conflicts: [{ id: "conflict", rule_set_id: rule.rule_set_id, court_name: court.name, court_state: "outdoor", weekday: 0,
-      starts_at_minute: 480, ends_at_minute: 600, starts_on: null, ends_on: null }] });
+it("deletes hours without requiring a visit to Pricing", async () => {
+  mocks.saveHours.mockResolvedValue({ ok: true, intervals: [], pricingAdjusted: true });
   await workspace(); tab("Opening hours");
-  fireEvent.click(screen.getByRole("button", { name: "Remove Mon 08:00–20:00" }));
-  const manage = await screen.findByRole("link", { name: "Manage conflicting pricing" });
-  expect(screen.getByRole("button", { name: "Remove hours" })).toHaveProperty("disabled", true);
-  fireEvent.click(manage);
-  expect(window.location.pathname).toBe(url);
-  expect(window.location.search).toBe("?tab=pricing");
-  expect(panel("Pricing")).toBeTruthy();
-  expect(screen.queryByRole("dialog")).toBeNull();
-  expect(mocks.saveHours).not.toHaveBeenCalled();
-  // Returning from pricing allows a new authoritative dependency check.
-  mocks.checkHoursRemoval.mockResolvedValue({ ok: true, intervals: hours });
-  tab("Opening hours");
-  fireEvent.click(screen.getByRole("button", { name: "Check dependencies again" }));
-  await waitFor(() => expect(screen.getByRole("button", { name: "Remove hours" })).toHaveProperty("disabled", false));
+  fireEvent.click(screen.getByRole("button", { name: "Delete interval 1" }));
+  expect(screen.queryByRole("link", { name: "Manage conflicting pricing" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(mocks.saveHours).toHaveBeenCalled();
 });
 
 it("creates a local court and edits/moves it with the existing dialog", async () => {
@@ -249,7 +238,7 @@ it("creates, edits and removes pricing using the shared dialogs and time combobo
   fireEvent.click(screen.getByRole("row", { name: "Edit pricing rule for Court One" }));
   fireEvent.click(screen.getByRole("button", { name: "Remove rule" }));
   fireEvent.click(within(screen.getByRole("dialog", { name: "Remove pricing rule?" })).getByRole("button", { name: "Remove rule" }));
-  await waitFor(() => expect(mocks.removePricing).toHaveBeenCalledWith({ location_id: location.id, rule_set_id: rule.rule_set_id }));
+  await waitFor(() => expect(mocks.removePricing).toHaveBeenCalledWith({ location_id: location.id, rule_set_id: rule.rule_set_id, revision: rule.revision }));
   expect(window.location.search).toBe("?tab=pricing");
 });
 
@@ -311,4 +300,23 @@ it.each(["court", "pricing"])("hides an open %s dialog on history navigation wit
   expect(screen.getByRole("dialog", { name: title })).toBe(dialog);
   expect(within(dialog).getByLabelText(kind === "court" ? "Name" : "Price per hour (RON)"))
     .toHaveProperty("value", kind === "court" ? "Draft Court" : "18.50");
+});
+
+it("renders reconciled pricing and readiness from the opening-hours refresh", async () => {
+  const view = await workspace(); tab("Opening hours");
+  const adjusted = [{ ...hours[0], opens_at_minute: 540 }];
+  mocks.saveHours.mockResolvedValue({ ok: true, intervals: adjusted, pricingAdjusted: true });
+  fireEvent.change(screen.getByLabelText("Opening time"), { target: { value: "09:00" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+  await waitFor(() => expect(mocks.refresh).toHaveBeenCalledOnce());
+  mocks.hours.mockResolvedValue(adjusted);
+  mocks.pricing.mockResolvedValue([{ ...rule, starts_at_minute: 540 }]);
+  mocks.readiness.mockResolvedValue([{ ...location, missing: ["pricing for every active court"] }]);
+  const content = await LocationManagementPage({ params: Promise.resolve({ locationId: location.id }) });
+  view.rerender(<ProfileDepartureProvider><AdminNavigation />{content}<Toaster /></ProfileDepartureProvider>);
+  tab("Pricing");
+  expect(panel("Pricing").textContent).toContain("09:00–10:00");
+  expect(panel("Pricing").textContent).not.toContain("08:00–10:00");
+  tab("Public booking");
+  expect(panel("Public booking").textContent).toContain("Pricing incomplete for active courts");
 });

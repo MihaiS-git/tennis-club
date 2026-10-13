@@ -3,6 +3,7 @@ import "server-only";
 import { In, IsNull, Not, type EntityManager } from "typeorm";
 import { z } from "zod";
 
+import { OpeningHoursScheduleEntity } from "../entities/opening-hours-schedule.entity";
 import { LocationEntity } from "../entities/location.entity";
 import { CourtEntity } from "../entities/court.entity";
 import { CourtCoveragePeriodEntity } from "../entities/court-coverage-period.entity";
@@ -138,7 +139,7 @@ export async function deleteCourtCoverage(manager: EntityManager, id: string, co
 
 export async function listLocationOpeningHoursFacts(manager: EntityManager, locationId: string) {
   return manager.getRepository(LocationOpeningHoursEntity).find({
-    where: { locationId }, select: { id: true },
+    where: { locationId }, select: { id: true, scheduleId: true, weekday: true, opensAtMinute: true, closesAtMinute: true },
   });
 }
 
@@ -148,11 +149,12 @@ export async function listActiveLocationCourts(manager: EntityManager, locationI
   });
 }
 
-export async function listLocationOpeningHours(manager: EntityManager, locationId?: string) {
-  return manager.getRepository(LocationOpeningHoursEntity).find({
-    where: locationId ? { locationId } : {},
-    order: { locationId: "ASC", weekday: "ASC", opensAtMinute: "ASC", id: "ASC" },
-  });
+export async function listLocationOpeningHours(manager: EntityManager, locationId?: string, date?: string) {
+  const query = manager.getRepository(LocationOpeningHoursEntity).createQueryBuilder("h")
+    .innerJoin(OpeningHoursScheduleEntity, "s", "s.id = h.schedule_id");
+  if (locationId) query.andWhere("h.location_id = :locationId", { locationId });
+  if (date) query.andWhere("s.starts_on <= :date AND (s.ends_on IS NULL OR s.ends_on >= :date)", { date });
+  return query.orderBy("h.location_id").addOrderBy("h.weekday").addOrderBy("h.opens_at_minute").addOrderBy("h.id").getMany();
 }
 
 export async function readOpeningHoursConfigurationTime(manager: EntityManager): Promise<Date> {
@@ -168,10 +170,10 @@ export type OpeningHoursFields = Pick<LocationOpeningHoursEntity,
   "locationId" | "weekday" | "opensAtMinute" | "closesAtMinute"
 >;
 
-export async function insertOpeningHours(manager: EntityManager, rows: readonly OpeningHoursFields[]) {
+export async function insertOpeningHours(manager: EntityManager, rows: readonly (OpeningHoursFields & { scheduleId: string })[]) {
   if (!rows.length) return;
   await manager.createQueryBuilder().insert().into(LocationOpeningHoursEntity)
-    .values(rows.map((row) => ({ locationId: row.locationId, weekday: row.weekday,
+    .values(rows.map((row) => ({ locationId: row.locationId, scheduleId: row.scheduleId, weekday: row.weekday,
       opensAtMinute: row.opensAtMinute, closesAtMinute: row.closesAtMinute })))
     .updateEntity(false).execute();
 }
@@ -212,21 +214,23 @@ export async function listPublicLocationFacts(manager: EntityManager): Promise<u
   return manager.query(`SELECT l.id,l.name,l.slug,l.address_line1,l.address_line2,l.city,l.postal_code,
     l.country_code,l.timezone,l.currency,l.allow_pay_at_club,l.is_active,l.is_public,
     l.archived_at::text AS archived_at,
-    coalesce((SELECT jsonb_agg(jsonb_build_object('id',h.id)) FROM public.location_opening_hours h
+    coalesce((SELECT jsonb_agg(jsonb_build_object('id',h.id,'weekday',h.weekday,'opens_at_minute',h.opens_at_minute,'closes_at_minute',h.closes_at_minute,'starts_on',s.starts_on,'ends_on',s.ends_on,'schedule_id',s.id)) FROM public.location_opening_hours h JOIN public.opening_hours_schedules s ON s.id=h.schedule_id
       WHERE h.location_id=l.id),'[]'::jsonb) AS location_opening_hours,
     coalesce((SELECT jsonb_agg(jsonb_build_object('id',c.id,'name',c.name,'slug',c.slug,
       'surface',c.surface,'environment',c.environment,'has_lighting',c.has_lighting,'is_active',c.is_active,
       'location_pricing_rules',coalesce((SELECT jsonb_agg(jsonb_build_object('court_state',p.court_state,
-        'ends_on',p.ends_on)) FROM public.location_pricing_rules p WHERE p.court_id=c.id),'[]'::jsonb))
+        'ends_on',p.ends_on,'starts_on',p.starts_on,'weekday',p.weekday,'starts_at_minute',p.starts_at_minute,'ends_at_minute',p.ends_at_minute)) FROM public.location_pricing_rules p WHERE p.court_id=c.id),'[]'::jsonb))
       ORDER BY c.name,c.id) FROM public.courts c WHERE c.location_id=l.id AND c.is_active),'[]'::jsonb) AS courts
     FROM public.locations l WHERE l.is_active AND l.archived_at IS NULL AND l.is_public
     ORDER BY l.display_order,l.name,l.id`);
 }
 
-export async function listPublicDayOpeningHours(manager: EntityManager, locationId: string, weekday: number): Promise<unknown> {
+export async function listPublicDayOpeningHours(manager: EntityManager, locationId: string, weekday: number, date: string): Promise<unknown> {
   const rows: unknown = await manager.query(`SELECT to_jsonb(h) AS row FROM public.location_opening_hours h
+    JOIN public.opening_hours_schedules s ON s.id=h.schedule_id
     JOIN public.locations l ON l.id=h.location_id AND l.is_active AND l.archived_at IS NULL AND l.is_public
-    WHERE h.location_id=$1 AND h.weekday=$2`, [locationId,weekday]);
+    WHERE h.location_id=$1 AND h.weekday=$2 AND s.starts_on <= $3::date
+      AND (s.ends_on IS NULL OR s.ends_on >= $3::date)`, [locationId,weekday,date]);
   return z.array(z.object({ row: z.unknown() })).parse(rows).map(({ row }) => row);
 }
 
@@ -243,11 +247,11 @@ export async function listPublicDayCoverage(manager: EntityManager, locationId: 
 export async function listAdminPublicationFacts(manager: EntityManager, locationIds: string[]): Promise<unknown> {
   if (!locationIds.length) return [];
   return manager.query(`SELECT l.id,
-    coalesce((SELECT jsonb_agg(jsonb_build_object('id',h.id)) FROM public.location_opening_hours h
+    coalesce((SELECT jsonb_agg(jsonb_build_object('id',h.id,'weekday',h.weekday,'opens_at_minute',h.opens_at_minute,'closes_at_minute',h.closes_at_minute,'starts_on',s.starts_on,'ends_on',s.ends_on,'schedule_id',s.id)) FROM public.location_opening_hours h JOIN public.opening_hours_schedules s ON s.id=h.schedule_id
       WHERE h.location_id=l.id),'[]'::jsonb) AS location_opening_hours,
     coalesce((SELECT jsonb_agg(jsonb_build_object('id',c.id,'environment',c.environment,
       'location_pricing_rules',coalesce((SELECT jsonb_agg(jsonb_build_object('court_state',p.court_state,
-        'ends_on',p.ends_on)) FROM public.location_pricing_rules p WHERE p.court_id=c.id),'[]'::jsonb)))
+        'ends_on',p.ends_on,'starts_on',p.starts_on,'weekday',p.weekday,'starts_at_minute',p.starts_at_minute,'ends_at_minute',p.ends_at_minute)) FROM public.location_pricing_rules p WHERE p.court_id=c.id),'[]'::jsonb)))
       FROM public.courts c WHERE c.location_id=l.id AND c.is_active),'[]'::jsonb) AS courts
     FROM public.locations l WHERE l.id=ANY($1::uuid[])`, [locationIds]);
 }
@@ -258,4 +262,23 @@ export async function setLocationPublication(manager: EntityManager, id: string,
 
 export async function findAdminLocation(manager: EntityManager, id: string) {
   return manager.getRepository(LocationEntity).findOne({ where: { id } });
+}
+
+export async function listOpeningHoursSchedules(manager: EntityManager, locationId: string) {
+  return manager.getRepository(OpeningHoursScheduleEntity).find({ where: { locationId }, order: { startsOn: "ASC", id: "ASC" } });
+}
+export async function saveOpeningHoursSchedule(manager: EntityManager, input: {
+  locationId: string; startsOn: string; endsOn: string | null;
+} & ({ id: string; revision: number } | { id?: undefined; revision?: undefined })) {
+  if (input.id) {
+    await manager.getRepository(OpeningHoursScheduleEntity).update({ id: input.id, locationId: input.locationId },
+      { startsOn: input.startsOn, endsOn: input.endsOn, revision: input.revision + 1 });
+    return input.id;
+  }
+  const result = await manager.createQueryBuilder().insert().into(OpeningHoursScheduleEntity)
+    .values({ locationId: input.locationId, startsOn: input.startsOn, endsOn: input.endsOn }).returning("id").execute();
+  return returnedIds.parse(result.raw)[0].id;
+}
+export async function deleteOpeningHoursSchedule(manager: EntityManager, locationId: string, id: string) {
+  await manager.getRepository(OpeningHoursScheduleEntity).delete({ id, locationId });
 }

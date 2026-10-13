@@ -3,7 +3,7 @@ import "server-only";
 import { z } from "zod";
 import { requireActiveAdmin } from "./authorization";
 import { courtEnvironments } from "./courts-validation";
-import { openingIntervalSchema, timeToMinute } from "./opening-hours-validation";
+import { datedOpeningIntervalSchema, timeToMinute } from "./opening-hours-validation";
 import { createClient } from "@/lib/supabase/server";
 import { logger } from "@/lib/logger";
 import { getDataSource } from "@/lib/db/data-source";
@@ -13,7 +13,8 @@ import { lockActiveAdminAccount } from "@/lib/db/repositories/accounts.repositor
 import * as clubs from "@/lib/db/repositories/clubs.repository";
 import * as pricing from "@/lib/db/repositories/pricing.repository";
 import { pricingRulesOverlap, pricingRemovalSchema, pricingMutationSchema, pricingRuleSchema, type PricingMutationResult, type PricingRule } from "@/lib/pricing/validation";
-import { groupPricingRuleSets, pricingOpeningHoursError } from "@/lib/pricing/resolution";
+import { groupPricingRuleSets, pricingOpeningHoursError, pricingRuleSetRevision } from "@/lib/pricing/resolution";
+import { localToday } from "@/lib/courts/local-time";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
 export async function listAdminPricingRules(locationId: string, supabase?: Client) {
@@ -54,6 +55,11 @@ async function mutatePricing(input: unknown, remove: boolean, supabase?: Client)
       const [location] = await clubs.lockLocations(manager, [location_id]);
       if (!await lockActiveAdminAccount(manager, actor.userId)) throw new Error("Administrator required");
       if (!location) return { ok: false, reason: "not-found" };
+      const allRules = await pricing.listLocationPricingRules(manager, location.id);
+      const existing = rule_set_id ? await pricing.findLocationRuleSet(manager, rule_set_id, location.id) : null;
+      if (rule_set_id && !existing) return { ok: false, reason: "not-found" };
+      if (existing && parsed.data.revision !== pricingRuleSetRevision(allRules.filter((r) => r.ruleSetId === existing.id)
+        .map((r) => ({ id: r.id, updated_at: r.updatedAt.toISOString() })))) return { ok: false, reason: "stale" };
       if ("starts_at" in parsed.data) {
         const rule = parsed.data;
         const starts_at_minute = timeToMinute(rule.starts_at);
@@ -70,26 +76,26 @@ async function mutatePricing(input: unknown, remove: boolean, supabase?: Client)
         }
         failureMessage = "Unable to validate pricing against opening hours.";
         const hoursRows = await clubs.listLocationOpeningHours(manager, location.id);
-        const hours = z.array(openingIntervalSchema).parse(hoursRows.map((row) => ({
-          id: row.id, location_id: row.locationId, weekday: row.weekday, opens_at_minute: row.opensAtMinute,
+        const schedules = await clubs.listOpeningHoursSchedules(manager, location.id);
+        const hours = z.array(datedOpeningIntervalSchema).parse(hoursRows.map((row) => ({
+          starts_on: schedules.find((s) => s.id === row.scheduleId)?.startsOn,
+          ends_on: schedules.find((s) => s.id === row.scheduleId)?.endsOn,
+          id: row.id, location_id: row.locationId, schedule_id: row.scheduleId, weekday: row.weekday, opens_at_minute: row.opensAtMinute,
           closes_at_minute: row.closesAtMinute, created_at: row.createdAt.toISOString(), updated_at: row.updatedAt.toISOString(),
         })));
-        const hoursError = pricingOpeningHoursError(hours, { location_id: location.id, weekdays: rule.weekdays, starts_at_minute, ends_at_minute });
+        const hoursError = pricingOpeningHoursError(hours, { location_id: location.id, weekdays: rule.weekdays, starts_on: rule.starts_on, ends_on: rule.ends_on, starts_at_minute, ends_at_minute },
+          localToday(location.timezone, await clubs.readOpeningHoursConfigurationTime(manager)));
         if (hoursError) return { ok: false, reason: "invalid-input", fieldErrors: { ends_at: hoursError } };
 
-        // Preserve validation before missing-set discovery. Replacements retain
-        // the parent identity and creation time, and replace every child row.
+        // Replacements retain the parent identity and creation time, and replace every child row.
         failureMessage = "Unable to change pricing rules.";
-        const existing = rule_set_id ? await pricing.findLocationRuleSet(manager, rule_set_id, location.id) : null;
-        if (rule_set_id && !existing) return { ok: false, reason: "not-found" };
         const updatedAt = new Date();
         const rows: Omit<pricing.PricingRuleFields, "ruleSetId">[] = rule.court_ids.flatMap((courtId) => rule.weekdays.map((weekday) => ({
           locationId: location.id, courtId, courtState: rule.court_state, weekday,
           startsAtMinute: starts_at_minute, endsAtMinute: ends_at_minute,
           startsOn: rule.starts_on, endsOn: rule.ends_on, pricePerHourMinor: rule.price_per_hour, updatedAt,
         })));
-        const current = (await pricing.listLocationPricingRules(manager, location.id))
-          .filter((row) => row.ruleSetId !== existing?.id);
+        const current = allRules.filter((row) => row.ruleSetId !== existing?.id);
         if (rows.some((row, index) => current.some((other) => pricingRulesOverlap(row, other))
           || rows.slice(0, index).some((other) => pricingRulesOverlap(row, other)))) {
           return { ok: false, reason: "overlap" };
@@ -99,7 +105,6 @@ async function mutatePricing(input: unknown, remove: boolean, supabase?: Client)
         await pricing.insertPricingRules(manager, rows.map((row) => ({ ...row, ruleSetId: savedSetId })));
         return { ok: true, id: savedSetId };
       }
-      const existing = await pricing.findLocationRuleSet(manager, parsed.data.rule_set_id, location.id);
       if (!existing) return { ok: false, reason: "not-found" };
       const removedId = await pricing.deleteLocationRuleSet(manager, existing.id, location.id);
       return removedId ? { ok: true, id: removedId } : { ok: false, reason: "not-found" };
@@ -107,9 +112,6 @@ async function mutatePricing(input: unknown, remove: boolean, supabase?: Client)
   } catch (error) {
     // Includes statement and deferred failures; the transaction is rolled back.
     const failure = normalizeDatabaseError(error);
-    if (failure.sqlState === "P0001" && failure.driverMessage === "pricing_outside_opening_hours") {
-      return { ok: false, reason: "invalid-input", fieldErrors: { ends_at: "Opening hours changed. Choose a time within the current schedule and try again." } };
-    }
     if (failure.sqlState === "23P01" || failure.sqlState === "23505") return { ok: false, reason: "overlap" };
     if (failure.sqlState === "23503") return { ok: false, reason: "not-found" };
     logger.error({ event: failureMessage === "Unable to validate pricing against opening hours." ? "admin.pricing_hours_read_failed" : "admin.pricing_mutation_failed",

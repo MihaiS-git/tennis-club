@@ -12,7 +12,7 @@ export function ReservationControls({ locations, locationId, date, today }: {
     const params = new URLSearchParams();
     params.set("location", location);
     if (selectedDate) params.set("date", selectedDate);
-    router.push(`/reservations${params.size ? `?${params}` : ""}`);
+    router.push(`/admin/reservations${params.size ? `?${params}` : ""}`);
   };
   return <div className="mt-3 flex flex-wrap gap-3">
     <LocationSelect id="reservation-location" locations={locations} selectedId={locationId} onChange={(id) => navigate(id)} />

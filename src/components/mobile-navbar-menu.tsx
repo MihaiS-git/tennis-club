@@ -6,6 +6,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import { signOutAction } from "@/app/account/actions";
+import { PrimaryNavigationLink } from "./primary-navigation-link";
 import { ProfileNavigationAvatar } from "./profile-navigation-avatar";
 
 export function MobileNavbarShell({ children }: { children: ReactNode }) {
@@ -28,8 +29,8 @@ export function MobileNavbarMenu(props: Parameters<typeof MobileNavbarControls>[
   return <MobileNavbarShell><MobileNavbarControls {...props} /></MobileNavbarShell>;
 }
 
-export function MobileNavbarControls({ isAuthenticated, isAdmin, canReserve, avatarUrl = null }: {
-  isAuthenticated: boolean; isAdmin: boolean; canReserve: boolean; avatarUrl?: string | null;
+export function MobileNavbarControls({ isAuthenticated, canReserve, avatarUrl = null }: {
+  isAuthenticated: boolean; canReserve: boolean; avatarUrl?: string | null;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const menuId = useId();
@@ -138,29 +139,28 @@ export function MobileNavbarControls({ isAuthenticated, isAdmin, canReserve, ava
         </div>
 
         <nav aria-label="Mobile navigation" className="flex-1 overflow-y-auto px-4 py-2">
-          <Link onClick={closeMenu} href="/courts" className="flex min-h-12 items-center text-sm font-medium text-foreground hover:text-accent">
+          <PrimaryNavigationLink onClick={closeMenu} href="/courts" className="flex min-h-12 items-center text-sm font-medium">
             Courts
-          </Link>
-          <Link onClick={closeMenu} href="/coaching" className="flex min-h-12 items-center text-sm font-medium text-foreground hover:text-accent">
+          </PrimaryNavigationLink>
+          <PrimaryNavigationLink onClick={closeMenu} href="/coaching" className="flex min-h-12 items-center text-sm font-medium">
             Coaching
-          </Link>
+          </PrimaryNavigationLink>
           {isAuthenticated && (
-            <Link onClick={closeMenu} href="/matches" className="flex min-h-12 items-center text-sm font-medium text-foreground hover:text-accent">
+            <PrimaryNavigationLink onClick={closeMenu} href="/matches" className="flex min-h-12 items-center text-sm font-medium">
               Matches
-            </Link>
+            </PrimaryNavigationLink>
           )}
-          <Link onClick={closeMenu} href="/rankings" className="flex min-h-12 items-center text-sm font-medium text-foreground hover:text-accent">
+          <PrimaryNavigationLink onClick={closeMenu} href="/rankings" className="flex min-h-12 items-center text-sm font-medium">
             Rankings
-          </Link>
-          <Link onClick={closeMenu} href="/club" className="flex min-h-12 items-center text-sm font-medium text-foreground hover:text-accent">
+          </PrimaryNavigationLink>
+          <PrimaryNavigationLink onClick={closeMenu} href="/club" className="flex min-h-12 items-center text-sm font-medium">
             Club
-          </Link>
-          {isAdmin && (
-            <Link onClick={closeMenu} href="/admin/locations" className="flex min-h-12 items-center text-sm font-medium text-foreground hover:text-accent">
+          </PrimaryNavigationLink>
+          {isAuthenticated && canReserve && (
+            <PrimaryNavigationLink onClick={closeMenu} section="/admin" href="/admin" className="flex min-h-12 items-center text-sm font-medium">
               Admin
-            </Link>
+            </PrimaryNavigationLink>
           )}
-          {canReserve && <Link onClick={closeMenu} href="/reservations" className="flex min-h-12 items-center text-sm font-medium text-foreground hover:text-accent">Reservations</Link>}
 
           <div className="mt-2 border-t border-border pt-2">
             {isAuthenticated ? (

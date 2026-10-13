@@ -19,3 +19,17 @@ it("groups only complete matching schedules and preserves multiple intervals", (
   expect(split.some((group) => group.weekdays.includes(2) && group.weekdays.includes(0))).toBe(false);
   expect(weekdayGroupLabel([0, 1, 2, 3, 4, 5, 6])).toBe("Daily");
 });
+
+it("validates independent interval rows at the server boundary", async () => {
+  const { weeklyHoursMutationSchema } = await import("../../../src/lib/admin/opening-hours-validation");
+  const input = { operation: "create", location_id, starts_on: "2026-10-31", weekdays: [], intervals: [], replace_ids: [],
+    rows: [{ weekdays: [0, 2, 4], opens_at: "07:17", closes_at: "24:00" }, { weekdays: [5, 6], opens_at: "09:00", closes_at: "12:00" }] };
+  expect(weeklyHoursMutationSchema.safeParse(input).success).toBe(true);
+  for (const rows of [
+    [{ weekdays: [], opens_at: "09:00", closes_at: "12:00" }],
+    [{ weekdays: [0, 0], opens_at: "09:00", closes_at: "12:00" }],
+    [{ weekdays: [0], opens_at: "24:00", closes_at: "24:00" }],
+    [...input.rows, { weekdays: [2], opens_at: "11:00", closes_at: "13:00" }],
+  ]) expect(weeklyHoursMutationSchema.safeParse({ ...input, rows }).success).toBe(false);
+  expect(weeklyHoursMutationSchema.safeParse({ ...input, weekdays: [0] }).success).toBe(false);
+});

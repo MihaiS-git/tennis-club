@@ -17,7 +17,7 @@ test("auth forms start fresh when revisited through navigation", async ({ page }
 });
 
 test("navigation follows the current account and protected routes enforce access", async ({ page }) => {
-  test.setTimeout(60_000);
+  test.setTimeout(120_000);
   const url = process.env.SUPABASE_URL!;
   expect(["127.0.0.1", "localhost", "[::1]"]).toContain(new URL(url).hostname);
   const key = localServiceRoleKey();
@@ -37,20 +37,21 @@ test("navigation follows the current account and protected routes enforce access
     await expect(target.getByRole("button", { name: "Account menu" })).toBeVisible();
   }
   try {
-    for (const label of ["member", "admin"]) {
+    for (const label of ["member", "admin", "coach"]) {
       const email = `navigation-${label}-${randomUUID()}@example.test`;
       const created = await service.auth.admin.createUser({ email, password, email_confirm: true });
       expect(created.error).toBeNull();
       accounts.push({ id: created.data.user!.id, email });
     }
     expect((await service.from("user_roles").insert({ user_id: accounts[1].id, role_code: "admin" })).error).toBeNull();
+    expect((await service.from("user_roles").insert({ user_id: accounts[2].id, role_code: "coach" })).error).toBeNull();
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto("/");
     await expect(page.getByRole("link", { name: "Sign in", exact: true })).toBeVisible();
     const navigation = page.getByRole("navigation", { name: "Main navigation" });
     await expect(navigation.getByRole("link", { name: "Matches" })).toHaveCount(0);
     await expect(navigation.getByRole("link", { name: "Admin" })).toHaveCount(0);
-    for (const route of ["/profile", "/admin/users", "/reset-password"]) {
+    for (const route of ["/profile", "/admin", "/admin/users", "/admin/reservations", "/reservations?date=2099-10-15", "/admin/payments/transactions", "/admin/payments/settings", "/reset-password"]) {
       await page.goto(route);
       await expect(page).toHaveURL(/\/login(?:\?|$)/);
     }
@@ -62,20 +63,22 @@ test("navigation follows the current account and protected routes enforce access
     await expect(page).toHaveURL(/\/my-activity\/bookings$/);
     await expect(navigation.getByRole("link", { name: "Matches" })).toBeVisible();
     await expect(navigation.getByRole("link", { name: "Admin" })).toHaveCount(0);
-    await page.goto("/admin/users");
-    await expect(page.getByRole("heading", { name: /404|not found/i })).toBeVisible();
+    for (const route of ["/admin", "/admin/users", "/admin/reservations", "/admin/payments/transactions", "/admin/payments/settings"]) {
+      await page.goto(route);
+      await expect(page.getByRole("heading", { name: /404|not found/i })).toBeVisible();
+    }
     await page.getByRole("button", { name: "Account menu" }).click();
     await page.getByRole("button", { name: "Sign out", exact: true }).click();
     await expect(page).toHaveURL(/\/login$/);
     await expect(page.getByRole("button", { name: "Account menu" })).toHaveCount(0);
     await signIn(page, accounts[1].email);
     await expect(navigation.getByRole("link", { name: "Admin" })).toBeVisible();
-    await expect(navigation.getByRole("link", { name: "Admin" })).toHaveAttribute("href", "/admin/locations");
+    await expect(navigation.getByRole("link", { name: "Admin" })).toHaveAttribute("href", "/admin");
     await expect(navigation.getByRole("link", { name: "Users" })).toHaveCount(0);
     await navigation.getByRole("link", { name: "Admin" }).click();
-    const adminNavigation = page.getByRole("navigation", { name: "Admin navigation" });
+    const adminNavigation = page.getByRole("navigation", { name: "Management navigation" });
     await expect(page).toHaveURL(/\/admin\/locations$/);
-    await expect(adminNavigation.getByRole("link")).toHaveText(["Locations", "Payments", "Users"]);
+    await expect(adminNavigation.getByRole("link")).toHaveText(["Locations", "Reservations", "Transactions", "Settings", "Users"]);
     await expect(adminNavigation.getByRole("link", { name: "Locations" })).toHaveAttribute("aria-current", "page");
     await adminNavigation.getByRole("link", { name: "Users" }).click();
     await expect(page.getByRole("heading", { name: "Users", exact: true })).toBeVisible();
@@ -97,6 +100,46 @@ test("navigation follows the current account and protected routes enforce access
     await adminNavigation.getByRole("link", { name: "Users" }).click();
     await expect(page.getByRole("heading", { name: "Users", exact: true })).toBeVisible();
     await expect(page.getByRole("dialog")).toHaveCount(0);
+    await page.goto("/admin");
+    await expect(page).toHaveURL(/\/admin\/locations$/);
+    await page.goto("/reservations?date=2099-10-15&extra=one&extra=two");
+    await expect(page).toHaveURL(/\/admin\/reservations\?date=2099-10-15&extra=one&extra=two$/);
+    await expect(page.getByRole("heading", { name: "Reservations", exact: true })).toBeVisible();
+    await expect(navigation.getByRole("link", { name: "Reservations" })).toHaveCount(0);
+    await expect(navigation.getByRole("link", { name: "Admin", exact: true })).toHaveAttribute("aria-current", "page");
+    await expect(adminNavigation.getByRole("link", { name: "Reservations" })).toHaveAttribute("aria-current", "page");
+    await page.goto("/admin/payments?status=due&q=A%20%26%20B&page=2");
+    await expect(page).toHaveURL(/\/admin\/payments\/transactions\?/);
+    expect(new URL(page.url()).searchParams.get("q")).toBe("A & B");
+    expect(new URL(page.url()).searchParams.get("status")).toBe("due");
+    expect(new URL(page.url()).searchParams.get("page")).toBe("2");
+    await expect(navigation.getByRole("link", { name: "Admin", exact: true })).toHaveAttribute("aria-current", "page");
+    await expect(navigation.getByRole("link", { name: "Reservations" })).toHaveCount(0);
+    await expect(adminNavigation.getByRole("link", { name: "Transactions" })).toHaveAttribute("aria-current", "page");
+    await adminNavigation.getByRole("link", { name: "Settings", exact: true }).click();
+    await expect(page).toHaveURL(/\/admin\/payments\/settings$/);
+    await expect(adminNavigation.getByRole("link", { name: "Settings", exact: true })).toHaveAttribute("aria-current", "page");
+    await page.goBack();
+    await expect(adminNavigation.getByRole("link", { name: "Transactions" })).toHaveAttribute("aria-current", "page");
+    await page.goForward();
+    await expect(adminNavigation.getByRole("link", { name: "Settings", exact: true })).toHaveAttribute("aria-current", "page");
+    await page.getByRole("button", { name: "Account menu" }).click();
+    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    await expect(page).toHaveURL(/\/login$/);
+    await signIn(page, accounts[2].email);
+    await expect(navigation.getByRole("link", { name: "Admin", exact: true })).toHaveAttribute("href", "/admin");
+    await navigation.getByRole("link", { name: "Admin", exact: true }).click();
+    await expect(page).toHaveURL(/\/admin\/reservations$/);
+    await expect(adminNavigation.getByRole("link")).toHaveText(["Reservations"]);
+    await page.goto("/admin");
+    await expect(page).toHaveURL(/\/admin\/reservations$/);
+    for (const route of ["/admin/locations", "/admin/locations/new", "/admin/courts", "/admin/pricing", "/admin/users", "/admin/payments", "/admin/payments/transactions", "/admin/payments/settings"]) {
+      await page.goto(route);
+      await expect(page.getByRole("heading", { name: /404|not found/i })).toBeVisible();
+    }
+    await page.goto("/admin/reservations?date=2099-10-15");
+    await expect(page.getByRole("heading", { name: "Reservations", exact: true })).toBeVisible();
+    await expect(adminNavigation.getByRole("link")).toHaveText(["Reservations"]);
     await page.getByRole("button", { name: "Account menu" }).click();
     await page.getByRole("button", { name: "Sign out", exact: true }).click();
     await expect(page).toHaveURL(/\/login$/);

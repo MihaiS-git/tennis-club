@@ -10,8 +10,7 @@ import { BookingEntity } from "./booking.entity";
 import { PaymentAttemptEntity } from "./payment-attempt.entity";
 
 @Entity({ schema: "public", name: "payment_refunds" })
-@Unique("payment_refunds_booking_id_key", ["bookingId"])
-@Unique("payment_refunds_payment_attempt_id_key", ["paymentAttemptId"])
+@Unique("payment_refunds_operation", ["paymentAttemptId", "operationKey"])
 @Unique("payment_refunds_provider_refund_id_key", ["providerRefundId"])
 @Check("payment_refunds_amount_minor_check", "(amount_minor > 0)")
 @Check("payment_refunds_provider_check", "(provider = ANY (ARRAY['stripe'::text, 'netopia'::text]))")
@@ -21,6 +20,20 @@ import { PaymentAttemptEntity } from "./payment-attempt.entity";
 @ForeignKey(() => PaymentAttemptEntity, ["paymentAttemptId"], ["id"], { name: "payment_refunds_payment_attempt_id_fkey", onDelete: "CASCADE" })
 @ForeignKey(() => UserEntity, ["requestedByUserId"], ["id"], { name: "payment_refunds_requested_by_user_id_fkey", onDelete: "SET NULL" })
 export class PaymentRefundEntity {
+  @Column({ name: "adjustment_id", type: "uuid", nullable: true })
+  adjustmentId!: string | null;
+
+  @Column({ name: "operation_key", type: "text", default: "cancellation" })
+  operationKey!: string;
+
+  @Column({ name: "captured_amount_minor", type: "integer", nullable: true })
+  capturedAmountMinor!: number | null;
+
+  @Column({ name: "provider_generation", type: "integer", default: 0 })
+  providerGeneration!: number;
+  @Column({ name: "provider_history", type: "jsonb", default: () => "'[]'::jsonb" })
+  providerHistory!: { provider_refund_id: string; status: string; recorded_at: string }[];
+
   @PrimaryColumn({ name: "id", type: "uuid", default: () => "gen_random_uuid()", primaryKeyConstraintName: "payment_refunds_pkey" })
   id!: string;
 

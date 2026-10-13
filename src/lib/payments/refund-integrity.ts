@@ -7,7 +7,8 @@ type OriginalPayment = {
 export function refundFinancialSnapshotMatches(refund: ProcessingRefund, payment: OriginalPayment): boolean {
   return refund.booking_id === payment.booking_id && refund.payment_attempt_id === payment.id
     && refund.provider === payment.provider && refund.provider_payment_id === payment.provider_payment_id
-    && refund.amount_minor === payment.amount_minor && refund.currency === payment.currency;
+    && (refund.captured_amount_minor == null ? refund.amount_minor === payment.amount_minor
+      : refund.captured_amount_minor === payment.amount_minor && refund.amount_minor <= refund.captured_amount_minor) && refund.currency === payment.currency;
 }
 export function paymentHasCapturedEvidence(payment: OriginalPayment, events: readonly ProviderReceipt[]): boolean {
   return payment.method === "online" && payment.provider === "stripe" && !!payment.provider_payment_id
@@ -16,7 +17,7 @@ export function paymentHasCapturedEvidence(payment: OriginalPayment, events: rea
       && event.outcome === "succeeded" && event.amount_minor === payment.amount_minor && event.currency === payment.currency));
 }
 export function sameRefundSnapshot(a: ProcessingRefund, b: ProcessingRefund): boolean {
-  return a.id === b.id && a.booking_id === b.booking_id && a.payment_attempt_id === b.payment_attempt_id
+  return (a.provider_generation ?? 0) === (b.provider_generation ?? 0) && a.id === b.id && a.booking_id === b.booking_id && a.payment_attempt_id === b.payment_attempt_id
     && a.provider === b.provider && a.provider_payment_id === b.provider_payment_id
-    && a.amount_minor === b.amount_minor && a.currency === b.currency && a.created_at === b.created_at;
+    && a.captured_amount_minor === b.captured_amount_minor && a.amount_minor === b.amount_minor && a.currency === b.currency && a.created_at === b.created_at;
 }

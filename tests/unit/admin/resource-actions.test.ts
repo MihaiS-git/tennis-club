@@ -1,10 +1,12 @@
 import { beforeEach, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ revalidate: vi.fn(), saveCourt: vi.fn(), saveCoverage: vi.fn(), removeCoverage: vi.fn(), savePricing: vi.fn(), removePricing: vi.fn() }));
+const mocks = vi.hoisted(() => ({ revalidate: vi.fn(), saveCourt: vi.fn(), saveCoverage: vi.fn(), removeCoverage: vi.fn(), savePricing: vi.fn(), removePricing: vi.fn(), openingHours: vi.fn() }));
 vi.mock("next/cache", () => ({ revalidatePath: mocks.revalidate }));
 vi.mock("../../../src/lib/admin/courts", () => ({ saveAdminCourt: mocks.saveCourt }));
 vi.mock("../../../src/lib/admin/court-coverage", () => ({ saveAdminCourtCoverage: mocks.saveCoverage, removeAdminCourtCoverage: mocks.removeCoverage }));
 vi.mock("../../../src/lib/admin/pricing", () => ({ saveAdminPricingRule: mocks.savePricing, removeAdminPricingRule: mocks.removePricing }));
+vi.mock("../../../src/lib/admin/opening-hours", () => ({ mutateAdminOpeningHours: mocks.openingHours }));
+import { mutateOpeningHoursAction } from "../../../src/app/admin/locations/opening-hours-actions";
 import { saveCourtAction, saveCoverageAction, removeCoverageAction } from "../../../src/app/admin/courts/actions";
 import { savePricingRuleAction, removePricingRuleAction } from "../../../src/app/admin/pricing/actions";
 
@@ -30,4 +32,14 @@ it.each([
   service.mockResolvedValue({ ok: false, reason: "overlap" });
   expect(await action({})).toEqual({ ok: false, reason: "overlap" });
   expect(mocks.revalidate).not.toHaveBeenCalled();
+});
+
+it("refreshes pricing, readiness and public discovery only after committed opening-hours changes", async () => {
+  mocks.openingHours.mockResolvedValueOnce({ ok: false, reason: "booking-conflict", message: "Existing reservations" });
+  await mutateOpeningHoursAction({});
+  expect(mocks.revalidate).not.toHaveBeenCalled();
+  mocks.openingHours.mockResolvedValueOnce({ ok: true, intervals: [], pricingAdjusted: true });
+  await mutateOpeningHoursAction({});
+  expect(mocks.revalidate).toHaveBeenCalledWith("/admin/locations", "layout");
+  for (const path of ["/admin/pricing", "/book", "/courts", "/admin/reservations"]) expect(mocks.revalidate).toHaveBeenCalledWith(path);
 });

@@ -3,8 +3,14 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }));
-vi.mock("next/link", () => ({ default: ({ href, children, ...props }: import("react").ComponentProps<"a">) =>
-  <a href={href} {...props}>{children}</a> }));
+vi.mock("next/link", () => ({ default: ({ href, children, ...props }:
+  import("react").ComponentProps<"a"> & Pick<import("react").ComponentProps<typeof import("next/link").default>, "scroll" | "transitionTypes" | "onNavigate">) =>
+  {
+    delete props.scroll;
+    delete props.transitionTypes;
+    delete props.onNavigate;
+    return <a href={href} {...props}>{children}</a>;
+  } }));
 vi.mock("@/app/account/actions", () => ({ signOutAction: vi.fn() }));
 
 import { AccountMenu } from "@/components/account-menu";

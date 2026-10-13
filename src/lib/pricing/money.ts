@@ -17,8 +17,10 @@ export function minorToMajor(amount: number): string {
   return `${Math.floor(amount / 100)}.${String(amount % 100).padStart(2, "0")}`;
 }
 
+// Financial summaries and differences may legitimately be zero. Creation and
+// pricing inputs still use the strictly positive minorAmountSchema above.
 export function formatMoney(amount: number, currency: LocationCurrency): string {
-  minorAmountSchema.parse(amount);
+  z.number().int().min(0).max(2147483647).parse(amount);
   z.enum(locationCurrencies).parse(currency);
   return new Intl.NumberFormat("en-GB", { style: "currency", currency, minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount / 100);
 }

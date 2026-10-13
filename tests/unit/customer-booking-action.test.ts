@@ -35,7 +35,7 @@ it("waits for successful persistence before invalidating affected reads", async 
   finish({ ok: true, status: "confirmed", holdExpiresAt: null, totalAmountMinor: 5000, currency: "RON", cancellationPolicy: { noticeMinutes: 120, cutoff: null } });
   await pending;
   expect(revalidate.mock.calls).toEqual([
-    ["/book"], ["/reservations"], ["/my-activity/bookings"],
+    ["/book"], ["/admin/reservations"], ["/my-activity/bookings"],
   ]);
 });
 
@@ -55,11 +55,11 @@ it("returns payment presentation only after atomic hold creation and never confi
 
 it("abandonment invalidates public availability only after a verified hold release", async () => {
   const access = { attemptId: intent.courtId, token: "a".repeat(64) };
-  abandon.mockResolvedValueOnce({ released: false });
+  abandon.mockResolvedValueOnce({ released: false, paymentStatus: "processing" });
   expect(await abandonCheckoutAction(access)).toMatchObject({ ok: false });
   expect(revalidate).not.toHaveBeenCalled();
-  abandon.mockResolvedValueOnce({ released: true });
-  expect(await abandonCheckoutAction(access)).toEqual({ ok: true });
+  abandon.mockResolvedValueOnce({ released: true, paymentStatus: "cancelled" });
+  expect(await abandonCheckoutAction(access)).toEqual({ ok: true, paymentStatus: "cancelled" });
   expect(abandon).toHaveBeenLastCalledWith(access);
   expect(revalidate.mock.calls).toEqual([["/book"]]);
 });

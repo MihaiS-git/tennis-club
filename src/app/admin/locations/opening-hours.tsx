@@ -1,244 +1,266 @@
 "use client";
 
-import { useId, useRef, useState } from "react";
+import { useId, useRef, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { Input } from "@/components/input";
 import { SearchableCombobox } from "@/components/searchable-combobox";
 import { Button } from "@/components/button";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import {
-  editorIntervalSchema, groupedWeeklySchedule, minuteToTime, openingHoursScheduleKey, timeToMinute, weeklyHoursMutationSchema, weekdayGroupLabel, weekdays,
-  type OpeningInterval, type OpeningHoursMutationResult,
+  groupedWeeklySchedule, minuteToTime, openingHoursScheduleKey, timeToMinute, weeklyHoursMutationSchema,
+  weekdayGroupLabel, weekdays, scheduleStatus, planOpeningHoursPeriod,
+  type OpeningInterval, type OpeningHoursMutationResult, type OpeningHoursSchedule,
 } from "@/lib/admin/opening-hours-validation";
 import { useProfileFormDirty } from "@/app/profile/unsaved-changes";
-import { courtStateLabels } from "@/lib/pricing/validation";
 import { useLocationPanelActive } from "./location-workspace";
-import { checkOpeningHoursRemovalAction, mutateOpeningHoursAction } from "./opening-hours-actions";
+import { mutateOpeningHoursAction } from "./opening-hours-actions";
 
-type DraftInterval = { opens_at: string; closes_at: string };
-type Draft = { weekdays: number[]; replacements: { weekday: number; id: string }[]; intervals: DraftInterval[] };
-type Removal = { weekdays: number[]; ids: string[]; label: string };
-const emptyDraft = (): Draft => ({ weekdays: [], replacements: [], intervals: [{ opens_at: "", closes_at: "" }] });
-const removalDraft = (removal: Removal): Draft => ({ weekdays: removal.weekdays,
-  replacements: removal.weekdays.map((weekday, index) => ({ weekday, id: removal.ids[index] })), intervals: [] });
+type DraftRow = { key: string; weekdays: number[]; opens_at: string; closes_at: string };
+type Draft = { starts_on: string; ends_on: string; rows: DraftRow[] };
+type Selection = { schedule: OpeningHoursSchedule | null; history: boolean };
+const emptyDraft = (): Draft => ({ starts_on: "", ends_on: "", rows: [] });
+const subscribeToHydration = () => () => {};
 const suggestions = Array.from({ length: 48 }, (_, index) => minuteToTime(index * 30));
 const openingOptions = suggestions.map((time) => ({ value: time, label: time }));
 const closingOptions = [...openingOptions, { value: "24:00", label: "24:00" }];
-const draftSnapshot = (draft: Draft) => JSON.stringify({
-  weekdays: [...draft.weekdays].sort((a, b) => a - b),
-  intervals: draft.intervals.map((interval) => ({ opens_at: interval.opens_at.trim(), closes_at: interval.closes_at.trim() })),
-});
+const draftSnapshot = (draft: Draft) => JSON.stringify({ ...draft, rows: draft.rows.map(({ weekdays, opens_at, closes_at }) => ({
+  weekdays: [...weekdays].sort((a, b) => a - b), opens_at, closes_at,
+})) });
+const scheduleLabel = (schedule: OpeningHoursSchedule, today: string) =>
+  `${scheduleStatus(schedule, today)} · ${schedule.starts_on} → ${schedule.ends_on ?? "Unlimited"}`;
 
-export function OpeningHours({ locationId, intervals, onUpdated }: {
-  locationId: string; intervals: OpeningInterval[]; onUpdated: (intervals: OpeningInterval[]) => void;
+export function OpeningHours({ locationId, intervals, schedules = [], today = "", onUpdated }: {
+  locationId: string; intervals: OpeningInterval[]; schedules?: OpeningHoursSchedule[]; today?: string;
+  onUpdated: (intervals: OpeningInterval[], schedules?: OpeningHoursSchedule[]) => void;
 }) {
   const prefix = useId();
+  const hydrated = useSyncExternalStore(subscribeToHydration, () => true, () => false);
   const panelActive = useLocationPanelActive();
   const router = useRouter();
   const pendingRef = useRef(false);
-  const removeTriggerRef = useRef<HTMLButtonElement>(null);
+  const nextKey = useRef(0);
+  function scheduleDraft(schedule: OpeningHoursSchedule | null, hours: OpeningInterval[]): Draft {
+    if (!schedule) return emptyDraft();
+    return { starts_on: schedule.starts_on, ends_on: schedule.ends_on ?? "",
+      rows: groupedWeeklySchedule(locationId, hours.filter((h) => h.schedule_id === schedule.id)).flatMap((group) =>
+        group.intervals.map((interval) => ({ key: interval.ids.join("-"), weekdays: [...group.weekdays],
+          opens_at: minuteToTime(interval.opens_at_minute), closes_at: minuteToTime(interval.closes_at_minute) }))) };
+  }
+  const defaultSchedule = () => schedules.find((s) => scheduleStatus(s, today) === "Current")
+    ?? schedules.find((s) => scheduleStatus(s, today) === "Scheduled") ?? null;
+  const [selectedSchedule, setSelectedSchedule] = useState(defaultSchedule);
+  const [creating, setCreating] = useState(!selectedSchedule);
+  const [history, setHistory] = useState(false);
+  const [draft, setDraft] = useState(() => scheduleDraft(selectedSchedule, intervals));
+  const [baseline, setBaseline] = useState(() => draftSnapshot(draft));
+  const [draftSchedules, setDraftSchedules] = useState(schedules);
+  const [savedHours, setSavedHours] = useState(intervals);
   const [pending, setPending] = useState(false);
-  const [draft, setDraft] = useState<Draft>(emptyDraft);
-  const [editBaseline, setEditBaseline] = useState<string | null>(null);
-  const [removing, setRemoving] = useState<Removal | null>(null);
-  const [removalCheck, setRemovalCheck] = useState<OpeningHoursMutationResult | null>(null);
-  const [error, setError] = useState("");
+  const [switching, setSwitching] = useState<Selection | null>(null);
+  const [openDays, setOpenDays] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  useProfileFormDirty("Opening hours", draftSnapshot(draft) !== (editBaseline ?? draftSnapshot(emptyDraft())));
-  const groups = groupedWeeklySchedule(locationId, intervals);
-  const hasHours = groups.some((group) => group.intervals.length > 0);
-  const canAddInterval = draft.intervals.length === 1 && editorIntervalSchema.safeParse(draft.intervals[0]).success;
-  const replaceIds = draft.replacements.filter((item) => draft.weekdays.includes(item.weekday)).map((item) => item.id);
-  const validation = weeklyHoursMutationSchema.safeParse({ location_id: locationId, weekdays: draft.weekdays,
-    replace_ids: replaceIds, intervals: draft.intervals });
-  const changed = validation.success && openingHoursScheduleKey(intervals.filter((interval) => replaceIds.includes(interval.id)))
-    !== openingHoursScheduleKey(draft.weekdays.flatMap((weekday) => validation.data.intervals.map((interval) => ({
-      weekday, opens_at_minute: timeToMinute(interval.opens_at), closes_at_minute: timeToMinute(interval.closes_at),
-    }))));
-  const canApply = validation.success && draft.intervals.length > 0 && changed
-    && draftSnapshot(draft) !== editBaseline;
-  const visibleFieldErrors = { ...fieldErrors };
-  if (!validation.success) for (const issue of validation.error.issues) {
-    const field = String(issue.path.at(-1));
-    if ((field === "opens_at" || field === "closes_at") && draft.intervals.some((interval) => interval[field] !== "")) {
-      visibleFieldErrors[field] = issue.message;
+  const dirty = draftSnapshot(draft) !== baseline;
+  useProfileFormDirty("Opening hours", dirty);
+  const source = JSON.stringify({ intervals, schedules });
+  const [loadedSource, setLoadedSource] = useState(source);
+  if (loadedSource !== source) {
+    setLoadedSource(source);
+    // Dirty drafts retain their original hours, period preview and revision.
+    if (!dirty && !pending) {
+      const saved = schedules.find((s) => s.id === selectedSchedule?.id) ?? defaultSchedule();
+      const next = scheduleDraft(saved, intervals);
+      setSelectedSchedule(saved); setCreating(!saved); setHistory(saved ? scheduleStatus(saved, today) === "History" : false);
+      setDraft(next); setBaseline(draftSnapshot(next)); setDraftSchedules(schedules); setSavedHours(intervals); setOpenDays(null);
     }
   }
-
-  function startEdit(days: number[], ids: string[], interval: DraftInterval) {
-    const next = { weekdays: [...days], replacements: days.map((weekday, index) => ({ weekday, id: ids[index] })), intervals: [interval] };
-    setDraft(next);
-    setEditBaseline(draftSnapshot(next));
-    setError(""); setFieldErrors({});
+  const readOnly = !creating && selectedSchedule !== null && scheduleStatus(selectedSchedule, today) === "History";
+  function selectSchedule({ schedule: selection, history: nextHistory }: Selection) {
+    const schedule = schedules.find((s) => s.id === selection?.id) ?? selection;
+    const next = scheduleDraft(schedule ?? selectedSchedule ?? defaultSchedule(), intervals);
+    if (!schedule) { next.starts_on = ""; next.ends_on = ""; }
+    setSelectedSchedule(schedule); setCreating(!schedule && !nextHistory); setHistory(nextHistory); setDraft(next);
+    setBaseline(draftSnapshot(next)); setDraftSchedules(schedules); setSavedHours(intervals); setFieldErrors({}); setSwitching(null); setOpenDays(null);
   }
-
-  function showFailure(result: Exclude<OpeningHoursMutationResult, { ok: true }>) {
-    if (result.reason === "invalid-input") {
-      setError(result.fieldErrors.weekdays || result.fieldErrors.form || result.fieldErrors.intervals || "Check the selected days and times.");
-      setFieldErrors(result.fieldErrors);
-    } else if (result.reason === "overlap") {
-      const days = result.weekdays.map((day) => weekdays[day]).join(", ");
-      setError(`${days || "Selected days"} ${result.weekdays.length === 1 ? "conflicts" : "conflict"} with existing opening hours. No changes were saved.`);
-    } else if (result.reason === "pricing-conflict") {
-      setError(result.message);
-    } else if (result.reason === "archived") {
-      setError("Restore this location before changing its opening hours.");
-    } else if (result.reason === "unchanged") {
-      setError("These opening hours are already saved. No changes were made.");
-    } else {
-      setError("This location or interval no longer exists. Refresh and try again.");
-    }
+  function requestSelection(selection: Selection) {
+    if (dirty) setSwitching(selection); else selectSchedule(selection);
   }
+  function updateRow(key: string, changes: Partial<Pick<DraftRow, "weekdays" | "opens_at" | "closes_at">>) {
+    setDraft((current) => ({ ...current, rows: current.rows.map((row) => row.key === key ? { ...row, ...changes } : row) })); setFieldErrors({});
+  }
+  const selectedIntervals = savedHours.filter((h) => h.schedule_id === selectedSchedule?.id);
+  const payload = {
+    location_id: locationId, operation: creating ? "create" : "update", weekdays: [], intervals: [],
+    replace_ids: creating ? [] : selectedIntervals.map((h) => h.id),
+    rows: draft.rows.map(({ weekdays, opens_at, closes_at }) => ({ weekdays, opens_at, closes_at })),
+    starts_on: draft.starts_on, ends_on: draft.ends_on,
+    ...(!creating && selectedSchedule ? { schedule_id: selectedSchedule.id, revision: selectedSchedule.revision } : {}),
+  };
+  const validation = weeklyHoursMutationSchema.safeParse(payload);
+  const period = validation.success ? planOpeningHoursPeriod(
+    draftSchedules.filter((s) => creating || s.id !== selectedSchedule?.id), draft.starts_on, draft.ends_on || null, today, creating,
+  ) : null;
+  const changedHours = validation.success && openingHoursScheduleKey(selectedIntervals) !== openingHoursScheduleKey(
+    draft.rows.flatMap((row) => row.weekdays.map((weekday) => ({ weekday,
+      opens_at_minute: timeToMinute(row.opens_at), closes_at_minute: timeToMinute(row.closes_at) }))));
+  const changedDates = selectedSchedule ? draft.starts_on !== selectedSchedule.starts_on || (draft.ends_on || null) !== selectedSchedule.ends_on : true;
+  const canSave = !readOnly && dirty && validation.success && period?.ok && (creating || changedHours || changedDates);
+  const issues = !validation.success && dirty ? validation.error.issues : [];
+  function fieldError(field: string, row?: number) {
+    const issue = issues.find((issue) => row === undefined ? issue.path[0] === field
+      : issue.path[0] === "rows" && issue.path[1] === row && issue.path[2] === field);
+    return fieldErrors[field] ?? (issue ? `${row === undefined ? "" : `Interval ${row + 1}: `}${field === "starts_on" ? "Choose a valid start date." : issue.message}` : undefined);
+  }
+  const periodError = period && !period.ok && dirty
+    ? "These dates overlap another schedule. Edit its validity dates explicitly; scheduled future policies cannot be adjusted automatically." : undefined;
+  const startError = fieldError("starts_on") ?? periodError;
+  const scheduleError = fieldErrors.form ?? fieldErrors.rows ?? issues.find((issue) => issue.path.length === 1 && issue.path[0] === "rows")?.message;
 
-  async function checkRemoval(removal: Removal) {
-    if (pendingRef.current) return;
-    pendingRef.current = true;
-    setPending(true); setError(""); setRemovalCheck(null);
+  async function save() {
+    if (!canSave || pendingRef.current) return;
+    pendingRef.current = true; setPending(true); setFieldErrors({}); setOpenDays(null);
+    const notification = toast.loading("Saving opening hours…");
     try {
-      const result = await checkOpeningHoursRemovalAction({ location_id: locationId, weekdays: removal.weekdays,
-        replace_ids: removal.ids, intervals: [] });
-      setRemovalCheck(result);
-      if (!result.ok) showFailure(result);
-    } catch {
-      setError("Unable to check conflicting pricing. Please try again.");
-    } finally {
-      pendingRef.current = false; setPending(false);
-    }
-  }
-
-  async function mutate(next: Draft) {
-    if (pendingRef.current) return;
-    pendingRef.current = true;
-    setPending(true); setError(""); setFieldErrors({});
-    try {
-      const result: OpeningHoursMutationResult = await mutateOpeningHoursAction({
-        location_id: locationId, weekdays: next.weekdays,
-        replace_ids: next.replacements.filter((item) => next.weekdays.includes(item.weekday)).map((item) => item.id),
-        intervals: next.intervals,
+      // Validate the whole table, then use the existing replacement command to
+      // preserve the identities and timestamps of every unchanged interval.
+      const matches = (saved: OpeningInterval, row: DraftRow, day: number) => saved.weekday === day
+        && minuteToTime(saved.opens_at_minute) === row.opens_at && minuteToTime(saved.closes_at_minute) === row.closes_at;
+      const replaceIds = selectedIntervals.filter((saved) => !draft.rows.some((row) => row.weekdays.some((day) => matches(saved, row, day)))).map((saved) => saved.id);
+      const rows = draft.rows.map((row) => ({ opens_at: row.opens_at, closes_at: row.closes_at,
+        weekdays: row.weekdays.filter((day) => !selectedIntervals.some((saved) => matches(saved, row, day))) })).filter((row) => row.weekdays.length);
+      const result: OpeningHoursMutationResult = await mutateOpeningHoursAction({ ...payload, replace_ids: replaceIds, rows,
+        ...(creating && period?.ok ? { adjustment: period.adjustment ? { id: period.adjustment.id, revision: period.adjustment.revision } : null } : {}),
       });
       if (result.ok) {
-        onUpdated(result.intervals);
-        setDraft(emptyDraft());
-        setEditBaseline(null);
-        setRemoving(null);
-        setRemovalCheck(null);
-        toast.success("Opening hours updated.");
+        onUpdated(result.intervals, result.schedules);
+        const saved = result.schedules?.find((s) => s.id === result.scheduleId) ?? selectedSchedule;
+        const next = scheduleDraft(saved, result.intervals);
+        setSelectedSchedule(saved); setCreating(!saved); setHistory(saved ? scheduleStatus(saved, today) === "History" : false);
+        setDraft(next); setBaseline(draftSnapshot(next)); setDraftSchedules(result.schedules ?? schedules); setSavedHours(result.intervals);
+        toast.success(result.pricingAdjusted ? "Opening hours updated. Pricing adjusted automatically." : "Opening hours updated.", { id: notification });
+        if (result.missingPricing) toast.warning("Some newly opened hours need pricing configuration for one or more courts.");
         router.refresh();
-      } else {
-        if (next.intervals.length === 0) setRemovalCheck(result);
-        showFailure(result);
-      }
-    } catch {
-      setError("Unable to change opening hours. Please try again.");
-    } finally {
-      pendingRef.current = false; setPending(false);
-    }
+      } else if (result.reason === "invalid-input") {
+        toast.dismiss(notification); setFieldErrors(result.fieldErrors);
+      } else if (result.reason === "overlap") {
+        toast.error(`${result.weekdays.map((day) => weekdays[day]).join(", ") || "Selected days"} conflict with existing opening hours. Check the intervals; no changes were saved.`, { id: notification });
+      } else if (result.reason === "period-overlap") {
+        toast.error("These dates overlap another schedule. Edit its validity dates explicitly; scheduled future policies cannot be adjusted automatically.", { id: notification });
+      } else if (result.reason === "stale") {
+        toast.error(creating ? "Opening hours have changed. Cancel this draft and create it again to review the latest schedules."
+          : "This schedule has changed. Cancel edit to load its latest saved values.", { id: notification });
+        router.refresh();
+      } else if (result.reason === "archived") toast.error("Restore this location before changing its opening hours.", { id: notification });
+      else if (result.reason === "unchanged") toast.info("These opening hours are already saved. No changes were made.", { id: notification });
+      else toast.error("This location or schedule no longer exists. Refresh and try again.", { id: notification });
+    } catch { toast.error("Unable to change opening hours. Please try again.", { id: notification }); }
+    finally { pendingRef.current = false; setPending(false); }
   }
 
-  function setDays(days: number[]) { setDraft((current) => ({ ...current, weekdays: days })); setError(""); setFieldErrors({}); }
-  function setTime(index: number, field: keyof DraftInterval, value: string) {
-    setDraft((current) => ({ ...current, intervals: current.intervals.map((interval, position) =>
-      position === index ? { ...interval, [field]: value } : interval) }));
-    setError(""); setFieldErrors({});
-  }
-
-  return <section aria-labelledby={`${prefix}-heading`} className="grid grid-cols-1 items-start gap-6 text-sm lg:grid-cols-2 lg:gap-8">
-    <div className="min-w-0">
-    <h2 id={`${prefix}-heading`} className="mb-2 font-semibold text-foreground">Weekly schedule</h2>
-    {hasHours ? <ul aria-label="Current weekly schedule" className="divide-y divide-border border-y border-border">
-      {groups.map((group) => <li key={group.weekdays.join("-")} className="flex items-start gap-3 py-2">
-        <span className="w-24 shrink-0 pt-1 font-medium sm:w-28">{weekdayGroupLabel(group.weekdays)}</span>
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
-          {group.intervals.length === 0 ? <span className="py-1 text-muted-foreground">Closed</span> : group.intervals.map((interval) => {
-            const label = `${minuteToTime(interval.opens_at_minute)}–${minuteToTime(interval.closes_at_minute)}`;
-            return <div key={interval.ids.join("-")} className="flex items-center gap-1">
-              <Button type="button" variant="subtle" size="small" disabled={pending} className="tabular-nums"
-                aria-label={`Edit ${weekdayGroupLabel(group.weekdays)} ${label}`}
-                onClick={() => startEdit(group.weekdays, interval.ids, { opens_at: minuteToTime(interval.opens_at_minute), closes_at: minuteToTime(interval.closes_at_minute) })}>{label}</Button>
-              <Button type="button" variant="destructive" size="icon" disabled={pending}
-                aria-label={`Remove ${weekdayGroupLabel(group.weekdays)} ${label}`}
-                onClick={(event) => {
-                  removeTriggerRef.current = event.currentTarget;
-                  const removal = { weekdays: group.weekdays, ids: interval.ids, label };
-                  setRemoving(removal); void checkRemoval(removal);
-                }}><Trash2 size={14} aria-hidden="true" /></Button>
-            </div>;
-          })}
-        </div>
-      </li>)}
-    </ul> : <p className="border-y border-border py-3 text-muted-foreground">Not configured</p>}
-
+  const availableSchedules = schedules.filter((s) => (scheduleStatus(s, today) === "History") === history);
+  return <section aria-labelledby={`${prefix}-heading`} className="min-w-0 text-sm">
+    <h2 id={`${prefix}-heading`} className="mb-3 font-semibold text-foreground">Weekly schedule</h2>
+    <div className="mb-4 flex flex-wrap items-end gap-3">
+      <label className="min-w-0 flex-1 text-xs font-medium" htmlFor={`${prefix}-schedule`}>{history ? "Historical schedule" : "Current/Scheduled schedule"}
+        <select id={`${prefix}-schedule`} aria-label={history ? "Historical schedule" : "Current/Scheduled schedule"}
+          value={creating ? "" : selectedSchedule?.id ?? ""} disabled={pending || !hydrated}
+          className="mt-1 min-h-10 w-full rounded-control border border-border bg-surface px-3 text-sm"
+          onChange={(event) => { const schedule = schedules.find((s) => s.id === event.target.value); if (schedule) requestSelection({ schedule, history }); }}>
+          {creating && <option value="">New schedule</option>}
+          {availableSchedules.map((schedule) => <option key={schedule.id} value={schedule.id}>{scheduleLabel(schedule, today)}</option>)}
+          {!creating && !availableSchedules.length && <option value="">No schedules</option>}
+        </select>
+      </label>
+      <Button type="button" variant="secondary" size="small" disabled={pending || !hydrated || creating}
+        onClick={() => requestSelection({ schedule: null, history: false })}>New schedule</Button>
+      <Button type="button" variant="secondary" size="small" disabled={pending || !hydrated} aria-pressed={history}
+        onClick={() => requestSelection({ history: !history, schedule: history ? defaultSchedule() : schedules.find((s) => scheduleStatus(s, today) === "History") ?? null })}>
+        {history ? "Current/Scheduled" : "History"}
+      </Button>
     </div>
-    <ConfirmationDialog open={panelActive && removing !== null} title={removing ? `Remove ${weekdayGroupLabel(removing.weekdays)} opening hours?` : "Remove opening hours?"}
-      message={removing ? `${removing.label} will be removed from ${weekdayGroupLabel(removing.weekdays)} opening hours.` : ""}
-      confirmLabel="Remove hours" pending={pending} confirmDisabled={!removalCheck?.ok} error={error} returnFocusRef={removeTriggerRef}
-      onClose={() => { if (!pendingRef.current) { setRemoving(null); setRemovalCheck(null); setError(""); } }}
-      onConfirm={() => { if (removing && removalCheck?.ok) void mutate(removalDraft(removing)); }}>
-      {removalCheck && !removalCheck.ok && removalCheck.reason === "pricing-conflict" && <div className="mt-3 text-sm">
-        <p className="font-medium">Update or remove the affected pricing rules before removing these opening hours.</p>
-        {Boolean(removalCheck.conflicts?.length) && <ul aria-label="Conflicting pricing rules" className="mt-2 space-y-2">
-          {removalCheck.conflicts?.map((rule) => <li key={rule.id}>
-            <span className="font-medium">{rule.court_name}</span> · {courtStateLabels[rule.court_state]} · {weekdays[rule.weekday]} · {minuteToTime(rule.starts_at_minute)}–{minuteToTime(rule.ends_at_minute)}
-            <span className="block text-xs text-muted-foreground">{rule.starts_on || rule.ends_on
-              ? `${rule.starts_on ? `From ${rule.starts_on}` : "Any start date"}${rule.ends_on ? ` · Until ${rule.ends_on}` : ""}` : "All dates"}</span>
-          </li>)}
-        </ul>}
-        <Link href={`/admin/locations/${locationId}?tab=pricing`}
-          className="mt-3 inline-block font-medium text-primary underline focus-visible:outline-2 focus-visible:outline-focus"
-          onClick={() => { setRemoving(null); setRemovalCheck(null); setError(""); }}>Manage conflicting pricing</Link>
-      </div>}
-      {!removalCheck?.ok && !pending && <Button type="button" variant="secondary" size="small" className="mt-3"
-        onClick={() => { if (removing) void checkRemoval(removing); }}>Check dependencies again</Button>}
-    </ConfirmationDialog>
-    <form aria-label="Opening hours editor" className="min-w-0 border-t border-border pt-6 lg:border-l lg:border-t-0 lg:pl-8 lg:pt-0" onSubmit={(event) => { event.preventDefault(); if (canApply) void mutate(draft); }}>
-      <fieldset disabled={pending}>
-        <legend className="mb-2 font-semibold">Days</legend>
-        <div className="mb-2 flex flex-wrap gap-2">
-          {([
-            ["Weekdays", [0, 1, 2, 3, 4]], ["Weekend", [5, 6]], ["All days", [0, 1, 2, 3, 4, 5, 6]],
-          ] as const).map(([label, days]) => <Button key={label} type="button" variant="secondary" size="small"
-            onClick={() => setDays([...days])}>{label}</Button>)}
+    <ConfirmationDialog open={panelActive && switching !== null} title="Discard opening-hours changes?"
+      message="Your unsaved changes will be discarded." confirmLabel="Discard changes"
+      onClose={() => setSwitching(null)} onConfirm={() => { if (switching) selectSchedule(switching); }} />
+    {history && !availableSchedules.length ? <p className="py-4 text-muted-foreground">No expired schedules.</p> :
+    <form aria-label="Opening hours editor" onSubmit={(event) => { event.preventDefault(); void save(); }}>
+      <p className="mb-3 text-muted-foreground">{creating ? "New schedule" : selectedSchedule ? scheduleLabel(selectedSchedule, today) : "Not configured"}</p>
+      {readOnly && <p className="mb-4 text-muted-foreground">Expired schedules are read-only.</p>}
+      <fieldset disabled={pending || !hydrated || readOnly}>
+        <legend className="sr-only">Weekly policy</legend>
+        <div className="mb-3 grid gap-3 sm:grid-cols-2">
+          <div><label className="text-xs font-medium">Valid from<Input type="date" required value={draft.starts_on}
+            aria-invalid={Boolean(startError)} aria-describedby={startError ? `${prefix}-start-error` : undefined}
+            onChange={(event) => { setDraft((current) => ({ ...current, starts_on: event.target.value })); setFieldErrors({}); }} /></label>
+            {startError && <p id={`${prefix}-start-error`} role="alert" className="mt-1 text-xs text-danger">{startError}</p>}</div>
+          <div><label className="text-xs font-medium">Valid until (optional)<Input type="date" min={draft.starts_on} value={draft.ends_on}
+            aria-invalid={Boolean(fieldError("ends_on"))} aria-describedby={fieldError("ends_on") ? `${prefix}-end-error` : undefined}
+            onChange={(event) => { setDraft((current) => ({ ...current, ends_on: event.target.value })); setFieldErrors({}); }} /></label>
+            {fieldError("ends_on") && <p id={`${prefix}-end-error`} role="alert" className="mt-1 text-xs text-danger">{fieldError("ends_on")}</p>}</div>
         </div>
-        <div className="mb-4 flex flex-wrap gap-x-3 gap-y-2">
-          {weekdays.map((label, day) => <label key={label} className="inline-flex items-center gap-1.5 text-xs">
-            <input type="checkbox" checked={draft.weekdays.includes(day)} onChange={(event) => setDays(event.target.checked
-              ? [...draft.weekdays, day].sort((a, b) => a - b) : draft.weekdays.filter((selected) => selected !== day))} />
-            {label.slice(0, 3)}
-          </label>)}
-        </div>
-        <div className="space-y-2">
-          {draft.intervals.map((interval, index) => <div key={index} className="flex flex-wrap items-end gap-2">
-            {(["opens_at", "closes_at"] as const).map((field) => <div key={field} className="w-32">
-              <label htmlFor={`${prefix}-${field}-${index}`} className="mb-1 block text-xs font-medium">{field === "opens_at" ? "Opening time" : "Closing time"}</label>
-              <SearchableCombobox id={`${prefix}-${field}-${index}`} placeholder="HH:mm" allowCustomValue disabled={pending}
-                options={field === "opens_at" ? openingOptions : closingOptions} value={interval[field]}
-                listLabel={field === "opens_at" ? "Opening time suggestions" : "Closing time suggestions"}
-                emptyMessage="Enter a time as HH:mm." onValueChange={(value) => setTime(index, field, value)}
-                aria-invalid={Boolean(visibleFieldErrors[field])} aria-describedby={`${prefix}-${field}-error`} />
-            </div>)}
-            {draft.intervals.length > 1 && <Button type="button" variant="destructive" size="icon"
-              aria-label={`Remove draft interval ${index + 1}`} onClick={() => setDraft((current) => ({ ...current, intervals: current.intervals.filter((_, position) => position !== index) }))}>
-              <Trash2 size={15} aria-hidden="true" /></Button>}
-          </div>)}
-        </div>
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          {draft.intervals.length === 1 && <Button type="button" variant="subtle" size="small" disabled={!canAddInterval} className="gap-1"
-            onClick={() => setDraft((current) => current.intervals.length === 1 && editorIntervalSchema.safeParse(current.intervals[0]).success
-              ? { ...current, intervals: [...current.intervals, { opens_at: "", closes_at: "" }] } : current)}>
-            <Plus size={14} aria-hidden="true" /> Add interval
-          </Button>}
-          {draft.replacements.length > 0 && <Button type="button" variant="secondary" size="small" onClick={() => { setDraft(emptyDraft()); setEditBaseline(null); setError(""); setFieldErrors({}); }}>Cancel edit</Button>}
-        </div>
-        <p id={`${prefix}-opens_at-error`} className="min-h-4 text-xs text-danger">{visibleFieldErrors.opens_at ?? ""}</p>
-        <p id={`${prefix}-closes_at-error`} className="min-h-4 text-xs text-danger">{visibleFieldErrors.closes_at ?? ""}</p>
-        <p role={error && !removing ? "alert" : undefined} className="min-h-10 py-2 text-sm text-danger">{removing ? "" : error}</p>
-        <Button type="submit" fullWidth={false} disabled={pending || !canApply} aria-busy={pending}>
-          {pending ? "Saving…" : draft.replacements.length ? "Apply changes to selected days" : "Apply to selected days"}
-        </Button>
+        <p className="mb-4 text-xs text-muted-foreground">{creating ? "This schedule replaces the entire weekly policy during its validity period. " : "Dates apply to the entire weekly policy. "}Validity boundaries are inclusive. Leave the end date empty for Unlimited.</p>
+        {creating && period?.ok && period.adjustment && <p role="status" className="mb-4 text-sm text-muted-foreground">
+          Saving will automatically end the current schedule ({period.adjustment.starts_on}) on {period.adjustment.ends_on}, the day before this schedule starts. Both schedules and their intervals will be preserved. Pricing will be reconciled automatically.
+        </p>}
+        <table aria-label="Weekly intervals" aria-describedby={scheduleError ? `${prefix}-schedule-error` : undefined} className="w-full table-fixed border-y border-border text-left">
+          <thead><tr className="border-b border-border text-xs text-muted-foreground">
+            <th scope="col" className="w-[34%] py-2 pr-2">Days</th><th scope="col" className="w-[25%] py-2 pr-2">Opens</th>
+            <th scope="col" className="w-[25%] py-2 pr-2">Closes</th><th scope="col" className="py-2"><span className="sr-only sm:not-sr-only">Actions</span></th>
+          </tr></thead>
+          <tbody>{draft.rows.map((row, index) => <tr key={row.key} className="border-b border-border last:border-b-0">
+            <td className="relative py-3 pr-2">
+              <div onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setOpenDays((key) => key === row.key ? null : key); }}
+                onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setOpenDays(null); event.currentTarget.querySelector("button")?.focus(); } }}>
+                <Button type="button" variant="secondary" size="small" className="w-full justify-start whitespace-normal text-left"
+                  aria-label={`Days for interval ${index + 1}: ${weekdayGroupLabel(row.weekdays) || "Select days"}`}
+                  aria-expanded={openDays === row.key} aria-controls={openDays === row.key ? `${prefix}-days-${row.key}` : undefined}
+                  aria-invalid={Boolean(fieldError("weekdays", index))} aria-describedby={fieldError("weekdays", index) ? `${prefix}-days-error-${row.key}` : undefined}
+                  onClick={() => setOpenDays((key) => key === row.key ? null : row.key)}>{weekdayGroupLabel(row.weekdays) || "Select days"}</Button>
+                {openDays === row.key && <div id={`${prefix}-days-${row.key}`} role="group" aria-label={`Weekdays for interval ${index + 1}`}
+                  className="absolute left-0 z-40 mt-1 w-64 max-w-[calc(100vw-3rem)] rounded-control border border-border bg-surface p-3 shadow-floating">
+                  <div className="mb-3 flex flex-wrap gap-1">
+                    {([["Weekdays", [0, 1, 2, 3, 4]], ["Weekend", [5, 6]], ["All days", [0, 1, 2, 3, 4, 5, 6]]] as const).map(([label, days]) =>
+                      <Button key={label} type="button" variant="subtle" size="small" onClick={() => updateRow(row.key, { weekdays: [...days] })}>{label}</Button>)}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">{weekdays.map((label, day) => <label key={label} className="inline-flex items-center gap-2 text-xs">
+                    <input type="checkbox" checked={row.weekdays.includes(day)} onChange={(event) => updateRow(row.key, { weekdays: event.target.checked
+                      ? [...row.weekdays, day].sort((a, b) => a - b) : row.weekdays.filter((selected) => selected !== day) })} />{label}
+                  </label>)}</div>
+                  <Button type="button" variant="subtle" size="small" className="mt-2" onClick={(event) => { setOpenDays(null); event.currentTarget.closest("td")?.querySelector("button")?.focus(); }}>Done</Button>
+                </div>}
+              </div>
+              {fieldError("weekdays", index) && <p id={`${prefix}-days-error-${row.key}`} role="alert" className="mt-1 text-xs text-danger">{fieldError("weekdays", index)}</p>}
+            </td>
+            {(["opens_at", "closes_at"] as const).map((field) => {
+              const error = fieldError(field, index);
+              return <td key={field} className="py-3 pr-2">
+                <label htmlFor={`${prefix}-${field}-${row.key}`} className="sr-only">{field === "opens_at" ? "Opening time" : "Closing time"}</label>
+                <SearchableCombobox id={`${prefix}-${field}-${row.key}`} placeholder="HH:mm" allowCustomValue disabled={pending || readOnly || !hydrated}
+                  options={field === "opens_at" ? openingOptions : closingOptions} value={row[field]}
+                  listLabel={field === "opens_at" ? "Opening time suggestions" : "Closing time suggestions"} emptyMessage="Enter a time as HH:mm."
+                  onValueChange={(value) => updateRow(row.key, { [field]: value })} aria-invalid={Boolean(error)} aria-describedby={error ? `${prefix}-${field}-${row.key}-error` : undefined} />
+                {error && <p id={`${prefix}-${field}-${row.key}-error`} role="alert" className="mt-1 text-xs text-danger">{error}</p>}
+              </td>;
+            })}
+            <td className="py-3"><Button type="button" variant="destructive" size="small" aria-label={`Delete interval ${index + 1}`}
+              onClick={() => { setDraft((current) => ({ ...current, rows: current.rows.filter((item) => item.key !== row.key) })); setOpenDays(null); setFieldErrors({}); }}>
+              <Trash2 size={14} aria-hidden="true" /><span className="hidden sm:inline">Delete</span>
+            </Button></td>
+          </tr>)}</tbody>
+        </table>
+        {!draft.rows.length && <p className="py-3 text-muted-foreground">No intervals. Days without intervals are closed.</p>}
+        {!readOnly && <Button type="button" variant="subtle" size="small" className="mt-2 gap-1" onClick={() => {
+          const key = `new-${nextKey.current++}`;
+          setDraft((current) => ({ ...current, rows: [...current.rows, { key, weekdays: [], opens_at: "", closes_at: "" }] })); setFieldErrors({});
+        }}><Plus size={14} aria-hidden="true" />Add interval</Button>}
+        {scheduleError && <p id={`${prefix}-schedule-error`} role="alert" className="mt-3 text-danger">{scheduleError}</p>}
+
+        {!readOnly && <div className="mt-4 flex flex-wrap gap-2">
+          <Button type="submit" fullWidth={false} disabled={pending || !canSave} aria-busy={pending}>{pending ? "Saving…" : "Save changes"}</Button>
+          {(dirty || creating) && <Button type="button" variant="secondary" onClick={() => selectSchedule({ schedule: creating ? defaultSchedule() : selectedSchedule, history: false })}>Cancel edit</Button>}
+        </div>}
       </fieldset>
-      <p className="mt-2 text-xs text-muted-foreground">Times are local to this location. Closing time may be 24:00.</p>
-    </form>
+      <p className="mt-3 text-xs text-muted-foreground">Times are local to this location. Closing time may be 24:00.</p>
+    </form>}
   </section>;
 }

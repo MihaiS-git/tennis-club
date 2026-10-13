@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export const paymentStatusSchema = z.enum([
   "pending",
+  "pending_retry",
   "succeeded",
   "failed",
   "cancelled",
@@ -10,6 +11,7 @@ export const paymentStatusSchema = z.enum([
 ]);
 export const paymentStatusLabels = {
   pending: "Pending",
+  pending_retry: "Pending retry",
   succeeded: "Paid",
   failed: "Failed",
   cancelled: "Cancelled",
@@ -44,5 +46,17 @@ export function parseAdminPaymentQuery(
 }
 export type AdminPaymentQuery = ReturnType<typeof parseAdminPaymentQuery>;
 export function adminPaymentHref(query: AdminPaymentQuery, page = query.page) {
-  return `/admin/payments?${new URLSearchParams({ ...query, page: String(page) })}`;
+  return `/admin/payments/transactions?${new URLSearchParams({ ...query, page: String(page) })}`;
+}
+
+export function adminTransactionHref(kind: "payment" | "refund" | "booking", id: string, query?: string) {
+  return `/admin/payments/transactions/${kind}/${id}${query ? `?${query}` : ""}`;
+}
+export function transactionStatusLabel(t: Pick<import("./admin").AdminPaymentTransaction,
+  "transaction_kind" | "transaction_status" | "amount_minor" | "refunded_minor">) {
+  if (!t.transaction_status) return "Unknown";
+  if (t.transaction_kind === "refund") return t.transaction_status === "succeeded" ? "Completed" : paymentStatusLabels[t.transaction_status];
+  const status = paymentStatusLabels[t.transaction_status];
+  if (t.transaction_status !== "succeeded" || t.refunded_minor === 0) return status;
+  return `${status} · ${t.refunded_minor >= t.amount_minor ? "Fully refunded" : "Partially refunded"}`;
 }

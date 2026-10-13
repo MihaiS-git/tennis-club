@@ -8,7 +8,7 @@ import { inTransaction } from "@/lib/db/transaction";
 import * as repository from "@/lib/db/repositories/reservations.repository";
 import * as accounts from "@/lib/db/repositories/accounts.repository";
 import { lockConfigurationForWrite, lockLocations } from "@/lib/db/repositories/clubs.repository";
-import { createDirectReservation, editDirectReservationAsAdmin, cancelDirectReservationAsAdmin } from "@/lib/reservations/service";
+import { createDirectReservation, editDirectReservationAsAdmin, cancelDirectReservationAsAdmin, readInternalOccupancy } from "@/lib/reservations/service";
 import { editOwnDirectReservation, cancelOwnDirectReservation } from "@/lib/reservations/personal-service";
 import { localMinute, localToday } from "@/lib/courts/local-time";
 import { cleanupAuthFixtures, localFixtureClient } from "../auth-fixtures";
@@ -16,7 +16,7 @@ import { ensureIntegrationAdminAnchor } from "../admin-anchor";
 
 let database: DataSource;
 let service: SupabaseClient;
-let admin: SupabaseClient, coach: SupabaseClient;
+let admin: SupabaseClient, coach: SupabaseClient, otherCoach: SupabaseClient;
 let adminId: string, coachId: string;
 const userIds: string[] = [];
 const locationId = randomUUID(), otherLocationId = randomUUID(), courtId = randomUUID(), secondCourtId = randomUUID();
@@ -41,6 +41,7 @@ beforeAll(async () => {
     return { id, client };
   }
   const a = await actor("admin"), c = await actor("coach"); admin = a.client; adminId = a.id; coach = c.client; coachId = c.id;
+  otherCoach = (await actor("coach")).client;
   for (const id of [locationId, otherLocationId]) {
     await database.query("INSERT INTO public.locations(id,name,slug,timezone) VALUES($1,'Race fixture',$2,'UTC')", [id, `reservation-${id}`]);
   }
@@ -61,7 +62,7 @@ beforeEach(async () => {
   await database.query("UPDATE public.users SET status='active' WHERE id=$1", [coachId]);
   await database.query("INSERT INTO public.user_roles(user_id,role_code) VALUES($1,'coach') ON CONFLICT DO NOTHING", [coachId]);
   await database.query("DELETE FROM public.location_opening_hours WHERE location_id=$1", [locationId]);
-  await database.query("INSERT INTO public.location_opening_hours(location_id,weekday,opens_at_minute,closes_at_minute) VALUES($1,3,0,1440)", [locationId]);
+  await database.query("WITH baseline AS (INSERT INTO public.opening_hours_schedules(location_id,starts_on) SELECT $1,DATE '0001-01-01' WHERE NOT EXISTS (SELECT 1 FROM public.opening_hours_schedules WHERE location_id=$1) RETURNING id) INSERT INTO public.location_opening_hours(schedule_id,location_id,weekday,opens_at_minute,closes_at_minute) VALUES(coalesce((SELECT id FROM public.opening_hours_schedules WHERE location_id=$1 LIMIT 1),(SELECT id FROM baseline)),$1,3,0,1440)", [locationId]);
 });
 afterEach(() => vi.restoreAllMocks());
 afterAll(async () => {
@@ -337,4 +338,31 @@ test("Admin cancellation rejects exact start equality and accepts the preceding 
   expect(await cancelDirectReservationAsAdmin(row.id, admin)).toEqual({ ok: true });
   const cancelled = await inTransaction((manager) => repository.findReservationForUpdate(manager, row.id));
   expect(cancelled?.cancelled_at).toBe("2099-10-15T09:59:59.999999+00:00");
+});
+test("Coach cancels own direct row, denies another Coach and safely releases occupancy on replay", async () => {
+  const row = await seed();
+  expect(await readInternalOccupancy({ courtIds: [courtId] }, date, now)).toHaveLength(1);
+  expect(await cancelOwnDirectReservation(row.id, otherCoach)).toEqual({ ok: false, message: "This reservation is no longer available to cancel." });
+  expect(await editOwnDirectReservation({ kind: "reason", id: row.id, expectedUpdatedAt: row.updated_at,
+    reason: "Another Coach's edit" }, otherCoach, now)).toMatchObject({ ok: false });
+  expect(await reservation()).toEqual(row);
+  await expect(cancelDirectReservationAsAdmin(row.id, coach)).rejects.toThrow();
+  expect(await cancelOwnDirectReservation(row.id, coach)).toEqual({ ok: true });
+  const cancelled = await inTransaction((manager) => repository.findReservationForUpdate(manager, row.id));
+  expect(cancelled).toMatchObject({ ...row, status: "cancelled", cancelled_at: expect.any(String), cancelled_by_user_id: coachId,
+    updated_at: expect.any(String) });
+  expect(await readInternalOccupancy({ courtIds: [courtId] }, date, now)).toEqual([]);
+  expect(await cancelOwnDirectReservation(row.id, coach)).toMatchObject({ ok: false });
+  expect(await inTransaction((manager) => repository.findReservationForUpdate(manager, row.id))).toEqual(cancelled);
+  expect(await createDirectReservation(input, otherCoach, now)).toEqual({ ok: true });
+});
+
+test.each(["customer", "guest"])("Coach cannot cancel a %s booking through owner direct cancellation", async (kind) => {
+  const row = await seed();
+  await database.query(`INSERT INTO public.bookings(reservation_id,account_user_id,customer_name,customer_email,customer_phone,total_amount_minor,currency,cancellation_notice_minutes)
+    VALUES($1,$2,'Customer','customer@example.test','123',5000,'RON',1440)`, [row.id, kind === "customer" ? coachId : null]);
+  expect(await cancelOwnDirectReservation(row.id, coach)).toMatchObject({ ok: false });
+  expect(await reservation()).toEqual(row);
+  expect(await readInternalOccupancy({ courtIds: [courtId] }, date, now)).toHaveLength(1);
+  expect(await database.query("SELECT status FROM public.bookings WHERE reservation_id=$1", [row.id])).toEqual([{ status: "confirmed" }]);
 });

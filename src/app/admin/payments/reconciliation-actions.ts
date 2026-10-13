@@ -1,12 +1,12 @@
 "use server";
 import { revalidatePath } from "next/cache";
-import { retryAdminPaymentRefund, resolveAdminPaymentReconciliation, type AdminRefundActionResult } from "@/lib/payments/admin-reconciliation";
+import { recoverAdminBookingAdjustment, retryAdminPaymentRefund, resolveAdminPaymentReconciliation, type AdminRefundActionResult } from "@/lib/payments/admin-reconciliation";
 import { logger } from "@/lib/logger";
 
 async function perform(operation: () => Promise<AdminRefundActionResult>): Promise<AdminRefundActionResult> {
   try {
     const result = await operation();
-    revalidatePath("/admin/payments");
+    revalidatePath("/admin/payments/transactions");
     return result;
   } catch {
     logger.error({ event: "payments.admin_reconciliation_action_failed" }, "Admin payment action failed");
@@ -18,4 +18,8 @@ export async function retryPaymentRefundAction(id: unknown) {
 }
 export async function resolvePaymentReconciliationAction(id: unknown) {
   return perform(() => resolveAdminPaymentReconciliation(id));
+}
+
+export async function recoverAdjustmentPaymentAction(id: unknown) {
+  return perform(() => recoverAdminBookingAdjustment(id));
 }

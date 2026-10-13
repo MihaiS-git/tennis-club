@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { cancellationNoticeMinutesSchema } from "@/lib/bookings/cancellation-policy";
+import { locationCurrencies } from "@/lib/admin/locations-validation";
 
 export const paymentMethodSchema = z.enum(["online", "pay_at_club"]);
 export const paymentProviderSchema = z.enum(["stripe", "netopia"]);
@@ -26,6 +28,17 @@ export type PaymentSettings = {
 
 export type PaymentPresentation = { kind: "stripe"; clientSecret: string; publishableKey: string };
 export type OnlineCheckout = { attemptId: string; token: string; presentation: PaymentPresentation };
+const checkoutPaymentStatusSchema = z.enum(["pending", "processing", "unknown", "succeeded",
+  "cancelled", "expired", "failed", "refund_pending", "refund_failed", "refunded"]);
+export type CheckoutPaymentStatus = z.infer<typeof checkoutPaymentStatusSchema>;
+export const checkoutStatusResponseSchema = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(false), message: z.string() }),
+  z.object({ ok: z.literal(true), status: z.enum(["pending_payment", "confirmed", "expired", "failed", "cancelled", "completed"]),
+    paymentStatus: checkoutPaymentStatusSchema, paymentUncertain: z.boolean(),
+    totalAmountMinor: z.number().int().positive(), currency: z.enum(locationCurrencies),
+    cancellationPolicy: z.object({ noticeMinutes: cancellationNoticeMinutesSchema, cutoff: z.string().nullable() }).nullable(),
+  }),
+]);
 
 export function paymentTransition(input: {
   attemptStatus: string; bookingStatus: string; reservationStatus: string;
@@ -33,6 +46,14 @@ export function paymentTransition(input: {
   outcome: "succeeded" | "failed" | "retryable_failed" | "cancelled";
 }) {
   if (input.attemptStatus !== "pending") return { result: input.attemptStatus, targets: null, deadline: null };
+  // Booking cancellation intent is durable even while Stripe is uncertain.
+  // Never turn a later capture into a booking confirmation.
+  if (input.bookingStatus === "cancelled" && input.reservationStatus === "held") {
+    if (input.outcome === "retryable_failed") return { result: "pending", targets: null, deadline: null };
+    return { result: input.outcome, deadline: null, targets: {
+      attempt: input.outcome, booking: "cancelled", reservation: "released",
+    } };
+  }
   if (input.bookingStatus !== "pending_payment" || input.reservationStatus !== "held")
     return { result: "unavailable", targets: null, deadline: null };
   if (input.reservationExpiry === null || input.attemptExpiry === null) throw new Error("Payment hold deadline missing.");

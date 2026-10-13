@@ -1,9 +1,10 @@
+import { publicationToday } from "@/lib/locations/publication";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { z } from "zod";
 import { AdminPageHeader } from "@/components/admin-page-controls";
 import { listAdminLocations, listAdminLocationsWithReadiness } from "@/lib/admin/locations";
-import { listAdminLocationOpeningHours } from "@/lib/admin/opening-hours";
+import { listAdminLocationOpeningHours, listAdminOpeningHoursSchedules } from "@/lib/admin/opening-hours";
 import { listAdminCourts } from "@/lib/admin/courts";
 import { listAdminCourtCoverage } from "@/lib/admin/court-coverage";
 import { listAdminPricingRules } from "@/lib/admin/pricing";
@@ -23,9 +24,9 @@ export default async function LocationManagementPage({ params }: { params: Promi
   if (!parsed.success) notFound();
   const [location] = await listAdminLocationsWithReadiness("current", parsed.data);
   if (!location) notFound();
-  const [intervals, locations, allCourts, allPeriods, rules] = await Promise.all([
+  const [intervals, locations, allCourts, allPeriods, rules, schedules] = await Promise.all([
     listAdminLocationOpeningHours(location.id), listAdminLocations(), listAdminCourts(),
-    listAdminCourtCoverage(), listAdminPricingRules(location.id),
+    listAdminCourtCoverage(), listAdminPricingRules(location.id), listAdminOpeningHoursSchedules(location.id),
   ]);
   const courts = allCourts.filter((court) => court.location_id === location.id);
   const courtIds = new Set(courts.map(({ id }) => id));
@@ -42,12 +43,12 @@ export default async function LocationManagementPage({ params }: { params: Promi
       "opening-hours": <>
         <p className="mb-3 text-sm text-muted-foreground">Weekly opening hours for {location.name} ({location.timezone}).</p>
         {location.archived_at ? <p>Restore this location before changing opening hours.</p>
-          : <LocationOpeningHours locationId={location.id} intervals={intervals} />}
+          : <LocationOpeningHours locationId={location.id} intervals={intervals} schedules={schedules} today={publicationToday(location.timezone)} />}
       </>,
       courts: location.archived_at ? <p>Restore this location before managing courts.</p>
         : <CourtInventory scoped location={location} courts={courts} locations={locations} periods={periods} />,
       pricing: location.archived_at ? <p>Restore this location before configuring pricing.</p>
-        : <PricingRules location={location} courts={courts} rules={rules} openingHours={intervals} />,
+        : <PricingRules location={location} courts={courts} rules={rules} openingHours={intervals} schedules={schedules} />,
       "public-booking": <>
         <p className="text-sm">{publicationState(location, location.missing)}. Publication {location.is_public ? "enabled" : "disabled"}.</p>
         {unavailable && <p className="mt-2 text-sm text-muted-foreground">{location.archived_at ? "Restore and activate" : "Activate"} this location before making it available for public booking.</p>}

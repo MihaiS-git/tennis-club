@@ -2,26 +2,21 @@ import { ProfileDepartureLink as Link } from "./profile-departure-navigation";
 import { Suspense } from "react";
 
 import { readNavigationProfile } from "@/lib/profile/navigation";
+import { PrimaryNavigationLink } from "./primary-navigation-link";
 import { AccountMenu } from "./account-menu";
 
 async function AccountNavigationLink({ admin = false }: { admin?: boolean }) {
   const { account } = await readNavigationProfile();
   const visible = admin
-    ? account.state === "active" && account.roles.includes("admin")
+    ? account.state === "active" && account.roles.some((role) => role === "admin" || role === "coach")
     : account.state !== "unauthenticated";
   if (!visible) return null;
 
   return (
-    <Link className="text-sm font-medium text-foreground hover:text-accent" href={admin ? "/admin/locations" : "/matches"}>
+    <PrimaryNavigationLink className="inline-flex min-h-10 items-center text-sm font-medium" section={admin ? "/admin" : "/matches"} href={admin ? "/admin" : "/matches"}>
       {admin ? "Admin" : "Matches"}
-    </Link>
+    </PrimaryNavigationLink>
   );
-}
-
-async function ReservationNavigationLink() {
-  const { account } = await readNavigationProfile();
-  if (account.state !== "active" || !account.roles.some((role) => role === "admin" || role === "coach")) return null;
-  return <Link className="text-sm font-medium text-foreground hover:text-accent" href="/reservations">Reservations</Link>;
 }
 
 async function AccountControls({ authenticated }: { authenticated: boolean }) {
@@ -45,26 +40,25 @@ export function DesktopNavbar() {
           Tennis Club
         </Link>
 
-        <nav aria-label="Main navigation" className="flex items-center gap-4 xl:gap-7">
-          <Link className="text-sm font-medium text-foreground hover:text-accent" href="/courts">
+        <nav aria-label="Main navigation" className="flex items-center gap-1 xl:gap-3">
+          <PrimaryNavigationLink className="inline-flex min-h-10 items-center text-sm font-medium" href="/courts">
             Courts
-          </Link>
-          <Link className="text-sm font-medium text-foreground hover:text-accent" href="/coaching">
+          </PrimaryNavigationLink>
+          <PrimaryNavigationLink className="inline-flex min-h-10 items-center text-sm font-medium" href="/coaching">
             Coaching
-          </Link>
+          </PrimaryNavigationLink>
           <Suspense fallback={<span aria-hidden="true" className="h-5 w-14 rounded-control bg-surface-muted" />}>
             <AccountNavigationLink />
           </Suspense>
-          <Link className="text-sm font-medium text-foreground hover:text-accent" href="/rankings">
+          <PrimaryNavigationLink className="inline-flex min-h-10 items-center text-sm font-medium" href="/rankings">
             Rankings
-          </Link>
-          <Link className="text-sm font-medium text-foreground hover:text-accent" href="/club">
+          </PrimaryNavigationLink>
+          <PrimaryNavigationLink className="inline-flex min-h-10 items-center text-sm font-medium" href="/club">
             Club
-          </Link>
+          </PrimaryNavigationLink>
           <Suspense fallback={<span aria-hidden="true" className="h-5 w-10 rounded-control bg-surface-muted" />}>
             <AccountNavigationLink admin />
           </Suspense>
-          <Suspense fallback={null}><ReservationNavigationLink /></Suspense>
         </nav>
 
         <div className="flex items-center justify-end gap-2 xl:gap-4">

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { expectToast, lastToast } from "../helpers/notifications";
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
@@ -60,7 +61,7 @@ it("resends the entered login email without submitting or clearing credentials",
   expect(submitted.get("email")).toBe("member@example.com");
   expect(submitted.has("password")).toBe(false);
   await act(async () => finish({ success: CONFIRMATION_RESEND_SUCCESS }));
-  expect(await screen.findByRole("status")).toBeDefined();
+  await expectToast(CONFIRMATION_RESEND_SUCCESS, "success");
   expect((email as HTMLInputElement).value).toBe("member@example.com");
   expect((password as HTMLInputElement).value).toBe("retained password");
   fireEvent.click(screen.getByRole("button", { name: "Resend confirmation email" }));
@@ -72,7 +73,7 @@ it("does not offer resend for incorrect login credentials", async () => {
   signInAction.mockResolvedValue({ formError: "Email or password is incorrect." });
   render(<SignInForm />);
   fireEvent.submit(screen.getByRole("button", { name: "Sign in" }).closest("form")!);
-  await screen.findByText("Email or password is incorrect.");
+  await expectToast("Email or password is incorrect.");
   expect(screen.queryByRole("button", { name: "Resend confirmation email" })).toBeNull();
 });
 
@@ -84,7 +85,7 @@ it("uses the retained signup email, displays rate-limit feedback, and allows ret
     const button = screen.getByRole("button", { name: "Resend confirmation email" });
     await act(async () => fireEvent.click(button));
     expect(resendConfirmationAction.mock.calls[0][1].get("email")).toBe("signup@example.com");
-    expect(screen.getByRole("alert").textContent).toContain("Too many email requests.");
+    expect(lastToast()).toContain("Too many email requests.");
     expect(button.hasAttribute("disabled")).toBe(true);
     await act(async () => vi.advanceTimersByTime(59_000));
     expect(button.hasAttribute("disabled")).toBe(true);
@@ -122,7 +123,7 @@ it.each([
     }
     for (const field of fields) expect(field.value).toBe(expected.get(field.name));
     fireEvent.click(within(container).getByRole("button", { name: submitName }));
-    await within(container).findByText("Please correct your details.");
+    await within(container).findByText("Check your password.");
     expect(action).toHaveBeenCalledOnce();
     const submitted: FormData = action.mock.calls[0][1];
     for (const field of fields) {

@@ -1,3 +1,4 @@
+vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 import type { BookingEmailEvent } from "@/lib/notifications/booking-email";
 const sent = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/notifications/booking-email", async importOriginal => ({
@@ -21,6 +22,10 @@ import { runBookingReschedule } from "@/lib/bookings/reschedule";
 import { localFixtureClient, cleanupAuthFixtures } from "../auth-fixtures";
 import { ensureIntegrationAdminAnchor } from "../admin-anchor";
 import { processOnlinePaymentEvent, settleOnlinePayment } from "@/lib/payments/service";
+import { readOnlineCheckout, abandonOnlineCheckout, startOnlineCheckout } from "@/lib/payments/checkout";
+import { adjustmentPresentation, readAdjustmentStatus } from "@/lib/payments/booking-adjustments";
+import { bookingFinancials, adjustmentAttempt } from "@/lib/db/repositories/booking-adjustments.repository";
+import { stripeAdapter } from "@/lib/payments/providers/stripe/adapter";
 import { prepareAdminRefund, prepareAutomaticRefund, commitAdminRefund, commitAutomaticRefund, type AdminRefundClaim } from "@/lib/payments/refund-commands";
 
 let database: DataSource;
@@ -50,11 +55,11 @@ beforeEach(async () => {
   await database.query("UPDATE public.users SET status='active' WHERE id=$1", [actorId]);
   await database.query("INSERT INTO public.user_roles(user_id,role_code) VALUES($1,'admin'),($1,'coach') ON CONFLICT DO NOTHING", [actorId]);
   await database.query("UPDATE public.courts SET location_id=$2,is_active=true WHERE id=ANY($1::uuid[])", [[courtId,secondCourtId],locationId]);
-  await database.query("UPDATE public.locations SET timezone='UTC',is_active=true,archived_at=null,currency='RON' WHERE id=$1", [locationId]);
+  await database.query("UPDATE public.locations SET timezone='UTC',is_active=true,is_public=true,archived_at=null,currency='RON' WHERE id=$1", [locationId]);
   await database.query("DELETE FROM public.location_pricing_rules WHERE location_id=$1", [locationId]);
   await database.query("DELETE FROM public.location_opening_hours WHERE location_id=$1", [locationId]);
   await database.query("DELETE FROM public.court_coverage_periods WHERE court_id=ANY($1::uuid[])", [[courtId,secondCourtId]]);
-  await database.query("INSERT INTO public.location_opening_hours(location_id,weekday,opens_at_minute,closes_at_minute) SELECT $1,i,0,1440 FROM generate_series(0,6) i", [locationId]);
+  await database.query("WITH baseline AS (INSERT INTO public.opening_hours_schedules(location_id,starts_on) SELECT $1,DATE '0001-01-01' WHERE NOT EXISTS (SELECT 1 FROM public.opening_hours_schedules WHERE location_id=$1) RETURNING id) INSERT INTO public.location_opening_hours(schedule_id,location_id,weekday,opens_at_minute,closes_at_minute) SELECT coalesce((SELECT id FROM public.opening_hours_schedules WHERE location_id=$1 LIMIT 1),(SELECT id FROM baseline)),$1,i,0,1440 FROM generate_series(0,6) i", [locationId]);
   await database.query(`INSERT INTO public.location_pricing_rules(location_id,rule_set_id,court_id,court_state,weekday,starts_at_minute,ends_at_minute,price_per_hour_minor)
     SELECT $1,$2,c,s,i,0,1440,CASE WHEN s='covered' THEN 7000 ELSE 5000 END
     FROM unnest($3::uuid[]) c CROSS JOIN unnest(ARRAY['outdoor','covered']) s CROSS JOIN generate_series(0,6) i`, [locationId,ruleSetId,[courtId,secondCourtId]]);
@@ -189,7 +194,7 @@ test("reservation monotonic floor and booking transaction-now timestamp are pres
   let transactionNow = "";
   const original = bookings.updateBookingRescheduleTotal;
   vi.spyOn(bookings,"updateBookingRescheduleTotal").mockImplementation(async (...args) => {
-    transactionNow = await reservations.readReservationTransactionTime(args[0]); await original(...args);
+    transactionNow = await reservations.readReservationTransactionTime(args[0]); return original(...args);
   });
   expect(await save(input)).toEqual({ok:true,totalAmountMinor:5000});
   const s = await state(f); expect(s.booking?.updated_at).toBe(transactionNow);
@@ -218,13 +223,17 @@ test.each(["reservation", "total"])("reschedule rollback after %s write restores
   }
   expect(await save(input)).toEqual({ok:false,message:"Unable to reschedule this booking. Try again."}); expect(await state(f)).toEqual(before);
 });
-test.each([8000,3000])("paid reschedule total %s preserves payment evidence; cancellation refunds original amount", async price => {
-  const f = await seed(600,true); const attempts: unknown = await database.query("SELECT * FROM public.payment_attempts WHERE booking_id=$1",[f.id]);
+test.each([8000,3000])("paid reschedule total %s records adjustment funds; cancellation preserves original capture", async price => {
+  const f = await seed(600,true);
+  const originalAttempt = await database.query("SELECT * FROM public.payment_attempts WHERE id=$1", [f.attemptId]);
   await database.query("UPDATE public.location_pricing_rules SET price_per_hour_minor=$2 WHERE location_id=$1 AND court_state='outdoor'",[locationId,price]);
-  expect(await save(await edit(f,{expectedTotal:price}))).toEqual({ok:true,totalAmountMinor:price});
-  expect(await database.query("SELECT * FROM public.payment_attempts WHERE booking_id=$1",[f.id])).toEqual(attempts);
-  expect((await state(f)).refunds).toEqual([]);
-  await cancel(f); expect((await state(f)).refunds).toEqual([expect.objectContaining({amount_minor:5000,currency:"RON",payment_attempt_id:f.attemptId})]);
+  const result = await save(await edit(f,{expectedTotal:price}));
+  expect(result).toMatchObject({ok:true,totalAmountMinor:price,adjustmentStatus:price>5000 ? "pending" : "applied"});
+  expect((await state(f)).booking?.total_amount_minor).toBe(price>5000 ? 5000 : price);
+  expect(await database.query("SELECT * FROM public.payment_attempts WHERE id=$1",[f.attemptId])).toEqual(originalAttempt);
+  await cancel(f);
+  const rows: {amount_minor:number}[] = await database.query("SELECT amount_minor FROM public.payment_refunds WHERE booking_id=$1",[f.id]);
+  expect(rows.reduce((sum,r)=>sum+r.amount_minor,0)).toBe(5000);
 });
 
 test.each(["court", "pricing"])("configuration %s writer first yields coherent new facts", async kind => {
@@ -347,6 +356,7 @@ test.each(["cutoff", "target"])("post-lock wall clock rejects elapsed %s boundar
 });
 
 test.each(["cancel","reschedule"])("pending/held rejects %s; settlement first then supplies confirmed evidence", async kind => {
+  const refundPayment = vi.spyOn(stripeAdapter, "refundPayment");
   const f=await seed(600,false,true);
   const input={id:f.id,expectedBookingUpdatedAt:"2000-01-01T00:00:00Z",expectedUpdatedAt:"2000-01-01T00:00:00Z",
     courtId:secondCourtId,date,startMinute:720,endMinute:780,save:true,expectedTotal:5000,priceAcknowledged:true};
@@ -363,14 +373,18 @@ test.each(["cancel","reschedule"])("pending/held rejects %s; settlement first th
     const before=await state(f), attempts: unknown=await database.query("SELECT * FROM public.payment_attempts WHERE id=$1",[f.attemptId]);
     await settleOnlinePayment({attemptId:f.attemptId,provider:"stripe",providerPaymentId:`pi-${f.attemptId}`,outcome:"succeeded"});
     expect(await state(f)).toEqual(before); expect(await database.query("SELECT * FROM public.payment_attempts WHERE id=$1",[f.attemptId])).toEqual(attempts);
+    expect(refundPayment).not.toHaveBeenCalled();
   } finally { if (blocker.isTransactionActive) await blocker.rollbackTransaction(); if (settlement) await Promise.allSettled([settlement]); await blocker.release(); }
 });
-test.each(["cancel","reschedule"])("%s first safely serializes retained late/duplicate settlement", async kind => {
+test.each(["cancel","reschedule","admin cancel without refund"])("%s first safely serializes retained late/duplicate settlement", async kind => {
   const f=await seed(600,true), input=await edit(f);
-  const [a,b]=await serialize<unknown,string>(() => kind === "cancel" ? cancel(f) : save(input),
+  const cancellation = kind !== "reschedule";
+  const [a,b]=await serialize<unknown,string>(() => kind === "admin cancel without refund" ? cancel(f,"admin",false)
+    : cancellation ? cancel(f) : save(input),
     () => settleOnlinePayment({attemptId:f.attemptId,provider:"stripe",providerPaymentId:`pi-${f.attemptId}`,outcome:"succeeded"}));
-  expect(a).toMatchObject(kind === "cancel" ? {outcome:"cancelled"} : {ok:true}); expect(typeof b).toBe("string");
-  expect((await state(f)).reservation).toMatchObject(kind === "cancel" ? {status:"cancelled"} : {court_id:secondCourtId,starts_at_minute:720});
+  expect(a).toMatchObject(cancellation ? {outcome:"cancelled"} : {ok:true}); expect(typeof b).toBe("string");
+  expect((await state(f)).reservation).toMatchObject(cancellation ? {status:"cancelled"} : {court_id:secondCourtId,starts_at_minute:720});
+  if (kind === "admin cancel without refund") expect((await state(f)).refunds).toEqual([]);
   expect(await database.query("SELECT amount_minor,currency,status FROM public.payment_attempts WHERE id=$1",[f.attemptId]))
     .toEqual([{amount_minor:5000,currency:"RON",status:"succeeded"}]);
 });
@@ -743,7 +757,7 @@ test("Phase 8 event validation failure rolls back refund success, lease clearing
   expect(await database.query("SELECT * FROM public.payment_provider_events WHERE attempt_id=$1",[f.attemptId])).toEqual(events);
   expect(await commitAdminRefund(prepared.claim,successResult)).toBe("succeeded");
   const resolved=await database.query("SELECT * FROM public.payment_provider_events WHERE attempt_id=$1",[f.attemptId]);
-  expect(await prepareAdminRefund("reconcile",f.eventId,actorId)).toEqual({outcome:"resolved",bookingId:f.id});
+  expect(await prepareAdminRefund("reconcile",f.eventId,actorId)).toMatchObject({outcome:"resolved",bookingId:f.id});
   expect(await database.query("SELECT * FROM public.payment_provider_events WHERE attempt_id=$1",[f.attemptId])).toEqual(resolved);
 });
 
@@ -850,4 +864,241 @@ test("settlement rejects conflicting occupancy before its lifecycle writes and k
   expect(await state(f)).toEqual(before);
   expect(await database.query("SELECT settlement_result,reconciliation_required FROM public.payment_provider_events WHERE attempt_id=$1",[f.attemptId]))
     .toEqual([{settlement_result:"unavailable",reconciliation_required:true}]);
+});
+
+
+// Simulated Stripe only; every adjustment, hold, allocation and receipt uses real PostgreSQL.
+function simulatedStripe() {
+  const outcomes = new Map<string, "pending" | "succeeded" | "cancelled">();
+  vi.spyOn(stripeAdapter,"createPayment").mockImplementation(async p => {
+    outcomes.set(`pi_${p.id}`, "pending");
+    return { providerPaymentId: `pi_${p.id}`, presentation: { kind:"stripe",clientSecret:`pi_${p.id}_secret`,publishableKey:"pk_test_Fixture" } };
+  });
+  vi.spyOn(stripeAdapter,"resumePayment").mockImplementation(async p => ({ kind:"stripe",clientSecret:`${p.providerPaymentId}_secret`,publishableKey:"pk_test_Fixture" }));
+  vi.spyOn(stripeAdapter,"readPayment").mockImplementation(async p => {
+    const rows: {amount_minor:number}[] = await database.query("SELECT amount_minor FROM public.payment_attempts WHERE id=$1",[p.id]);
+    return {status:outcomes.get(p.providerPaymentId) ?? "pending",amountMinor:rows[0].amount_minor,currency:"RON"};
+  });
+  vi.spyOn(stripeAdapter,"cancelPayment").mockImplementation(async p => { outcomes.set(p.providerPaymentId,"cancelled"); return "cancelled"; });
+  vi.spyOn(stripeAdapter,"refundPayment").mockImplementation(async p => ({ providerRefundId:`re_${p.id}`,status:"succeeded" }));
+  return outcomes;
+}
+async function captureAdjustment(id: string, eventId = randomUUID()) {
+  const attempt = await adjustmentAttempt(database.manager,id);
+  if (!attempt?.providerPaymentId) throw new Error("Missing adjustment payment");
+  return processOnlinePaymentEvent({attemptId:attempt.id,provider:"stripe",providerPaymentId:attempt.providerPaymentId,
+    eventId,outcome:"succeeded",amountMinor:attempt.amountMinor,currency:"RON"});
+}
+test("paid 50 → 75 → 100 → 75 → cancellation preserves all captures and refunds only remaining funds", async () => {
+  simulatedStripe();
+  const f = await seed(600,true);
+  const original = await database.query("SELECT * FROM public.payment_attempts WHERE id=$1",[f.attemptId]);
+  for (const [end,total] of [[690,7500],[720,10000]]) {
+    const input = await edit(f,{courtId,startMinute:600,endMinute:end,expectedTotal:total,requestId:randomUUID()});
+    const result = await save(input);
+    expect(result).toMatchObject({ok:true,adjustmentStatus:"pending",totalAmountMinor:total});
+    if (!result.ok || !result.adjustmentId || !result.checkout) throw new Error("No checkout");
+    const current = await state(f);
+    expect(current.reservation?.ends_at_minute).toBe(end-30);
+    const attempt = await adjustmentAttempt(database.manager,result.adjustmentId);
+    expect(attempt?.amountMinor).toBe(2500);
+    // The extra half-hour is protected before capture.
+    await expect(database.query(`INSERT INTO public.court_reservations(court_id,booking_date,starts_at_minute,ends_at_minute)
+      VALUES($1,$2,$3,$3+60)`,[courtId,date,end-30])).rejects.toMatchObject({code:"23P01"});
+    expect(await save(input)).toMatchObject({ok:true,adjustmentId:result.adjustmentId});
+    const eventId=randomUUID();
+    expect(await captureAdjustment(result.adjustmentId,eventId)).toBe("succeeded");
+    expect(await captureAdjustment(result.adjustmentId,eventId)).toBe("succeeded");
+    expect(await captureAdjustment(result.adjustmentId)).toBe("succeeded");
+    expect((await state(f)).booking?.total_amount_minor).toBe(total);
+    expect((await state(f)).reservation?.ends_at_minute).toBe(end);
+  }
+  const cheaper = await save(await edit(f,{courtId,startMinute:600,endMinute:690,expectedTotal:7500,requestId:randomUUID()}));
+  expect(cheaper).toMatchObject({ok:true,adjustmentStatus:"applied",refundStatus:"succeeded"});
+  expect(await database.query("SELECT * FROM public.payment_attempts WHERE id=$1",[f.attemptId])).toEqual(original);
+  let facts = await bookingFinancials(database.manager,f.id);
+  expect(facts).toMatchObject({captured:10000,refunded:2500,netPaid:7500,refundable:7500});
+  const cancelled=await cancel(f);
+  expect(cancelled.outcome).toBe("cancelled");
+  facts=await bookingFinancials(database.manager,f.id);
+  expect(facts.obligated).toBe(10000);
+  for(const p of facts.captures) expect(facts.refunds.filter(r=>r.paymentAttemptId===p.id).reduce((n,r)=>n+r.amountMinor,0)).toBeLessThanOrEqual(p.amountMinor);
+});
+
+test.each(["cancelled","expired","conflict","price","suspended"])("unapplied surcharge %s preserves original and compensates late capture", async mode => {
+  simulatedStripe();
+  const f=await seed(600,true), before=await state(f);
+  const result=await save(await edit(f,{courtId,startMinute:600,endMinute:690,expectedTotal:7500,requestId:randomUUID()}));
+  if(!result.ok || !result.adjustmentId || !result.checkout) throw new Error("No pending adjustment");
+  if(mode==="cancelled") await abandonOnlineCheckout({attemptId:result.checkout.attemptId,token:result.checkout.token});
+  if(mode==="expired") await database.query("UPDATE public.booking_adjustments SET expires_at='2020-01-01' WHERE id=$1",[result.adjustmentId]);
+  if(mode==="conflict") {
+    await database.query("UPDATE public.court_reservations SET status='released',hold_expires_at=NULL WHERE adjustment_id=$1",[result.adjustmentId]);
+    await database.query("INSERT INTO public.court_reservations(court_id,booking_date,starts_at_minute,ends_at_minute) VALUES($1,$2,660,720)",[courtId,date]);
+  }
+  if(mode==="price") await database.query("UPDATE public.location_pricing_rules SET price_per_hour_minor=6000 WHERE court_id=$1 AND court_state='outdoor'",[courtId]);
+  if(mode==="suspended") await database.query("UPDATE public.users SET status='suspended' WHERE id=$1",[actorId]);
+  expect(await captureAdjustment(result.adjustmentId)).toBe("expired");
+  const after=await state(f);
+  expect(after.booking).toEqual(before.booking); expect(after.reservation).toEqual(before.reservation);
+  expect(await bookingFinancials(database.manager,f.id)).toMatchObject({captured:7500,refunded:2500,netPaid:5000});
+  await captureAdjustment(result.adjustmentId);
+  expect((await bookingFinancials(database.manager,f.id)).refunds).toHaveLength(1);
+});
+
+test("partial refund failure is durable and Admin retry succeeds without allocating duplicate money", async () => {
+  simulatedStripe();
+  const f=await seed(600,true);
+  await database.query("UPDATE public.location_pricing_rules SET price_per_hour_minor=3000 WHERE court_id=$1 AND court_state='outdoor'",[secondCourtId]);
+  vi.mocked(stripeAdapter.refundPayment).mockRejectedValueOnce(new Error("Network uncertainty"));
+  const result=await save(await edit(f,{expectedTotal:3000,requestId:randomUUID()}));
+  expect(result).toMatchObject({ok:true,adjustmentStatus:"applied",refundStatus:"pending_retry"});
+  if(!result.ok || !result.refundIds?.[0]) throw new Error("No refund obligation");
+  expect(await bookingFinancials(database.manager,f.id)).toMatchObject({captured:5000,refunded:0,obligated:2000,refundable:3000});
+  const claim=await prepareAdminRefund("retry",result.refundIds[0],actorId);
+  if(claim.outcome!=="ready") throw new Error("Not retryable");
+  const {processBookingRefund}=await import("@/lib/payments/refunds");
+  expect(await processBookingRefund(result.refundIds[0],claim.claim)).toBe("succeeded");
+  expect(await bookingFinancials(database.manager,f.id)).toMatchObject({refunded:2000,netPaid:3000});
+  await cancel(f); expect((await bookingFinancials(database.manager,f.id)).obligated).toBe(5000);
+});
+
+test("concurrent edits and browser recovery use one adjustment and one Stripe intent", async () => {
+  const outcomes=simulatedStripe(); const f=await seed(600,true);
+  const input=await edit(f,{courtId,startMinute:600,endMinute:690,expectedTotal:7500,requestId:randomUUID()});
+  const results=await Promise.all([save(input),save({...input,requestId:randomUUID()})]);
+  expect(results.every(r=>r.ok)).toBe(true);
+  const result=results[0]; if(!result.ok || !result.adjustmentId) throw new Error("No adjustment");
+  expect(results[1]).toMatchObject({adjustmentId:result.adjustmentId});
+  expect(await database.query("SELECT id FROM public.payment_attempts WHERE adjustment_id=$1",[result.adjustmentId])).toHaveLength(1);
+  const resumed=await adjustmentPresentation(result.adjustmentId); if(!resumed) throw new Error("No recovery");
+  outcomes.set(`pi_${resumed.checkout.attemptId}`,"succeeded");
+  expect(await readOnlineCheckout({attemptId:resumed.checkout.attemptId,token:resumed.checkout.token})).toMatchObject({status:"confirmed",totalAmountMinor:7500});
+  expect((await state(f)).reservation?.ends_at_minute).toBe(690);
+});
+
+
+test("definitively failed partial refund retries with an audited provider generation", async () => {
+  simulatedStripe(); const f=await seed(600,true);
+  await database.query("UPDATE public.location_pricing_rules SET price_per_hour_minor=3000 WHERE court_id=$1 AND court_state='outdoor'",[secondCourtId]);
+  vi.mocked(stripeAdapter.refundPayment).mockResolvedValueOnce({providerRefundId:"re_definitively_failed",status:"failed"});
+  const result=await save(await edit(f,{expectedTotal:3000,requestId:randomUUID()}));
+  expect(result).toMatchObject({ok:true,refundStatus:"failed"});
+  if(!result.ok || !result.refundIds?.[0]) throw new Error("Missing refund");
+  const prepared=await prepareAdminRefund("retry",result.refundIds[0],actorId);
+  if(prepared.outcome!=="ready") throw new Error("Not retryable");
+  const {processBookingRefund}=await import("@/lib/payments/refunds");
+  expect(await processBookingRefund(result.refundIds[0],prepared.claim)).toBe("succeeded");
+  const facts=await bookingFinancials(database.manager,f.id);
+  expect(facts).toMatchObject({refunded:2000,obligated:2000});
+  expect(facts.refunds[0]).toMatchObject({providerGeneration:1,providerHistory:[{provider_refund_id:"re_definitively_failed",status:"failed",recorded_at:expect.any(String)}]});
+});
+
+
+test("retryable payment failure and an unknown provider outcome preserve original occupancy", async () => {
+  simulatedStripe(); const f=await seed(600,true),original=await state(f);
+  const result=await save(await edit(f,{courtId,startMinute:600,endMinute:690,expectedTotal:7500,requestId:randomUUID()}));
+  if(!result.ok || !result.adjustmentId || !result.checkout) throw new Error("Missing surcharge");
+  const attempt=await adjustmentAttempt(database.manager,result.adjustmentId); if(!attempt?.providerPaymentId) throw new Error("Missing payment");
+  expect(await processOnlinePaymentEvent({attemptId:attempt.id,provider:"stripe",providerPaymentId:attempt.providerPaymentId,
+    outcome:"retryable_failed",eventId:randomUUID(),amountMinor:2500,currency:"RON"})).toBe("pending");
+  expect((await state(f)).booking).toEqual(original.booking); expect((await state(f)).reservation).toEqual(original.reservation);
+  vi.mocked(stripeAdapter.readPayment).mockRejectedValueOnce(new Error("Timeout"));
+  expect(await readOnlineCheckout({attemptId:result.checkout.attemptId,token:result.checkout.token})).toMatchObject({status:"pending_payment",paymentStatus:"unknown",paymentUncertain:true});
+  expect((await bookingFinancials(database.manager,f.id)).captured).toBe(5000);
+});
+
+test("uncertain cancellation remains recoverable, expires its attempt, and refunds a late capture without applying the old change", async () => {
+  simulatedStripe(); const f=await seed(600,true),original=await state(f);
+  const result=await save(await edit(f,{courtId,startMinute:600,endMinute:690,expectedTotal:7500,requestId:randomUUID()}));
+  if(!result.ok || !result.adjustmentId || !result.checkout) throw new Error("Missing surcharge");
+  vi.mocked(stripeAdapter.cancelPayment).mockRejectedValue(new Error("Unknown cancellation"));
+  await expect(abandonOnlineCheckout({attemptId:result.checkout.attemptId,token:result.checkout.token})).rejects.toThrow();
+  const context=await readCustomerBookingEditContext(f.id,date,actorId,"owner");
+  expect(context).toMatchObject({pending_adjustment_id:result.adjustmentId,payment_recovery_required:true,adjustment_status:"cancelled"});
+  expect(await save(await edit(f,{courtId,startMinute:600,endMinute:690,expectedTotal:7500,requestId:randomUUID()})))
+    .toMatchObject({ok:true,adjustmentId:result.adjustmentId,adjustmentStatus:"cancelled",paymentRecoveryRequired:true});
+  await database.query("UPDATE public.booking_adjustments SET expires_at='2020-01-01' WHERE id=$1",[result.adjustmentId]);
+  await readAdjustmentStatus(database.manager,result.adjustmentId);
+  expect((await adjustmentAttempt(database.manager,result.adjustmentId))?.status).toBe("expired");
+  expect(await captureAdjustment(result.adjustmentId)).toBe("expired");
+  expect((await state(f)).booking).toEqual(original.booking); expect((await state(f)).reservation).toEqual(original.reservation);
+  expect(await bookingFinancials(database.manager,f.id)).toMatchObject({netPaid:5000,refunded:2500});
+});
+
+test.each(["coach","admin"] as const)("%s edits require verified surcharge; Coach management restrictions remain intact", async scope => {
+  simulatedStripe(); const f=await seed(600,true);
+  if(scope==="coach") await database.query("DELETE FROM public.user_roles WHERE user_id=$1 AND role_code='admin'",[actorId]);
+  else await database.query("UPDATE public.bookings SET account_user_id=NULL WHERE id=$1",[f.id]);
+  const mode=scope==="coach" ? "owner" : "admin";
+  const context=await readCustomerBookingEditContext(f.id,date,actorId,mode); if(!context) throw new Error("Missing context");
+  const input={id:f.id,courtId,date,startMinute:600,endMinute:690,save:true,expectedTotal:7500,priceAcknowledged:true,
+    expectedUpdatedAt:context.updated_at,expectedBookingUpdatedAt:context.booking_updated_at,requestId:randomUUID()};
+  if(scope==="coach") expect(await save(input,"admin")).toMatchObject({ok:false});
+  const result=await save(input,mode); expect(result).toMatchObject({ok:true,adjustmentStatus:"pending"});
+  if(!result.ok || !result.adjustmentId) throw new Error("Missing adjustment");
+  expect((await state(f)).booking?.total_amount_minor).toBe(5000);
+  expect(await captureAdjustment(result.adjustmentId)).toBe("succeeded");
+  expect((await state(f)).booking?.total_amount_minor).toBe(7500);
+});
+
+
+test("expiry crossing the final SQL write rolls back the move and durably compensates the capture", async () => {
+  simulatedStripe(); const f=await seed(600,true),original=await state(f);
+  const result=await save(await edit(f,{courtId,startMinute:600,endMinute:690,expectedTotal:7500,requestId:randomUUID()}));
+  if(!result.ok || !result.adjustmentId) throw new Error("Missing adjustment");
+  await database.query("UPDATE public.booking_adjustments SET expires_at=clock_timestamp()+interval '100 milliseconds' WHERE id=$1",[result.adjustmentId]);
+  const write=bookings.updateBookingRescheduleTotal;
+  vi.spyOn(bookings,"updateBookingRescheduleTotal").mockImplementationOnce(async (...args)=>{ await database.query("SELECT pg_sleep(0.2)"); return write(...args); });
+  expect(await captureAdjustment(result.adjustmentId)).toBe("expired");
+  expect((await state(f)).booking).toEqual(original.booking); expect((await state(f)).reservation).toEqual(original.reservation);
+  expect(await bookingFinancials(database.manager,f.id)).toMatchObject({netPaid:5000,refunded:2500});
+});
+
+
+test("initial checkout capability cannot cancel a managed adjustment or override an Admin no-refund decision", async () => {
+  simulatedStripe(); const f=await seed(600,false,true);
+  await database.query("UPDATE public.payment_attempts SET provider_payment_id=NULL WHERE id=$1",[f.attemptId]);
+  const initial=await startOnlineCheckout(f.attemptId);
+  await processOnlinePaymentEvent({attemptId:f.attemptId,provider:"stripe",providerPaymentId:`pi_${f.attemptId}`,
+    eventId:randomUUID(),outcome:"succeeded",amountMinor:5000,currency:"RON"});
+  const result=await save(await edit(f,{courtId,startMinute:600,endMinute:690,expectedTotal:7500,requestId:randomUUID()}));
+  if(!result.ok || !result.checkout) throw new Error("Missing adjustment");
+  await expect(abandonOnlineCheckout({attemptId:initial.attemptId,token:initial.token})).rejects.toThrow("booking management");
+  expect((await state(f)).booking?.status).toBe("confirmed");
+  await abandonOnlineCheckout({attemptId:result.checkout.attemptId,token:result.checkout.token});
+  expect((await cancel(f,"admin",false)).outcome).toBe("cancelled");
+  await expect(abandonOnlineCheckout({attemptId:initial.attemptId,token:initial.token})).rejects.toThrow("booking management");
+  expect((await bookingFinancials(database.manager,f.id)).refunds).toEqual([]);
+});
+
+test("Admin ledger projects 50 + 25 - 25 as three financial identities with 50 net collected", async () => {
+  simulatedStripe();
+  const f = await seed(600, true);
+  const result = await save(await edit(f, { courtId, startMinute: 600, endMinute: 690, expectedTotal: 7500, requestId: randomUUID() }));
+  if (!result.ok || !result.adjustmentId) throw new Error("Missing surcharge");
+  expect(await captureAdjustment(result.adjustmentId)).toBe("succeeded");
+  expect(await save(await edit(f, { courtId, startMinute: 600, endMinute: 660, expectedTotal: 5000, requestId: randomUUID() })))
+    .toMatchObject({ ok: true, refundStatus: "succeeded" });
+  expect(await bookingFinancials(database.manager, f.id)).toMatchObject({ captured: 7500, refunded: 2500, netPaid: 5000 });
+  const query = { page: 1, status: "all", provider: "all", method: "all", attention: false, search: "", sort: "date", direction: "asc",
+    bookingId: f.id, attentionRefundStatuses: ["pending_retry", "failed"] };
+  const schema = z.object({ total: z.number(), rows: z.array(z.object({ transaction_kind: z.enum(["payment", "refund", "booking"]),
+    transaction_id: z.uuid(), payment_attempt_id: z.uuid(), amount_minor: z.number(), operation_label: z.string(),
+    refunded_minor: z.number(), transaction_status: z.string(), provider_payment_id: z.string(),
+    refund: z.object({ provider_refund_id: z.string() }).nullable() })) });
+  const ledger = schema.parse(await payments.listAdminTransactionProjection(database.manager, query));
+  expect(ledger.total).toBe(3);
+  expect(ledger.rows.map(row => [row.operation_label, row.amount_minor])).toEqual([
+    ["Original payment", 5000], ["Additional adjustment payment", 2500], ["Partial refund", 2500],
+  ]);
+  expect(new Set(ledger.rows.map(row => row.transaction_id)).size).toBe(3);
+  expect(ledger.rows[0]).toMatchObject({ transaction_id: f.attemptId, refunded_minor: 0 });
+  expect(ledger.rows[1].refunded_minor).toBe(2500);
+  expect(ledger.rows[2].payment_attempt_id).toBe(ledger.rows[1].transaction_id);
+  for (const row of ledger.rows) {
+    const detail = schema.parse(await payments.listAdminTransactionProjection(database.manager,
+      { ...query, transaction: { kind: row.transaction_kind, id: row.transaction_id } }));
+    expect(detail.total).toBe(1); expect(detail.rows).toEqual([row]);
+  }
 });

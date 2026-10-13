@@ -37,7 +37,8 @@ export function fitsOpeningHours(
     && interval.opens_at_minute <= rule.starts_at_minute && rule.ends_at_minute <= interval.closes_at_minute);
 }
 
-type HoursInterval = Pick<OpeningInterval, "location_id" | "weekday" | "opens_at_minute" | "closes_at_minute">;
+type HoursInterval = Pick<OpeningInterval, "location_id" | "weekday" | "opens_at_minute" | "closes_at_minute">
+  & { starts_on: string; ends_on: string | null };
 
 function dayNames(days: readonly number[]): string {
   const sorted = [...days].sort((a, b) => a - b);
@@ -49,14 +50,33 @@ function dayNames(days: readonly number[]): string {
 
 export function pricingOpeningHoursError(
   intervals: readonly HoursInterval[],
-  input: { location_id: string; weekdays: readonly number[]; starts_at_minute: number; ends_at_minute: number },
+  input: { location_id: string; weekdays: readonly number[]; starts_at_minute: number; ends_at_minute: number; starts_on?: string | null; ends_on?: string | null },
+  today: string,
 ): string | null {
+  if (input.ends_on && input.ends_on < today) return null;
   const locationHours = intervals.filter((interval) => interval.location_id === input.location_id);
   if (!locationHours.length) return "Configure this location's opening hours before saving pricing.";
-  const invalid = input.weekdays.filter((weekday) => !fitsOpeningHours(locationHours, { ...input, weekday }));
-  if (!invalid.length) return null;
+  const nextDate = (date: string) => new Date(Date.parse(`${date}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
+  const first = input.starts_on && input.starts_on > today ? input.starts_on : today;
+  const boundaries = [...new Set([first, ...locationHours.flatMap((h) => [h.starts_on, h.ends_on ? nextDate(h.ends_on) : undefined])
+    .filter((d): d is string => d !== undefined && d > first && (!input.ends_on || d <= input.ends_on))])].sort();
+  for (const [index, date] of boundaries.entries()) {
+    const next = boundaries[index + 1];
+    const until = next ? new Date(Date.parse(`${next}T00:00:00Z`) - 86400000).toISOString().slice(0, 10) : input.ends_on ?? null;
+    const applicable = locationHours.filter((h) => (h.starts_on <= date) && (!h.ends_on || date <= h.ends_on));
+    const invalid = input.weekdays.filter((weekday) => pricingHasFutureOccurrence({ weekday, starts_on: date, ends_on: until }, date)
+      && !fitsOpeningHours(applicable, { ...input, weekday }));
+    if (invalid.length) {
+      const message = openingHoursTimeError(applicable, { ...input, weekdays: invalid });
+      return date === "0001-01-01" ? message : `${message} Check pricing validity from ${date}.`;
+    }
+  }
+  return null;
+}
+
+function openingHoursTimeError(locationHours: readonly HoursInterval[], input: Parameters<typeof pricingOpeningHoursError>[1]): string {
   const grouped = new Map<string, { days: number[]; hours: HoursInterval[] }>();
-  for (const day of invalid) {
+  for (const day of input.weekdays) {
     const hours = locationHours.filter((interval) => interval.weekday === day)
       .sort((a, b) => a.opens_at_minute - b.opens_at_minute);
     const key = hours.map((interval) => `${interval.opens_at_minute}-${interval.closes_at_minute}`).join(",");
@@ -96,10 +116,16 @@ export function groupPricingRuleSets(rows: readonly PricingRule[]): PricingRuleS
       || new Set(group.map((row) => `${row.court_id}:${row.weekday}`)).size !== group.length) {
       throw new Error("Inconsistent pricing rule set.");
     }
-    return { ...definition, court_ids, weekdays };
+    return { ...definition, court_ids, weekdays, revision: pricingRuleSetRevision(group) };
   }).sort((a, b) => courtStates.indexOf(a.court_state) - courtStates.indexOf(b.court_state)
     || a.weekdays[0] - b.weekdays[0] || a.starts_at_minute - b.starts_at_minute
     || (a.starts_on ?? "").localeCompare(b.starts_on ?? "") || a.rule_set_id.localeCompare(b.rule_set_id));
+}
+
+// Child identities change on replacement. Include all rows, so partial automatic
+// reconciliation also invalidates an editor opened against the previous definition.
+export function pricingRuleSetRevision(rows: readonly Pick<PricingRule, "id" | "updated_at">[]) {
+  return JSON.stringify(rows.map((row) => [row.id, row.updated_at]).sort((a, b) => a[0].localeCompare(b[0])));
 }
 
 export function formatWeekdays(days: readonly number[]): string {

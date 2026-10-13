@@ -1,14 +1,16 @@
+import { insertOpeningHoursFixture } from "./opening-hours-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test } from "vitest";
-import { getReservationDay } from "@/lib/reservations/service";
+import { cancelCustomerBookingAsAdmin, cancelDirectReservationAsAdmin, editDirectReservationAsAdmin, getAdminReservationEditDay, getReservationDay } from "@/lib/reservations/service";
+import { getAdminBookingEditDay, rescheduleCustomerBookingAsAdmin } from "@/lib/bookings/admin-reschedule";
 import { mondayWeekday } from "@/lib/pricing/resolution";
 import { cleanupAuthFixtures, localFixtureClient } from "./auth-fixtures";
 
-test("Admin sees booking snapshots beside direct reservations while Coach receives occupancy only", async () => {
+test("Admin and Coach share direct, customer and guest details while mutations remain Admin-only", async () => {
   const service = localFixtureClient();
   const locationId = randomUUID(), courtId = randomUUID();
-  const directId = randomUUID(), reservationId = randomUUID(), bookingId = randomUUID();
+  const directId = randomUUID(), reservationId = randomUUID(), bookingId = randomUUID(), paymentId = randomUUID();
   const userIds: string[] = [];
   const date = "2099-10-15", now = new Date("2099-10-14T12:00:00Z");
   const location = { id: locationId, name: "Operations", timezone: "UTC", courts: [{ id: courtId, name: "Court 1" }] };
@@ -30,7 +32,7 @@ test("Admin sees booking snapshots beside direct reservations while Coach receiv
       slug: `operational-${locationId}`, timezone: "UTC", is_public: true })).error, null);
     assert.strictEqual((await service.from("courts").insert({ id: courtId, location_id: locationId,
       name: "Court 1", slug: "court-1", surface: "clay", environment: "outdoor", is_active: true })).error, null);
-    assert.strictEqual((await service.from("location_opening_hours").insert({ location_id: locationId,
+    assert.strictEqual((await insertOpeningHoursFixture(service, { location_id: locationId,
       weekday: mondayWeekday(date), opens_at_minute: 600, closes_at_minute: 780 })).error, null);
     const admin = await account("admin"), coach = await account("coach"), member = await account();
     assert.strictEqual((await service.from("users").update({ first_name: "Mihai", last_name: "Stan" }).eq("id", coach.id)).error, null);
@@ -44,18 +46,41 @@ test("Admin sees booking snapshots beside direct reservations while Coach receiv
       account_user_id: member.id, payment_method: "pay_at_club", customer_name: "Ana Pop", customer_email: "ana@example.test",
       customer_phone: "+40 123", cancellation_notice_minutes: 120, total_amount_minor: 7500, currency: "RON" })).error, null);
 
+    assert.strictEqual((await service.from("payment_attempts").insert({ id: paymentId, booking_id: bookingId,
+      method: "pay_at_club", status: "due", amount_minor: 7500, currency: "RON" })).error, null);
     const adminDay = await getReservationDay(location, date, now, admin.client);
     expect(adminDay.adminOccupancy).toHaveLength(2);
     expect(adminDay.adminOccupancy).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: "reservation", id: directId, creator_name: "Mihai Stan", reason: "Training" }),
-      expect.objectContaining({ kind: "booking", id: bookingId, customer_name: "Ana Pop",
-        customer_email: "ana@example.test", customer_phone: "+40 123", cancellation_notice_minutes: 120, total_amount_minor: 7500, currency: "RON",
+      expect.objectContaining({ kind: "booking", id: bookingId, account_user_id: member.id, payment_method: "pay_at_club", customer_name: "Ana Pop",
+        customer_email: "ana@example.test", customer_phone: "+40 123", cancellation_notice_minutes: 120, total_amount_minor: 7500, currency: "RON", payments: [{ id: paymentId, method: "pay_at_club", provider: null, status: "due" }],
         starts_at_minute: 660, ends_at_minute: 750 }),
     ]));
     assert.strictEqual((await service.from("users").update({ first_name: "Different", last_name: "Profile" }).eq("id", member.id)).error, null);
     expect((await getReservationDay(location, date, now, admin.client)).adminOccupancy.find((row) => row.kind === "booking")).toMatchObject({ customer_name: "Ana Pop" });
     const coachDay = await getReservationDay(location, date, now, coach.client);
-    expect(coachDay.adminOccupancy).toEqual([]);
+    expect(coachDay.adminOccupancy).toEqual(adminDay.adminOccupancy);
+    expect(adminDay.canManage).toBe(true);
+    expect(coachDay.canManage).toBe(false);
+    await expect(getReservationDay(location, date, now, member.client)).rejects.toThrow();
+    const guest = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_PUBLISHABLE_KEY!, { auth: { persistSession: false } });
+    await expect(getReservationDay(location, date, now, guest)).rejects.toThrow();
+    await expect(cancelDirectReservationAsAdmin(directId, coach.client)).rejects.toThrow();
+    await expect(editDirectReservationAsAdmin({}, coach.client)).rejects.toThrow();
+    await expect(getAdminReservationEditDay({ reservationId: directId, date }, coach.client, now)).rejects.toThrow();
+    await expect(cancelCustomerBookingAsAdmin({ id: bookingId, refund: true }, coach.client)).rejects.toThrow();
+    await expect(getAdminBookingEditDay(bookingId, date, coach.client, now)).rejects.toThrow();
+    await expect(rescheduleCustomerBookingAsAdmin({}, coach.client)).rejects.toThrow();
+    assert.strictEqual((await service.from("bookings").update({ account_user_id: null }).eq("id", bookingId)).error, null);
+    assert.strictEqual((await service.from("bookings").update({ payment_method: "online" }).eq("id", bookingId)).error, null);
+    assert.strictEqual((await service.from("payment_attempts").update({ method: "online", provider: "stripe",
+      provider_payment_id: `pi_${paymentId}`, status: "succeeded", expires_at: "2099-10-14T12:10:00Z",
+      completed_at: "2099-10-14T12:01:00Z" }).eq("id", paymentId)).error, null);
+    const guestAdminDay = await getReservationDay(location, date, now, admin.client);
+    expect((await getReservationDay(location, date, now, coach.client)).adminOccupancy).toEqual(guestAdminDay.adminOccupancy);
+    expect(guestAdminDay.adminOccupancy.find((row) => row.kind === "booking")).toMatchObject({
+      account_user_id: null, customer_name: "Ana Pop", customer_email: "ana@example.test", customer_phone: "+40 123", payment_method: "online", stripe_refund_available: true,
+      payments: [{ id: paymentId, method: "online", provider: "stripe", status: "succeeded" }] });
     expect(coachDay.courts[0].cells).toEqual(["booked", "booked", "booked", "booked", "booked", "available"]);
     expect((await admin.client.from("bookings").select("customer_email")).error?.code).toBe("42501");
     expect((await service.from("bookings").update({ status: "cancelled" }).eq("id", bookingId)).error).toBeNull();

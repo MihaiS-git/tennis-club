@@ -1,3 +1,4 @@
+import { configureCheckoutPolicyFixture } from "./opening-hours-fixtures";
 import { z } from "zod";
 import { settleOnlinePayment } from "@/lib/payments/service";
 import { insertCheckoutFixture } from "./checkout-fixtures";
@@ -73,6 +74,7 @@ test("full customer/Admin refunds are atomic, replay-safe and leave failed refun
     expect((await db.from("locations").insert({ id: locationId, name: "Refund test", slug: `refund-${locationId}`,
       timezone: "UTC", currency: "RON", is_public: true, allow_pay_at_club: true })).error).toBeNull();
     expect((await db.from("courts").insert({ id: courtId, location_id: locationId, name: "Court", slug: "court", environment: "outdoor", surface: "clay" })).error).toBeNull();
+    await configureCheckoutPolicyFixture(db,locationId,courtId);
     const own = await book(600);
     // Changed booking pricing must not change the original captured refund amount.
     expect((await db.from("bookings").update({ total_amount_minor: 7000 }).eq("id", own.booking_id)).error).toBeNull();
@@ -118,6 +120,8 @@ test("full customer/Admin refunds are atomic, replay-safe and leave failed refun
     refundPayment.mockClear();
     expect(await cancelCustomerBookingAsAdmin({ id: adminNoRefundFlow.booking_id, refund: false }, admin)).toEqual({ ok: true });
     expect(refundPayment).not.toHaveBeenCalled();
+    // Staff-owned bookings use the owner cancellation/refund workflow unchanged.
+    expect((await db.from("user_roles").insert({ user_id: users[0], role_code: "coach" })).error).toBeNull();
     const ownerFlow = await book(900);
     refundPayment.mockRejectedValueOnce(new Error("ambiguous network response"));
     expect(await cancelOwnCustomerBooking(ownerFlow.booking_id, member)).toEqual({ ok: true, refundStatus: "pending_retry" });
@@ -135,6 +139,7 @@ test("full customer/Admin refunds are atomic, replay-safe and leave failed refun
     expect(cancellations(adminFlow.booking_id)[0].text).toContain("The club administrator has cancelled");
     expect(cancellations(ownerFlow.booking_id)[0].text).toContain("You have cancelled");
     expect(cancellations(adminNoRefundFlow.booking_id)[0].text).not.toContain("refund has been requested");
+    expect((await db.from("user_roles").delete().eq("user_id", users[0]).eq("role_code", "coach")).error).toBeNull();
     const failedDelivery = await book(960);
     failDelivery = true;
     expect(await cancelOwnCustomerBooking(failedDelivery.booking_id, member)).toEqual({ ok: true, refundStatus: "succeeded" });
@@ -153,6 +158,8 @@ test("full customer/Admin refunds are atomic, replay-safe and leave failed refun
     const bookings = (await db.from("bookings").select("id").in("reservation_id", ids)).data?.map(b => b.id) ?? [];
     await db.from("bookings").delete().in("id", bookings);
     await db.from("court_reservations").delete().eq("court_id", courtId);
+    await db.from("pricing_rule_sets").delete().eq("location_id",locationId);
+    await db.from("location_opening_hours").delete().eq("location_id",locationId);
     await db.from("courts").delete().eq("id", courtId); await db.from("locations").delete().eq("id", locationId);
     await cleanupAuthFixtures(db, users);
   }

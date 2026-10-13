@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 const instant = z.string();
-export const paymentFactSchema = z.object({ id: z.uuid(), booking_id: z.uuid(), method: z.string(), provider: z.string().nullable(),
+export const paymentFactSchema = z.object({ id: z.uuid(), booking_id: z.uuid(), adjustment_id: z.uuid().nullable().optional(), method: z.string(), provider: z.string().nullable(),
   provider_payment_id: z.string().nullable(), amount_minor: z.number().int(), currency: z.string(), status: z.string(),
   expires_at: instant.nullable(), created_at: instant });
 export const providerEventFactSchema = z.object({ provider: z.string(), event_id: z.string(), attempt_id: z.uuid(),

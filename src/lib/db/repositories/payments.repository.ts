@@ -5,6 +5,25 @@ import { z } from "zod";
 import { paymentProviderSchema } from "@/lib/payments/domain";
 import type { PaymentProvider } from "@/lib/payments/domain";
 import { PaymentAttemptEntity } from "../entities/payment-attempt.entity";
+import { PaymentRefundEntity } from "../entities/payment-refund.entity";
+
+// An uncollected club debt follows the current booking price. Captured online
+// transactions remain immutable and are never included in this update.
+export async function lockPayAtClubAmountDue(manager: EntityManager, bookingId: string) {
+  await manager.query(`SELECT id FROM public.payment_attempts
+    WHERE booking_id=$1 AND method='pay_at_club' AND status='due' ORDER BY id FOR UPDATE`, [bookingId]);
+}
+
+export async function updatePayAtClubAmountDue(manager: EntityManager, bookingId: string, amount: number) {
+  await manager.query(`UPDATE public.payment_attempts SET amount_minor=$2,updated_at=now()
+    WHERE booking_id=$1 AND method='pay_at_club' AND status='due'`, [bookingId, amount]);
+}
+
+export async function findCheckoutRefund(manager: EntityManager, attemptId: string) {
+  return manager.getRepository(PaymentRefundEntity).findOne({
+    where: { paymentAttemptId: attemptId }, select: { id: true, status: true },
+  });
+}
 
 export async function findSelectedPaymentProvider(manager: EntityManager, lock = false) {
   const rows: unknown = await manager.query(
@@ -31,7 +50,7 @@ export async function findCheckoutAttempt(manager: EntityManager, id: string, to
   return manager.getRepository(PaymentAttemptEntity).findOne({
     where: { id, ...(tokenHash === undefined ? {} : { checkoutTokenHash: tokenHash }) },
     select: { id: true, bookingId: true, method: true, provider: true, providerPaymentId: true,
-      amountMinor: true, currency: true, status: true, expiresAt: true, checkoutTokenHash: true },
+      amountMinor: true, currency: true, status: true, expiresAt: true, checkoutTokenHash: true, adjustmentId: true },
   });
 }
 
@@ -66,15 +85,15 @@ export async function findAndLockEarliestSucceededStripeAttempt(manager: EntityM
 
 export async function findAndLockRefundByBooking(manager: EntityManager, bookingId: string) {
   const rows: unknown = await manager.query(
-    "SELECT id FROM public.payment_refunds WHERE booking_id=$1 FOR UPDATE", [bookingId]);
+    "SELECT id FROM public.payment_refunds WHERE booking_id=$1 AND operation_key='cancellation' ORDER BY created_at,id LIMIT 1 FOR UPDATE", [bookingId]);
   return z.array(z.object({ id: z.uuid() })).max(1).parse(rows)[0] ?? null;
 }
 
-export async function insertBookingRefundRequest(manager: EntityManager, bookingId: string, actorId: string,
+export async function insertBookingRefundRequest(manager: EntityManager, bookingId: string, actorId: string | null,
   payment: z.infer<typeof refundPaymentSchema>) {
   const rows: unknown = await manager.query(
     `INSERT INTO public.payment_refunds(booking_id,payment_attempt_id,provider,provider_payment_id,
-     amount_minor,currency,requested_by_user_id) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+     amount_minor,currency,requested_by_user_id,captured_amount_minor) VALUES($1,$2,$3,$4,$5,$6,$7,$5) RETURNING id`,
     [bookingId,payment.id,payment.provider,payment.provider_payment_id,payment.amount_minor,payment.currency,actorId]);
   return z.array(z.object({ id: z.uuid() })).length(1).parse(rows)[0].id;
 }
@@ -96,10 +115,10 @@ export async function findSettlementBookingId(manager: EntityManager, attemptId:
 
 export async function lockSettlementAttempt(manager: EntityManager, id: string) {
   const rows: unknown = await manager.query(
-    `SELECT id,booking_id,method,provider,provider_payment_id,amount_minor,currency,status,
+    `SELECT id,booking_id,adjustment_id,method,provider,provider_payment_id,amount_minor,currency,status,
      replace((expires_at AT TIME ZONE 'UTC')::text,' ','T') || '+00:00' AS expires_at
      FROM public.payment_attempts WHERE id=$1 FOR UPDATE`, [id]);
-  return z.array(z.object({ id: z.uuid(), booking_id: z.uuid(), method: z.enum(["online", "pay_at_club"]),
+  return z.array(z.object({ id: z.uuid(), booking_id: z.uuid(), adjustment_id: z.uuid().nullable().optional(), method: z.enum(["online", "pay_at_club"]),
     provider: paymentProviderSchema.nullable(), provider_payment_id: z.string().nullable(),
     amount_minor: z.number().int(), currency: z.string(),
     status: z.enum(["pending", "succeeded", "failed", "cancelled", "expired", "due"]),
@@ -140,17 +159,17 @@ export async function insertProviderEventReceipt(manager: EntityManager, receipt
 
 // Phase 8 projections deliberately avoid entity timestamp hydration.
 const processingRefundSchema = z.object({
-  id: z.uuid(), booking_id: z.uuid(), payment_attempt_id: z.uuid(), provider: z.literal("stripe"),
+  id: z.uuid(), booking_id: z.uuid(), payment_attempt_id: z.uuid(), operation_key: z.string().optional(), provider_generation: z.number().int().nonnegative().optional(), provider: z.literal("stripe"),
   provider_payment_id: z.string().min(1), provider_refund_id: z.string().nullable(),
-  amount_minor: z.number().int().positive(), currency: z.string().length(3),
+  amount_minor: z.number().int().positive(), captured_amount_minor: z.number().int().positive().nullable().optional(), currency: z.string().length(3),
   status: z.enum(["pending", "pending_retry", "succeeded", "failed"]),
   created_at: z.iso.datetime({ offset: true }),
   admin_lease_token: z.uuid().nullable(), admin_lease_actor_id: z.uuid().nullable(),
   admin_lease_until: z.iso.datetime({ offset: true }).nullable(), lease_busy: z.boolean().nullable(),
 });
 export type ProcessingRefund = z.infer<typeof processingRefundSchema>;
-const processingRefundProjection = `id,booking_id,payment_attempt_id,provider,provider_payment_id,
-  provider_refund_id,amount_minor,currency,status,admin_lease_token,admin_lease_actor_id,
+const processingRefundProjection = `id,booking_id,payment_attempt_id,operation_key,provider_generation,provider,provider_payment_id,
+  provider_refund_id,amount_minor,captured_amount_minor,currency,status,admin_lease_token,admin_lease_actor_id,
   replace((created_at AT TIME ZONE 'UTC')::text,' ','T') || '+00:00' AS created_at,
   replace((admin_lease_until AT TIME ZONE 'UTC')::text,' ','T') || '+00:00' AS admin_lease_until,
   admin_lease_until > clock_timestamp() AS lease_busy`;
@@ -170,7 +189,7 @@ export async function discoverEventAttempt(manager: EntityManager, eventId: stri
 export async function lockRefundForProcessing(manager: EntityManager, target: { id: string } | { bookingId: string }) {
   const byId = "id" in target;
   const rows: unknown = await manager.query(
-    `SELECT ${processingRefundProjection} FROM public.payment_refunds WHERE ${byId ? "id" : "booking_id"}=$1 FOR UPDATE`,
+    `SELECT ${processingRefundProjection} FROM public.payment_refunds WHERE ${byId ? "id" : "booking_id"}=$1 ORDER BY created_at,id LIMIT 1 FOR UPDATE`,
     [byId ? target.id : target.bookingId]);
   return z.array(processingRefundSchema).max(1).parse(rows)[0] ?? null;
 }
@@ -205,7 +224,7 @@ export async function writeRefundResult(manager: EntityManager, id: string, inpu
 }
 
 export async function writeRefundEventResolution(manager: EntityManager,
-  events: readonly { provider: string; event_id: string }[], attemptId: string, actorId: string) {
+  events: readonly { provider: string; event_id: string }[], attemptId: string, actorId: string | null) {
   for (const event of events) {
     const rows: unknown = await manager.query(
       `WITH changed AS (UPDATE public.payment_provider_events SET reconciliation_required=false,
@@ -220,36 +239,51 @@ export async function listAdminTransactionProjection(manager: EntityManager, que
   page: number; status: string; provider: string; method: string; attention: boolean;
   search: string; sort: string; direction: string; bookingId: string | null;
   attentionRefundStatuses: readonly string[];
+  transaction?: { kind: "payment" | "refund" | "booking"; id: string };
 }): Promise<unknown> {
-  const rows: unknown = await manager.query(`with transactions as (
-    select b.id as booking_id, b.reservation_id, b.customer_name, b.customer_email,
-      coalesce(p.amount_minor, b.total_amount_minor) as amount_minor,
-      coalesce(p.currency, b.currency) as currency,
-      coalesce(p.method, b.payment_method) as method, p.provider, p.status as payment_status,
-      p.provider_payment_id, coalesce(p.created_at, b.created_at) as created_at,
-      coalesce(p.updated_at, b.updated_at) as updated_at,
+  const rows: unknown = await manager.query(`with operations as (
+    select 'payment'::text as kind, p.id, p.booking_id, p.id as attempt_id, null::uuid as refund_id,
+      p.adjustment_id, p.amount_minor, p.currency, p.method, p.provider, p.status, p.provider_payment_id,
+      p.created_at, p.updated_at from public.payment_attempts p
+    union all
+    select 'refund', f.id, f.booking_id, f.payment_attempt_id, f.id, f.adjustment_id,
+      f.amount_minor, f.currency, 'online', f.provider, f.status, f.provider_payment_id,
+      f.created_at, f.updated_at from public.payment_refunds f
+    union all
+    select 'booking', b.id, b.id, null, null, null, b.total_amount_minor, b.currency,
+      b.payment_method, null, null, null, b.created_at, b.updated_at from public.bookings b
+      where not exists(select 1 from public.payment_attempts p where p.booking_id=b.id)
+  ), transactions as (
+    select op.kind as transaction_kind, op.id as transaction_id, op.attempt_id as payment_attempt_id,
+      op.adjustment_id, op.status as transaction_status,
+      coalesce((select sum(rf.amount_minor)::integer from public.payment_refunds rf
+        where rf.payment_attempt_id=op.attempt_id and rf.status='succeeded'),0) as refunded_minor,
+      case when op.kind='refund' then case when exists(select 1 from public.booking_adjustments ba where ba.id=f.adjustment_id and ba.new_total < ba.original_total) then 'Partial refund'
+        when f.amount_minor < coalesce(f.captured_amount_minor,p.amount_minor) then 'Partial refund'
+        else 'Full refund' end
+        when op.adjustment_id is not null then 'Additional adjustment payment'
+        when op.kind='booking' then 'Historical booking' else 'Original payment' end as operation_label,
+      b.id as booking_id, b.reservation_id, b.customer_name, b.customer_email, op.amount_minor,
+      b.total_amount_minor as booking_total_minor,
+      op.currency, op.method, op.provider, p.status as payment_status,
+      op.provider_payment_id, op.created_at, op.updated_at,
       b.status::text as booking_status,r.status::text as reservation_status,r.booking_date, r.starts_at_minute, r.ends_at_minute, c.name as court_name,
       l.name as location_name, l.timezone as location_timezone,
       case when f.id is null then null else jsonb_build_object(
         'id',f.id,'amount_minor',f.amount_minor,'currency',f.currency,'status',f.status,
-        'provider_refund_id',f.provider_refund_id,'requested_by_user_id',f.requested_by_user_id,
+        'provider_refund_id',f.provider_refund_id,'provider_history',f.provider_history,
+        'captured_amount_minor',coalesce(f.captured_amount_minor,p.amount_minor),'requested_by_user_id',f.requested_by_user_id,
         'requested_by_name',nullif(concat_ws(' ',u.first_name,u.last_name),''),
         'payment_attempt_id',f.payment_attempt_id,'created_at',f.created_at,'updated_at',f.updated_at,'last_error',f.last_error) end as refund,
       coalesce(e.reconciliation, '[]'::jsonb) as reconciliation,
       (coalesce(f.status = any($10::text[]), false) or ($11::boolean and coalesce(e.required,false))) as matches_attention
-    from public.bookings b
+    from operations op join public.bookings b on b.id=op.booking_id
     join public.court_reservations r on r.id = b.reservation_id
     join public.courts c on c.id = r.court_id
     join public.locations l on l.id = c.location_id
-    left join public.payment_refunds f on f.booking_id = b.id
+    left join public.payment_attempts p on p.id=op.attempt_id
+    left join public.payment_refunds f on f.id=op.refund_id
     left join public.users u on u.id = f.requested_by_user_id
-    left join lateral (
-      select a.* from public.payment_attempts a where a.booking_id = b.id
-      order by (a.id = f.payment_attempt_id) desc nulls last,
-        (a.status = 'succeeded') desc,
-        case when a.status = 'succeeded' then a.created_at end asc,
-        a.created_at desc, a.id limit 1
-    ) p on true
     left join lateral (
       select bool_or(ev.reconciliation_required) as required, jsonb_agg(jsonb_build_object(
         'event_id',ev.event_id,'attempt_id',ev.attempt_id,'provider',ev.provider,'reconciliation_required',ev.reconciliation_required,
@@ -258,11 +292,12 @@ export async function listAdminTransactionProjection(manager: EntityManager, que
         'settlement_result', ev.settlement_result,
         'outcome', ev.outcome, 'received_at', ev.received_at) order by ev.received_at, ev.event_id) as reconciliation
       from public.payment_provider_events ev join public.payment_attempts a on a.id = ev.attempt_id
-      where a.booking_id = b.id and (ev.reconciliation_required or ev.resolved_at is not null)
+      where a.id = op.attempt_id and (ev.reconciliation_required or ev.resolved_at is not null)
       having count(*) > 0
     ) e on true
   ), filtered as materialized (
-    select * from transactions t where ($9::uuid is null or t.booking_id = $9::uuid) and ($2::text = 'all' or t.payment_status = $2::text)
+    select * from transactions t where ($9::uuid is null or t.booking_id = $9::uuid) and ($2::text = 'all' or t.transaction_status = $2::text)
+      and ($12::text is null or (t.transaction_kind=$12 and t.transaction_id=$13::uuid))
       and ($3::text = 'all' or t.provider = $3::text)
       and ($4::text = 'all' or t.method = $4::text)
       and (not $5::boolean or t.matches_attention)
@@ -270,6 +305,8 @@ export async function listAdminTransactionProjection(manager: EntityManager, que
       and ($6::text = '' or strpos(lower(t.customer_name),lower($6::text)) > 0
         or strpos(lower(t.customer_email),lower($6::text)) > 0
         or strpos(t.booking_id::text,lower($6::text)) > 0
+        or strpos(t.transaction_id::text,lower($6::text)) > 0
+        or strpos(lower(coalesce(t.refund->>'provider_refund_id','')),lower($6::text)) > 0
         or strpos(lower(coalesce(t.provider_payment_id,'')),lower($6::text)) > 0)
   ), stats as (
     select count(*)::integer as total, greatest(1,ceil(count(*) / 20.0)::integer) as total_pages from filtered
@@ -279,16 +316,16 @@ export async function listAdminTransactionProjection(manager: EntityManager, que
       case when $7::text = 'date' and $8::text = 'desc' then t.created_at end desc,
       case when $7::text = 'amount' and $8::text = 'asc' then t.amount_minor end asc,
       case when $7::text = 'amount' and $8::text = 'desc' then t.amount_minor end desc,
-      case when $7::text = 'payment' and $8::text = 'asc' then t.payment_status end asc nulls last,
-      case when $7::text = 'payment' and $8::text = 'desc' then t.payment_status end desc nulls last,
-      t.booking_id asc) as position from filtered t
+      case when $7::text = 'payment' and $8::text = 'asc' then t.transaction_status end asc nulls last,
+      case when $7::text = 'payment' and $8::text = 'desc' then t.transaction_status end desc nulls last,
+      t.transaction_kind asc, t.transaction_id asc) as position from filtered t
   )
   select jsonb_build_object('total',s.total,'totalPages',s.total_pages,'page',least($1::integer,s.total_pages),
     'rows',coalesce((select jsonb_agg(to_jsonb(o) - 'position' - 'matches_attention' order by o.position)
       from ordered o where o.position > (least($1::integer,s.total_pages)-1)*20
         and o.position <= least($1::integer,s.total_pages)*20),'[]'::jsonb)) AS result from stats s;`,
     [query.page,query.status,query.provider,query.method,query.attention,query.search,query.sort,
-      query.direction,query.bookingId,query.attentionRefundStatuses,true]);
+      query.direction,query.bookingId,query.attentionRefundStatuses,true,query.transaction?.kind ?? null,query.transaction?.id ?? null]);
   return z.array(z.object({ result: z.unknown() })).length(1).parse(rows)[0].result;
 }
 
@@ -312,7 +349,7 @@ export async function discoverExpiredHoldLocations(manager: EntityManager, scope
   const rows: unknown = await manager.query(`SELECT DISTINCT c.location_id
     FROM public.bookings b JOIN public.court_reservations r ON r.id=b.reservation_id
     JOIN public.courts c ON c.id=r.court_id
-    WHERE b.status='pending_payment' AND r.status='held' AND r.hold_expires_at<=clock_timestamp()
+    WHERE ((b.status IN ('pending_payment','cancelled') AND r.status='held' AND r.hold_expires_at<=clock_timestamp()) OR EXISTS (SELECT 1 FROM public.booking_adjustments ba WHERE ba.booking_id=b.id AND ba.status IN ('pending','cancelled') AND ba.expires_at<=clock_timestamp() AND EXISTS(SELECT 1 FROM public.payment_attempts pa WHERE pa.adjustment_id=ba.id AND pa.status='pending')))
       AND ($1::uuid IS NULL OR r.court_id=$1) AND ($2::uuid IS NULL OR c.location_id=$2)
     ORDER BY c.location_id LIMIT $3`, [scope.courtId ?? null,scope.locationId ?? null,limit]);
   return z.array(z.object({ location_id: z.uuid() })).parse(rows);
@@ -328,7 +365,7 @@ export async function lockExpiredHoldBookings(manager: EntityManager, locationId
 }) {
   const rows: unknown = await manager.query(`SELECT b.id,b.reservation_id FROM public.bookings b
     JOIN public.court_reservations r ON r.id=b.reservation_id JOIN public.courts c ON c.id=r.court_id
-    WHERE c.location_id=$1 AND b.status='pending_payment' AND r.status='held'
+    WHERE c.location_id=$1 AND b.status IN ('pending_payment','cancelled') AND r.status='held'
       AND r.hold_expires_at<=clock_timestamp() AND ($2::uuid IS NULL OR r.court_id=$2)
       AND ($3::uuid IS NULL OR r.id<>$3)
     ORDER BY b.id LIMIT $4 FOR UPDATE OF b${input.skipLocked ? " SKIP LOCKED" : ""}`,
@@ -362,7 +399,7 @@ export async function discoverSettlementParent(manager: EntityManager, attemptId
 export async function findRefundCaptureEvidence(manager: EntityManager, attemptId: string) {
   const rows: unknown = await manager.query(`SELECT id,booking_id,method,provider,provider_payment_id,amount_minor,currency,status
     FROM public.payment_attempts WHERE id=$1`, [attemptId]);
-  const payment = z.array(z.object({ id:z.uuid(),booking_id:z.uuid(),method:z.string(),provider:paymentProviderSchema.nullable(),
+  const payment = z.array(z.object({ id:z.uuid(),booking_id:z.uuid(),adjustment_id:z.uuid().nullable().optional(),method:z.string(),provider:paymentProviderSchema.nullable(),
     provider_payment_id:z.string().nullable(),amount_minor:z.number().int(),currency:z.string(),status:z.string() })).max(1).parse(rows)[0] ?? null;
   const events: unknown = await manager.query(`SELECT provider,event_id,attempt_id,provider_payment_id,outcome,amount_minor,currency,
     settlement_result,reconciliation_required FROM public.payment_provider_events WHERE attempt_id=$1 ORDER BY provider,event_id`, [attemptId]);
@@ -372,4 +409,28 @@ export async function findRefundCaptureEvidence(manager: EntityManager, attemptI
 export async function countBookingPaymentAttempts(manager: EntityManager, bookingId: string): Promise<number> {
   const rows: unknown = await manager.query("SELECT count(*)::integer AS total FROM public.payment_attempts WHERE booking_id=$1", [bookingId]);
   return z.array(z.object({ total: z.number().int() })).length(1).parse(rows)[0].total;
+}
+
+
+export async function restartFailedRefund(manager: EntityManager, id: string, generation: number, previousReference: string | null) {
+  await manager.query(`UPDATE public.payment_refunds SET status='pending_retry',provider_generation=$2,
+    provider_history=CASE WHEN $3::text IS NULL THEN provider_history ELSE provider_history ||
+      jsonb_build_array(jsonb_build_object('provider_refund_id',$3::text,'status','failed','recorded_at',clock_timestamp())) END,
+    provider_refund_id=NULL,last_error=NULL,updated_at=now() WHERE id=$1 AND status='failed'`, [id,generation,previousReference]);
+}
+
+export async function refundForAttempt(manager: EntityManager, attemptId: string) {
+  const rows: unknown = await manager.query("SELECT id FROM public.payment_refunds WHERE payment_attempt_id=$1 ORDER BY created_at DESC,id LIMIT 1",[attemptId]);
+  return z.array(z.object({id:z.uuid()})).max(1).parse(rows)[0]?.id;
+}
+export async function refundObligationsForAttempt(manager: EntityManager, attemptId: string) {
+  const rows: unknown = await manager.query("SELECT amount_minor FROM public.payment_refunds WHERE payment_attempt_id=$1",[attemptId]);
+  return z.array(z.object({amount_minor:z.number().int().positive()})).parse(rows).reduce((sum,r)=>sum+r.amount_minor,0);
+}
+
+export async function reissueCheckoutCapability(manager: EntityManager, id: string, hash: string) {
+  const rows: unknown = await manager.query(`WITH changed AS (UPDATE public.payment_attempts
+    SET checkout_token_hash=$2,updated_at=now() WHERE id=$1 AND method='online' RETURNING id)
+    SELECT id FROM changed`,[id,hash]);
+  if (z.array(z.object({id:z.uuid()})).max(1).parse(rows).length !== 1) throw new Error("Checkout capability unavailable");
 }

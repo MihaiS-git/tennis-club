@@ -6,7 +6,7 @@ import { selectActivePaymentProvider, type PaymentSettingsResult } from "@/lib/p
 export async function selectPaymentProviderAction(input: unknown): Promise<PaymentSettingsResult> {
   const result = await selectActivePaymentProvider(input);
   if (result.ok) {
-    revalidatePath("/admin/payments");
+    revalidatePath("/admin/payments/transactions");
     revalidatePath("/admin/payments/settings");
     revalidatePath("/book");
   }

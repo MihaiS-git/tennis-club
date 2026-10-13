@@ -2,23 +2,14 @@ import "server-only";
 
 import { In, type EntityManager } from "typeorm";
 import { z } from "zod";
+import type { OpeningHoursPricingPlan } from "@/lib/pricing/opening-hours-reconciliation";
 import { CourtEntity } from "../entities/court.entity";
 import { LocationPricingRuleEntity } from "../entities/location-pricing-rule.entity";
 import { PricingRuleSetEntity } from "../entities/pricing-rule-set.entity";
 
 export async function listLocationPublicationPricing(manager: EntityManager, locationId: string) {
   return manager.getRepository(LocationPricingRuleEntity).find({
-    where: { locationId }, select: { courtId: true, courtState: true, endsOn: true },
-  });
-}
-
-export async function listLocationHoursCompatibilityPricing(manager: EntityManager, locationId: string) {
-  return manager.getRepository(LocationPricingRuleEntity).find({
-    where: { locationId },
-    relations: { court: true },
-    select: { id: true, ruleSetId: true, courtState: true, weekday: true, startsAtMinute: true, endsAtMinute: true,
-      startsOn: true, endsOn: true, court: { name: true } },
-    order: { weekday: "ASC", startsAtMinute: "ASC", endsAtMinute: "ASC", id: "ASC" },
+    where: { locationId }, select: { courtId: true, courtState: true, endsOn: true, startsOn: true, weekday: true, startsAtMinute: true, endsAtMinute: true },
   });
 }
 
@@ -83,4 +74,19 @@ export async function listPublicDayPricing(manager: EntityManager, locationId: s
       AND (p.starts_on IS NULL OR p.starts_on<=$4::date)
       AND (p.ends_on IS NULL OR p.ends_on>=$4::date)`, [locationId,courtIds,weekday,date]);
   return z.array(z.object({ row: z.unknown() })).parse(rows).map(({ row }) => row);
+}
+
+// Configuration fence and location lock must already be held by the service.
+export async function applyOpeningHoursPricing(manager: EntityManager, locationId: string,
+  plan: OpeningHoursPricingPlan, now: Date) {
+  if (plan.deleteRuleIds.length) await manager.delete(LocationPricingRuleEntity, { locationId, id: In(plan.deleteRuleIds) });
+  for (const id of plan.removeRuleSetIds) await deleteLocationRuleSet(manager, id, locationId);
+  for (const ids of plan.moveRuleIds) {
+    const ruleSetId = await insertRuleSet(manager, locationId);
+    await manager.update(LocationPricingRuleEntity, { id: In(ids), locationId }, { ruleSetId });
+  }
+  for (const rows of plan.newRuleSets) {
+    const ruleSetId = await insertRuleSet(manager, locationId);
+    await insertPricingRules(manager, rows.map((row) => ({ ...row, locationId, ruleSetId, updatedAt: now })));
+  }
 }

@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
+import { expectToast } from "../helpers/notifications";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ProfileActionState } from "../../src/lib/profile/validation";
-const { personal, tennis, upload, remove, success } = vi.hoisted(() => ({
-  personal: vi.fn(), tennis: vi.fn(), upload: vi.fn(), remove: vi.fn(), success: vi.fn(),
+const { personal, tennis, upload, remove } = vi.hoisted(() => ({
+  personal: vi.fn(), tennis: vi.fn(), upload: vi.fn(), remove: vi.fn(),
 }));
 vi.mock("../../src/app/profile/actions", () => ({ savePersonalAction: personal, saveTennisAction: tennis, uploadAvatarAction: upload, removeAvatarAction: remove }));
-vi.mock("sonner", () => ({ toast: { success } }));
 import { PersonalInformationForm, TennisProfileForm, AvatarForms } from "../../src/app/profile/profile-forms";
 const emptyPersonal = { first_name: null, last_name: null, phone: null, date_of_birth: null, address_line1: null, address_line2: null, city: null, postal_code: null, country_code: null };
 beforeEach(() => { vi.resetAllMocks(); personal.mockResolvedValue({}); tennis.mockResolvedValue({}); });
@@ -84,7 +84,7 @@ it.each(["remove"])("disables both avatar controls and blocks duplicate submits 
   }
   expect(activeAction).toHaveBeenCalledOnce(); expect(otherAction).not.toHaveBeenCalled();
   await act(async () => finish({ formError: "Please retry." }));
-  await screen.findByText("Please retry.");
+  await expectToast("Please retry.");
   expect(input.hasAttribute("disabled")).toBe(false);
   for (const form of [uploadForm, removeForm]) expect(within(form).getByRole("button").hasAttribute("disabled")).toBe(false);
 });

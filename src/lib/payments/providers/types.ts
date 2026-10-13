@@ -8,7 +8,12 @@ export interface PaymentProviderConfiguration {
 }
 
 export interface OnlinePaymentAdapter {
-  refundPayment(refund: { id: string; providerPaymentId: string; amountMinor: number; currency: string;
+  resumePayment(attempt: { id: string; providerPaymentId: string }): Promise<import("../domain").OnlineCheckout["presentation"]>;
+  readPayment(attempt: { id: string; providerPaymentId: string }): Promise<{
+    status: "pending" | "processing" | "succeeded" | "cancelled";
+    amountMinor: number; currency: string;
+  }>;
+  refundPayment(refund: { id: string; generation?: number; providerPaymentId: string; amountMinor: number; currency: string;
     providerRefundId: string | null }): Promise<{ providerRefundId: string; status: "succeeded" | "pending" | "failed" }>;
 
   cancelPayment(attempt: { id: string; providerPaymentId: string }): Promise<"cancelled" | "succeeded" | "processing">;

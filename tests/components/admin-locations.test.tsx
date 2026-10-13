@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { lastToast } from "../helpers/notifications";
 import { installDialogMock } from "../helpers/dialog";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -11,7 +12,7 @@ vi.mock("../../src/lib/admin/locations", () => ({ listAdminLocations, listAdminL
 vi.mock("../../src/lib/admin/courts", () => ({ listAdminCourts }));
 vi.mock("../../src/lib/admin/court-coverage", () => ({ listAdminCourtCoverage }));
 vi.mock("../../src/lib/admin/pricing", () => ({ listAdminPricingRules }));
-vi.mock("../../src/lib/admin/opening-hours", () => ({ listAdminLocationOpeningHours }));
+vi.mock("../../src/lib/admin/opening-hours", () => ({ listAdminLocationOpeningHours, listAdminOpeningHoursSchedules: async () => [] }));
 vi.mock("../../src/app/admin/locations/actions", () => ({ saveLocationAction, archiveLocationAction, setLocationPublicationAction }));
 vi.mock("../../src/app/admin/locations/opening-hours-actions", () => ({ mutateOpeningHoursAction }));
 vi.mock("../../src/app/admin/courts/actions", () => ({ saveCourtAction: vi.fn() }));
@@ -20,7 +21,6 @@ vi.mock("next/navigation", () => ({
   usePathname: () => window.location.pathname,
   useSearchParams: () => new URLSearchParams(window.location.search),
 }));
-vi.mock("sonner", () => ({ toast: { success: vi.fn() } }));
 import { LocationForm } from "../../src/app/admin/locations/location-form";
 import { PublicationControl } from "../../src/app/admin/locations/publication-control";
 import { LocationArchiveControl } from "../../src/app/admin/locations/location-archive-control";
@@ -130,7 +130,7 @@ it("shows a contextual publication failure when server readiness changes", async
     message: "This location cannot be published yet. Configure pricing for every active court." });
   render(<PublicationControl id={location.id} published={false} blocked={false} />);
   fireEvent.click(screen.getByRole("button", { name: "Enable public booking" }));
-  await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Configure pricing"));
+  await waitFor(() => expect(lastToast()).toContain("Configure pricing"));
 });
 
 it("disables publishing incomplete configuration while allowing explicit unpublication", () => {
@@ -188,9 +188,9 @@ it("keeps archive confirmation open with contextual safe feedback on failure", a
   render(<LocationArchiveControl id={location.id} name={location.name} archived={false} />);
   fireEvent.click(screen.getByRole("button", { name: "Archive Central Club" }));
   fireEvent.click(within(screen.getByRole("dialog", { name: "Archive Central Club" })).getByRole("button", { name: "Archive location" }));
-  await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Unable to archive"));
+  await waitFor(() => expect(lastToast()).toContain("Unable to archive"));
   expect(screen.getByRole("dialog", { name: "Archive Central Club" })).toBeTruthy();
-  expect(screen.getByRole("alert").textContent).not.toContain("private database error");
+  expect(lastToast()).not.toContain("private database error");
 });
 
 it.each([0, 1440])("creates a location with default or selected notice %s", async (notice) => {
@@ -237,11 +237,17 @@ it.each([
   openEditLocation();
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Unsaved name" } });
   fireEvent.click(screen.getByRole("button", { name: "Save location" }));
-  await waitFor(() => expect(screen.getByRole("alert").textContent).toContain(result.message));
+  if (result.reason === "duplicate-slug") await screen.findByText(/A location with this generated slug already exists/);
+  else await waitFor(() => expect(lastToast()).toContain(result.message));
   expect(screen.getByLabelText("Name")).toHaveProperty("value", "Unsaved name");
   expect(push).not.toHaveBeenCalled();
   expect(refresh).not.toHaveBeenCalled();
   expect(screen.getByRole("button", { name: "Save location" })).toHaveProperty("disabled", false);
+  saveLocationAction.mockResolvedValueOnce({ ok: true, id: location.id });
+  fireEvent.click(screen.getByRole("button", { name: "Save location" }));
+  await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+  expect(saveLocationAction.mock.calls[1][0]).toEqual(saveLocationAction.mock.calls[0][0]);
+  expect(screen.getByLabelText("Name")).toHaveProperty("value", "Unsaved name");
 });
 
 it("preserves creation input after failure and navigates only after a successful retry", async () => {
@@ -254,7 +260,7 @@ it("preserves creation input after failure and navigates only after a successful
   fireEvent.keyDown(timezone, { key: "Enter" });
   const form = screen.getByRole("form", { name: "Create location" });
   fireEvent.submit(form);
-  await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Unable to save location"));
+  await waitFor(() => expect(lastToast()).toContain("Unable to save location"));
   expect(screen.getByLabelText("Name")).toHaveProperty("value", "New Club");
   expect(new FormData(form as HTMLFormElement).get("timezone")).toBe("Europe/Bucharest");
   expect(push).not.toHaveBeenCalled();
@@ -316,7 +322,7 @@ it.each(["create", "edit"])("disables pending %s location saves and preserves va
   fireEvent.click(save);
   expect(saveLocationAction).toHaveBeenCalledTimes(1);
   await act(async () => rejectSave(new Error("Unavailable")));
-  expect(screen.getByRole("alert").textContent).toContain("Unable to save location");
+  expect(lastToast()).toContain("Unable to save location");
   expect(screen.getByLabelText("Name")).toHaveProperty("value", "Retry draft");
   expect(save).toHaveProperty("disabled", false);
   fireEvent.click(save);

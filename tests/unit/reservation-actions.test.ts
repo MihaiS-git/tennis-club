@@ -20,10 +20,10 @@ vi.mock("@/lib/reservations/personal-service", () => ({
 }));
 
 import { cancelAdminCustomerBookingAction, cancelAdminReservationAction, editAdminReservationAction,
-  reserveCourtAction, rescheduleAdminBookingAction, quoteAdminBookingAction } from "@/app/reservations/actions";
+  reserveCourtAction, rescheduleAdminBookingAction, quoteAdminBookingAction } from "@/app/admin/reservations/actions";
 import { cancelOwnReservationAction, editOwnReservationAction } from "@/app/my-activity/bookings/actions";
 
-const upcomingPaths = [["/book"], ["/reservations"], ["/my-activity/bookings"]];
+const upcomingPaths = [["/book"], ["/admin/reservations"], ["/my-activity/bookings"]];
 const cancelledPaths = [...upcomingPaths, ["/my-activity/history"]];
 const mutations = [
   { name: "direct reservation create", action: reserveCourtAction, service: services.create, paths: upcomingPaths },
@@ -37,7 +37,7 @@ const mutations = [
 
 beforeEach(() => vi.resetAllMocks());
 
-it.each([mutations[0]])("$name invalidates exactly the affected reads after success and preserves the result", async ({ action, service, paths }) => {
+it.each(mutations)("$name invalidates exactly the affected reads after success and preserves the result", async ({ action, service, paths }) => {
   const input = { id: "owned-by-another-user", reason: "Unchanged intent" };
   const result = { ok: true, reservation: { reason: "Saved reason" } };
   let finish!: (value: unknown) => void;
@@ -63,5 +63,13 @@ it.each([
   const failure = { ok: false, reason: "price_changed", totalAmountMinor: 10000 };
   service.mockResolvedValue(failure);
   expect(await save({ save: true })).toBe(failure);
+  expect(services.revalidate).not.toHaveBeenCalled();
+});
+
+it("owner cancellation rejection leaves all calendar caches unchanged", async () => {
+  const failure = { ok: false, message: "This reservation is no longer available to cancel." };
+  services.ownerCancel.mockResolvedValue(failure);
+  expect(await cancelOwnReservationAction("stale-reservation")).toBe(failure);
+  expect(services.ownerCancel).toHaveBeenCalledExactlyOnceWith("stale-reservation");
   expect(services.revalidate).not.toHaveBeenCalled();
 });

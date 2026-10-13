@@ -1,5 +1,6 @@
 // Deterministic local fixtures. Existing rows are reused and never reset.
 import { getDataSource } from "../src/lib/db/data-source.ts";
+import { OpeningHoursScheduleEntity } from "../src/lib/db/entities/opening-hours-schedule.entity.ts";
 import { LocationEntity } from "../src/lib/db/entities/location.entity.ts";
 import { CourtEntity } from "../src/lib/db/entities/court.entity.ts";
 import { LocationOpeningHoursEntity } from "../src/lib/db/entities/location-opening-hours.entity.ts";
@@ -65,6 +66,9 @@ async function seedConfiguration(manager: EntityManager) {
     } else hours.push({ locationId, weekday, opensAtMinute: 480, closesAtMinute: 1200 });
   }
   for (const fixture of hours) {
+    let schedule = await manager.findOneBy(OpeningHoursScheduleEntity, { locationId: fixture.locationId });
+    if (!schedule) schedule = await manager.save(OpeningHoursScheduleEntity, { locationId: fixture.locationId, startsOn: "0001-01-01", endsOn: null });
+    fixture.scheduleId = schedule.id;
     if (!await manager.findOneBy(LocationOpeningHoursEntity, fixture)) await manager.save(LocationOpeningHoursEntity, fixture);
   }
 
@@ -121,11 +125,17 @@ async function seedConfiguration(manager: EntityManager) {
     for (const court of activeCourts) {
       const rules = await manager.findBy(LocationPricingRuleEntity, { courtId: court.id });
       publicationCourts.push({ ...court, location_pricing_rules: rules
-        .map((rule) => ({ court_state: rule.courtState, ends_on: rule.endsOn })) });
+        .map((rule) => ({ court_state: rule.courtState, weekday: rule.weekday, starts_on: rule.startsOn, ends_on: rule.endsOn, starts_at_minute: rule.startsAtMinute, ends_at_minute: rule.endsAtMinute })) });
     }
+    const schedules = await manager.findBy(OpeningHoursScheduleEntity, { locationId: id });
     const configuration = {
       ...row, is_active: row.isActive, is_public: row.isPublic, archived_at: null,
-      location_opening_hours: await manager.findBy(LocationOpeningHoursEntity, { locationId: id }),
+      location_opening_hours: (await manager.findBy(LocationOpeningHoursEntity, { locationId: id })).map((hour) => {
+        const schedule = schedules.find((s) => s.id === hour.scheduleId);
+        if (!schedule) throw new Error("Opening-hours schedule missing.");
+        return { id: hour.id, weekday: hour.weekday, starts_on: schedule.startsOn, ends_on: schedule.endsOn,
+          opens_at_minute: hour.opensAtMinute, closes_at_minute: hour.closesAtMinute };
+      }),
       courts: publicationCourts,
     };
     const missing = publicationReadiness(configuration, publicationToday(row.timezone));

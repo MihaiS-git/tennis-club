@@ -1,7 +1,9 @@
+import { insertOpeningHoursFixture } from "./opening-hours-fixtures";
 import { insertCheckoutFixture } from "./checkout-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test } from "vitest";
+import { bookingContactPrefill } from "@/lib/bookings/prefill";
 import { createCustomerBooking } from "@/lib/bookings/service";
 import { getPublicCourtDay } from "@/lib/courts/public-calendar";
 import { listPublicLocationsWithCourts } from "@/lib/courts/public";
@@ -39,8 +41,8 @@ test("customer booking persists both rows, snapshots contact and price, and roll
       { id: courtId, location_id: locationId, name: "Court", slug: "court", surface: "clay", environment: "outdoor", is_active: true },
       { id: inactiveCourtId, location_id: locationId, name: "Inactive", slug: "inactive", surface: "clay", environment: "outdoor", is_active: false },
     ])).error, null);
-    assert.strictEqual((await service.from("location_opening_hours").insert({ location_id: locationId,
-      weekday: mondayWeekday(date), opens_at_minute: 600, closes_at_minute: 900 })).error, null);
+    assert.strictEqual((await insertOpeningHoursFixture(service, { location_id: locationId,
+      weekday: mondayWeekday(date), opens_at_minute: 600, closes_at_minute: 720 })).error, null);
     assert.strictEqual((await service.from("pricing_rule_sets").insert({ id: ruleSetId, location_id: locationId })).error, null);
     const priceRule = { location_id: locationId, rule_set_id: ruleSetId, court_id: courtId,
       court_state: "outdoor", weekday: mondayWeekday(date), starts_at_minute: 600,
@@ -60,6 +62,7 @@ test("customer booking persists both rows, snapshots contact and price, and roll
     expect(await createCustomerBooking({ ...base, expectedTotalAmountMinor: 6000 }, guest, now))
       .toEqual({ ok: false, reason: "price_changed", totalAmountMinor: 6000, currency: "EUR" });
     expect(await rows()).toEqual({ bookings: [], reservations: [] });
+    expect(await bookingContactPrefill(guest)).toEqual({ customerName: "", customerEmail: "", customerPhone: "" });
     const guestResult = await createCustomerBooking({ ...base, expectedTotalAmountMinor: 6000,
       expectedCurrency: "EUR" }, guest, now);
     assert.ok(guestResult.ok, JSON.stringify(guestResult));
@@ -93,14 +96,17 @@ test("customer booking persists both rows, snapshots contact and price, and roll
     userIds.push(memberId);
     const member = reader();
     assert.strictEqual((await member.auth.signInWithPassword({ email, password })).error, null);
+    expect(await bookingContactPrefill(member)).toEqual({ customerName: "", customerEmail: email, customerPhone: "" });
+    assert.strictEqual((await service.from("users").update({ first_name: "Ana", last_name: "Player", phone: "+40 111" }).eq("id", memberId)).error, null);
+    expect(await bookingContactPrefill(member)).toEqual({ customerName: "Ana Player", customerEmail: email, customerPhone: "+40 111" });
     const profileBefore = await service.from("users").select("email, first_name, last_name, phone").eq("id", memberId).single();
     expect(await createCustomerBooking({ ...base, startMinute: 660, endMinute: 720,
-      customerName: "Different Customer", customerEmail: "different@example.test",
+      customerName: "Different Customer", customerEmail: "different@example.test", customerPhone: "  +40 999  ",
       expectedTotalAmountMinor: 7000, expectedCurrency: "EUR" }, member, now)).toMatchObject({ ok: true, cancellationPolicy: { noticeMinutes: 1440, cutoff: "2099-10-14T11:00:00.000Z" } });
     const booked = await allBookings();
     expect(booked).toHaveLength(2);
     expect(booked.find((row) => row.account_user_id === memberId)).toMatchObject({
-      customer_name: "Different Customer", customer_email: "different@example.test", cancellation_notice_minutes: 1440, total_amount_minor: 7000, currency: "EUR" });
+      customer_name: "Different Customer", customer_email: "different@example.test", customer_phone: "+40 999", cancellation_notice_minutes: 1440, total_amount_minor: 7000, currency: "EUR" });
     expect((await service.from("users").select("email, first_name, last_name, phone").eq("id", memberId).single()).data)
       .toEqual(profileBefore.data);
 

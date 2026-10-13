@@ -9,7 +9,7 @@ import { logger } from "@/lib/logger";
 import type { ConfirmedCancellationPolicy } from "@/lib/bookings/confirmation-policy";
 import type { LocationCurrency } from "@/lib/pricing/money";
 import type { OnlineCheckout } from "@/lib/payments/domain";
-import { abandonOnlineCheckout, readOnlineCheckout } from "@/lib/payments/checkout";
+import { abandonOnlineCheckout } from "@/lib/payments/checkout";
 
 export type CommitBookingResult = ({ ok: true; totalAmountMinor: number; currency: LocationCurrency; cancellationPolicy: ConfirmedCancellationPolicy | null } &
   ({ status: "confirmed"; holdExpiresAt: null } | { status: "pending_payment"; holdExpiresAt: string; checkout: OnlineCheckout }))
@@ -39,20 +39,15 @@ export async function commitCustomerBookingAction(input: unknown): Promise<Commi
   return { ok: true, status: "confirmed", holdExpiresAt: null, totalAmountMinor: result.totalAmountMinor, currency: result.currency, cancellationPolicy: result.cancellationPolicy };
 }
 
-export async function readCheckoutStatusAction(input: unknown) {
-  try { return { ok: true as const, ...await readOnlineCheckout(input) }; }
-  catch { return { ok: false as const, message: "Unable to check payment. Please try again." }; }
-}
-
 export async function abandonCheckoutAction(input: unknown) {
   try {
     const result = await abandonOnlineCheckout(input);
     if (!result.released) return { ok: false as const,
-      message: "Payment is processing or has already completed. Wait for booking confirmation." };
+      message: "Cancellation requested. The payment outcome is still uncertain. You may close this window; do not pay again yet." };
     revalidatePath("/book");
-    return { ok: true as const };
+    return { ok: true as const, paymentStatus: result.paymentStatus };
   } catch {
     logger.error({ event: "payments.abandonment_failed" }, "Unable to abandon checkout");
-    return { ok: false as const, message: "Unable to cancel payment. Please try again. Your hold will expire automatically." };
+    return { ok: false as const, message: "Unable to confirm payment cancellation. You may close this window; do not pay again until its outcome is established." };
   }
 }

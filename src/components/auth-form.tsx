@@ -21,20 +21,3 @@ export function AuthShell({
     </main>
   );
 }
-
-export function FormMessage({
-  children,
-}: {
-  children?: string;
-}) {
-  if (!children) return null;
-
-  return (
-    <p
-      role="alert"
-      className="mb-4 rounded-lg bg-danger-background px-3 py-2 text-sm text-danger"
-    >
-      {children}
-    </p>
-  );
-}

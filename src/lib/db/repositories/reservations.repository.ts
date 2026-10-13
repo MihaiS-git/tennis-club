@@ -1,3 +1,4 @@
+import { publicationHoursSchema, publicationPricingSchema } from "@/lib/locations/publication";
 import "server-only";
 
 import type { EntityManager } from "typeorm";
@@ -67,10 +68,12 @@ export async function hasCustomerBookingLink(manager: EntityManager, id: string)
 
 export async function listReservationOpeningHours(manager: EntityManager, locationId: string, date: string) {
   const rows: unknown = await manager.query(
-    `SELECT id, location_id, weekday, opens_at_minute, closes_at_minute,
-     ${timestamp("created_at")} AS created_at, ${timestamp("updated_at")} AS updated_at
-     FROM public.location_opening_hours WHERE location_id = $1 AND weekday = $2
-     ORDER BY opens_at_minute, id`, [locationId, mondayWeekday(date)],
+    `SELECT h.id, h.location_id, weekday, opens_at_minute, closes_at_minute,
+     ${timestamp("h.created_at")} AS created_at, ${timestamp("h.updated_at")} AS updated_at
+     FROM public.location_opening_hours h JOIN public.opening_hours_schedules s ON s.id=h.schedule_id
+     WHERE h.location_id = $1 AND weekday = $2 AND s.starts_on <= $3::date
+       AND (s.ends_on IS NULL OR s.ends_on >= $3::date)
+     ORDER BY opens_at_minute, h.id`, [locationId, mondayWeekday(date), date],
   );
   return z.array(openingIntervalSchema).parse(rows);
 }
@@ -170,23 +173,23 @@ export async function findReservationEditLocation(manager: EntityManager, locati
 export async function listInternalReservationLocations(manager: EntityManager) {
   const rows: unknown = await manager.query(
     `SELECT l.id, l.name, l.slug, l.timezone, l.currency, l.is_active, l.is_public,
+     EXISTS(SELECT 1 FROM public.court_reservations r JOIN public.courts rc ON rc.id=r.court_id
+       WHERE rc.location_id=l.id AND r.status IN ('active','held')) AS has_reservations,
      ${timestamp("l.archived_at")} AS archived_at,
-     coalesce((SELECT jsonb_agg(jsonb_build_object('id', h.id)) FROM public.location_opening_hours h
+     coalesce((SELECT jsonb_agg(jsonb_build_object('id',h.id,'weekday',h.weekday,'opens_at_minute',h.opens_at_minute,'closes_at_minute',h.closes_at_minute,'starts_on',s.starts_on,'ends_on',s.ends_on)) FROM public.location_opening_hours h JOIN public.opening_hours_schedules s ON s.id=h.schedule_id
        WHERE h.location_id = l.id), '[]'::jsonb) AS location_opening_hours,
      coalesce((SELECT jsonb_agg(jsonb_build_object('id', c.id, 'name', c.name, 'environment', c.environment,
        'is_active', c.is_active, 'location_pricing_rules',
-       coalesce((SELECT jsonb_agg(jsonb_build_object('court_state', p.court_state, 'ends_on', p.ends_on))
+       coalesce((SELECT jsonb_agg(jsonb_build_object('court_state',p.court_state,'ends_on',p.ends_on,'starts_on',p.starts_on,'weekday',p.weekday,'starts_at_minute',p.starts_at_minute,'ends_at_minute',p.ends_at_minute))
          FROM public.location_pricing_rules p WHERE p.court_id = c.id), '[]'::jsonb)) ORDER BY c.name, c.id)
        FROM public.courts c WHERE c.location_id = l.id AND c.is_active), '[]'::jsonb) AS courts
      FROM public.locations l WHERE l.is_active AND l.archived_at IS NULL ORDER BY l.display_order, l.name, l.id`,
   );
   return z.array(z.object({ id: z.uuid(), name: z.string(), slug: z.string(), timezone: z.string(), currency: z.string(),
-    is_active: z.boolean(), is_public: z.boolean(), archived_at: instant.nullable(),
-    location_opening_hours: z.array(z.object({ id: z.uuid() })),
+    is_active: z.boolean(), is_public: z.boolean(), has_reservations: z.boolean(), archived_at: instant.nullable(),
+    location_opening_hours: z.array(publicationHoursSchema),
     courts: z.array(z.object({ id: z.uuid(), name: z.string(), environment: z.enum(["indoor", "outdoor"]),
-      is_active: z.boolean(), location_pricing_rules: z.array(z.object({
-        court_state: z.enum(["indoor", "outdoor", "covered"]), ends_on: z.iso.date().nullable(),
-      })) })),
+      is_active: z.boolean(), location_pricing_rules: z.array(publicationPricingSchema) })),
   })).parse(rows);
 }
 
@@ -231,11 +234,13 @@ export async function updateCustomerReservationCancellation(manager: EntityManag
 
 export async function updateCustomerReservationSchedule(manager: EntityManager, id: string, input: {
   courtId: string; date: string; startMinute: number; endMinute: number;
-}) {
-  await manager.query(
-    `UPDATE public.court_reservations SET court_id=$2,booking_date=$3,starts_at_minute=$4,ends_at_minute=$5,
-     updated_at=greatest(clock_timestamp(),updated_at + interval '1 microsecond') WHERE id=$1`,
-    [id,input.courtId,input.date,input.startMinute,input.endMinute]);
+}, deadline: string | null = null) {
+  const rows: unknown = await manager.query(
+    `WITH changed AS (UPDATE public.court_reservations SET court_id=$2,booking_date=$3,starts_at_minute=$4,ends_at_minute=$5,
+     updated_at=greatest(clock_timestamp(),updated_at + interval '1 microsecond') WHERE id=$1
+       AND ($6::timestamptz IS NULL OR clock_timestamp()<$6) RETURNING id) SELECT id FROM changed`,
+    [id,input.courtId,input.date,input.startMinute,input.endMinute,deadline]);
+  return z.array(z.object({id:z.uuid()})).max(1).parse(rows).length === 1;
 }
 
 export async function listCustomerEditOccupancy(manager: EntityManager, locationId: string, date: string, excludeId: string) {
@@ -279,7 +284,8 @@ export async function listAdminOperationalProjection(manager: EntityManager, cou
       case when b.id is null and u.id is not null then coalesce(
         nullif(btrim(concat_ws(' ', nullif(btrim(u.first_name), ''), nullif(btrim(u.last_name), ''))), ''),
         nullif(btrim(p.display_name), ''), u.email) else null end AS creator_name,
-      b.customer_name, b.customer_email, b.customer_phone,
+      u.email AS creator_email, u.phone AS creator_phone,
+      b.account_user_id, b.payment_method, b.customer_name, b.customer_email, b.customer_phone,
       b.total_amount_minor, b.currency, b.cancellation_notice_minutes,
       coalesce((select jsonb_agg(to_jsonb(p) order by p.created_at,p.id) from public.payment_attempts p where p.booking_id=b.id),'[]'::jsonb) AS payment_facts
     from public.court_reservations r

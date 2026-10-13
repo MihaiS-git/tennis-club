@@ -16,7 +16,9 @@ class MetadataDataSource extends DataSource {
   }
 }
 
-const entities = [LocationEntity, CourtEntity, CourtCoveragePeriodEntity,
+import { OpeningHoursScheduleEntity } from "@/lib/db/entities/opening-hours-schedule.entity";
+
+const entities = [OpeningHoursScheduleEntity, LocationEntity, CourtEntity, CourtCoveragePeriodEntity,
   LocationOpeningHoursEntity, PricingRuleSetEntity, LocationPricingRuleEntity];
 
 async function loadMetadata() {
@@ -43,12 +45,12 @@ test("existing scalar repository inserts reuse FK columns and omit obsolete gene
   const ruleSetId = "00000000-0000-4000-8000-000000000004";
   const updatedAt = new Date("2026-10-08T00:00:00Z");
   await insertCourtCoverage(manager, courtId, { startsOn: "2026-11-01", endsOn: "2026-11-30" }, updatedAt);
-  await insertOpeningHours(manager, [{ locationId, weekday: 1, opensAtMinute: 480, closesAtMinute: 1320 }]);
+  await insertOpeningHours(manager, [{ locationId, scheduleId: ruleSetId, weekday: 1, opensAtMinute: 480, closesAtMinute: 1320 }]);
   await insertPricingRules(manager, [{ locationId, ruleSetId, courtId, courtState: "covered", weekday: 1,
     startsAtMinute: 480, endsAtMinute: 1320, startsOn: null, endsOn: null, pricePerHourMinor: 2500, updatedAt }]);
   expect(queries).toHaveLength(3);
   expect(queries[0].parameters).toEqual([courtId, "2026-11-01", "2026-11-30", updatedAt]);
-  expect(queries[1].parameters).toEqual([locationId, 1, 480, 1320]);
+  expect(queries[1].parameters).toEqual([locationId, ruleSetId, 1, 480, 1320]);
   expect(queries[2].parameters).toEqual([locationId, ruleSetId, courtId, "covered", 1, 480, 1320, null, null, 2500, updatedAt]);
   for (const { sql } of queries) {
     expect(sql).not.toContain('"court_environment"');

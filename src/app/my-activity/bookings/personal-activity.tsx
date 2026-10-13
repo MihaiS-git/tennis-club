@@ -1,5 +1,7 @@
 "use client";
 
+import { toast } from "sonner";
+
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { DialogHeader, DialogFooter } from "@/components/dialog-layout";
@@ -12,7 +14,7 @@ import type { UpcomingActivity as Activity, UpcomingCourtActivity as CourtActivi
 import type { PersonalCustomerBooking } from "@/lib/bookings/personal";
 import { formatMoney } from "@/lib/pricing/money";
 import { isReservationInProgress, isReservationUpcoming, type PersonalReservation } from "@/lib/reservations/personal";
-import { BookingEditForm, type BookingEditActions } from "@/app/reservations/booking-edit-form";
+import { BookingEditForm, type BookingEditActions } from "@/app/admin/reservations/booking-edit-form";
 import { cancelOwnReservationAction, loadPersonalActivityAction, loadOwnBookingEditDayAction, quoteOwnBookingAction, rescheduleOwnBookingAction } from "./actions";
 import { ActivityControls } from "../activity-controls";
 import { ActivityTable } from "../activity-table";
@@ -60,10 +62,7 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
   const [selected, setSelected] = useState<PersonalReservation | null>(null);
   const [selectedBooking, setSelectedBooking] = useState<PersonalCustomerBooking | null>(null);
   const [editing, setEditing] = useState(false);
-  const [detailNotice, setDetailNotice] = useState("");
   const [confirming, setConfirming] = useState(false);
-  const [cancelError, setCancelError] = useState("");
-  const [success, setSuccess] = useState("");
   const [pending, setPending] = useState(false);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const bookingDialogRef = useRef<HTMLDialogElement>(null);
@@ -72,30 +71,36 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
   const titleId = useId();
 
   useEffect(() => {
+    if (error) toast.error(error, { action: { label: "Retry", onClick: () => setError("") } });
+  }, [error]);
+
+  useEffect(() => {
     if (activity || error) return;
     let cancelled = false;
+    const notification = toast.loading("Loading your court activity…");
     loadPersonalActivityAction(listQuery).then((value) => {
       if (!cancelled) setActivity(value);
     }).catch(() => {
       if (!cancelled) setError("Unable to load your court activity. Try again.");
     });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; toast.dismiss(notification); };
   }, [activity, error, listQuery]);
 
   async function cancel() {
     if (!selected || pending) return;
-    setPending(true); setCancelError("");
+    setPending(true);
     let cancelled = false;
+    const notification = toast.loading("Cancelling reservation…");
     try {
       const result = await cancelOwnReservationAction(selected.id);
-      if (!result.ok) { setCancelError(result.message); return; }
+      if (!result.ok) { toast.error(result.message, { id: notification }); return; }
       cancelled = true;
       setConfirming(false);
       dialogRef.current?.close();
       setSelected(null);
-      setSuccess("Reservation cancelled.");
+      toast.success("Reservation cancelled.", { id: notification });
     } catch {
-      setCancelError("Unable to cancel this reservation. Try again.");
+      toast.error("Unable to cancel this reservation. Try again.", { id: notification });
     } finally { setPending(false); }
     if (cancelled) {
       try { setActivity(await loadPersonalActivityAction(listQuery)); }
@@ -106,19 +111,17 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
   async function refreshCancelledBooking() {
     bookingDialogRef.current?.close();
     setSelectedBooking(null);
-    setSuccess("Booking cancelled.");
     try { setActivity(await loadPersonalActivityAction(listQuery)); }
     catch { setActivity(null); setError("Unable to load your court activity. Try again."); }
   }
 
-  async function refreshEditedReservation(notice: string) {
+  async function refreshEditedReservation() {
     setEditing(false);
     try {
       const refreshed = await loadPersonalActivityAction(listQuery);
       setActivity(refreshed);
       const current = refreshed.upcoming.find((row) => row.id === selected?.id);
       setSelected(current ?? null);
-      setDetailNotice(notice);
     } catch {
       setSelected(null);
       setActivity(null);
@@ -126,13 +129,12 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
     }
   }
 
-  if (!activity && !error) return <p role="status" className="text-sm text-muted-foreground">Loading your court activity…</p>;
-  if (error) return <div role="alert" className="text-sm text-danger">{error} <button type="button" className="font-semibold underline" onClick={() => setError("")}>Retry</button></div>;
+  if (!activity && !error) return <div aria-busy="true" className="min-h-20" />;
+  if (error) return <button type="button" className="text-sm font-semibold underline" onClick={() => setError("")}>Retry loading court activity</button>;
   if (!activity) return null;
 
   function openDetails(item: CourtActivity, row: HTMLTableRowElement) {
-    returnFocusRef.current = row;
-    setSuccess(""); setDetailNotice(""); setEditing(false);
+    returnFocusRef.current = row; setEditing(false);
     if (item.kind === "booking") setSelectedBooking(item.row); else setSelected(item.row);
   }
 
@@ -161,7 +163,6 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
   return <>
     {activity.locations && activity.courts && <ActivityControls staff={staff} scope="upcoming" query={query}
       options={{ locations: activity.locations, courts: activity.courts }} />}
-    <p role="status" className="min-h-5 text-sm text-success">{success}</p>
     {list(activity.ordered ?? [...activity.bookings.map((row): CourtActivity => ({ kind: "booking", row })), ...activity.upcoming.map((row): CourtActivity => ({ kind: "reservation", row }))])}
     {activity.hasNext !== undefined && <ActivityPagination scope="upcoming" query={query}
       hasNext={activity.hasNext} empty={!activity.bookings.length && !activity.upcoming.length} />}
@@ -175,7 +176,6 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
           actions={ownBookingActions} onCancel={() => setEditing(false)} onPendingChange={setPending}
           onSaved={async () => {
             setEditing(false);
-            setSuccess("Booking updated.");
             try {
               const refreshed = await loadPersonalActivityAction(listQuery);
               setActivity(refreshed);
@@ -200,17 +200,16 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
         <DialogHeader titleId={titleId} title={editing ? "Edit reservation" : "Reservation details"} status={editing ? undefined : selected.status === "cancelled" ? "Cancelled" : "Active"} disabled={pending} onClose={() => dialogRef.current?.close()} />
         {editing ? <ReservationEditForm key={`${selected.id}:${selected.updated_at}`} reservation={selected}
           inProgress={isReservationInProgress(selected, new Date())} onCancel={() => setEditing(false)} onPendingChange={setPending}
-          onSaved={async () => { await refreshEditedReservation(""); setSuccess("Reservation updated."); }}
-          onStale={async () => { await refreshEditedReservation("This reservation has changed since you opened it. Review the current details before editing again."); }} /> : <>
-        <p role={detailNotice ? "alert" : undefined} className="min-h-5 pt-2 text-sm text-danger">{detailNotice}</p>
+          onSaved={refreshEditedReservation}
+          onStale={refreshEditedReservation} /> : <>
         <ReservationDetails reservation={selected} />
         <DialogFooter>
           {staff && selected.status === "active" && activity.upcoming.some((row) => row.id === selected.id)
             && isReservationUpcoming(selected, new Date())
             && selected.created_by_user_id === userId && <>
-            <button type="button" disabled={pending} onClick={() => { setDetailNotice(""); setEditing(true); }}
+            <button type="button" disabled={pending} onClick={() => {  setEditing(true); }}
               className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold text-primary">Edit reservation</button>
-            <button ref={cancelButtonRef} type="button" disabled={pending} onClick={() => { setCancelError(""); setConfirming(true); }}
+            <button ref={cancelButtonRef} type="button" disabled={pending} onClick={() => {  setConfirming(true); }}
               className="min-h-10 rounded-control border border-danger px-4 text-sm font-semibold text-danger">Cancel reservation</button></>}
           <button type="button" disabled={pending} onClick={() => dialogRef.current?.close()}
           className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button></DialogFooter>
@@ -218,7 +217,7 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
       </ModalDialog>, document.body)}
     <ConfirmationDialog open={confirming && !!selected} title="Cancel reservation?"
       message={selected ? `${selected.location_name} · ${selected.court_name}\n${dateLabel(selected.booking_date)} · ${timeLabel(selected.starts_at_minute)}–${timeLabel(selected.ends_at_minute)}\nThis will free the court for other bookings.` : ""}
-      confirmLabel="Cancel reservation" cancelLabel="Keep reservation" pending={pending} error={cancelError}
+      confirmLabel="Cancel reservation" cancelLabel="Keep reservation" pending={pending}
       onConfirm={cancel} onClose={() => { if (!pending) setConfirming(false); }} returnFocusRef={cancelButtonRef} />
   </>;
 }

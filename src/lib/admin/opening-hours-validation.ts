@@ -1,5 +1,4 @@
 import { z } from "zod";
-import type { PricingRule } from "@/lib/pricing/validation";
 
 export const weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
 
@@ -17,27 +16,64 @@ export function minuteToTime(minute: number): string {
 }
 
 export const openingIntervalSchema = z.object({
-  id: z.uuid(), location_id: z.uuid(), weekday: z.number().int().min(0).max(6),
+  id: z.uuid(), location_id: z.uuid(), schedule_id: z.uuid().optional(),
+  starts_on: z.iso.date().optional(), ends_on: z.iso.date().nullable().optional(), weekday: z.number().int().min(0).max(6),
   opens_at_minute: z.number().int().min(0).max(1439),
   closes_at_minute: z.number().int().min(1).max(1440),
   created_at: z.iso.datetime({ offset: true }), updated_at: z.iso.datetime({ offset: true }),
 }).refine((value) => value.opens_at_minute < value.closes_at_minute);
 export type OpeningInterval = z.infer<typeof openingIntervalSchema>;
+export const datedOpeningIntervalSchema = openingIntervalSchema.safeExtend({
+  schedule_id: z.uuid(), starts_on: z.iso.date(), ends_on: z.iso.date().nullable(),
+});
+export type DatedOpeningInterval = z.infer<typeof datedOpeningIntervalSchema>;
 
-export const editorIntervalSchema = z.strictObject({
+const editorIntervalSchema = z.strictObject({
   opens_at: timeSchema.refine((value) => value !== "24:00", "Opening time must be before 24:00."),
   closes_at: timeSchema,
 }).refine((value) => !timeSchema.safeParse(value.opens_at).success || !timeSchema.safeParse(value.closes_at).success
   || timeToMinute(value.opens_at) < timeToMinute(value.closes_at), {
   path: ["closes_at"], message: "Closing time must be after opening time.",
 });
-export const weeklyHoursMutationSchema = z.strictObject({
-  location_id: z.uuid(), weekdays: z.array(z.number().int().min(0).max(6)).min(1),
+const hoursMutationFields = {
+  location_id: z.uuid(),
+  starts_on: z.iso.date().optional(), ends_on: z.union([z.iso.date(), z.literal(""), z.null()]).optional(),
+  weekdays: z.array(z.number().int().min(0).max(6)),
   replace_ids: z.array(z.uuid()), intervals: z.array(editorIntervalSchema),
-}).superRefine((value, context) => {
+  rows: z.array(editorIntervalSchema.safeExtend({
+    weekdays: z.array(z.number().int().min(0).max(6)).min(1, "Select at least one day.")
+      .refine((days) => new Set(days).size === days.length, "Select each day only once."),
+  })).optional(),
+};
+const existingScheduleFields = { schedule_id: z.uuid(), revision: z.number().int().positive() };
+export const weeklyHoursMutationSchema = z.discriminatedUnion("operation", [
+  z.strictObject({ ...hoursMutationFields, operation: z.literal("create"), starts_on: z.iso.date(),
+    adjustment: z.object({ id: z.uuid(), revision: z.number().int().positive() }).nullable().optional(),
+    schedule_id: z.never().optional(), revision: z.never().optional() }),
+  z.strictObject({ ...hoursMutationFields, ...existingScheduleFields, operation: z.literal("update") }),
+  z.strictObject({ ...hoursMutationFields, ...existingScheduleFields, operation: z.literal("delete") }),
+]).superRefine((value, context) => {
+  if (value.starts_on && value.ends_on && value.ends_on < value.starts_on) context.addIssue({ code: "custom", path: ["ends_on"], message: "Valid until must be on or after valid from." });
+  if (value.operation === "delete") {
+    if (value.weekdays.length || value.replace_ids.length || value.intervals.length || value.rows?.length) context.addIssue({ code: "custom", path: ["form"], message: "Delete the schedule without interval changes." });
+    return;
+  }
+  if (value.operation === "create" && value.replace_ids.length) context.addIssue({ code: "custom", path: ["replace_ids"], message: "A new schedule cannot replace existing intervals." });
+  if (value.intervals.length && !value.weekdays.length) context.addIssue({ code: "custom", path: ["weekdays"], message: "Select at least one day." });
   if (new Set(value.weekdays).size !== value.weekdays.length) context.addIssue({ code: "custom", path: ["weekdays"], message: "Select each day only once." });
   if (new Set(value.replace_ids).size !== value.replace_ids.length) context.addIssue({ code: "custom", path: ["replace_ids"], message: "Duplicate interval selection." });
-  if (value.intervals.length === 0 && value.replace_ids.length === 0) context.addIssue({ code: "custom", path: ["intervals"], message: "Add an interval." });
+  if (value.rows !== undefined) {
+    if (value.weekdays.length || value.intervals.length) context.addIssue({ code: "custom", path: ["rows"], message: "Use individual rows or shared weekdays, not both." });
+    for (let day = 0; day < 7; day++) {
+      const valid = value.rows.filter((row) => row.weekdays.includes(day) && editorIntervalSchema.safeParse({ opens_at: row.opens_at, closes_at: row.closes_at }).success)
+        .map((row) => ({ start: timeToMinute(row.opens_at), end: timeToMinute(row.closes_at) })).sort((a, b) => a.start - b.start);
+      if (valid.some((row, index) => index > 0 && row.start < valid[index - 1].end)) {
+        context.addIssue({ code: "custom", path: ["rows"], message: `${weekdays[day]} intervals cannot overlap.` });
+      }
+    }
+    return;
+  }
+  if (value.intervals.length === 0 && value.replace_ids.length === 0 && !value.starts_on) context.addIssue({ code: "custom", path: ["intervals"], message: "Add an interval." });
   const valid = value.intervals.filter((interval) => editorIntervalSchema.safeParse(interval).success)
     .map((interval) => ({ start: timeToMinute(interval.opens_at), end: timeToMinute(interval.closes_at) }))
     .sort((a, b) => a.start - b.start);
@@ -46,15 +82,11 @@ export const weeklyHoursMutationSchema = z.strictObject({
   }
 });
 
-export type OpeningHoursPricingConflict = Pick<PricingRule,
-  "id" | "rule_set_id" | "court_state" | "weekday" | "starts_at_minute" | "ends_at_minute" | "starts_on" | "ends_on"
-> & { court_name: string };
-
 export type OpeningHoursMutationResult =
-  | { ok: true; intervals: OpeningInterval[] }
+  | { ok: true; intervals: OpeningInterval[]; schedules?: OpeningHoursSchedule[]; scheduleId?: string; pricingAdjusted?: boolean; missingPricing?: boolean }
   | { ok: false; reason: "invalid-input"; fieldErrors: Record<string, string> }
   | { ok: false; reason: "overlap"; weekdays: number[] }
-  | { ok: false; reason: "pricing-conflict"; message: string; conflicts?: OpeningHoursPricingConflict[] }
+  | { ok: false; reason: "stale" | "period-overlap" }
   | { ok: false; reason: "not-found" | "archived" | "unchanged" };
 
 export function openingHoursScheduleKey(intervals: readonly Pick<OpeningInterval, "weekday" | "opens_at_minute" | "closes_at_minute">[]) {
@@ -94,4 +126,25 @@ export function weekdayGroupLabel(days: readonly number[]) {
   if (days.join() === "5,6") return "Sat–Sun";
   const short = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   return days.map((day) => short[day]).join(", ");
+}
+
+export const openingHoursScheduleSchema = z.object({
+  id: z.uuid(), location_id: z.uuid(), starts_on: z.iso.date(), ends_on: z.iso.date().nullable(),
+  revision: z.number().int().positive(),
+});
+export type OpeningHoursSchedule = z.infer<typeof openingHoursScheduleSchema>;
+export function scheduleStatus(schedule: Pick<OpeningHoursSchedule, "starts_on" | "ends_on">, today: string) {
+  return schedule.starts_on > today ? "Scheduled" : schedule.ends_on && schedule.ends_on < today ? "History" : "Current";
+}
+
+/** Only a current policy may yield to a new future policy; scheduled policies need an explicit edit. */
+export function planOpeningHoursPeriod(schedules: readonly OpeningHoursSchedule[], startsOn: string, endsOn: string | null, today: string, allowAdjustment = true) {
+  const overlaps = schedules.filter((s) => (!s.ends_on || startsOn <= s.ends_on) && (!endsOn || s.starts_on <= endsOn));
+  if (!overlaps.length) return { ok: true as const, adjustment: null };
+  const current = overlaps[0];
+  if (!allowAdjustment || overlaps.length !== 1 || startsOn <= today || scheduleStatus(current, today) !== "Current") {
+    return { ok: false as const };
+  }
+  const ends_on = new Date(Date.parse(`${startsOn}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
+  return { ok: true as const, adjustment: { ...current, ends_on } };
 }

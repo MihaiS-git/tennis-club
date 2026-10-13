@@ -35,8 +35,12 @@ export async function getOwnReservationEditDay(input: { reservationId: unknown; 
   if (parsed.data.date < localToday(timezone, now)) throw new Error("Choose a future date at this location.");
   const occupancy = await readInternalOccupancy({ locationId: reservation.location_id },
     parsed.data.date, now, reservation.id);
-  return loadReservationEditDayForLocation({ client: supabase, locationId: reservation.location_id,
+  const day = await loadReservationEditDayForLocation({ client: supabase, locationId: reservation.location_id,
     timezone, date: parsed.data.date, occupancy, now });
+  return { ...day, reservation: { id: reservation.id, updated_at: reservation.updated_at,
+    court_id: reservation.court_id, booking_date: reservation.booking_date,
+    starts_at_minute: reservation.starts_at_minute, ends_at_minute: reservation.ends_at_minute,
+    reason: reservation.reason } };
 }
 
 export async function cancelOwnDirectReservation(input: unknown, client?: Awaited<ReturnType<typeof createClient>>) {

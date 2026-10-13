@@ -1,21 +1,25 @@
 // @vitest-environment jsdom
+import { expectToast, lastToast } from "../helpers/notifications";
 import { installDialogMock } from "../helpers/dialog";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
-import { ReservationCalendar } from "@/app/reservations/reservation-calendar";
+import { ReservationCalendar } from "@/app/admin/reservations/reservation-calendar";
 import { localMinute, localToday } from "@/lib/courts/local-time";
 
-const { cancelAction, cancelBookingAction, editAction, adminAvailability, refresh } = vi.hoisted(() => ({ cancelAction: vi.fn(), cancelBookingAction: vi.fn(), editAction: vi.fn(), adminAvailability: vi.fn(), refresh: vi.fn() }));
+const { ownerEdit, ownerAvailability, ownerBookingLoad, ownerBookingQuote, ownerBookingSave, ownerBookingCancel, cancelAction, ownerCancelAction, cancelBookingAction, editAction, adminAvailability, refresh } = vi.hoisted(() => ({ ownerEdit: vi.fn(), ownerAvailability: vi.fn(), ownerBookingLoad: vi.fn(), ownerBookingQuote: vi.fn(), ownerBookingSave: vi.fn(), ownerBookingCancel: vi.fn(), ownerCancelAction: vi.fn(), cancelAction: vi.fn(), cancelBookingAction: vi.fn(), editAction: vi.fn(), adminAvailability: vi.fn(), refresh: vi.fn() }));
+vi.mock("@/app/my-activity/bookings/actions", () => ({ cancelOwnReservationAction: ownerCancelAction, editOwnReservationAction: ownerEdit,
+  loadReservationEditDayAction: ownerAvailability, loadOwnBookingEditDayAction: ownerBookingLoad,
+  quoteOwnBookingAction: ownerBookingQuote, rescheduleOwnBookingAction: ownerBookingSave, cancelOwnCustomerBookingAction: ownerBookingCancel }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
-vi.mock("@/app/reservations/actions", () => ({ reserveCourtAction: vi.fn(), cancelAdminReservationAction: cancelAction,
+vi.mock("@/app/admin/reservations/actions", () => ({ reserveCourtAction: vi.fn(), cancelAdminReservationAction: cancelAction,
   cancelAdminCustomerBookingAction: cancelBookingAction, editAdminReservationAction: editAction, loadAdminBookingEditDayAction: vi.fn(), quoteAdminBookingAction: vi.fn(), rescheduleAdminBookingAction: vi.fn(), loadAdminReservationEditDayAction: adminAvailability }));
 beforeAll(() => {
   installDialogMock();
 });
-afterEach(() => { cleanup(); cancelAction.mockReset(); cancelBookingAction.mockReset(); editAction.mockReset(); adminAvailability.mockReset(); refresh.mockReset(); });
+afterEach(() => { cleanup(); [ownerEdit, ownerAvailability, ownerBookingLoad, ownerBookingQuote, ownerBookingSave, ownerBookingCancel].forEach((mock) => mock.mockReset()); ownerCancelAction.mockReset(); cancelAction.mockReset(); cancelBookingAction.mockReset(); editAction.mockReset(); adminAvailability.mockReset(); refresh.mockReset(); });
 
 it("offers a reason and Reserve action after selection, without pricing", () => {
-  render(<ReservationCalendar date="2099-10-15" location={{ id: "11111111-1111-4111-8111-111111111111", name: "Club", timezone: "UTC", courts: [] }}
+  render(<ReservationCalendar canManage date="2099-10-15" location={{ id: "11111111-1111-4111-8111-111111111111", name: "Club", timezone: "UTC", courts: [] }}
     day={{ times: [600, 630, 660], courts: [{ court: { id: "22222222-2222-4222-8222-222222222222", name: "Court 1" },
       cells: ["available", "available", "closed"] }] }} />);
   expect(screen.queryByText(/Total|price|payment/i)).toBeNull();
@@ -28,7 +32,7 @@ it("offers a reason and Reserve action after selection, without pricing", () => 
 });
 
 it("shows occupied intervals without management controls and prevents their selection", () => {
-  render(<ReservationCalendar date="2099-10-15" location={{ id: "11111111-1111-4111-8111-111111111111", name: "Club", timezone: "UTC",
+  render(<ReservationCalendar canManage date="2099-10-15" location={{ id: "11111111-1111-4111-8111-111111111111", name: "Club", timezone: "UTC",
     courts: [{ id: "22222222-2222-4222-8222-222222222222", name: "Court 1" }] }}
     day={{ times: [600, 630], courts: [{ court: { id: "22222222-2222-4222-8222-222222222222", name: "Court 1" }, cells: ["booked", "booked"] }] }} />);
   expect(screen.getAllByLabelText(/, Booked/)).toHaveLength(2);
@@ -45,7 +49,7 @@ it("confirms booking cancellation and refreshes the timetable in place", async (
     customer_name: "Ana Pop", customer_email: "ana@example.test", customer_phone: "+40 123",
     cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON" as const };
   cancelBookingAction.mockResolvedValue({ ok: true });
-  const { rerender } = render(<ReservationCalendar date={booking.booking_date} location={location}
+  const { rerender } = render(<ReservationCalendar canManage date={booking.booking_date} location={location}
     day={{ times: [600, 630], courts: [{ court: location.courts[0], cells: ["booked", "booked"] }] }}
     adminOccupancy={[booking]} />);
   fireEvent.click(screen.getByRole("button", { name: /10:00–11:00, Booking · Ana Pop/ }));
@@ -59,8 +63,8 @@ it("confirms booking cancellation and refreshes the timetable in place", async (
   await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
   expect(cancelAction).not.toHaveBeenCalled();
   expect(screen.queryByRole("dialog")).toBeNull();
-  expect(screen.getByRole("status").textContent).toContain("Booking cancelled.");
-  rerender(<ReservationCalendar date={booking.booking_date} location={location}
+  expect(lastToast("success")).toContain("Booking cancelled.");
+  rerender(<ReservationCalendar canManage date={booking.booking_date} location={location}
     day={{ times: [600, 630], courts: [{ court: location.courts[0], cells: ["available", "available"] }] }}
     adminOccupancy={[]} />);
   fireEvent.click(screen.getByRole("button", { name: /10:00–10:30, Available/ }));
@@ -81,7 +85,7 @@ it("reuses the edit timetable for another user's reservation with fixed location
       { court: location.courts[0], cells: ["available", "available", "available", "booked", "available"] },
       { court: location.courts[1], cells: ["available", "available", "available", "available", "available"] },
     ] } }));
-  render(<ReservationCalendar date={reservation.booking_date} location={location}
+  render(<ReservationCalendar canManage date={reservation.booking_date} location={location}
     day={{ times: [750, 780, 810], courts: [{ court: location.courts[0], cells: ["booked", "booked", "booked"] }] }}
     adminOccupancy={[{ ...reservation, kind: "reservation" }]} />);
   fireEvent.click(screen.getByRole("button", { name: /12:30–14:00, Reservation/ }));
@@ -117,7 +121,7 @@ it("keeps an in-progress Admin edit to reason only", async () => {
   const start = Math.floor(localMinute(zone, now) / 30) * 30 - 30;
   const date = localToday(zone, now);
   const courtId = "22222222-2222-4222-8222-222222222222";
-  render(<ReservationCalendar date={date} location={{ id: "11111111-1111-4111-8111-111111111111", name: "RIVUS",
+  render(<ReservationCalendar canManage date={date} location={{ id: "11111111-1111-4111-8111-111111111111", name: "RIVUS",
     timezone: zone, courts: [{ id: courtId, name: "Court 1" }] }}
     day={{ times: [start, start + 30], courts: [{ court: { id: courtId, name: "Court 1" }, cells: ["booked", "booked"] }] }}
     adminOccupancy={[{ kind: "reservation", id: "33333333-3333-4333-8333-333333333333", court_id: courtId,
@@ -150,7 +154,7 @@ it("locks the Admin direct-reservation dialog during Save and preserves a failed
   let finish: (result: { ok: false; message: string }) => void = () => { throw new Error("Not saving"); };
   editAction.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }))
     .mockResolvedValueOnce({ ok: true, reservation });
-  render(<ReservationCalendar date={reservation.booking_date} location={location}
+  render(<ReservationCalendar canManage date={reservation.booking_date} location={location}
     day={{ times: [600, 630], courts: [{ court, cells: ["booked", "booked"] }] }} adminOccupancy={[reservation]} />);
   fireEvent.click(screen.getByRole("button", { name: /Reservation · Unknown creator/ }));
   fireEvent.click(screen.getByRole("button", { name: "Edit reservation" }));
@@ -172,7 +176,7 @@ it("locks the Admin direct-reservation dialog during Save and preserves a failed
 it("keeps the confirmation open with a clear error on stale cancellation", async () => {
   const courtId = "22222222-2222-4222-8222-222222222222";
   cancelAction.mockResolvedValue({ ok: false, message: "This reservation is no longer available to cancel." });
-  render(<ReservationCalendar date="2099-10-15" location={{ id: "11111111-1111-4111-8111-111111111111",
+  render(<ReservationCalendar canManage date="2099-10-15" location={{ id: "11111111-1111-4111-8111-111111111111",
     name: "Club", timezone: "UTC", courts: [{ id: courtId, name: "Court 1" }] }}
     day={{ times: [600], courts: [{ court: { id: courtId, name: "Court 1" }, cells: ["booked"] }] }}
     adminOccupancy={[{ kind: "reservation", id: "33333333-3333-4333-8333-333333333333", court_id: courtId,
@@ -183,8 +187,8 @@ it("keeps the confirmation open with a clear error on stale cancellation", async
   fireEvent.click(screen.getByRole("button", { name: "Cancel reservation" }));
   fireEvent.click(within(screen.getByRole("dialog", { name: "Cancel reservation?" }))
     .getByRole("button", { name: "Cancel reservation" }));
-  await waitFor(() => expect(within(screen.getByRole("dialog", { name: "Cancel reservation?" }))
-    .getByRole("alert").textContent).toContain("no longer available"));
+  await expectToast("no longer available");
+  expect(screen.getByRole("dialog", { name: "Cancel reservation?" })).toBeTruthy();
   expect(refresh).not.toHaveBeenCalled();
 });
 
@@ -195,7 +199,7 @@ it.each(["reservation"] as const)("keeps a past %s read-only in the Admin dialog
     reason: "Historical event", created_by_user_id: null, creator_name: "Coach",
     customer_name: "Ana Pop", customer_email: "ana@example.test", customer_phone: "+40 123",
     cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON" as const };
-  render(<ReservationCalendar date={item.booking_date} location={{ id: "11111111-1111-4111-8111-111111111111",
+  render(<ReservationCalendar canManage date={item.booking_date} location={{ id: "11111111-1111-4111-8111-111111111111",
     name: "Club", timezone: "Europe/Bucharest", courts: [{ id: courtId, name: "Court 1" }] }}
     day={{ times: [600, 630], courts: [{ court: { id: courtId, name: "Court 1" }, cells: ["past", "past"] }] }}
     adminOccupancy={[item]} />);
@@ -207,19 +211,35 @@ it.each(["reservation"] as const)("keeps a past %s read-only in the Admin dialog
   expect(cancelBookingAction).not.toHaveBeenCalled();
 });
 
-it("opens past occupancy for a Coach without private details or operational actions", () => {
+it.each(["reservation", "booking"] as const)("opens shared %s details for a Coach after refresh without Admin actions", (kind) => {
   const court = { id: "22222222-2222-4222-8222-222222222222", name: "Court 1" };
-  render(<ReservationCalendar date="2000-10-15"
-    location={{ id: "11111111-1111-4111-8111-111111111111", name: "Club", timezone: "Europe/Bucharest", courts: [court] }}
-    day={{ times: [600, 630, 660, 690], courts: [{ court, cells: ["booked", "booked", "past", "past"] }] }}
-    occupancy={[{ court_id: court.id, starts_at_minute: 600, ends_at_minute: 660 }]} />);
-  fireEvent.click(screen.getByRole("button", { name: /Court 1.*10:00–11:00, Booked/ }));
-  const dialog = screen.getByRole("dialog", { name: "Occupied court details" });
-  expect(within(dialog).getByText("Court 1")).toBeTruthy();
-  expect(within(dialog).getByText("10:00–11:00 (Europe/Bucharest)")).toBeTruthy();
-  expect(within(dialog).queryByText(/customer|reason|created by|price|total/i)).toBeNull();
-  expect(within(dialog).getAllByRole("button").every((button) => button.textContent === "Close" || button.getAttribute("aria-label") === "Close dialog")).toBe(true);
-  expect(screen.queryByRole("button", { name: /Available|Reserve court|Edit |Cancel / })).toBeNull();
+  const location = { id: "11111111-1111-4111-8111-111111111111", name: "Club", timezone: "UTC", courts: [court] };
+  const item = { kind, id: "33333333-3333-4333-8333-333333333333", court_id: court.id,
+    booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660,
+    reason: "Training", created_by_user_id: null, creator_name: "Coach", creator_email: "coach@example.test", creator_phone: "123",
+    account_user_id: null, customer_name: "Ana Pop", customer_email: "ana@example.test", customer_phone: "+40 123",
+    cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON" as const,
+    payment_method: "online" as const, stripe_refund_available: true,
+    payments: [{ id: "payment", method: "online", provider: "stripe", status: "succeeded" }] };
+  const view = <ReservationCalendar canManage={false} date={item.booking_date} location={location}
+    day={{ times: [600, 630], courts: [{ court, cells: ["booked", "booked"] }] }} adminOccupancy={[item]} />;
+  const { unmount } = render(view);
+  function openAndCheck() {
+    fireEvent.click(screen.getByRole("button", { name: /Court 1.*10:00–11:00/ }));
+    const dialog = screen.getByRole("dialog", { name: kind === "booking" ? "Booking details" : "Reservation details" });
+    for (const value of kind === "booking" ? ["Ana Pop", "ana@example.test", "+40 123", "Guest", "Online", "succeeded", "RON"] : ["Coach", "Training", "coach@example.test", "123"])
+      expect(dialog.textContent).toContain(value);
+    expect(within(dialog).queryByRole("button", { name: /^(Edit|Cancel) / })).toBeNull();
+    expect(within(dialog).queryByRole("checkbox")).toBeNull();
+  }
+  openAndCheck();
+  unmount();
+  render(view);
+  openAndCheck();
+  expect(cancelAction).not.toHaveBeenCalled();
+  expect(cancelBookingAction).not.toHaveBeenCalled();
+  expect(editAction).not.toHaveBeenCalled();
+  expect(adminAvailability).not.toHaveBeenCalled();
 });
 
 it.each([true, false])("Admin explicitly cancels a paid Stripe booking with refund=%s", async (refund) => {
@@ -231,7 +251,7 @@ it.each([true, false])("Admin explicitly cancels a paid Stripe booking with refu
     customer_name: "Ana Pop", customer_email: "ana@example.test", customer_phone: "+40 123",
     cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON" as const };
   cancelBookingAction.mockResolvedValue({ ok: true });
-  const { rerender } = render(<ReservationCalendar date={booking.booking_date} location={location}
+  const { rerender } = render(<ReservationCalendar canManage date={booking.booking_date} location={location}
     day={{ times: [600, 630], courts: [{ court: location.courts[0], cells: ["booked", "booked"] }] }}
     adminOccupancy={[booking]} />);
   fireEvent.click(screen.getByRole("button", { name: /10:00–11:00, Booking · Ana Pop/ }));
@@ -247,10 +267,185 @@ it.each([true, false])("Admin explicitly cancels a paid Stripe booking with refu
   await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
   expect(cancelAction).not.toHaveBeenCalled();
   expect(screen.queryByRole("dialog")).toBeNull();
-  expect(screen.getByRole("status").textContent).toContain("Booking cancelled.");
-  rerender(<ReservationCalendar date={booking.booking_date} location={location}
+  expect(lastToast("success")).toContain("Booking cancelled.");
+  rerender(<ReservationCalendar canManage date={booking.booking_date} location={location}
     day={{ times: [600, 630], courts: [{ court: location.courts[0], cells: ["available", "available"] }] }}
     adminOccupancy={[]} />);
   fireEvent.click(screen.getByRole("button", { name: /10:00–10:30, Available/ }));
   expect(screen.getByLabelText("Selected reservation")).toBeTruthy();
+});
+
+const coachId = "44444444-4444-4444-8444-444444444444";
+const coachCourt = { id: "22222222-2222-4222-8222-222222222222", name: "Court 1" };
+const coachLocation = { id: "11111111-1111-4111-8111-111111111111", name: "Club", timezone: "UTC", courts: [coachCourt] };
+const coachReservation = { kind: "reservation" as const, id: "33333333-3333-4333-8333-333333333333", court_id: coachCourt.id,
+  booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660,
+  reason: "Practice", created_by_user_id: coachId, creator_name: "Coach" };
+const coachDay = { times: [600, 630] };
+
+it("Coach confirms own cancellation, prevents duplicate submits and refreshes freed occupancy", async () => {
+  let finish!: (result: { ok: true }) => void;
+  ownerCancelAction.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+  const { rerender } = render(<ReservationCalendar actorUserId={coachId} date={coachReservation.booking_date}
+    location={coachLocation} day={{ ...coachDay, courts: [{ court: coachCourt, cells: ["booked", "booked"] }] }} adminOccupancy={[coachReservation]} />);
+  fireEvent.click(screen.getByRole("button", { name: /Reservation · Coach/ }));
+  expect(screen.getByRole("button", { name: "Edit reservation" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Cancel reservation" }));
+  expect(ownerCancelAction).not.toHaveBeenCalled();
+  fireEvent.click(within(screen.getByRole("dialog", { name: "Cancel reservation?" })).getByRole("button", { name: "Keep reservation" }));
+  expect(ownerCancelAction).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Cancel reservation" }));
+  const confirmation = screen.getByRole("dialog", { name: "Cancel reservation?" });
+  const confirm = within(confirmation).getByRole("button", { name: "Cancel reservation" });
+  fireEvent.click(confirm);
+  expect(confirm).toHaveProperty("disabled", true);
+  fireEvent.click(confirm);
+  expect(ownerCancelAction).toHaveBeenCalledExactlyOnceWith(coachReservation.id);
+  expect(cancelAction).not.toHaveBeenCalled();
+  await act(async () => finish({ ok: true }));
+  await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(lastToast("success")).toBe("Reservation cancelled.");
+  rerender(<ReservationCalendar actorUserId={coachId} date={coachReservation.booking_date} location={coachLocation}
+    day={{ times: [600, 630], courts: [{ court: coachCourt, cells: ["available", "available"] }] }} adminOccupancy={[]} />);
+  fireEvent.click(screen.getByRole("button", { name: /10:00–10:30, Available/ }));
+  expect(screen.getByLabelText("Selected reservation")).toBeTruthy();
+});
+
+it.each(["stale", "network"])("Coach cancellation reports %s failure through Sonner and keeps confirmation", async (failure) => {
+  if (failure === "stale") ownerCancelAction.mockResolvedValue({ ok: false, message: "This reservation is no longer available to cancel." });
+  else ownerCancelAction.mockRejectedValue(new Error("Network"));
+  render(<ReservationCalendar actorUserId={coachId} date={coachReservation.booking_date} location={coachLocation}
+    day={{ times: [600, 630], courts: [{ court: coachCourt, cells: ["booked", "booked"] }] }} adminOccupancy={[coachReservation]} />);
+  fireEvent.click(screen.getByRole("button", { name: /Reservation · Coach/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Cancel reservation" }));
+  const confirmation = screen.getByRole("dialog", { name: "Cancel reservation?" });
+  fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel reservation" }));
+  await expectToast(failure === "stale" ? "no longer available" : "Unable to cancel");
+  expect(screen.getByRole("dialog", { name: "Cancel reservation?" })).toBeTruthy();
+  expect(refresh).not.toHaveBeenCalled();
+});
+
+it.each(["other Coach", "historical creator", "customer", "guest", "ended", "ended booking"])("Coach cannot cancel %s occupancy", (kind) => {
+  const item = kind === "customer" || kind === "guest" || kind === "ended booking" ? { ...coachReservation, kind: "booking" as const,
+    account_user_id: kind === "ended booking" ? coachId : kind === "customer" ? "other-user" : null,
+    booking_date: kind === "ended booking" ? "2000-10-15" : coachReservation.booking_date, customer_name: "Customer", customer_email: "coach@example.test",
+    customer_phone: "123", total_amount_minor: 9000, currency: "RON" as const, cancellation_notice_minutes: 120 }
+    : { ...coachReservation, created_by_user_id: kind === "historical creator" ? null : kind === "other Coach" ? "other-user" : coachId,
+      booking_date: kind === "ended" ? "2000-10-15" : coachReservation.booking_date };
+  render(<ReservationCalendar actorUserId={coachId} date={item.booking_date} location={coachLocation}
+    day={{ times: [600, 630], courts: [{ court: coachCourt, cells: ["booked", "booked"] }] }} adminOccupancy={[item]} />);
+  fireEvent.click(screen.getByRole("button", { name: /Court 1.*10:00–11:00/ }));
+  expect(screen.queryByRole("button", { name: /^(Cancel|Edit) (reservation|booking)$/ })).toBeNull();
+  expect(ownerCancelAction).not.toHaveBeenCalled();
+});
+
+it.each([false, true])("in-progress cancellation preserves owner/Admin rules with canManage=%s", (canManage) => {
+  const clock = new Date();
+  const timezone = ["UTC", "America/Los_Angeles", "Asia/Tokyo"].find((zone) => localMinute(zone, clock) >= 120 && localMinute(zone, clock) <= 1260)!;
+  const start = Math.floor(localMinute(timezone, clock) / 30) * 30 - 30;
+  const item = { ...coachReservation, booking_date: localToday(timezone, clock), starts_at_minute: start, ends_at_minute: start + 120 };
+  render(<ReservationCalendar canManage={canManage} actorUserId={coachId} date={item.booking_date} location={{ ...coachLocation, timezone }}
+    day={{ times: [start], courts: [{ court: coachCourt, cells: ["past"] }] }} adminOccupancy={[item]} />);
+  fireEvent.click(screen.getByRole("button", { name: /Reservation · Coach/ }));
+  expect(!!screen.queryByRole("button", { name: "Cancel reservation" })).toBe(!canManage);
+});
+
+
+it.each(["future", "in-progress", "stale"])("Coach edits own reservation through owner actions, preserves failed draft (%s)", async (mode) => {
+  const inProgress = mode === "in-progress";
+  const clock = new Date();
+  const timezone = ["UTC", "America/Los_Angeles", "Asia/Tokyo"].find((zone) => localMinute(zone, clock) >= 120 && localMinute(zone, clock) <= 1260)!;
+  const start = Math.floor(localMinute(timezone, clock) / 30) * 30 - 30;
+  const item = inProgress ? { ...coachReservation, booking_date: localToday(timezone, clock), starts_at_minute: start, ends_at_minute: start + 120 } : coachReservation;
+  const location = { ...coachLocation, timezone: inProgress ? timezone : "UTC" };
+  const day = { times: [item.starts_at_minute, item.starts_at_minute + 30, item.starts_at_minute + 60], courts: [{ court: coachCourt, cells: ["available", "available", "available"] }] };
+  const token = "2026-10-01T12:00:00.123456Z";
+  ownerAvailability.mockResolvedValue({ reservation: { ...item, updated_at: token }, day });
+  ownerEdit.mockResolvedValueOnce({ ok: false, message: "Try again.", stale: mode === "stale" }).mockResolvedValueOnce({ ok: true });
+  render(<ReservationCalendar actorUserId={coachId} date={item.booking_date} location={location}
+    day={{ ...day, courts: [{ court: coachCourt, cells: ["booked", "booked"] }] }} adminOccupancy={[item]} />);
+  fireEvent.click(screen.getByRole("button", { name: /Reservation · Coach/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Edit reservation" }));
+  const dialog = screen.getByRole("dialog", { name: "Edit reservation" });
+  const reason = await within(dialog).findByRole("textbox", { name: "Reason" });
+  if (inProgress) expect(within(dialog).queryByLabelText("Date")).toBeNull();
+  else {
+    await within(dialog).findByText("Current reservation");
+    fireEvent.click(within(dialog).getByRole("button", { name: /11:00–11:30, Available/ }));
+  }
+  fireEvent.change(reason, { target: { value: "Updated training" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+  await expectToast("Try again.", mode === "stale" ? "warning" : "error");
+  expect(reason).toHaveProperty("value", "Updated training");
+  if (mode === "stale") {
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(screen.getByRole("dialog", { name: "Edit reservation" })).toBeTruthy();
+    return;
+  }
+  expect(refresh).not.toHaveBeenCalled();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+  await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+  expect(ownerEdit).toHaveBeenLastCalledWith(expect.objectContaining({ id: item.id, expectedUpdatedAt: token,
+    kind: inProgress ? "reason" : "schedule" }));
+  expect(editAction).not.toHaveBeenCalled();
+  expect(adminAvailability).not.toHaveBeenCalled();
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+const ownBooking = { kind: "booking" as const, id: coachReservation.id, court_id: coachCourt.id,
+  booking_date: coachReservation.booking_date, starts_at_minute: 600, ends_at_minute: 660, account_user_id: coachId,
+  customer_name: "Customer", customer_email: "coach@example.test", customer_phone: "123",
+  total_amount_minor: 9000, currency: "RON" as const, cancellation_notice_minutes: 43200, stripe_refund_available: true };
+
+it("Coach cancels own booking with automatic refund, preserves failed confirmation and refreshes occupancy", async () => {
+  ownerBookingCancel.mockResolvedValueOnce({ ok: false, message: "Try again." }).mockResolvedValueOnce({ ok: true, refundStatus: "succeeded" });
+  const { rerender } = render(<ReservationCalendar actorUserId={coachId} date={ownBooking.booking_date} location={coachLocation}
+    day={{ times: [600, 630], courts: [{ court: coachCourt, cells: ["booked", "booked"] }] }} adminOccupancy={[ownBooking]} />);
+  fireEvent.click(screen.getByRole("button", { name: /Booking · Customer/ }));
+  expect(screen.getByRole("button", { name: "Edit booking" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Cancel booking" }));
+  const confirmation = screen.getByRole("dialog", { name: "Cancel booking?" });
+  expect(within(confirmation).queryByRole("checkbox")).toBeNull();
+  expect(ownerBookingCancel).not.toHaveBeenCalled();
+  fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel booking" }));
+  await expectToast("Try again.");
+  expect(screen.getByRole("dialog", { name: "Cancel booking?" })).toBeTruthy();
+  fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel booking" }));
+  await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+  expect(ownerBookingCancel).toHaveBeenLastCalledWith(ownBooking.id);
+  expect(cancelBookingAction).not.toHaveBeenCalled();
+  expect(lastToast("success")).toContain("Booking cancelled.");
+  expect(screen.queryByRole("dialog")).toBeNull();
+  rerender(<ReservationCalendar actorUserId={coachId} date={ownBooking.booking_date} location={coachLocation}
+    day={{ times: [600, 630], courts: [{ court: coachCourt, cells: ["available", "available"] }] }} adminOccupancy={[]} />);
+  expect(screen.getAllByRole("button", { name: /Available/ })).toHaveLength(2);
+});
+
+it("Coach reschedules own booking with price acknowledgement and owner stale tokens", async () => {
+  ownerBookingLoad.mockResolvedValue({ day: { times: [600, 630, 660], courts: [{ court: coachCourt, cells: ["available", "available", "available"] }] },
+    booking: { ...ownBooking, location_id: coachLocation.id, location_timezone: "UTC", updated_at: "2026-10-01T12:00:00.123456Z",
+      booking_updated_at: "2026-10-01T12:00:00.123457Z", location: coachLocation, hours: [], occupancy: [] } });
+  ownerBookingQuote.mockResolvedValue({ ok: true, totalAmountMinor: 10000 });
+  ownerBookingSave.mockResolvedValueOnce({ ok: false, message: "Try again." }).mockResolvedValueOnce({ ok: true, totalAmountMinor: 10000 });
+  render(<ReservationCalendar actorUserId={coachId} date={ownBooking.booking_date} location={coachLocation}
+    day={{ times: [600, 630], courts: [{ court: coachCourt, cells: ["booked", "booked"] }] }} adminOccupancy={[ownBooking]} />);
+  fireEvent.click(screen.getByRole("button", { name: /Booking · Customer/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Edit booking" }));
+  const dialog = screen.getByRole("dialog", { name: "Edit booking" });
+  await within(dialog).findByText("Current reservation");
+  fireEvent.click(within(dialog).getByRole("button", { name: /11:00–11:30, Available/ }));
+  await within(dialog).findByRole("checkbox");
+  expect(within(dialog).getByRole("button", { name: "Save changes" })).toHaveProperty("disabled", true);
+  fireEvent.click(within(dialog).getByRole("checkbox"));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+  await expectToast("Try again.");
+  expect(within(dialog).getByRole("checkbox")).toHaveProperty("checked", true);
+  expect(refresh).not.toHaveBeenCalled();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+  await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+  expect(ownerBookingSave).toHaveBeenLastCalledWith(expect.objectContaining({ id: ownBooking.id, startMinute: 600, endMinute: 690,
+    expectedUpdatedAt: "2026-10-01T12:00:00.123456Z", expectedBookingUpdatedAt: "2026-10-01T12:00:00.123457Z",
+    expectedTotal: 10000, priceAcknowledged: true, save: true }));
+  expect(screen.queryByRole("dialog")).toBeNull();
 });

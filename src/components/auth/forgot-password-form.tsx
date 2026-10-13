@@ -3,7 +3,7 @@
 import { useActionState } from "react";
 
 import { forgotPasswordAction } from "@/app/(auth)/actions";
-import { FormMessage } from "@/components/auth-form";
+import { ActionFeedback } from "@/components/action-feedback";
 import { useActionErrors } from "@/components/auth-action-errors";
 import { FormField } from "@/components/form-field";
 import { Input } from "@/components/input";
@@ -12,11 +12,11 @@ import { initialAuthActionState } from "@/lib/auth/action-state";
 
 export function ForgotPasswordForm() {
   const [state, action] = useActionState(forgotPasswordAction, initialAuthActionState);
-  const { formRef, clearErrors, fieldError, formError } = useActionErrors(state);
+  const { formRef, clearErrors, fieldError } = useActionErrors(state);
 
   return (
     <form ref={formRef} action={action} className="space-y-4" noValidate>
-      <FormMessage>{formError}</FormMessage>
+      <ActionFeedback state={state} loading="Submitting…" />
       <FormField label="Email" htmlFor="recovery-email" error={fieldError("email")} errorId="recovery-email-error">
         <Input
           id="recovery-email"

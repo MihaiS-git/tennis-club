@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { expectToast } from "../helpers/notifications";
+import { toast } from "sonner";
 import { installDialogMock } from "../helpers/dialog";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -25,13 +27,15 @@ it("enables coverage Save only after an edit differs from the persisted dates", 
 afterEach(cleanup);
 it.each([
   [{ ok: false, reason: "invalid-input", fieldErrors: { ends_on: "End date must be on or after start date." } }, "Check the coverage dates."],
-])("shows safe errors and retains entered dates", async (result, message) => {
+])("shows field errors and retains entered dates", async (result) => {
   saveCoverageAction.mockResolvedValue(result);
   render(<CoveragePeriods courtId={courtId} periods={[period]} />);
   fireEvent.click(screen.getByRole("button", { name: "Edit period" }));
   fireEvent.change(screen.getByLabelText("End date"), { target: { value: "2027-04-16" } });
   fireEvent.submit(screen.getByRole("button", { name: "Save period" }).closest("form")!);
-  await waitFor(() => expect(screen.getByRole("alert").textContent).toBe(message));
+  await screen.findByText("End date must be on or after start date.");
+  expect(screen.getByLabelText("End date").getAttribute("aria-invalid")).toBe("true");
+  expect(toast.error).not.toHaveBeenCalled();
   expect((screen.getByLabelText("Start date") as HTMLInputElement).value).toBe(period.starts_on);
 });
 
@@ -79,7 +83,7 @@ it("prevents duplicate saves while pending and preserves failed changes for retr
   fireEvent.submit(form);
   expect(saveCoverageAction).toHaveBeenCalledTimes(1);
   fail({ ok: false, reason: "overlap" });
-  await screen.findByRole("alert");
+  await expectToast();
   expect(screen.getByLabelText("End date")).toHaveProperty("value", "2027-04-16");
   await waitFor(() => expect(screen.getByRole("button", { name: "Save period" })).toHaveProperty("disabled", false));
   fireEvent.click(screen.getByRole("button", { name: "Save period" }));

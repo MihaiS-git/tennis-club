@@ -1,3 +1,4 @@
+import { insertOpeningHoursFixture } from "../opening-hours-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { expect, test } from "vitest";
@@ -27,7 +28,7 @@ test("public discovery includes only published, configured locations and orders 
       is_active: index !== 4 && index !== 8,
     })))).error).toBeNull();
 
-    expect((await service.from("location_opening_hours").insert([0, 1, 2, 5].map((index) => ({
+    expect((await insertOpeningHoursFixture(service, [0, 1, 2, 5].map((index) => ({
       location_id: ids[index], weekday: 0, opens_at_minute: 480, closes_at_minute: 1200,
     })))).error).toBeNull();
     const ruleSetIds = [0, 1, 2].map(() => randomUUID());

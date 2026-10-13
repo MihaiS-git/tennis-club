@@ -43,7 +43,7 @@ export type PricingRule = z.infer<typeof pricingRuleSchema>;
 export type PricingRuleSet = Omit<
   PricingRule,
   "id" | "court_id" | "weekday"
-> & { court_ids: string[]; weekdays: number[] };
+> & { court_ids: string[]; weekdays: number[]; revision: string };
 
 export const pricingDefinitionSchema = z
   .strictObject({
@@ -90,15 +90,17 @@ export const pricingDefinitionSchema = z
   );
 export const pricingMutationSchema = pricingDefinitionSchema.safeExtend({
   rule_set_id: z.uuid().optional(),
-});
+  revision: z.string().min(1).optional(),
+}).refine((value) => Boolean(value.rule_set_id) === Boolean(value.revision), { path: ["revision"], message: "Reload the pricing rule before saving." });
 export const pricingRemovalSchema = z.strictObject({
   rule_set_id: z.uuid(),
   location_id: z.uuid(),
+  revision: z.string().min(1),
 });
 export type PricingMutationResult =
   | { ok: true; id: string }
   | { ok: false; reason: "invalid-input"; fieldErrors: Record<string, string> }
-  | { ok: false; reason: "overlap" | "not-found" };
+  | { ok: false; reason: "overlap" | "not-found" | "stale" };
 
 export type PricingOverlapRule = {
   courtId: string; courtState: string; weekday: number;

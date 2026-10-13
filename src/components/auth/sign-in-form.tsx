@@ -1,10 +1,10 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 
 import { signInAction } from "@/app/(auth)/actions";
 import { ResendConfirmation } from "@/components/auth/resend-confirmation";
-import { FormMessage } from "@/components/auth-form";
+import { ActionFeedback } from "@/components/action-feedback";
 import { useActionErrors } from "@/components/auth-action-errors";
 import { FormField } from "@/components/form-field";
 import { Input } from "@/components/input";
@@ -15,17 +15,19 @@ import { initialAuthActionState } from "@/lib/auth/action-state";
 export function SignInForm() {
   const [state, action] = useActionState(signInAction, initialAuthActionState);
   const { formRef, clearErrors, fieldError, formError } = useActionErrors(state);
+  const [confirmationEmailError, setConfirmationEmailError] = useState<string | undefined>();
+  const emailError = confirmationEmailError ?? fieldError("email");
 
   return (
     <form ref={formRef} action={action} className="space-y-4" noValidate>
-      <FormMessage>{formError}</FormMessage>
+      <ActionFeedback state={state} loading="Submitting…" />
       {state.emailUnconfirmed && formError ? (
-        <ResendConfirmation getEmail={() => {
+        <ResendConfirmation onEmailError={setConfirmationEmailError} getEmail={() => {
           const email = formRef.current?.elements.namedItem("email");
           return email instanceof HTMLInputElement ? email.value : "";
         }} />
       ) : null}
-      <FormField label="Email" htmlFor="signin-email" error={fieldError("email")} errorId="signin-email-error">
+      <FormField label="Email" htmlFor="signin-email" error={emailError} errorId="signin-email-error">
         <Input
           id="signin-email"
           type="email"
@@ -34,9 +36,10 @@ export function SignInForm() {
           required
           onChange={() => {
             clearErrors(["email"]);
+            setConfirmationEmailError(undefined);
           }}
-          aria-invalid={Boolean(fieldError("email"))}
-          aria-describedby={fieldError("email") ? "signin-email-error" : undefined}
+          aria-invalid={Boolean(emailError)}
+          aria-describedby={emailError ? "signin-email-error" : undefined}
         />
       </FormField>
       <FormField label="Password" htmlFor="signin-password" error={fieldError("password")} errorId="signin-password-error">

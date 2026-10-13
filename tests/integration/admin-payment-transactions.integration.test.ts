@@ -6,7 +6,7 @@ import { ensureIntegrationAdminAnchor } from "./admin-anchor";
 import { listAdminPaymentTransactions } from "@/lib/payments/admin";
 import { parseAdminPaymentQuery } from "@/lib/payments/admin-query";
 
-test("Admin transaction projection selects original payments, joins refunds, filters before pagination and denies non-Admins", async () => {
+test("Admin transaction projection lists every payment and refund, filters before pagination and denies non-Admins", async () => {
   const db = localFixtureClient(), locationId = randomUUID(), courtId = randomUUID(), users: string[] = [];
   const admin = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_PUBLISHABLE_KEY!, { auth: { persistSession: false, autoRefreshToken: false } });
   const marker = `transaction-${randomUUID()}`;
@@ -36,7 +36,7 @@ test("Admin transaction projection selects original payments, joins refunds, fil
       status: index === 23 ? "due" : index === 22 ? "failed" : "succeeded",
       expires_at: index === 23 ? null : "2099-10-15T10:00:00Z", completed_at: index === 23 ? null : "2026-10-06T10:00:00Z",
       created_at: `2026-10-${String(index+1).padStart(2,'0')}T10:00:00Z` })))).error).toBeNull();
-    // An additional newer failed attempt must not duplicate or replace original paid money.
+    // A failed retry remains individually traceable without replacing the original capture.
     expect((await db.from("payment_attempts").insert({ booking_id: bookingIds[0], method: "online", provider: "stripe",
       provider_payment_id: "later-failed-attempt", amount_minor: 8000, currency: "RON", status: "failed",
       expires_at: "2099-10-15T10:00:00Z", completed_at: "2026-10-25T10:00:00Z", created_at: "2026-10-25T10:00:00Z" })).error).toBeNull();
@@ -47,15 +47,15 @@ test("Admin transaction projection selects original payments, joins refunds, fil
       provider_payment_id: `original-${attemptIds[2]}`, outcome: "succeeded", settlement_result: "amount_mismatch",
       reconciliation_required: true, amount_minor: 1, currency: "RON" })).error).toBeNull();
     const first = await listAdminPaymentTransactions(query(),admin), second = await listAdminPaymentTransactions(query({ page: "2" }),admin);
-    expect(first.total).toBe(24); expect(first.totalPages).toBe(2); expect(first.rows).toHaveLength(20); expect(second.rows).toHaveLength(4);
-    expect(first.rows[0].booking_id).toBe(bookingIds[23]);
-    const all = [...first.rows,...second.rows]; expect(new Set(all.map(r => r.booking_id)).size).toBe(24);
-    expect(all.find(r => r.booking_id === bookingIds[0])).toMatchObject({ amount_minor: 1000, provider_payment_id: `original-${attemptIds[0]}`,
-      payment_status: "succeeded", needsAttention: true, refund: { status: "pending_retry", amount_minor: 1000, requested_by_user_id: users[0] } });
-    expect(all.find(r => r.booking_id === bookingIds[1])).toMatchObject({ needsAttention: true, refund: { status: "failed", amount_minor: 1001 } });
+    expect(first.total).toBe(28); expect(first.totalPages).toBe(2); expect(first.rows).toHaveLength(20); expect(second.rows).toHaveLength(8);
+    expect(first.rows[0].booking_id).toBe(bookingIds[0]);
+    const all = [...first.rows,...second.rows]; expect(new Set(all.map(r => r.transaction_id)).size).toBe(28);
+    expect(all.find(r => r.transaction_id === attemptIds[0])).toMatchObject({ amount_minor: 1000, provider_payment_id: `original-${attemptIds[0]}`,
+      payment_status: "succeeded", needsAttention: false, refund: null });
+    expect(all.find(r => r.booking_id === bookingIds[1] && r.transaction_kind === "refund")).toMatchObject({ needsAttention: true, refund: { status: "failed", amount_minor: 1001 } });
     expect(all.find(r => r.booking_id === bookingIds[2])).toMatchObject({ needsAttention: true, refund: null,
       reconciliation: [{ settlement_result: "amount_mismatch" }] });
-    expect(all.find(r => r.booking_id === bookingIds[3])).toMatchObject({ needsAttention: false, refund: { status: "pending" } });
+    expect(all.find(r => r.booking_id === bookingIds[3] && r.transaction_kind === "refund")).toMatchObject({ needsAttention: false, refund: { status: "pending" } });
     expect(all.find(r => r.booking_id === bookingIds[4])).toMatchObject({ needsAttention: false, refund: null });
     expect(all.find(r => r.booking_id === bookingIds[22])).toMatchObject({ payment_status: "failed", needsAttention: false });
     expect((await listAdminPaymentTransactions(query({ attention: "required" }),admin)).rows).toHaveLength(3);
@@ -64,7 +64,9 @@ test("Admin transaction projection selects original payments, joins refunds, fil
     expect((await listAdminPaymentTransactions(query({ sort: "amount", dir: "asc" }),admin)).rows[0].amount_minor).toBe(1000);
     expect((await listAdminPaymentTransactions(query({ sort: "payment", dir: "asc" }),admin)).rows[0].payment_status).toBe("due");
     for (const search of [bookingIds[0], `original-${attemptIds[0]}`, `${marker}-0@example.test`]) {
-      expect((await listAdminPaymentTransactions(query({ q: search }),admin)).rows.map(r => r.booking_id)).toEqual([bookingIds[0]]);
+      const rows = (await listAdminPaymentTransactions(query({ q: search }),admin)).rows;
+      expect(rows).toHaveLength(search.startsWith("original-") ? 2 : 3);
+      expect(rows.every(r => r.booking_id === bookingIds[0])).toBe(true);
     }
     expect((await listAdminPaymentTransactions(query({ q: "%" }),admin)).total).toBe(0);
     expect((await db.from("user_roles").delete().eq("user_id",users[0]).eq("role_code","admin")).error).toBeNull();

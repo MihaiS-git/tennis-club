@@ -14,7 +14,7 @@ const { updateUserStatusAction, updateUserRoleAction, success, error, refresh } 
 }));
 
 vi.mock("../../../src/app/admin/users/actions", () => ({ updateUserStatusAction, updateUserRoleAction }));
-vi.mock("sonner", () => ({ toast: { success, error, refresh } }));
+vi.mock("sonner", () => ({ toast: { success, error, loading: vi.fn(() => "user-operation") } }));
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
 import { UserAccessControls } from "../../../src/app/admin/users/user-access-controls";
@@ -87,14 +87,14 @@ it("keeps state unchanged for final-active-admin", async () => {
   fireEvent.click(within(dialog).getByRole("button", { name: "Suspend user" }));
   confirm("Suspend user");
 
-  await waitFor(() => expect(error).toHaveBeenCalledWith("At least one active administrator must remain."));
+  await waitFor(() => expect(error).toHaveBeenCalledExactlyOnceWith("At least one active administrator must remain.", { id: "user-operation" }));
   expect(within(dialog).getByText("Active")).toBeTruthy();
   expect(within(dialog).getByRole("button", { name: "Suspend user" })).toBeTruthy();
-  expect(within(confirmation()).getByRole("alert").textContent).toBe("At least one active administrator must remain.");
+  expect(within(confirmation()).queryByRole("alert")).toBeNull();
   expect(within(dialog).getByRole("heading", { name: "Roles" }).closest("section")?.querySelector('[role="alert"]')).toBeNull();
 });
 
-it("clears a status error on retry and keeps a role error until its own retry", async () => {
+it("reports errors once through Sonner, retains account state, and permits retries", async () => {
   updateUserStatusAction.mockResolvedValueOnce({ ok: false, reason: "final-active-admin" })
     .mockResolvedValueOnce({ ok: true, user: { id: userId, status: "suspended" } });
   updateUserRoleAction.mockResolvedValueOnce({ ok: false, reason: "not-found" })
@@ -104,14 +104,14 @@ it("clears a status error on retry and keeps a role error until its own retry", 
   const rolesSection = within(dialog).getByRole("heading", { name: "Roles" }).closest("section")!;
   fireEvent.click(within(statusSection).getByRole("button", { name: "Suspend user" }));
   confirm("Suspend user");
-  await waitFor(() => expect(within(confirmation()).getByRole("alert")).toBeTruthy());
+  await waitFor(() => expect(error).toHaveBeenCalledTimes(1));
   fireEvent.click(within(confirmation()).getByRole("button", { name: "Cancel" }));
-  expect(within(statusSection).getByRole("alert")).toBeTruthy();
+  expect(within(statusSection).queryByRole("alert")).toBeNull();
   fireEvent.click(within(roleRow(dialog, "Coach")).getByRole("button", { name: "Assign" }));
-  await waitFor(() => expect(within(rolesSection).getByRole("alert")).toBeTruthy());
+  await waitFor(() => expect(error).toHaveBeenCalledTimes(2));
   fireEvent.click(within(statusSection).getByRole("button", { name: "Suspend user" }));
   expect(within(confirmation()).queryByRole("alert")).toBeNull();
-  expect(within(rolesSection).getByRole("alert")).toBeTruthy();
+  expect(within(rolesSection).queryByRole("alert")).toBeNull();
   confirm("Suspend user");
   await waitFor(() => expect(within(statusSection).getByText("Suspended")).toBeTruthy());
   fireEvent.click(within(roleRow(dialog, "Coach")).getByRole("button", { name: "Assign" }));

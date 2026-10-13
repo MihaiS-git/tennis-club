@@ -3,7 +3,7 @@
 import { useActionState, useLayoutEffect } from "react";
 
 import { changePasswordAction } from "@/app/account/actions";
-import { FormMessage } from "@/components/auth-form";
+import { ActionFeedback } from "@/components/action-feedback";
 import { useActionErrors } from "@/components/auth-action-errors";
 import { NewPasswordFields } from "@/components/auth/new-password-fields";
 import { FormField } from "@/components/form-field";
@@ -13,7 +13,7 @@ import { initialAuthActionState } from "@/lib/auth/action-state";
 
 export function ChangePasswordForm() {
   const [state, action] = useActionState(changePasswordAction, initialAuthActionState);
-  const { formRef, clearErrors, fieldError, formError } = useActionErrors(state);
+  const { formRef, clearErrors, fieldError } = useActionErrors(state);
 
   useLayoutEffect(() => {
     if (!state.success) return;
@@ -25,8 +25,7 @@ export function ChangePasswordForm() {
 
   return (
     <form ref={formRef} action={action} className="mt-4 space-y-4 [&_input]:min-h-11" noValidate>
-      <FormMessage>{formError}</FormMessage>
-      {state.success && <p role="status" className="text-sm text-accent">{state.success}</p>}
+      <ActionFeedback state={state} loading="Submitting…" />
       <FormField label="Current password" htmlFor="current-password" error={fieldError("currentPassword")} errorId="current-password-error">
         <PasswordInput
           id="current-password"

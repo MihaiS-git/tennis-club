@@ -31,12 +31,12 @@ const date = "2099-10-15", now = new Date("2099-10-14T12:00:00Z");
 const input = { paymentMethod: "pay_at_club", courtId, date, startMinute: 600, endMinute: 660,
   customerName: "  Guest Name  ", customerEmail: "  Guest@Example.test  ", customerPhone: "  +40 123  ",
   expectedTotalAmountMinor: 5000, expectedCurrency: "RON" };
-const { createPayment } = vi.hoisted(() => ({ createPayment: vi.fn() }));
+const { createPayment, cancelPayment, retrievePayment } = vi.hoisted(() => ({ createPayment: vi.fn(), cancelPayment: vi.fn(), retrievePayment: vi.fn() }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: async () => guest }));
 vi.mock("@/lib/payments/providers/stripe/client", async () => {
   const actual = await vi.importActual<typeof import("@/lib/payments/providers/stripe/client")>("@/lib/payments/providers/stripe/client");
-  return { ...actual, stripeClient: () => ({ paymentIntents: { create: createPayment } }) };
+  return { ...actual, stripeClient: () => ({ paymentIntents: { create: createPayment, cancel: cancelPayment, retrieve: retrievePayment } }) };
 });
 
 beforeAll(async () => {
@@ -68,7 +68,7 @@ async function clearBookings() {
   await database.query("DELETE FROM public.court_reservations WHERE court_id=$1", [courtId]);
 }
 beforeEach(async () => {
-  await clearBookings(); createPayment.mockReset(); sent.mockReset();
+  await clearBookings(); createPayment.mockReset(); cancelPayment.mockReset(); retrievePayment.mockReset(); sent.mockReset();
   await database.query("UPDATE public.users SET status='active' WHERE id=$1", [userId]);
   await database.query("UPDATE public.payment_provider_settings SET active_provider='stripe' WHERE id");
   await database.query("UPDATE public.locations SET is_active=true,is_public=true,archived_at=null,allow_pay_at_club=true WHERE id=$1", [locationId]);
@@ -76,7 +76,7 @@ beforeEach(async () => {
   await database.query("DELETE FROM public.location_pricing_rules WHERE location_id=$1", [locationId]);
   await database.query("DELETE FROM public.court_coverage_periods WHERE court_id=$1", [courtId]);
   await database.query("DELETE FROM public.location_opening_hours WHERE location_id=$1", [locationId]);
-  await database.query("INSERT INTO public.location_opening_hours(location_id,weekday,opens_at_minute,closes_at_minute) VALUES($1,3,0,1440)", [locationId]);
+  await database.query("WITH baseline AS (INSERT INTO public.opening_hours_schedules(location_id,starts_on) SELECT $1,DATE '0001-01-01' WHERE NOT EXISTS (SELECT 1 FROM public.opening_hours_schedules WHERE location_id=$1) RETURNING id) INSERT INTO public.location_opening_hours(schedule_id,location_id,weekday,opens_at_minute,closes_at_minute) VALUES(coalesce((SELECT id FROM public.opening_hours_schedules WHERE location_id=$1 LIMIT 1),(SELECT id FROM baseline)),$1,3,0,1440)", [locationId]);
   await database.query(`INSERT INTO public.location_pricing_rules(location_id,rule_set_id,court_id,court_state,weekday,starts_at_minute,ends_at_minute,price_per_hour_minor)
     VALUES($1,$2,$3,'outdoor',3,0,1440,5000)`, [locationId, ruleSetId, courtId]);
 });
@@ -293,12 +293,16 @@ test("provider success and attachment rollback withholds presentation and create
 });
 test("provider initialization outliving expiry attaches its reference without reclaiming occupancy", async () => {
   const held = await online();
+  retrievePayment.mockResolvedValue({ status: "requires_payment_method" });
+  cancelPayment.mockResolvedValue({ status: "canceled" });
   createPayment.mockImplementation(async () => {
     await database.query("UPDATE public.court_reservations SET hold_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", [held.reservationId]);
     await expirePaymentHolds();
     return { id: "pi_after_expiry", client_secret: "secret" };
   });
-  await startOnlineCheckout(held.paymentAttemptId);
+  await expect(startOnlineCheckout(held.paymentAttemptId)).rejects.toThrow("Payment hold expired");
+  expect(cancelPayment).toHaveBeenCalledWith("pi_after_expiry", { cancellation_reason: "abandoned" },
+    { idempotencyKey: `court-payment-abandon-${held.paymentAttemptId}` });
   expect(await stored()).toMatchObject([{ reservation_status: "released", booking_status: "expired", attempt_status: "expired",
     provider_payment_id: "pi_after_expiry", checkout_token_hash: expect.any(String), hold_expires_at: null }]);
   expect(await counts()).toEqual({ reservations: 1, bookings: 1, attempts: 1 });
@@ -354,10 +358,10 @@ test("attachment locks booking before attempt and an existing capability cannot 
 test("checkout retains per-cell adjacent-hours selection and covered mixed-rate rounding", async () => {
   await database.query("DELETE FROM public.location_pricing_rules WHERE location_id=$1", [locationId]);
   await database.query("DELETE FROM public.location_opening_hours WHERE location_id=$1", [locationId]);
-  await database.query("INSERT INTO public.location_opening_hours(location_id,weekday,opens_at_minute,closes_at_minute) VALUES($1,3,600,630),($1,3,630,660)", [locationId]);
+  await database.query("WITH baseline AS (INSERT INTO public.opening_hours_schedules(location_id,starts_on) SELECT $1,DATE '0001-01-01' WHERE NOT EXISTS (SELECT 1 FROM public.opening_hours_schedules WHERE location_id=$1) RETURNING id) INSERT INTO public.location_opening_hours(schedule_id,location_id,weekday,opens_at_minute,closes_at_minute) VALUES(coalesce((SELECT id FROM public.opening_hours_schedules WHERE location_id=$1 LIMIT 1),(SELECT id FROM baseline)),$1,3,600,630),(coalesce((SELECT id FROM public.opening_hours_schedules WHERE location_id=$1 LIMIT 1),(SELECT id FROM baseline)),$1,3,630,660)", [locationId]);
   await database.query("INSERT INTO public.court_coverage_periods(court_id,starts_on,ends_on) VALUES($1,$2,$2)", [courtId, date]);
   await database.query(`INSERT INTO public.location_pricing_rules(location_id,rule_set_id,court_id,court_state,weekday,starts_at_minute,ends_at_minute,price_per_hour_minor)
-    VALUES($1,$2,$3,'outdoor',3,600,630,5000),($1,$2,$3,'covered',3,600,630,5001),($1,$2,$3,'covered',3,630,660,7000)`, [locationId, ruleSetId, courtId]);
+    VALUES($1,$2,$3,'outdoor',3,600,630,5000),($1,$2,$3,'outdoor',3,630,660,5000),($1,$2,$3,'covered',3,600,630,5001),($1,$2,$3,'covered',3,630,660,7000)`, [locationId, ruleSetId, courtId]);
   expect(await createCustomerBooking({ ...input, expectedTotalAmountMinor: 6001 }, guest, now)).toMatchObject({ ok: true, totalAmountMinor: 6001 });
   expect(await stored()).toMatchObject([{ total_amount_minor: 6001, amount_minor: 6001 }]);
 });

@@ -57,6 +57,9 @@ test.each(["coach"])("own availability authorizes %s, scopes target to owner and
   expect(query.mock.calls[0][0]).toContain("NOT EXISTS(SELECT 1 FROM public.bookings");
   expect(query.mock.calls[1][1]).toEqual([row.booking_date, locationId, row.id, 0, 1000]);
   expect(result).toMatchObject({ date: row.booking_date, location: { id: locationId, name: "Club", timezone: "Europe/Bucharest" } });
+  expect(result.reservation).toEqual({ id: row.id, updated_at: token, court_id: row.court_id,
+    booking_date: row.booking_date, starts_at_minute: row.starts_at_minute, ends_at_minute: row.ends_at_minute,
+    reason: row.reason });
   expect(result.day.courts[0].cells.slice(0, 4)).toEqual(["past", "available", "booked", "booked"]);
   expect(network).not.toHaveBeenCalled();
 });
@@ -77,5 +80,5 @@ test("own edit uses one now for precise hold expiry and returns generic interval
   ]);
   const result = await getOwnReservationEditDay(editInput, client, now);
   expect(result.day.courts[0].cells).toEqual(["past", "available", "booked", "booked", "booked", "booked", "available", "available", "available", "available"]);
-  expect(JSON.stringify(result)).not.toMatch(/created_by_user_id|hold_expires_at|reason|customer/);
+  expect(JSON.stringify(result.day)).not.toMatch(/created_by_user_id|hold_expires_at|reason|customer/);
 });

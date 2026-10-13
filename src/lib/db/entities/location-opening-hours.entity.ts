@@ -1,7 +1,8 @@
 import "server-only";
 
-import { Check, Column, Entity, Exclusion, JoinColumn, ManyToOne, PrimaryColumn, type Relation } from "typeorm";
+import { Check, Column, Entity, Exclusion, ForeignKey, JoinColumn, ManyToOne, PrimaryColumn, type Relation } from "typeorm";
 
+import { OpeningHoursScheduleEntity } from "./opening-hours-schedule.entity";
 import { LocationEntity } from "./location.entity";
 
 @Entity({ schema: "public", name: "location_opening_hours" })
@@ -9,13 +10,17 @@ import { LocationEntity } from "./location.entity";
 @Check("location_opening_hours_opens_at_minute_check", "opens_at_minute >= 0 AND opens_at_minute <= 1439")
 @Check("location_opening_hours_positive_interval", "opens_at_minute < closes_at_minute")
 @Check("location_opening_hours_weekday_check", "weekday >= 0 AND weekday <= 6")
-@Exclusion("location_opening_hours_no_overlap", "USING gist (location_id WITH =, weekday WITH =, int4range(opens_at_minute, closes_at_minute, '[)') WITH &&)")
+@ForeignKey(() => OpeningHoursScheduleEntity, ["locationId", "scheduleId"], ["locationId", "id"], { name: "location_opening_hours_schedule_fkey", onDelete: "CASCADE" })
+@Exclusion("location_opening_hours_no_overlap", "USING gist (schedule_id WITH =, weekday WITH =, int4range(opens_at_minute, closes_at_minute, '[)') WITH &&)")
 export class LocationOpeningHoursEntity {
   @PrimaryColumn({ name: "id", type: "uuid", default: () => "gen_random_uuid()", primaryKeyConstraintName: "location_opening_hours_pkey" })
   id!: string;
 
   @Column({ name: "location_id", type: "uuid" })
   locationId!: string;
+
+  @Column({ name: "schedule_id", type: "uuid" })
+  scheduleId!: string;
 
   @Column({ name: "weekday", type: "integer" })
   weekday!: number;

@@ -11,6 +11,6 @@ export async function bookingContactPrefill(client?: Awaited<ReturnType<typeof c
   if (account.state !== "active") return { customerName: "", customerEmail: "", customerPhone: "" };
   const profile = await loadProfile(reader, account.userId);
   const name = [profile?.personal.first_name, profile?.personal.last_name].filter(Boolean).join(" ").trim();
-  return { customerName: name || profile?.player?.display_name?.trim() || "",
+  return { customerName: name,
     customerEmail: account.email, customerPhone: profile?.personal.phone ?? "" };
 }

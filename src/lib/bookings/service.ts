@@ -16,7 +16,7 @@ import { inTransaction } from "@/lib/db/transaction";
 import { normalizeDatabaseError } from "@/lib/db/errors";
 import { lockCheckoutAccountStatus } from "@/lib/db/repositories/accounts.repository";
 import { lockConfigurationForRead, lockLocations, findCourtConfiguration,
-  listCheckoutLocationCourts, listLocationOpeningHours, listCheckoutCourtCoverage } from "@/lib/db/repositories/clubs.repository";
+  listCheckoutLocationCourts, listLocationOpeningHours, listOpeningHoursSchedules, listCheckoutCourtCoverage } from "@/lib/db/repositories/clubs.repository";
 import { listLocationPublicationPricing, listCheckoutPricing } from "@/lib/db/repositories/pricing.repository";
 import { readCheckoutClock, insertCustomerReservation } from "@/lib/db/repositories/reservations.repository";
 import { readOccupancyForMutation } from "@/lib/reservations/occupancy";
@@ -61,7 +61,8 @@ export async function createCustomerBooking(input: unknown, reader?: Reader,
         const authoritative = await findCourtConfiguration(manager, courtId);
         if (!authoritative || authoritative.locationId !== parent.locationId) throw new CheckoutParentChanged();
         const courts = await listCheckoutLocationCourts(manager, location.id);
-        const hours = await listLocationOpeningHours(manager, location.id);
+        const hours = await listLocationOpeningHours(manager, location.id, date);
+        const schedules = await listOpeningHoursSchedules(manager, location.id);
         const publicationPricing = await listLocationPublicationPricing(manager, location.id);
         const coverage = await listCheckoutCourtCoverage(manager, courtId, date);
         const pricing = await listCheckoutPricing(manager, courtId, mondayWeekday(date), date);
@@ -77,10 +78,14 @@ export async function createCustomerBooking(input: unknown, reader?: Reader,
         const today = publicationToday(location.timezone, now);
         if (!isPubliclyEligible({ name: location.name, slug: location.slug, timezone: location.timezone,
           currency: location.currency, is_active: location.isActive, is_public: location.isPublic,
-          archived_at: location.archivedAt?.toISOString() ?? null, location_opening_hours: hours,
+          archived_at: location.archivedAt?.toISOString() ?? null, location_opening_hours: hours.map((h) => {
+            const schedule = schedules.find((s) => s.id === h.scheduleId);
+            if (!schedule) throw new Error("Opening-hours schedule missing.");
+            return { id: h.id, weekday: h.weekday, starts_on: schedule.startsOn, ends_on: schedule.endsOn, opens_at_minute: h.opensAtMinute, closes_at_minute: h.closesAtMinute };
+          }),
           courts: courts.map((court) => ({ id: court.id, environment: court.environment,
             location_pricing_rules: publicationPricing.filter((rule) => rule.courtId === court.id)
-              .map((rule) => ({ court_state: rule.courtState, ends_on: rule.endsOn })) })),
+              .map((rule) => ({ court_state: rule.courtState, starts_on: rule.startsOn, ends_on: rule.endsOn, weekday: rule.weekday, starts_at_minute: rule.startsAtMinute, ends_at_minute: rule.endsAtMinute })) })),
         }, today) || !courts.some((court) => court.id === courtId))
           return { ok: false, message: "That court is not available for booking." };
         if (paymentMethod === "pay_at_club" && !location.allowPayAtClub)

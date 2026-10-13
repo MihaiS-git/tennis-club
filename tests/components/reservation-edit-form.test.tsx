@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { expectToast, lastToast } from "../helpers/notifications";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ReservationEditForm } from "@/app/my-activity/bookings/reservation-edit-form";
@@ -82,7 +83,7 @@ it("disables Save while availability is pending or its required interval is unav
   render(<ReservationEditForm reservation={reservation} inProgress={false} {...callbacks} />);
   changeReason("Training");
   expect(saveButton()).toHaveProperty("disabled", true);
-  expect(screen.getByRole("status").textContent).toContain("Loading court availability");
+  expect(lastToast("loading")).toContain("Loading court availability");
   await act(async () => finish(day(reservation.booking_date)));
   expect(saveButton()).toHaveProperty("disabled", false);
 });
@@ -111,6 +112,17 @@ it("allows valid reason-only changes in progress without availability", async ()
   expect(availability).not.toHaveBeenCalled();
 });
 
+it("keeps a successful Server Action outcome when refreshing saved details fails", async () => {
+  edit.mockResolvedValue({ ok: true });
+  const onSaved = vi.fn(async () => { throw new Error("Refresh failed"); });
+  render(<ReservationEditForm reservation={reservation} inProgress {...callbacks} onSaved={onSaved} />);
+  changeReason("Training"); fireEvent.click(saveButton());
+  await expectToast(/Reservation updated.*refresh/i, "warning");
+  expect(lastToast()).toBe("");
+  expect(onSaved).toHaveBeenCalledOnce();
+  expect(saveButton()).toHaveProperty("disabled", false);
+});
+
 it("locks pending submission, prevents duplicates, preserves failures and allows retry", async () => {
   availability.mockResolvedValue(day(reservation.booking_date));
   let finish: (value: { ok: false; message: string }) => void = () => { throw new Error("Not saving"); };
@@ -126,7 +138,7 @@ it("locks pending submission, prevents duplicates, preserves failures and allows
   expect(screen.getByLabelText("Reason")).toHaveProperty("disabled", true);
   expect(callbacks.onPendingChange).toHaveBeenLastCalledWith(true);
   await act(async () => finish({ ok: false, message: "Unable to save. Try again." }));
-  expect(screen.getByRole("alert").textContent).toContain("Try again");
+  expect(lastToast()).toContain("Try again");
   expect(screen.getByLabelText("Reason")).toHaveProperty("value", "Training");
   expect(saveButton()).toHaveProperty("disabled", false);
   expect(callbacks.onPendingChange).toHaveBeenLastCalledWith(false);
@@ -141,7 +153,7 @@ it("preserves the draft and enables retry after a thrown save error", async () =
   render(<ReservationEditForm reservation={reservation} inProgress={false} {...callbacks} />);
   await screen.findByText("Current reservation");
   changeReason("Training"); fireEvent.click(saveButton());
-  await screen.findByText(/Unable to save this reservation/);
+  await expectToast(/Unable to save this reservation/);
   expect(screen.getByLabelText("Reason")).toHaveProperty("value", "Training");
   expect(saveButton()).toHaveProperty("disabled", false);
   fireEvent.click(saveButton());
@@ -182,7 +194,7 @@ it("keeps reason and reports a conflict while refreshing newly blocked availabil
   fireEvent.change(screen.getByRole("textbox", { name: "Reason" }), { target: { value: "Training" } });
   fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
   await waitFor(() => expect(availability).toHaveBeenCalledTimes(2));
-  expect(screen.getByRole("alert").textContent).toContain("existing reservation has not been changed");
+  expect(lastToast()).toContain("existing reservation has not been changed");
   expect(screen.getByRole("textbox", { name: "Reason" })).toHaveProperty("value", "Training");
   expect(screen.queryByRole("region", { name: "Selected reservation" })).toBeNull();
   expect(screen.queryByRole("button", { name: /Court B 2099-10-15 10:00–10:30/ })).toBeNull();
@@ -204,9 +216,9 @@ it("retains reason changes after availability fails and allows retry", async () 
   availability.mockRejectedValueOnce(new Error("Network failure")).mockResolvedValueOnce(day(reservation.booking_date));
   render(<ReservationEditForm reservation={reservation} inProgress={false} {...callbacks} />);
   changeReason("Training");
-  await screen.findByText(/Unable to load court availability/);
+  await expectToast(/Unable to load court availability/);
   expect(saveButton()).toHaveProperty("disabled", true);
-  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  fireEvent.click(screen.getByRole("button", { name: "Retry loading availability" }));
   expect(saveButton()).toHaveProperty("disabled", true);
   await screen.findByText("Current reservation");
   expect(screen.getByLabelText("Reason")).toHaveProperty("value", "Training");

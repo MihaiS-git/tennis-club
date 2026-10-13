@@ -50,8 +50,9 @@ npm integration runner for focused tests too:
 npm run test:integration -- tests/integration/db/migration-cutover.integration.test.ts
 ```
 
-Playwright always builds and starts a fresh production Next.js server on port 3000.
-Stop any server on that port first; `PLAYWRIGHT_USE_EXISTING_SERVER=1` is rejected.
+Playwright builds into `.next-test` and starts its own production Next.js server on
+port 3100, leaving the development server and `.next` output untouched. Port 3100
+must be free; `PLAYWRIGHT_USE_EXISTING_SERVER=1` is rejected.
 The build and server inherit the verified test connections and `APP_URL` explicitly,
 so Next.js cannot replace them with `.env.local` values. Real booking mail and
 payment-provider environment credentials are explicitly blanked; tests opt into
@@ -143,3 +144,22 @@ npm run test:integration -- tests/integration/db/migration-cutover.integration.t
 
 Use only the isolated `tennis-club-tests` project. Fixtures are cleaned up or rolled
 back; never run them against development, remote, production or shared databases.
+
+
+## Booking adjustment validation
+
+The existing db/booking-mutations integration suite now covers surcharge capture,
+retryable failure/unknown outcome, cancellation/expiry, target/pricing/actor invalidation,
+compensation, partial refund retry (including a verified failure generation), repeated
+50 → 75 → 100 → 75 → cancellation, concurrent edits/recovery, role boundaries and
+expiry at the final SQL write. Existing Stripe/cancellation/Admin suites remain required.
+
+`tests/e2e/booking-adjustments.e2e.ts` exercises My Activity Edit, original/new/difference
+prices, refresh recovery, an additional payment and a partial refund through the real
+Next.js/TypeORM services. Playwright starts a loopback Stripe HTTP fixture on 3111,
+uses intentionally fake fixture credentials and intercepts Stripe.js in this test.
+It makes no real Stripe transaction. Production routing to the fixture is rejected
+unless the exact isolated test database, project marker, fake secret and URL match.
+Test environment setup clears inherited Stripe fixture/provider variables before
+Playwright opts into these explicit fake credentials. Application server/build remain
+isolated on port 3100 and .next-test; the development server is not reused.

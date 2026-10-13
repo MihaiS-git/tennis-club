@@ -1,10 +1,12 @@
 import { installDialogMock } from "../helpers/dialog";
 import { toast } from "sonner";
 // @vitest-environment jsdom
+import { lastToast } from "../helpers/notifications";
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { PersonalActivity } from "@/app/my-activity/bookings/personal-activity";
+import { CustomerBookingCancellation } from "@/app/my-activity/bookings/customer-booking-cancellation";
 import { localMinute, localToday } from "@/lib/courts/local-time";
 import type { PersonalCustomerBooking } from "@/lib/bookings/personal";
 import type { PersonalReservation } from "@/lib/reservations/personal";
@@ -78,7 +80,7 @@ it.each([true])("renders every owned row and opens each detail dialog (staff=%s)
 });
 
 it("loads on the bookings page and offers cancellation only for the owner's Upcoming reservation", async () => {
-  const active = { id: "one", court_id: "court", location_id: "location", updated_at: "2026-10-01T12:00:00Z", booking_date: "2026-10-12", starts_at_minute: 840, ends_at_minute: 960,
+  const active = { id: "one", court_id: "court", location_id: "location", updated_at: "2026-10-01T12:00:00Z", booking_date: "2099-10-12", starts_at_minute: 840, ends_at_minute: 960,
     reason: "Course with Andrej", status: "active", created_by_user_id: "owner", creator_name: "Andrej",
     cancelled_at: null, cancelled_by_name: null, location_name: "RIVUS", location_timezone: "Europe/Bucharest", court_name: "Court 2" };
   const cancelled = { ...active, id: "two", booking_date: "2026-10-08", status: "cancelled", reason: null,
@@ -155,7 +157,7 @@ it("edits a future reservation in the details dialog and shows refreshed details
   const updated = await screen.findByRole("dialog", { name: "Reservation details" });
   expect(within(updated).getByText("Court 3")).toBeDefined();
   expect(within(updated).getByText("Training")).toBeDefined();
-  expect(screen.getByRole("status").textContent).toBe("Reservation updated.");
+  expect(lastToast("success")).toBe("Reservation updated.");
   expect(screen.getByRole("region", { name: "Upcoming" })).toBeDefined();
 });
 
@@ -210,7 +212,7 @@ it("refreshes changed details after a stale edit instead of overwriting them", a
     expectedUpdatedAt: active.updated_at, reason: "My draft" }));
   const details = await screen.findByRole("dialog", { name: "Reservation details" });
   expect(within(details).getByText("Newer update")).toBeDefined();
-  expect(within(details).getByRole("alert").textContent).toContain("changed since you opened it");
+  expect(lastToast("warning")).toContain("changed since you opened it");
 });
 
 const cancellableBooking: PersonalCustomerBooking = {
@@ -257,10 +259,24 @@ it.each([
   fireEvent.click(within(screen.getByRole("dialog", { name: "Cancel booking?" })).getByRole("button", { name: "Cancel booking" }));
   await waitFor(() => expect(cancelBooking).toHaveBeenCalledWith(cancellableBooking.id));
   expect(await screen.findByText("No upcoming bookings or reservations match your filters.")).toBeDefined();
-  expect(screen.getByRole("status").textContent).toBe("Booking cancelled.");
-  expect(notification).toHaveBeenCalledWith(message);
+  expect(lastToast("success")).toBe(message);
+  expect(notification).toHaveBeenCalledExactlyOnceWith(message, expect.objectContaining({ id: expect.any(Number) }));
   notification.mockRestore();
   expect(cancel).not.toHaveBeenCalled();
+});
+
+it("reports a committed cancellation accurately when the details refresh rejects", async () => {
+  cancelBooking.mockResolvedValue({ ok: true, refundStatus: "succeeded" });
+  const onCancelled = vi.fn(async () => { throw new Error("Refresh failed"); });
+  render(<CustomerBookingCancellation booking={cancellableBooking} staff={false} onCancelled={onCancelled} onPendingChange={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "Cancel booking" }));
+  fireEvent.click(within(screen.getByRole("dialog", { name: "Cancel booking?" })).getByRole("button", { name: "Cancel booking" }));
+  await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(
+    "Booking cancelled. Your full payment has been refunded.",
+    expect.objectContaining({ description: expect.stringContaining("refresh") }),
+  ));
+  expect(toast.error).not.toHaveBeenCalled();
+  expect(onCancelled).toHaveBeenCalledOnce();
 });
 
 it.each([true])("applies snapshot notice only to ordinary owners (staff=%s)", async (staff) => {
@@ -277,7 +293,7 @@ it.each([true])("applies snapshot notice only to ordinary owners (staff=%s)", as
   }
 });
 
-it("keeps a stale cancellation error beside the confirmation and prevents duplicate requests", async () => {
+it("toasts a stale cancellation error while keeping confirmation open and prevents duplicate requests", async () => {
   load.mockResolvedValue({ bookings: [cancellableBooking], upcoming: [] });
   let resolve!: (value: { ok: false; message: string }) => void;
   cancelBooking.mockImplementation(() => new Promise((done) => { resolve = done; }));
@@ -289,7 +305,7 @@ it("keeps a stale cancellation error beside the confirmation and prevents duplic
   fireEvent.click(button); fireEvent.click(button);
   expect(cancelBooking).toHaveBeenCalledOnce();
   resolve({ ok: false, message: "The cancellation notice period for this booking has expired." });
-  await waitFor(() => expect(within(confirmation).getByRole("alert").textContent).toContain("has expired"));
+  await waitFor(() => expect(lastToast()).toContain("has expired"));
   expect(load).toHaveBeenCalledOnce();
   expect(screen.getByRole("dialog", { name: "Booking" })).toBeDefined();
 });

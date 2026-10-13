@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 
+import { renderToReadableStream } from "react-dom/server";
 import { afterEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 
 import type { CurrentAccount } from "../../src/lib/auth/account";
 
-const { readCurrentAccount, avatar } = vi.hoisted(() => ({ readCurrentAccount: vi.fn(), avatar: { url: null as string | null } }));
+const { readCurrentAccount, avatar, route } = vi.hoisted(() => ({ readCurrentAccount: vi.fn(), avatar: { url: null as string | null }, route: { pathname: "/courts" } }));
 
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }));
+vi.mock("next/navigation", () => ({ usePathname: () => route.pathname, useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }));
 
 vi.mock("../../src/app/account/actions", () => ({ signOutAction: vi.fn() }));
 vi.mock("../../src/lib/auth/account", () => ({ readCurrentAccount }));
@@ -16,12 +17,13 @@ vi.mock("../../src/lib/profile/navigation", () => ({ readNavigationProfile: asyn
 }) }));
 
 import { MobileNavbarMenu } from "../../src/components/mobile-navbar-menu";
+import { DesktopNavbar } from "../../src/components/desktop-navbar";
 import { MobileNavbar } from "../../src/components/mobile-navbar";
 
 afterEach(() => { cleanup(); avatar.url = null; });
 
 it("shows signed-out links and closes on link selection or Escape", () => {
-  render(<MobileNavbarMenu isAuthenticated={false} isAdmin={false} canReserve={false} />);
+  render(<MobileNavbarMenu isAuthenticated={false} canReserve={false} />);
 
   const trigger = screen.getByRole("button", { name: "Open menu" });
   expect(trigger.getAttribute("aria-expanded")).toBe("false");
@@ -53,7 +55,7 @@ it("shows signed-out links and closes on link selection or Escape", () => {
 });
 
 it("closes on backdrop or drawer close button and restores focus", () => {
-  render(<MobileNavbarMenu isAuthenticated={false} isAdmin={false} canReserve={false} />);
+  render(<MobileNavbarMenu isAuthenticated={false} canReserve={false} />);
   const trigger = screen.getByRole("button", { name: "Open menu" });
 
   fireEvent.click(trigger);
@@ -68,7 +70,7 @@ it("closes on backdrop or drawer close button and restores focus", () => {
 });
 
 it("keeps keyboard focus inside the open drawer", () => {
-  render(<MobileNavbarMenu isAuthenticated={false} isAdmin={false} canReserve={false} />);
+  render(<MobileNavbarMenu isAuthenticated={false} canReserve={false} />);
   fireEvent.click(screen.getByRole("button", { name: "Open menu" }));
 
   const drawer = screen.getByRole("dialog", { name: "Mobile navigation menu" });
@@ -84,6 +86,9 @@ it("keeps keyboard focus inside the open drawer", () => {
 
 it.each([
   ["active admin", { state: "active", userId: "admin-1", email: "admin@example.com", roles: ["admin"] }, true],
+  ["active coach", { state: "active", userId: "coach-1", email: "coach@example.com", roles: ["coach"] }, true],
+  ["member", { state: "active", userId: "member-1", email: "member@example.com", roles: [] }, false],
+  ["guest", { state: "unauthenticated" }, false],
   ["suspended admin", { state: "suspended", userId: "admin-1", email: "admin@example.com", roles: ["admin"] }, false],
 ] satisfies ReadonlyArray<readonly [string, CurrentAccount, boolean]>)("shows Admin only for %s in the mobile navbar", async (_description, account, showsAdmin) => {
   readCurrentAccount.mockResolvedValue(account);
@@ -97,12 +102,42 @@ it.each([
   const adminLink = within(navigation).queryByRole("link", { name: "Admin" });
   if (showsAdmin) {
     expect(links.map((link) => link.textContent)).toEqual([
-      "Courts", "Coaching", "Matches", "Rankings", "Club", "Admin", "Reservations", "My activity", "Profile & settings",
+      "Courts", "Coaching", "Matches", "Rankings", "Club", "Admin", "My activity", "Profile & settings",
     ]);
-    expect(adminLink?.getAttribute("href")).toBe("/admin/locations");
+    expect(adminLink?.getAttribute("href")).toBe("/admin");
   } else {
     expect(adminLink).toBeNull();
   }
   const reservations = within(navigation).queryByRole("link", { name: "Reservations" });
-  expect(reservations?.getAttribute("href") ?? null).toBe(account.state === "active" && account.roles.some((role) => role === "admin" || role === "coach") ? "/reservations" : null);
+  expect(reservations).toBeNull();
+  // Wait for the server navbar's async account boundaries before inspecting it.
+  const stream = await renderToReadableStream(<DesktopNavbar />);
+  await stream.allReady;
+  const desktop = new DOMParser().parseFromString(await new Response(stream).text(), "text/html");
+  const desktopNav = desktop.querySelector('nav[aria-label="Main navigation"]')!;
+  const desktopAdmin = [...desktopNav.querySelectorAll("a")].find((link) => link.textContent === "Admin");
+  expect(Boolean(desktopAdmin)).toBe(showsAdmin);
+  if (showsAdmin) expect(desktopAdmin?.getAttribute("href")).toBe("/admin");
+  expect([...desktopNav.querySelectorAll("a")].some((link) => link.textContent === "Reservations")).toBe(false);
+});
+
+it.each([
+  ["/admin", "Admin"], ["/admin/payments/transactions", "Admin"], ["/admin/payments/settings", "Admin"], ["/admin/locations/location-id", "Admin"],
+  ["/admin/reservations", "Admin"], ["/admin/reservations/day", "Admin"],
+  ["/courts", "Courts"], ["/coaching/session", "Coaching"], ["/matches", "Matches"],
+  ["/rankings", "Rankings"], ["/club/about", "Club"],
+  ["/administrator", null], ["/admin/reservations-extra", "Admin"], ["/courts-extra", null],
+])("highlights a single segment-aware primary section on %s", async (pathname, active) => {
+  route.pathname = pathname;
+  render(<MobileNavbarMenu isAuthenticated canReserve />);
+  fireEvent.click(screen.getByRole("button", { name: "Open menu" }));
+  const nav = screen.getByRole("navigation", { name: "Mobile navigation" });
+  const current = within(nav).getAllByRole("link").filter((link) => link.hasAttribute("aria-current"));
+  expect(current.map((link) => link.textContent)).toEqual(active ? [active] : []);
+  if (current.length) expect(current[0].className).toContain("bg-primary text-primary-foreground");
+  readCurrentAccount.mockResolvedValue({ state: "active", roles: ["admin"] });
+  const stream = await renderToReadableStream(<DesktopNavbar />);
+  await stream.allReady;
+  const desktop = new DOMParser().parseFromString(await new Response(stream).text(), "text/html");
+  expect([...desktop.querySelectorAll('nav[aria-label="Main navigation"] a[aria-current="page"]')].map((link) => link.textContent)).toEqual(active ? [active] : []);
 });

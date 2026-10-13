@@ -28,7 +28,7 @@ export async function getPublicCourtDay(location: PublicLocation, date: string, 
     const manager = (await getDataSource()).manager;
     const courtIds = location.courts.map((court) => court.id);
     const [hoursResult, coverageResult, pricingResult, reservationResult] = await Promise.all([
-      listPublicDayOpeningHours(manager, location.id, mondayWeekday(date)),
+      listPublicDayOpeningHours(manager, location.id, mondayWeekday(date), date),
       listPublicDayCoverage(manager, location.id, courtIds, date),
       listPublicDayPricing(manager, location.id, courtIds, mondayWeekday(date), date),
       listPublicDayOccupancy(manager, location.id, courtIds, date),

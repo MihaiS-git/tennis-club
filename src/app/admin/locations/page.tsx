@@ -25,7 +25,7 @@ export default async function AdminLocationsPage({ searchParams }: {
     {rows.length === 0 ? <p className="rounded-control border border-border bg-surface px-4 py-6 text-sm text-muted-foreground">
       {archived ? "No archived locations." : "No locations found."}
     </p> : <>
-      <div className="overflow-x-auto rounded-control border border-border bg-surface">
+      <div className="relative overflow-x-auto rounded-control border border-border bg-surface">
         <table className="w-full min-w-[1100px] text-left text-sm" aria-label={archived ? "Archived locations" : "Locations"}>
           <thead className="border-b border-border bg-surface-muted text-xs font-semibold text-muted-foreground">
             <tr>{["Location", "Status", "City / Country", "Timezone", "Currency", "Details", "Opening hours", "Courts", "Pricing", "Public booking"].map((label, index) =>

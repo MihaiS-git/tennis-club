@@ -49,12 +49,14 @@ export function buildReservationDay(input: {
   hours: readonly OpeningInterval[]; reservations: readonly Occupancy[];
 }) {
   const hours = input.hours.filter((hour) => hour.weekday === mondayWeekday(input.date));
-  const first = hours.length ? Math.floor(Math.min(...hours.map((hour) => hour.opens_at_minute)) / 30) * 30 : 0;
-  const last = hours.length ? Math.ceil(Math.max(...hours.map((hour) => hour.closes_at_minute)) / 30) * 30 : 0;
+  const starts = [...hours.map((h) => h.opens_at_minute), ...input.reservations.map((r) => r.starts_at_minute)];
+  const ends = [...hours.map((h) => h.closes_at_minute), ...input.reservations.map((r) => r.ends_at_minute)];
+  const first = starts.length ? Math.floor(Math.min(...starts) / 30) * 30 : 0;
+  const last = ends.length ? Math.ceil(Math.max(...ends) / 30) * 30 : 0;
   const times = Array.from({ length: (last - first) / 30 }, (_, index) => first + index * 30);
   const courts = input.courts.map((court) => ({ court, cells: times.map((minute): ReservationCell => {
-    if (!hours.some((hour) => hour.opens_at_minute <= minute && minute + 30 <= hour.closes_at_minute)) return "closed";
     if (input.reservations.some((row) => row.court_id === court.id && row.starts_at_minute < minute + 30 && minute < row.ends_at_minute)) return "booked";
+    if (!hours.some((hour) => hour.opens_at_minute <= minute && minute + 30 <= hour.closes_at_minute)) return "closed";
     if (input.date < input.today || (input.date === input.today && minute < input.currentMinute)) return "past";
     return "available";
   }) }));

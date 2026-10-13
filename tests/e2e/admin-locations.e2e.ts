@@ -43,7 +43,7 @@ test("location rows navigate to the shared workspace form and edits stay in plac
     await expect(form.getByRole("button", { name: "Save location", exact: true })).toBeDisabled();
     await expect(page).toHaveURL(new RegExp(`/admin/locations/${locationId}$`));
     await expect(page.getByRole("textbox", { name: "City", exact: true })).toHaveValue("Updated city");
-    await page.getByRole("navigation", { name: "Admin navigation" }).getByRole("link", { name: "Locations", exact: true }).click();
+    await page.getByRole("navigation", { name: "Management navigation" }).getByRole("link", { name: "Locations", exact: true }).click();
     await expect(row.getByText("Updated city", { exact: true })).toBeVisible();
     await row.focus();
     await row.press("Enter");
@@ -71,7 +71,7 @@ test("location rows navigate to the shared workspace form and edits stay in plac
     await expect(page.getByRole("region", { name: "Opening hours", exact: true })).toBeVisible();
     await tabs.getByRole("link", { name: /^Details/ }).click();
     await expect(page.getByRole("textbox", { name: "City", exact: true })).toHaveValue("Unsaved city");
-    await page.getByRole("navigation", { name: "Admin navigation" }).getByRole("link", { name: "Locations", exact: true }).click();
+    await page.getByRole("navigation", { name: "Management navigation" }).getByRole("link", { name: "Locations", exact: true }).click();
     await expect(page.getByText("You have unsaved changes in Details.")).toBeVisible();
     await page.getByRole("button", { name: "Stay", exact: true }).click();
     await expect(page.getByRole("textbox", { name: "City", exact: true })).toHaveValue("Unsaved city");

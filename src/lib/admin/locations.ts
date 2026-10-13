@@ -1,3 +1,4 @@
+import { publicationHoursSchema, publicationPricingSchema } from "@/lib/locations/publication";
 import "server-only";
 
 import { z } from "zod";
@@ -71,11 +72,10 @@ export async function saveAdminLocation(input: unknown, supabase?: Awaited<Retur
     name: fields.name, addressLine1: fields.address_line1, addressLine2: fields.address_line2,
     city: fields.city, postalCode: fields.postal_code, countryCode: fields.country_code,
     timezone: fields.timezone, currency: fields.currency, isActive: fields.is_active,
-    isPublic: id ? fields.is_public : false, displayOrder: fields.display_order,
+    isPublic: false, displayOrder: fields.display_order,
     allowPayAtClub: fields.allow_pay_at_club,
     customerCancellationNoticeMinutes: fields.customer_cancellation_notice_minutes,
   };
-  let failureMessage = id && fields.is_public ? "Unable to check public booking readiness." : "Unable to save location.";
   let result: LocationMutationResult;
   try {
     if (!id) {
@@ -91,12 +91,10 @@ export async function saveAdminLocation(input: unknown, supabase?: Awaited<Retur
         const [location] = await clubs.lockLocations(manager, [id]);
         if (!await lockActiveAdminAccount(manager, actor.userId)) throw new Error("Administrator required");
         if (!location || location.archivedAt) return { ok: false, reason: "not-found" };
-        if (fields.is_public) {
-          failureMessage = "Unable to check public booking readiness.";
-          const missing = await locationPublicationMissing(manager, id, { ...fields, slug: location.slug, archived_at: null });
-          if (missing.length) return { ok: false, reason: "not-ready", message: publicationError(missing) };
-          failureMessage = "Unable to save location.";
-        }
+        // Details edits do not request publication. Preserve authoritative intent,
+        // including when a sibling publication control changed since form load.
+        // Only setAdminLocationPublication validates and changes that intent.
+        values.isPublic = location.isPublic;
         const savedId = await clubs.updateUnarchivedLocation(manager, id, values, new Date());
         return savedId ? { ok: true, id: savedId } : { ok: false, reason: "not-found" };
       });
@@ -104,9 +102,9 @@ export async function saveAdminLocation(input: unknown, supabase?: Awaited<Retur
   } catch (error) {
     const failure = normalizeDatabaseError(error);
     if (failure.sqlState === "23505") return { ok: false, reason: "duplicate-slug" };
-    logger.error({ event: failureMessage === "Unable to save location." ? "admin.location_save_failed" : "admin.location_readiness_failed",
+    logger.error({ event: "admin.location_save_failed",
       actorId: actor.userId, locationId: id, kind: failure.kind, code: failure.sqlState }, "Failed to save location");
-    throw new Error(failureMessage);
+    throw new Error("Unable to save location.");
   }
   if (!result.ok) return result;
   const locationId = result.id;
@@ -140,9 +138,9 @@ export async function setAdminLocationArchived(input: unknown, supabase?: Awaite
 }
 
 const publicationFactsSchema = z.array(z.object({
-  id: z.uuid(), location_opening_hours: z.array(z.object({ id: z.uuid() })),
+  id: z.uuid(), location_opening_hours: z.array(publicationHoursSchema),
   courts: z.array(z.object({ id: z.uuid(), environment: z.enum(["indoor", "outdoor"]),
-    location_pricing_rules: z.array(z.object({ court_state: z.enum(["indoor", "outdoor", "covered"]), ends_on: z.iso.date().nullable() })),
+    location_pricing_rules: z.array(publicationPricingSchema),
   })),
 }));
 
@@ -165,12 +163,13 @@ export async function listAdminLocationsWithReadiness(view: "current" | "archive
 async function locationPublicationMissing(manager: EntityManager, id: string,
   location: Omit<PublicationConfiguration, "location_opening_hours" | "courts">) {
   const hours = await clubs.listLocationOpeningHoursFacts(manager, id);
+  const schedules = await clubs.listOpeningHoursSchedules(manager, id);
   const courts = await clubs.listActiveLocationCourts(manager, id);
   const pricing = await listLocationPublicationPricing(manager, id);
-  const configuration: PublicationConfiguration = { ...location, location_opening_hours: hours,
+  const configuration: PublicationConfiguration = { ...location, location_opening_hours: hours.map((h) => publicationHoursSchema.parse({ id: h.id, starts_on: schedules.find((s) => s.id === h.scheduleId)?.startsOn, ends_on: schedules.find((s) => s.id === h.scheduleId)?.endsOn, weekday: h.weekday, opens_at_minute: h.opensAtMinute, closes_at_minute: h.closesAtMinute })),
     courts: courts.map((court) => ({ id: court.id, environment: court.environment,
       location_pricing_rules: pricing.filter((rule) => rule.courtId === court.id)
-        .map((rule) => ({ court_state: rule.courtState, ends_on: rule.endsOn })),
+        .map((rule) => ({ court_state: rule.courtState, ends_on: rule.endsOn, starts_on: rule.startsOn, weekday: rule.weekday, starts_at_minute: rule.startsAtMinute, ends_at_minute: rule.endsAtMinute })),
     })),
   };
   return publicationReadiness(configuration, publicationToday(location.timezone));

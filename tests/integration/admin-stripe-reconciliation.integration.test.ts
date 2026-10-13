@@ -5,6 +5,7 @@ import { getDataSource } from "@/lib/db/data-source";
 import { cancelBookingCommand } from "@/lib/bookings/cancellation-service";
 import { processOnlinePaymentEvent, settleOnlinePayment } from "@/lib/payments/service";
 import { insertCheckoutFixture } from "./checkout-fixtures";
+import { configureCheckoutPolicyFixture } from "./opening-hours-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { expect, test, vi } from "vitest";
@@ -60,6 +61,7 @@ test("Admin retries and late captured-payment refunds are original-payment scope
     expect((await db.from("payment_provider_settings").update({ active_provider:"stripe" }).eq("id",true)).error).toBeNull();
     expect((await db.from("locations").insert({ id:locationId,name:"Reconciliation test",slug:`reconcile-${locationId}`,timezone:"UTC",currency:"RON",is_public:true })).error).toBeNull();
     expect((await db.from("courts").insert({ id:courtId,location_id:locationId,name:"Court",slug:"court",environment:"outdoor",surface:"clay" })).error).toBeNull();
+    await configureCheckoutPolicyFixture(db, locationId, courtId);
     list.mockImplementation(() => (async function* () {})());
     create.mockImplementation(async (params) => ({ id:`refund-${params.metadata.payment_refund_id}`,amount:params.amount,currency:"ron",payment_intent:params.payment_intent,status:"succeeded" }));
     const own = await book(600);

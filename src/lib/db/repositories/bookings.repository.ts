@@ -39,6 +39,7 @@ const commandBookingSchema = z.object({
   id: z.uuid(), reservation_id: z.uuid(), account_user_id: z.uuid().nullable(), status: z.string(),
   customer_name: z.string(), customer_email: z.string(), customer_phone: z.string(),
   total_amount_minor: z.number().int(), currency: z.string(), cancellation_notice_minutes: z.number().int(),
+  payment_method: z.enum(["online", "pay_at_club"]).nullable(),
   updated_at: z.iso.datetime({ offset: true }), token_matches: z.boolean().nullable(),
 });
 
@@ -53,7 +54,7 @@ export async function discoverBookingLocation(manager: EntityManager, id: string
 export async function findBookingForUpdate(manager: EntityManager, id: string, token?: string) {
   const rows: unknown = await manager.query(
     `SELECT id,reservation_id,account_user_id,status,customer_name,customer_email,customer_phone,
-     total_amount_minor,currency,cancellation_notice_minutes,
+     total_amount_minor,currency,cancellation_notice_minutes,payment_method,
      replace((updated_at AT TIME ZONE 'UTC')::text,' ','T') || '+00:00' AS updated_at,
      updated_at=$2::timestamptz AS token_matches FROM public.bookings WHERE id=$1 FOR UPDATE`, [id, token ?? null]);
   return z.array(commandBookingSchema).max(1).parse(rows)[0] ?? null;
@@ -63,18 +64,19 @@ export async function updateBookingCancellationStatus(manager: EntityManager, id
   await manager.query("UPDATE public.bookings SET status='cancelled',updated_at=now() WHERE id=$1", [id]);
 }
 
-export async function updateBookingRescheduleTotal(manager: EntityManager, id: string, total: number) {
+export async function updateBookingRescheduleTotal(manager: EntityManager, id: string, total: number, deadline: string | null = null) {
   // Preserve transaction now(), rather than a monotonic booking token.
-  await manager.query("UPDATE public.bookings SET total_amount_minor=$2,updated_at=now() WHERE id=$1", [id, total]);
+  const rows: unknown = await manager.query("WITH changed AS (UPDATE public.bookings SET total_amount_minor=$2,updated_at=now() WHERE id=$1 AND ($3::timestamptz IS NULL OR clock_timestamp()<$3) RETURNING id) SELECT id FROM changed", [id, total, deadline]);
+  return z.array(z.object({id:z.uuid()})).max(1).parse(rows).length === 1;
 }
 
 
 export async function lockSettlementBooking(manager: EntityManager, id: string) {
   const rows: unknown = await manager.query(
-    `SELECT id,reservation_id,status,customer_name,customer_email,total_amount_minor,currency
+    `SELECT id,reservation_id,status,customer_name,customer_email,total_amount_minor,currency,cancellation_notice_minutes
      FROM public.bookings WHERE id=$1 FOR UPDATE`, [id]);
   return z.array(commandBookingSchema.pick({ id:true,reservation_id:true,status:true,customer_name:true,
-    customer_email:true,total_amount_minor:true,currency:true })).max(1).parse(rows)[0] ?? null;
+    customer_email:true,total_amount_minor:true,currency:true,cancellation_notice_minutes:true })).max(1).parse(rows)[0] ?? null;
 }
 
 export async function updateSettlementBookingStatus(manager: EntityManager, id: string, status: string) {

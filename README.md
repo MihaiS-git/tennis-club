@@ -268,8 +268,8 @@ Public occupancy is served only through explicit TypeORM projections.
 Internal timetable occupancy uses bounded TypeORM SELECTs after `requireReservationRole`,
 restricted to requested courts/date and active or held reservations at active, unarchived
 resources. TypeScript includes held rows only while their persisted deadline is later than
-one shared `now`; reads never expire holds. Coach occupancy remains generic, with
-customer/direct-reservation details confined to the existing Admin-only read.
+one shared `now`; reads never expire holds. Active Admins and Coaches receive the same direct-reservation and customer/guest
+booking detail projection; management mutations remain Admin-only.
 
 Never expose the secret key to:
 
@@ -524,6 +524,18 @@ Rescheduling should be represented by history rather than a permanent `reschedul
 
 ## Rescheduling
 
+Online paid-booking edits now collect only a positive price difference through the
+existing Stripe checkout, or refund an eligible reduction through durable partial
+refund obligations. The original confirmed booking stays intact during surcharge
+payment; GiST-protected hold fragments reserve target time outside the original
+interval. Verified settlement atomically applies the edit, or records compensation
+without changing the original booking. My Activity Edit recovers the registered
+intent after refresh; Admin-created changes expose a capability-bound customer
+payment link. Same-price edits save directly. Pay-at-club edits update uncollected
+amount due without Stripe. Captured payment amounts remain immutable; cancellation
+allocates only remaining funds across all captures and preserves Admin refund choices.
+See [implemented workflow and validation](docs/booking-payment-workflow-audit.md).
+
 Members should be able to choose between rescheduling and cancellation/refund.
 
 ```text
@@ -573,7 +585,7 @@ Owner-scoped availability excludes its own reservation and returns only active c
 opening hours and occupancy for its fixed location, independent of public publication.
 Focused TypeORM edit reads and commands retain separate owner and Admin authorization
 boundaries, checked against locked actor and aggregate facts. Success calls `revalidateCourtActivity("edit")`
-for `/book`, `/reservations`, and `/my-activity/bookings`. Payment lifecycle/holds, Stripe checkout and full Stripe cancellation refunds are implemented;
+for `/book`, `/admin/reservations`, and `/my-activity/bookings`. Payment lifecycle/holds, Stripe checkout and full Stripe cancellation refunds are implemented;
 guest self-management is not implemented. Booking lifecycle emails use best-effort
 post-commit delivery described in [Booking notifications](docs/booking-notifications.md).
 
@@ -594,7 +606,7 @@ court. Repeated requests reuse the record and its stable idempotency key. See
 [refund lifecycle and retry handling](docs/payments-memberships.md#stripe-cancellation-refunds).
 Partial and NETOPIA refunds and generic manual reconciliation are outside the implemented scope.
 Admin payment transactions and persisted reconciliation reasons can be reviewed
-at `/admin/payments`, with focused Stripe refund retry and late-capture refund actions; provider settings are at `/admin/payments/settings`.
+at `/admin/payments/transactions`, with focused Stripe refund retry and late-capture refund actions; provider settings are at `/admin/payments/settings`.
 
 ---
 
@@ -1089,19 +1101,50 @@ collisions require a different name. Location counts are derived from records.
 Next.js authorizes active administrators before TypeORM persistence. The database prevents an archived location from being active. Public discovery
 requires explicit publication and derived configuration readiness. Enabling Public booking is checked server-side and returns a useful missing-configuration error; disabling it retains all Admin configuration.
 
-Location opening hours are managed from Edit Location through an explicit Manage opening hours action. The compact weekly editor groups weekdays only when their complete
-interval sets match. One form selects weekdays, supports multiple intervals, and
-creates, replaces, or removes grouped intervals together. A server-only TypeORM transaction
-commits each multi-day change atomically under configuration advisory then location locks.
-TypeScript checks applicable pricing against the candidate schedule under configuration/location
-locks; PostgreSQL retains interval checks and overlap exclusion. Browser roles cannot write hours.
-Archived locations cannot have opening hours changed through the application transaction; admins can still read their hours. Restoring a location leaves it inactive and allows hours editing again.
-`location_opening_hours` stores local minute-of-day boundaries (0–1440, including
-`24:00`), with Monday = 0 and Sunday = 6. A GiST exclusion constraint prevents
-overlaps for the same location and weekday while allowing adjacent intervals.
-Days without intervals display Closed; a wholly empty schedule is explicitly marked
-not configured and has no inferred hours. There are no date exceptions yet. The
-public `/courts` temporary “Open daily 07:00–24:00” fallback remains independent.
+Location opening hours are managed in `/admin/locations/[locationId]?tab=opening-hours`.
+One full-width editable table shows the selected weekly schedule. Each interval has
+independent weekdays and inline time comboboxes. Current is selected by default;
+scheduled policies use the selector and expired policies appear read-only in History.
+Add and Delete change only the draft; Save changes commits the entire policy and
+Cancel edit restores authoritative saved values. New schedules copy the selected
+policy into the same table and require a start date.
+Validity dates apply to the whole weekly schedule. Both boundaries are inclusive;
+an absent end date is unlimited. Unsaved drafts survive server refreshes, selection
+changes require discard confirmation, and revisions reject stale saves. Creating a future
+schedule automatically ends the overlapping current schedule on the preceding calendar
+day, preserving both schedules and their intervals. The editor explains the cutoff
+before saving; overlaps with independently scheduled policies require an explicit edit.
+The cutoff, revision increment, creation and pricing reconciliation commit atomically.
+
+`opening_hours_schedules` owns each location's validity period;
+`location_opening_hours.schedule_id` associates the existing weekday intervals.
+The additive `EffectiveOpeningHours` TypeORM migration preserves all existing interval
+IDs, values and timestamps beneath a baseline from 0001-01-01 with no expiration.
+It does not touch reservations or financial records. PostgreSQL excludes overlapping
+schedule periods for a location and overlapping intervals within a schedule/weekday.
+Minutes retain the 0–1440 convention, including 24:00. Closed weekdays have no intervals.
+Reads use the requested playing date in the location's IANA timezone; a date without
+an applicable schedule is closed for new reservations. Future schedules apply to
+future playing dates even before the schedule's start date is reached.
+
+Opening hours take priority over pricing. A TypeScript service changes hours and
+reconciles prices atomically under the exclusive configuration fence then location
+locks. Reconciliation splits existing pricing validity at affected date boundaries,
+trims/splits/removes time coverage, and inherits compatible adjacent prices for newly
+opened time (maximum across a gap). Historical and unaffected periods remain intact.
+Dates without a schedule retain dormant pricing, which cannot make them bookable.
+Missing adjacent prices remain unconfigured. Readiness requires compatible current
+or future pricing coverage within each applicable schedule; it does not require
+perpetual pricing.
+
+Policy changes never edit or block existing confirmed reservations. Their playing
+intervals, prices, currency, payment method, cancellation notice, payment and refund
+records remain unchanged. Calendars include existing occupancy outside new opening
+hours. Pending payment attempts revalidate current policy before confirmation under
+the shared configuration fence; invalid captured attempts expire and enter the
+existing provider refund/reconciliation path. Guest and signed-in checkout still
+recalculate stale quotes transactionally. Archived locations retain their existing
+hours and must be restored before edits.
 
 `/admin/pricing` manages logical hourly rule sets for one or more specific courts at a
 location. Each definition selects a compatible operational state (outdoor or covered
@@ -1113,15 +1156,15 @@ per definition. An active-Admin-authorized TypeORM transaction creates, replaces
 removes the entire set under configuration advisory then location locks; the per-court/state/day GiST exclusion constraint prevents overlapping
 date/time applicability and permits adjacent intervals. Next.js validates every
 selected court and weekday against environment and configured opening hours inside
-that transaction before persistence. Direct browser grants are denied. Later opening-hours edits do not rewrite
-pricing; consumers must still check opening hours independently. The resolver uses
+that transaction before persistence. Direct browser grants are denied. Later opening-hours edits reconcile affected pricing validity and time coverage atomically;
+consumers still check applicable opening hours independently. The resolver uses
 court, derived state, date, weekday and local minute. Public `/courts` discovers
 only eligible locations and courts. See [Pricing](docs/pricing.md).
 
-`/book` and `/reservations` default to the selected location's current calendar
+`/book` and `/admin/reservations` default to the selected location's current calendar
 date when the URL omits a date. An explicit valid date overrides that default;
 malformed explicit dates retain the validation error, and `/book` also rejects past dates.
-Admins and Coaches can navigate to past dates in `/reservations` using Prev or the
+Admins and Coaches can navigate to past dates in `/admin/reservations` using Prev or the
 date picker. Past occupancy opens read-only details with existing role visibility;
 past slots cannot be reserved and past activity cannot be edited or cancelled. The server renders
 only the chosen day, without a client redirect or adjacent-day preload.
@@ -1151,7 +1194,7 @@ active intervals for the same court/date. An optional `reason` (up to 255 charac
 describes direct reservations; customer bookings have their own commercial record.
 Reservations have `active`, `cancelled`, `held` or `released` status; active rows and
 non-expired payment holds block occupancy. Active Admins
-and Coaches can create direct reservations at `/reservations` for active courts at
+and Coaches can create direct reservations at `/admin/reservations` for active courts at
 structurally ready locations, including unpublished locations.
 The Server Action checks the account, resources, location-local time, opening hours,
 duration and required trimmed reason before a TypeORM transaction rechecks locked facts and inserts. The GiST
@@ -1184,15 +1227,16 @@ rows; duplicate events cannot duplicate confirmation, and late success is record
 for reconciliation. Existing attempt providers are immutable. Historical bookings retain
 an unknown (NULL) payment method, with no fabricated payment debt. Pay at club defaults OFF per location and is edited in Booking policy.
 Direct reservations have no price or payment flow. Next.js permits only active Admins
-and Coaches to create rows with a reason and their verified user ID as creator. Existing rows can have a null creator. `/reservations` reads active occupancy
-for all staff; active Admins additionally receive a narrow Admin-authorized TypeORM projection
-of active reservation identity, reason, and creator display name. Admin occupied
-cells open one details dialog for the whole reservation. After explicit confirmation,
+and Coaches to create rows with a reason and their verified user ID as creator. Existing rows can have a null creator. `/admin/reservations` reads active occupancy
+for all staff; active Admins and Coaches receive the same narrow staff-authorized
+TypeORM projection of direct-reservation identity, reason and creator contact, plus
+authenticated customer and guest booking contact, price, currency and payment details.
+Staff occupied cells reuse the same details dialogs. After explicit confirmation,
 an active Admin may cancel an active direct reservation strictly before its start
 through a TypeORM transaction. Its lifecycle update records the Admin as canceller,
 preserves the creator and reservation row, and releases occupancy. A missing or
-already-cancelled row returns a safe result. Coaches see generic booked cells and
-receive no operational details or Admin management IDs or actions.
+already-cancelled row returns a safe result. Coaches receive operational details through the same read projection, while edit,
+cancellation and refund management remain Admin-only on the server and in the dialogs.
 The Admin details dialog also opens a shared reservation edit form. Its Admin-only
 availability read resolves the active reservation's fixed location, reads active
 courts and opening hours there, and excludes that reservation from occupancy while
@@ -1204,7 +1248,7 @@ The creator and lifecycle fields remain intact. The personal owner-only edit
 mutation remains separate.
 
 Admins can reschedule future confirmed customer bookings from the booking details
-dialog on `/reservations`. The booking-specific timetable keeps the location fixed,
+dialog on `/admin/reservations`. The booking-specific timetable keeps the location fixed,
 preselects the current interval and excludes its own reservation from occupancy.
 Contact snapshots remain read-only. The shared TypeScript rescheduling service reuses
 public-calendar court-state, pricing and rounding functions, then evaluates price
@@ -1215,7 +1259,7 @@ and policy checks. Configuration writers serialize against those locks so pricin
 coverage, hours and resource reads remain coherent throughout quote/save.
 Changed totals require explicit acknowledgement; a changed save quote returns
 `price_changed` without writing. Rescheduling preserves identity,
-contact and cancellation-policy snapshots, and invalidates `/book`, `/reservations`
+contact and cancellation-policy snapshots, and invalidates `/book`, `/admin/reservations`
 and `/my-activity/bookings`, without invalidating History. The owner-scoped
 self-rescheduling workflow above reuses this implementation. Stripe one-time checkout
 and full Stripe cancellation refunds are implemented. Booking lifecycle notifications use best-effort post-commit Brevo delivery.
@@ -1630,3 +1674,19 @@ SKIP LOCKED expiry for polling. Services preserve original financial snapshots a
 terminal refund success; all network calls remain outside transactions.
 
 See [focused disposable validation](docs/testing.md#typeorm-cutover-validation).
+
+Management routing uses `/admin/reservations` for active Admins and Coaches and
+`/admin/payments/transactions` for Admin transaction management; provider settings
+remain at `/admin/payments/settings`. The shared management shell requires an active
+Admin or Coach. Locations, Courts, Pricing, Payments and Users retain Admin-only
+server guards; Coaches access Reservations with shared staff details and may edit/cancel their own
+direct reservations and reschedule/cancel their own authenticated customer bookings through
+the existing owner services. Ownership uses creator/account user IDs, never contact email.
+Direct reservations retain reason-only editing in progress and owner cancellation until end.
+Customer bookings retain staff-owner notice bypass, before-start mutations, current-price
+acknowledgement and automatic refunds. Other records remain read-only for Coaches;
+Admin management permissions remain unchanged. The desktop/mobile Admin link is staff-only, targets
+`/admin`, and stays active throughout `/admin/**`; no separate Reservations primary
+link remains. `/admin` redirects Admins
+to Locations and Coaches to Reservations. Legacy `/reservations` and `/admin/payments`
+redirect to their canonical destinations while preserving query parameters.

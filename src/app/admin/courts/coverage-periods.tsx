@@ -1,5 +1,7 @@
 "use client";
 
+import { toast } from "sonner";
+
 import { useId, useRef, useState, useTransition } from "react";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { Input } from "@/components/input";
@@ -19,7 +21,6 @@ export function CoveragePeriods({ courtId, courtName, periods }: { courtId: stri
   const panelActive = useLocationPanelActive();
   const prefix = useId();
   const [editing, setEditing] = useState<CoveragePeriod | "new" | null>(null);
-  const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [removing, setRemoving] = useState<CoveragePeriod | null>(null);
   const [pending, startTransition] = useTransition();
@@ -35,18 +36,18 @@ export function CoveragePeriods({ courtId, courtName, periods }: { courtId: stri
 
   function mutate(operation: () => Promise<CoverageMutationResult>) {
     if (pendingRef.current) return;
-    pendingRef.current = true;
-    setError(""); setFieldErrors({});
+    pendingRef.current = true; setFieldErrors({});
     startTransition(async () => {
+      const notification = toast.loading("Updating coverage period…");
       try {
         const result = await operation();
-        if (result.ok) { setEditing(null); setRemoving(null); reset(); }
+        if (result.ok) { toast.success("Coverage period updated.", { id: notification }); setEditing(null); setRemoving(null); reset(); }
         else if (result.reason === "invalid-input") {
-          setError("Check the coverage dates."); setFieldErrors(result.fieldErrors);
-        } else setError(result.reason === "overlap" ? "These dates overlap an existing coverage period."
+          toast.dismiss(notification); setFieldErrors(result.fieldErrors);
+        } else toast.error(result.reason === "overlap" ? "These dates overlap an existing coverage period."
           : result.reason === "outdoor-only" ? "Coverage periods are only available for outdoor courts."
-            : "This court or coverage period no longer exists.");
-      } catch { setError("Unable to change coverage period. Please try again."); }
+            : "This court or coverage period no longer exists.", { id: notification });
+      } catch { toast.error("Unable to change coverage period. Please try again.", { id: notification }); }
       finally { pendingRef.current = false; }
     });
   }
@@ -58,16 +59,16 @@ export function CoveragePeriods({ courtId, courtName, periods }: { courtId: stri
       {periods.map((period) => <li key={period.id} className="flex items-center justify-between gap-2 py-1 text-sm">
         <span className="min-w-0">{dateLabel(period.starts_on)} — {dateLabel(period.ends_on)}</span>
         <div className="flex shrink-0 gap-1">
-          <Button type="button" variant="subtle" size="icon" aria-label="Edit period" title="Edit period" disabled={pending} onClick={() => { reset(); setEditing(period); setError(""); setFieldErrors({}); }}><Pencil size={16} aria-hidden="true" /></Button>
-          <Button type="button" variant="destructive" size="icon" aria-label="Remove period" title="Remove period" disabled={pending} onClick={(event) => { removeTriggerRef.current = event.currentTarget; setError(""); setRemoving(period); }}><Trash2 size={16} aria-hidden="true" /></Button>
+          <Button type="button" variant="subtle" size="icon" aria-label="Edit period" title="Edit period" disabled={pending} onClick={() => { reset(); setEditing(period); setFieldErrors({}); }}><Pencil size={16} aria-hidden="true" /></Button>
+          <Button type="button" variant="destructive" size="icon" aria-label="Remove period" title="Remove period" disabled={pending} onClick={(event) => { removeTriggerRef.current = event.currentTarget; setRemoving(period); }}><Trash2 size={16} aria-hidden="true" /></Button>
         </div>
       </li>)}
     </ul>
-    {error && !removing && <p role="alert" className="mt-3 text-sm text-danger">{error}</p>}
+
     <ConfirmationDialog open={panelActive && removing !== null} title={`Remove coverage period${courtName ? ` from ${courtName}` : ""}?`}
       message={removing ? `Coverage from ${dateLabel(removing.starts_on)} to ${dateLabel(removing.ends_on)} will no longer apply to ${courtName ?? "this court"}.` : ""}
-      confirmLabel="Remove period" pending={pending} error={error} returnFocusRef={removeTriggerRef}
-      onClose={() => { if (!pendingRef.current) { setRemoving(null); setError(""); } }}
+      confirmLabel="Remove period" pending={pending} returnFocusRef={removeTriggerRef}
+      onClose={() => { if (!pendingRef.current) { setRemoving(null); } }}
       onConfirm={() => { if (removing) mutate(() => removeCoverageAction({ id: removing.id, court_id: courtId })); }} />
     {editing ? <form key={editing === "new" ? "new" : editing.id} ref={attach} onInput={sync} onChange={sync} className="mt-3" onSubmit={(event) => {
       event.preventDefault();
@@ -84,8 +85,8 @@ export function CoveragePeriods({ courtId, courtName, periods }: { courtId: stri
           {fieldErrors[field] && <p id={`${prefix}-${field}-error`} className="mt-1 text-sm text-danger">{fieldErrors[field]}</p>}
         </div>)}
         <Button type="submit" variant="primary" size="small" fullWidth={false} disabled={pending || !dirty || !valid} aria-busy={pending}>{pending ? "Saving…" : "Save period"}</Button>
-        <Button type="button" variant="secondary" size="small" onClick={() => { reset(); setEditing(null); setError(""); setFieldErrors({}); }}>Cancel</Button>
+        <Button type="button" variant="secondary" size="small" onClick={() => { reset(); setEditing(null); setFieldErrors({}); }}>Cancel</Button>
       </fieldset>
-    </form> : <Button type="button" variant="subtle" size="small" className="mt-1 gap-1" aria-label="Add coverage period" disabled={pending} onClick={() => { reset(); setEditing("new"); setError(""); setFieldErrors({}); }}><Plus size={14} aria-hidden="true" /> Add period</Button>}
+    </form> : <Button type="button" variant="subtle" size="small" className="mt-1 gap-1" aria-label="Add coverage period" disabled={pending} onClick={() => { reset(); setEditing("new"); setFieldErrors({}); }}><Plus size={14} aria-hidden="true" /> Add period</Button>}
   </section>;
 }

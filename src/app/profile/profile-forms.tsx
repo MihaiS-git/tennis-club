@@ -1,9 +1,8 @@
 "use client";
 
-import { useActionState, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { toast } from "sonner";
+import { useActionState, useLayoutEffect, useRef, useState } from "react";
 import { FormField } from "@/components/form-field";
-import { FormMessage } from "@/components/auth-form";
+import { ActionFeedback } from "@/components/action-feedback";
 import { Input } from "@/components/input";
 import { SubmitButton } from "@/components/submit-button";
 import type { PersonalProfile, PlayerProfile } from "@/lib/profile/profile";
@@ -28,20 +27,16 @@ const personalFields = [
 const personalFieldNames = personalFields.map(([name]) => name);
 const tennisFieldNames = ["display_name", "sportya_level", "handedness", "backhand", "preferred_game", "preferred_surface", "bio"] as const;
 
-function useFeedback(state: ProfileActionState) {
-  useEffect(() => { if (state.success) toast.success(state.success); }, [state]);
-}
 
 export function PersonalInformationForm({ profile }: { profile: PersonalProfile }) {
   const [values, setValues] = useState(profile);
   const { state, action, dirty } = usePersistedBaseline(savePersonalAction, values, personalFieldNames);
   useProfileFormDirty("personal", dirty);
   const [edited, setEdited] = useState<{ state: ProfileActionState; fields: string[] } | null>(null);
-  useFeedback(state);
   const errorFor = (field: string) => edited?.state === state && edited.fields.includes(field) ? undefined : state.fieldErrors?.[field];
   return (
     <form action={action} noValidate className="space-y-6">
-      <FormMessage>{edited?.state === state ? undefined : state.formError}</FormMessage>
+      <ActionFeedback state={state} loading="Saving…" />
       {[
         { title: "Contact details", fields: personalFields.slice(0, 4) },
         { title: "Address", fields: personalFields.slice(4) },
@@ -102,7 +97,6 @@ export function TennisProfileForm({ profile, personal = {} }: {
   const { state, action, dirty } = usePersistedBaseline(saveTennisAction, values, tennisFieldNames);
   useProfileFormDirty("tennis", dirty);
   const [edited, setEdited] = useState<{ state: ProfileActionState; fields: string[] } | null>(null);
-  useFeedback(state);
   const errorFor = (field: string) => edited?.state === state && edited.fields.includes(field) ? undefined : state.fieldErrors?.[field];
   function change(name: string, value: string) {
     setValues({ ...values, [name]: value });
@@ -111,7 +105,7 @@ export function TennisProfileForm({ profile, personal = {} }: {
   const fieldProps = (name: string) => ({ id: name, name, value: values[name], "aria-invalid": Boolean(errorFor(name)), "aria-describedby": errorFor(name) ? `${name}-error` : undefined });
   return (
     <form ref={formRef} action={action} noValidate className="space-y-6">
-      <FormMessage>{edited?.state === state ? undefined : state.formError}</FormMessage>
+      <ActionFeedback state={state} loading="Saving…" />
       <fieldset className="min-w-0">
         <legend className="mb-4 text-sm font-semibold text-primary">Player details</legend>
         <div className="grid min-w-0 gap-5 sm:grid-cols-2">
@@ -168,8 +162,6 @@ export function AvatarForms({ hasAvatar, hasProfile }: { hasAvatar: boolean; has
   const pending = uploadPending || removePending;
   const [selection, setSelection] = useState<{ state: ProfileActionState; error?: string } | null>(null);
   const avatarError = selection?.error ?? (selection?.state === uploadState ? undefined : uploadState.fieldErrors?.avatar);
-  useFeedback(uploadState);
-  useFeedback(removeState);
   if (!hasProfile) return <p className="text-sm text-muted-foreground">Save your tennis profile to add an avatar.</p>;
   return (
     <details className="min-w-0">
@@ -183,7 +175,7 @@ export function AvatarForms({ hasAvatar, hasProfile }: { hasAvatar: boolean; has
           if (error) { event.preventDefault(); return; }
           mutating.current = true;
         }}>
-          <FormMessage>{uploadState.formError}</FormMessage>
+          <ActionFeedback state={uploadState} loading="Saving…" />
           <FormField label={hasAvatar ? "Change avatar" : "Upload avatar"} htmlFor="avatar" error={avatarError} errorId="avatar-error">
             <Input disabled={pending} className="min-h-11 min-w-0" id="avatar" name="avatar" type="file" accept="image/jpeg,image/png,image/webp"
               onChange={(event) => setSelection({ state: uploadState, error: avatarFileError(event.target.files?.[0]) })}
@@ -196,7 +188,7 @@ export function AvatarForms({ hasAvatar, hasProfile }: { hasAvatar: boolean; has
           if (mutating.current) { event.preventDefault(); return; }
           mutating.current = true;
         }}>
-          <FormMessage>{removeState.formError}</FormMessage>
+          <ActionFeedback state={removeState} loading="Saving…" />
           <SubmitButton disabled={pending} variant="secondary" pendingLabel="Removing…">Remove avatar</SubmitButton>
         </form>}
       </div>

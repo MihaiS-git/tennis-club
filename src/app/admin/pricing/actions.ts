@@ -8,6 +8,9 @@ export async function savePricingRuleAction(input: unknown) {
   if (result.ok) {
     revalidatePath("/admin/pricing");
     revalidatePath("/admin/locations", "layout");
+    revalidatePath("/book");
+    revalidatePath("/courts");
+    revalidatePath("/admin/reservations");
   }
   return result;
 }
@@ -16,6 +19,9 @@ export async function removePricingRuleAction(input: unknown) {
   if (result.ok) {
     revalidatePath("/admin/pricing");
     revalidatePath("/admin/locations", "layout");
+    revalidatePath("/book");
+    revalidatePath("/courts");
+    revalidatePath("/admin/reservations");
   }
   return result;
 }

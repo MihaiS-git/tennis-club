@@ -49,7 +49,7 @@ test("Admin Users shows live profiles and private avatars while preserving manag
     const tabs = page.getByRole("navigation", { name: "User management" });
     const account = page.getByRole("region", { name: "Account & access", exact: true });
     await expect(page.getByRole("heading", { name: "Alex Player", exact: true })).toBeVisible();
-    await expect(page.getByRole("navigation", { name: "Admin navigation" }).getByRole("link", { name: "Users", exact: true })).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("navigation", { name: "Management navigation" }).getByRole("link", { name: "Users", exact: true })).toHaveAttribute("aria-current", "page");
     await expect(tabs.getByRole("link")).toHaveCount(3);
     await expect(account).toBeVisible();
     await tabs.getByRole("link", { name: "Personal profile", exact: true }).click();
@@ -131,7 +131,12 @@ test("Admin Users shows live profiles and private avatars while preserving manag
       expect(await tennis.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
     }
     await expect(page.getByRole("link", { name: "Back to users", exact: true })).toHaveCount(0);
-    await page.getByRole("navigation", { name: "Admin navigation" }).getByRole("link", { name: "Users", exact: true }).click();
+    // The responsive checks leave us on mobile; enter management through its drawer.
+    await page.getByRole("button", { name: "Management menu", exact: true }).click();
+    const managementDrawer = page.getByRole("dialog", { name: "Management menu", exact: true });
+    await managementDrawer.getByRole("navigation", { name: "Management navigation" })
+      .getByRole("link", { name: "Users", exact: true }).click();
+    await expect(managementDrawer).toBeHidden();
     await expect(page).toHaveURL(/\/admin\/users$/);
     await page.goto(`/admin/users?q=${encodeURIComponent(`admin-details-${runId}`)}`);
     await page.setViewportSize({ width: 1440, height: 900 });

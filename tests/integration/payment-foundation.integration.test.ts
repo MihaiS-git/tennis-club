@@ -1,3 +1,4 @@
+import { insertOpeningHoursFixture } from "./opening-hours-fixtures";
 import type { BookingEmailEvent } from "@/lib/notifications/booking-email";
 const sent = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/notifications/booking-email", async importOriginal => ({
@@ -47,7 +48,7 @@ test("payment lifecycle keeps one reservation, protects overlap, releases expiry
       timezone: "UTC", currency: "RON", is_public: true })).error).toBeNull();
     expect((await db.from("courts").insert({ id: courtId, location_id: locationId, slug: "court", name: "Court",
       environment: "outdoor", surface: "clay", is_active: true })).error).toBeNull();
-    expect((await db.from("location_opening_hours").insert({ location_id: locationId, weekday: 3,
+    expect((await insertOpeningHoursFixture(db, { location_id: locationId, weekday: 3,
       opens_at_minute: 600, closes_at_minute: 1080 })).error).toBeNull();
     expect((await db.from("pricing_rule_sets").insert({ id: ruleId, location_id: locationId })).error).toBeNull();
     expect((await db.from("location_pricing_rules").insert({ rule_set_id: ruleId, location_id: locationId, court_id: courtId,

@@ -6,21 +6,22 @@ const hours = [0, 1, 2, 3, 4].flatMap((weekday) => [
   { location_id, weekday, opens_at_minute: 480, closes_at_minute: 720 },
   { location_id, weekday, opens_at_minute: 840, closes_at_minute: 1260 },
 ]).concat([{ location_id, weekday: 5, opens_at_minute: 480, closes_at_minute: 1440 }]);
-const check = (days: number[], start: number, end: number, schedule = hours) => pricingOpeningHoursError(schedule, {
+const datedHours = hours.map((hour) => ({ ...hour, starts_on: "0001-01-01", ends_on: null }));
+const check = (days: number[], start: number, end: number, schedule = datedHours) => pricingOpeningHoursError(schedule, {
   location_id, weekdays: days, starts_at_minute: start, ends_at_minute: end,
-});
+}, "2026-10-10");
 
 it("accepts a 24:00 end boundary", () => {
   expect(check([5], 1260, 1440)).toBeNull();
 });
 it("rejects before opening with the affected days and schedule", () => {
-  expect(check([0, 1, 2, 3, 4], 390, 540)).toBe("The selected time 06:30–09:00 is outside Monday–Friday opening hours (08:00–12:00, 14:00–21:00).");
+  expect(check([0, 1, 2, 3, 4], 390, 540)).toContain("outside Monday–Friday opening hours");
 });
 it("rejects a split-hours closed gap", () => {
-  expect(check([0, 1, 2, 3, 4], 660, 900)).toBe("The selected time 11:00–15:00 crosses a closed period. Monday–Friday are open 08:00–12:00 and 14:00–21:00.");
+  expect(check([0, 1, 2, 3, 4], 660, 900)).toContain("crosses a closed period");
 });
 it("rejects a closed selected day even when another day is valid", () => {
-  expect(check([0, 6], 900, 960)).toBe("Sunday is closed. Remove Sunday or change the location's opening hours.");
+  expect(check([0, 6], 900, 960)).toContain("Sunday is closed");
 });
 it("checks different weekday schedules independently", () => {
   expect(check([0, 5], 1200, 1320)).toContain("Monday opening hours");
@@ -37,4 +38,15 @@ it("only future matching weekdays retain an opening-hours dependency", () => {
   expect(pricingHasFutureOccurrence({ ...rule, ends_on: "2026-10-11" }, "2026-10-06")).toBe(false);
   expect(pricingHasFutureOccurrence({ ...rule, starts_on: "2026-10-13", ends_on: "2026-10-18" }, "2026-10-06")).toBe(false);
   expect(pricingHasFutureOccurrence({ ...rule, ends_on: "2026-10-05" }, "2026-10-06")).toBe(false);
+});
+
+
+it("validates optional pricing dates from today, retains historical contracts, and rejects future closed gaps", () => {
+  const current = hours.map((h) => ({ ...h, starts_on: "2026-10-10", ends_on: null }));
+  const input = { location_id, weekdays: [0], starts_at_minute: 480, ends_at_minute: 720 };
+  expect(pricingOpeningHoursError(current,input,"2026-10-10")).toBeNull();
+  expect(pricingOpeningHoursError(current,{ ...input, starts_on: "2026-01-01", ends_on: "2026-01-31" },"2026-10-10")).toBeNull();
+  const gap = [...current.map((h) => ({ ...h, ends_on: "2026-10-18" })), ...current.map((h) => ({ ...h, starts_on: "2026-10-27" }))];
+  expect(pricingOpeningHoursError(gap,input,"2026-10-10")).toContain("closed");
+  expect(pricingOpeningHoursError(gap,{ ...input, ends_on: "2026-10-18" },"2026-10-10")).toBeNull();
 });

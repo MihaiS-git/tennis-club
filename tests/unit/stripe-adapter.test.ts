@@ -49,14 +49,20 @@ test("explicit abandonment cancels the stored intent idempotently and accepts an
   expect(await stripeAdapter.cancelPayment(attempt)).toBe("cancelled");
   expect(cancel).toHaveBeenCalledTimes(1);
 });
-test("abandonment preserves processing/completed payments and recovers a concurrent completion", async () => {
+test("attempts processing cancellation and recovers processing or concurrently captured outcomes", async () => {
   configure();
   const attempt = { id, providerPaymentId: "pi_fixture" };
-  retrieve.mockResolvedValueOnce({ status: "processing" }).mockResolvedValueOnce({ status: "succeeded" });
+  retrieve.mockResolvedValueOnce({ status: "processing" }).mockResolvedValueOnce({ status: "processing" })
+    .mockResolvedValueOnce({ status: "succeeded" });
+  cancel.mockRejectedValue(new Error("Cannot cancel yet"));
   expect(await stripeAdapter.cancelPayment(attempt)).toBe("processing");
   expect(await stripeAdapter.cancelPayment(attempt)).toBe("succeeded");
-  expect(cancel).not.toHaveBeenCalled();
+  expect(cancel).toHaveBeenCalledOnce();
   retrieve.mockResolvedValueOnce({ status: "requires_payment_method" }).mockResolvedValueOnce({ status: "succeeded" });
-  cancel.mockRejectedValue(new Error("payment completed concurrently"));
   expect(await stripeAdapter.cancelPayment(attempt)).toBe("succeeded");
+  retrieve.mockResolvedValueOnce({ status: "processing" });
+  cancel.mockResolvedValueOnce({ status: "canceled" });
+  expect(await stripeAdapter.cancelPayment(attempt)).toBe("cancelled");
+  retrieve.mockRejectedValueOnce(new Error("Network timeout"));
+  await expect(stripeAdapter.cancelPayment(attempt)).rejects.toThrow("Payment service unavailable.");
 });

@@ -1,3 +1,4 @@
+import { publicationHoursSchema, publicationPricingSchema } from "@/lib/locations/publication";
 import "server-only";
 
 import { normalizeDatabaseError } from "@/lib/db/errors";
@@ -18,7 +19,7 @@ const courtSchema = z.object({
   environment: z.enum(["outdoor", "indoor"]),
   has_lighting: z.boolean(),
   is_active: z.boolean(),
-  location_pricing_rules: z.array(z.object({ court_state: z.enum(["indoor", "outdoor", "covered"]), ends_on: z.iso.date().nullable() })),
+  location_pricing_rules: z.array(publicationPricingSchema),
 });
 const locationSchema = z.object({
   id: z.uuid(),
@@ -35,7 +36,7 @@ const locationSchema = z.object({
   is_active: z.boolean(),
   is_public: z.boolean(),
   archived_at: z.iso.datetime({ offset: true }).nullable(),
-  location_opening_hours: z.array(z.object({ id: z.uuid() })),
+  location_opening_hours: z.array(publicationHoursSchema),
   courts: z.array(courtSchema),
 });
 

@@ -1,292 +1,208 @@
 // @vitest-environment jsdom
+import { expectToast } from "../helpers/notifications";
+import { toast } from "sonner";
 import { installDialogMock } from "../helpers/dialog";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpeningInterval } from "../../src/lib/admin/opening-hours-validation";
-const { mutateOpeningHoursAction, checkOpeningHoursRemovalAction, refresh, onUpdated, success } = vi.hoisted(() => ({
-  mutateOpeningHoursAction: vi.fn(), checkOpeningHoursRemovalAction: vi.fn(), refresh: vi.fn(), onUpdated: vi.fn(), success: vi.fn(),
+const { mutateOpeningHoursAction, refresh, onUpdated } = vi.hoisted(() => ({
+  mutateOpeningHoursAction: vi.fn(), refresh: vi.fn(), onUpdated: vi.fn(),
 }));
-vi.mock("sonner", () => ({ toast: { success } }));
-vi.mock("../../src/app/admin/locations/opening-hours-actions", () => ({ mutateOpeningHoursAction, checkOpeningHoursRemovalAction }));
+vi.mock("../../src/app/admin/locations/opening-hours-actions", () => ({ mutateOpeningHoursAction }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
 import { OpeningHours } from "../../src/app/admin/locations/opening-hours";
 import { LocationOpeningHours } from "../../src/app/admin/locations/location-opening-hours";
 import { ProfileUnsavedChanges } from "../../src/app/profile/unsaved-changes";
 
 const locationId = "c6000000-0000-4000-8000-000000000011";
+const schedule = { id: "c6000000-0000-4000-8000-000000000099", location_id: locationId, starts_on: "2026-01-01", ends_on: null, revision: 1 };
+const future = { ...schedule, id: "c6000000-0000-4000-8000-000000000098", starts_on: "2027-01-01" };
 const row = (weekday: number, opens_at_minute = 420, closes_at_minute = 1440): OpeningInterval => ({
   id: `c6000000-0000-4000-8000-${String(weekday * 10000 + opens_at_minute).padStart(12, "0")}`,
-  location_id: locationId, weekday, opens_at_minute, closes_at_minute,
+  location_id: locationId, schedule_id: schedule.id, weekday, opens_at_minute, closes_at_minute,
   created_at: "2026-09-29T00:00:00Z", updated_at: "2026-09-29T00:00:00Z",
 });
-const renderHours = (intervals: OpeningInterval[] = []) => render(<OpeningHours locationId={locationId} intervals={intervals} onUpdated={onUpdated} />);
-beforeEach(() => { vi.resetAllMocks(); mutateOpeningHoursAction.mockResolvedValue({ ok: true, intervals: [] });
-  checkOpeningHoursRemovalAction.mockResolvedValue({ ok: true, intervals: [] });
-  installDialogMock();
-});
+const renderHours = (intervals: OpeningInterval[] = [row(0)]) => render(<OpeningHours locationId={locationId}
+  schedules={intervals.length ? [schedule] : []} today="2026-10-10" intervals={intervals} onUpdated={onUpdated} />);
+const form = () => screen.getByRole("form", { name: "Opening hours editor" });
+const save = () => screen.getByRole("button", { name: "Save changes" });
+const time = (label: "Opening time" | "Closing time", index: number, value: string) => fireEvent.change(screen.getAllByLabelText(label)[index], { target: { value } });
+function days(index: number, preset: string) {
+  fireEvent.click(screen.getByRole("button", { name: new RegExp(`^Days for interval ${index + 1}:`) }));
+  fireEvent.click(screen.getByRole("button", { name: preset }));
+  fireEvent.click(screen.getByRole("button", { name: "Done" }));
+}
+beforeEach(() => { vi.resetAllMocks(); installDialogMock(); mutateOpeningHoursAction.mockResolvedValue({ ok: true, intervals: [row(0, 480)], schedules: [{ ...schedule, revision: 2 }], scheduleId: schedule.id }); });
 afterEach(cleanup);
 
-it("offers mouse-selectable half-hour suggestions and permits manually typed HH:mm", async () => {
-  renderHours();
-  fireEvent.click(screen.getByRole("button", { name: "Weekend" }));
-  const opening = screen.getByLabelText("Opening time") as HTMLInputElement;
-  const closing = screen.getByLabelText("Closing time") as HTMLInputElement;
-  fireEvent.focus(opening);
-  expect(screen.getByRole("option", { name: "07:30" })).toBeTruthy();
-  expect(screen.queryByRole("option", { name: "24:00" })).toBeNull();
-  fireEvent.click(screen.getByRole("option", { name: "07:30" }));
-  expect(opening.value).toBe("07:30");
-  fireEvent.focus(closing);
-  expect(screen.getByRole("option", { name: "24:00" })).toBeTruthy();
-  fireEvent.change(opening, { target: { value: "07:17" } });
-  fireEvent.change(closing, { target: { value: "23:43" } });
-  fireEvent.submit(screen.getByRole("button", { name: "Apply to selected days" }).closest("form")!);
-  await waitFor(() => expect(mutateOpeningHoursAction).toHaveBeenCalledExactlyOnceWith({
-    location_id: locationId, weekdays: [5, 6], replace_ids: [], intervals: [{ opens_at: "07:17", closes_at: "23:43" }],
-  }));
-});
-
-it("keeps an unchecked day unchanged when editing a grouped interval", async () => {
-  const intervals = [0, 1, 2, 3, 4].map((day) => row(day));
+it("loads every weekday group into one editable table and changes only the edited row", async () => {
+  const intervals = [...[0, 1, 2, 3, 4].map((day) => row(day, 420, 720)), row(5, 540, 1200), row(6, 540, 1200)];
   renderHours(intervals);
-  fireEvent.click(screen.getByRole("button", { name: "Edit Mon–Fri 07:00–24:00" }));
-  fireEvent.click(screen.getByRole("checkbox", { name: "Fri" }));
-  fireEvent.change(screen.getByLabelText("Opening time"), { target: { value: "08:00" } });
-  fireEvent.submit(screen.getByRole("button", { name: "Apply changes to selected days" }).closest("form")!);
-  await waitFor(() => expect(mutateOpeningHoursAction).toHaveBeenCalledExactlyOnceWith({
-    location_id: locationId, weekdays: [0, 1, 2, 3], replace_ids: intervals.slice(0, 4).map((interval) => interval.id),
-    intervals: [{ opens_at: "08:00", closes_at: "24:00" }],
-  }));
+  expect(screen.getAllByRole("table")).toHaveLength(1);
+  expect(screen.queryByRole("list")).toBeNull();
+  expect(screen.getAllByLabelText("Opening time")).toHaveLength(2);
+  expect(save()).toHaveProperty("disabled", true);
+  time("Opening time", 0, "08:00");
+  expect(screen.getAllByLabelText("Opening time")[1]).toHaveProperty("value", "09:00");
+  fireEvent.click(save());
+  await waitFor(() => expect(mutateOpeningHoursAction).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+    operation: "update", revision: 1, replace_ids: intervals.slice(0, 5).map((h) => h.id), weekdays: [], intervals: [],
+    rows: [{ weekdays: [0,1,2,3,4], opens_at: "08:00", closes_at: "12:00" }],
+  })));
 });
 
-it("keeps selected days and times after a conflict and identifies the day", async () => {
-  mutateOpeningHoursAction.mockResolvedValue({ ok: false, reason: "overlap", weekdays: [1] });
-  renderHours();
-  fireEvent.click(screen.getByRole("button", { name: "Weekdays" }));
-  fireEvent.change(screen.getByLabelText("Opening time"), { target: { value: "07:00" } });
-  fireEvent.change(screen.getByLabelText("Closing time"), { target: { value: "24:00" } });
-  fireEvent.submit(screen.getByRole("button", { name: "Apply to selected days" }).closest("form")!);
-  await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Tuesday conflicts"));
-  expect((screen.getByRole("checkbox", { name: "Tue" }) as HTMLInputElement).checked).toBe(true);
-  expect((screen.getByLabelText("Closing time") as HTMLInputElement).value).toBe("24:00");
-  expect(onUpdated).not.toHaveBeenCalled();
+it("adds independent weekend intervals, deletes locally and reverts the entire draft", () => {
+  renderHours([row(0, 420, 720)]);
+  for (const [start, end] of [["09:00", "12:00"], ["13:00", "20:00"]]) {
+    fireEvent.click(screen.getByRole("button", { name: "Add interval" }));
+    const index = screen.getAllByLabelText("Opening time").length - 1;
+    days(index, "Weekend"); time("Opening time", index, start); time("Closing time", index, end);
+  }
+  expect(save()).toHaveProperty("disabled", false);
+  fireEvent.click(screen.getByRole("button", { name: "Delete interval 1" }));
+  expect(screen.getAllByLabelText("Opening time")).toHaveLength(2);
+  expect(mutateOpeningHoursAction).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Cancel edit" }));
+  expect(screen.getAllByLabelText("Opening time")).toHaveLength(1);
+  expect(screen.getByLabelText("Opening time")).toHaveProperty("value", "07:00");
+  expect(save()).toHaveProperty("disabled", true);
 });
 
-it("preserves a rejected opening-hours draft and shows the pricing conflict", async () => {
-  mutateOpeningHoursAction.mockResolvedValue({ ok: false, reason: "pricing-conflict",
-    message: "These opening hours conflict with existing pricing on Monday (18:00–21:00). Update or remove the conflicting pricing rule before changing the opening hours." });
-  renderHours([row(0, 420, 1320)]);
-  fireEvent.click(screen.getByRole("button", { name: "Edit Mon 07:00–22:00" }));
-  fireEvent.change(screen.getByLabelText("Closing time"), { target: { value: "20:00" } });
-  fireEvent.submit(screen.getByRole("button", { name: "Apply changes to selected days" }).closest("form")!);
-  await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Monday (18:00–21:00)"));
-  expect((screen.getByLabelText("Closing time") as HTMLInputElement).value).toBe("20:00");
-  expect((screen.getByRole("checkbox", { name: "Mon" }) as HTMLInputElement).checked).toBe(true);
-  expect((screen.getByRole("button", { name: "Apply changes to selected days" }) as HTMLButtonElement).disabled).toBe(false);
-  expect(onUpdated).not.toHaveBeenCalled();
+it("supports arbitrary per-row weekdays and keyboard dismissal with restored focus", () => {
+  renderHours([row(0), row(1)]);
+  const trigger = screen.getByRole("button", { name: /^Days for interval 1:/ });
+  fireEvent.click(trigger);
+  const group = screen.getByRole("group", { name: "Weekdays for interval 1" });
+  fireEvent.click(within(group).getByRole("checkbox", { name: "Tuesday" }));
+  fireEvent.click(within(group).getByRole("checkbox", { name: "Thursday" }));
+  fireEvent.keyDown(within(group).getByRole("checkbox", { name: "Thursday" }), { key: "Escape" });
+  expect(trigger).toHaveProperty("textContent", "Mon, Thu");
+  expect(trigger).toHaveProperty("ariaExpanded", "false");
+  expect(document.activeElement).toBe(trigger);
+  expect(save()).toHaveProperty("disabled", false);
 });
 
-it("balances the schedule and editor on desktop and stacks them on mobile with compact time inputs", () => {
-  renderHours([row(0)]);
-  const schedule = screen.getByRole("list", { name: "Current weekly schedule" });
-  const editor = screen.getByRole("form", { name: "Opening hours editor" });
-  expect(editor.parentElement).toBe(schedule.parentElement?.parentElement);
-  expect(editor.parentElement?.className).toContain("grid-cols-1");
-  expect(editor.parentElement?.className).toContain("lg:grid-cols-2");
-  expect(screen.getByLabelText("Opening time").parentElement?.parentElement?.className).toBe("w-32");
-  expect(editor.contains(screen.getByRole("button", { name: "Apply to selected days" }))).toBe(true);
-});
-
-it("offers alternatives for populated times, supports keyboard selection and 24:00", () => {
-  renderHours([row(0, 420, 1320)]);
-  fireEvent.click(screen.getByRole("button", { name: "Edit Mon 07:00–22:00" }));
+it("uses the same empty table for the first schedule, accepts typed minutes and keyboard time suggestions", async () => {
+  renderHours([]);
+  expect(screen.getAllByRole("table")).toHaveLength(1);
+  fireEvent.change(screen.getByLabelText("Valid from"), { target: { value: "2026-11-01" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add interval" })); days(0, "Weekend");
   const opening = screen.getByLabelText("Opening time");
   fireEvent.focus(opening);
   expect(within(screen.getByRole("listbox", { name: "Opening time suggestions" })).getAllByRole("option")).toHaveLength(48);
-  expect(opening).toHaveProperty("value", "07:00");
-  fireEvent.keyDown(opening, { key: "ArrowDown" });
-  fireEvent.keyDown(opening, { key: "Enter" });
-  expect(opening).toHaveProperty("value", "07:30");
-  const closing = screen.getByLabelText("Closing time");
-  fireEvent.focus(closing);
+  expect(screen.queryByRole("option", { name: "24:00" })).toBeNull();
+  fireEvent.keyDown(opening, { key: "ArrowDown" }); fireEvent.keyDown(opening, { key: "Enter" });
+  expect(opening).toHaveProperty("value", "00:30");
+  time("Opening time", 0, "07:17");
+  fireEvent.focus(screen.getByLabelText("Closing time"));
   fireEvent.click(screen.getByRole("option", { name: "24:00" }));
-  expect(closing).toHaveProperty("value", "24:00");
+  fireEvent.submit(form());
+  await waitFor(() => expect(mutateOpeningHoursAction).toHaveBeenCalledWith(expect.objectContaining({ operation: "create", adjustment: null,
+    rows: [{ weekdays: [5, 6], opens_at: "07:17", closes_at: "24:00" }],
+  })));
 });
 
-it("disables unchanged, invalid, overlapping and incomplete drafts, including direct form submission", () => {
-  renderHours([row(0, 420, 1320)]);
-  fireEvent.click(screen.getByRole("button", { name: "Edit Mon 07:00–22:00" }));
-  const apply = screen.getByRole("button", { name: "Apply changes to selected days" });
-  expect(apply).toHaveProperty("disabled", true);
-  fireEvent.submit(apply.closest("form")!);
-  expect(mutateOpeningHoursAction).not.toHaveBeenCalled();
-  for (const value of ["bad", "06:00", "07:00", ""]) {
-    fireEvent.change(screen.getByLabelText("Closing time"), { target: { value } });
-    expect(apply).toHaveProperty("disabled", true);
-  }
-  fireEvent.change(screen.getByLabelText("Closing time"), { target: { value: "23:00" } });
-  expect(apply).toHaveProperty("disabled", false);
+it("copies all current rows into a future schedule and previews the cutoff", async () => {
+  renderHours([row(0, 420, 720), row(0, 780, 1320), row(6, 540, 1200)]);
+  fireEvent.click(screen.getByRole("button", { name: "New schedule" }));
+  expect(screen.getAllByLabelText("Opening time").map((input) => (input as HTMLInputElement).value)).toEqual(["07:00", "13:00", "09:00"]);
+  expect(save()).toHaveProperty("disabled", true);
+  fireEvent.change(screen.getByLabelText("Valid from"), { target: { value: "2026-10-31" } });
+  expect(screen.getByRole("status").textContent).toContain("on 2026-10-30");
+  fireEvent.click(save());
+  await waitFor(() => expect(mutateOpeningHoursAction).toHaveBeenCalledWith(expect.objectContaining({
+    operation: "create", replace_ids: [], adjustment: { id: schedule.id, revision: 1 }, starts_on: "2026-10-31",
+  })));
+});
+
+it("validates row-specific times/days, overlaps only on shared days, and date bounds before submission", () => {
+  renderHours([row(0, 420, 720)]);
+  time("Closing time", 0, "bad");
+  expect(screen.getByRole("alert").textContent).toContain("Interval 1");
+  expect(save()).toHaveProperty("disabled", true);
+  time("Closing time", 0, "12:00");
   fireEvent.click(screen.getByRole("button", { name: "Add interval" }));
-  expect(apply).toHaveProperty("disabled", true);
-  fireEvent.change(screen.getAllByLabelText("Opening time")[1], { target: { value: "22:00" } });
-  fireEvent.change(screen.getAllByLabelText("Closing time")[1], { target: { value: "24:00" } });
-  expect(apply).toHaveProperty("disabled", true);
-  fireEvent.change(screen.getAllByLabelText("Opening time")[1], { target: { value: "23:00" } });
-  expect(apply).toHaveProperty("disabled", false);
+  expect(screen.getAllByRole("alert").some((error) => error.textContent?.includes("Select at least one day"))).toBe(true);
+  time("Opening time", 1, "11:00"); time("Closing time", 1, "13:00"); days(1, "Weekend");
+  expect(save()).toHaveProperty("disabled", false);
+  days(1, "All days");
+  expect(screen.getByRole("alert").textContent).toContain("Monday intervals cannot overlap");
+  fireEvent.submit(form()); expect(mutateOpeningHoursAction).not.toHaveBeenCalled();
+  time("Opening time", 1, "12:00");
+  expect(save()).toHaveProperty("disabled", false);
+  fireEvent.change(screen.getByLabelText("Valid until (optional)"), { target: { value: "2025-12-31" } });
+  expect(screen.getByRole("alert").textContent).toContain("on or after");
 });
 
-it("uses committed intervals through equivalent server rerenders, authoritative refresh, reload and reopen", async () => {
-  const original = [row(0, 420, 1320)];
-  const saved = [{ ...row(0, 480, 1380), updated_at: "2026-10-09T00:00:00Z" }];
-  mutateOpeningHoursAction.mockResolvedValue({ ok: true, intervals: saved });
-  const view = render(<LocationOpeningHours locationId={locationId} intervals={original} />);
-  fireEvent.click(screen.getByRole("button", { name: "Edit Mon 07:00–22:00" }));
-  fireEvent.change(screen.getByLabelText("Opening time"), { target: { value: "08:00" } });
-  fireEvent.change(screen.getByLabelText("Closing time"), { target: { value: "23:00" } });
-  fireEvent.click(screen.getByRole("button", { name: "Apply changes to selected days" }));
-  await screen.findByRole("button", { name: "Edit Mon 08:00–23:00" });
-  expect(success).toHaveBeenCalledExactlyOnceWith("Opening hours updated.");
-  expect(refresh).toHaveBeenCalledOnce();
-  // A newly deserialized, unchanged source must not resurrect pre-save values.
-  view.rerender(<LocationOpeningHours locationId={locationId} intervals={original.map((interval) => ({ ...interval }))} />);
-  expect(screen.queryByRole("button", { name: "Edit Mon 07:00–22:00" })).toBeNull();
-  view.rerender(<LocationOpeningHours locationId={locationId} intervals={saved} />);
-  fireEvent.click(screen.getByRole("button", { name: "Edit Mon 08:00–23:00" }));
-  expect(screen.getByLabelText("Opening time")).toHaveProperty("value", "08:00");
-  expect(screen.getByLabelText("Closing time")).toHaveProperty("value", "23:00");
-  expect(screen.getByRole("button", { name: "Apply changes to selected days" })).toHaveProperty("disabled", true);
-  view.unmount();
-  render(<LocationOpeningHours locationId={locationId} intervals={saved} />);
-  fireEvent.click(screen.getByRole("button", { name: "Edit Mon 08:00–23:00" }));
-  expect(screen.getByLabelText("Opening time")).toHaveProperty("value", "08:00");
-});
-
-it.each(["rejected", "failed", "unchanged"])("preserves a %s draft without a success toast and permits retry", async (failure) => {
-  if (failure === "failed") mutateOpeningHoursAction.mockRejectedValueOnce(new Error("Persistence failed"));
-  else mutateOpeningHoursAction.mockResolvedValueOnce(failure === "unchanged" ? { ok: false, reason: "unchanged" }
-    : { ok: false, reason: "overlap", weekdays: [0] });
-  render(<ProfileUnsavedChanges onDeparture={() => {}}>
-    <OpeningHours locationId={locationId} intervals={[row(0, 420, 1320)]} onUpdated={onUpdated} />
-  </ProfileUnsavedChanges>);
-  const isDirty = () => {
-    const event = new Event("beforeunload", { cancelable: true });
-    window.dispatchEvent(event);
-    return event.defaultPrevented;
-  };
-  fireEvent.click(screen.getByRole("button", { name: "Edit Mon 07:00–22:00" }));
-  fireEvent.change(screen.getByLabelText("Opening time"), { target: { value: "08:00" } });
-  const apply = screen.getByRole("button", { name: "Apply changes to selected days" });
-  fireEvent.click(apply);
-  await screen.findByRole("alert");
-  expect(screen.getByLabelText("Opening time")).toHaveProperty("value", "08:00");
-  expect(success).not.toHaveBeenCalled();
-  expect(refresh).not.toHaveBeenCalled();
-  expect(apply).toHaveProperty("disabled", false);
-  expect(isDirty()).toBe(true);
-  fireEvent.click(apply);
-  await waitFor(() => expect(success).toHaveBeenCalledOnce());
-  expect(mutateOpeningHoursAction).toHaveBeenCalledTimes(2);
-  expect(isDirty()).toBe(false);
-});
-
-it("disables a day-only edit that would leave the saved schedule unchanged", () => {
-  renderHours([row(0, 420, 1320), row(1, 420, 1320)]);
-  fireEvent.click(screen.getByRole("button", { name: "Edit Mon, Tue 07:00–22:00" }));
-  fireEvent.click(screen.getByRole("checkbox", { name: "Tue" }));
-  expect(screen.getByRole("button", { name: "Apply changes to selected days" })).toHaveProperty("disabled", true);
-  fireEvent.click(screen.getByRole("checkbox", { name: "Wed" }));
-  expect(screen.getByRole("button", { name: "Apply changes to selected days" })).toHaveProperty("disabled", false);
-});
-
-it("blocks duplicate submission while persistence is pending", async () => {
-  let complete!: (result: { ok: true; intervals: OpeningInterval[] }) => void;
-  mutateOpeningHoursAction.mockReturnValue(new Promise((resolve) => { complete = resolve; }));
-  renderHours([row(0, 420, 1320)]);
-  fireEvent.click(screen.getByRole("button", { name: "Edit Mon 07:00–22:00" }));
-  fireEvent.change(screen.getByLabelText("Opening time"), { target: { value: "08:00" } });
-  const form = screen.getByRole("form", { name: "Opening hours editor" });
-  fireEvent.submit(form); fireEvent.submit(form);
+it.each(["stale", "failure", "overlap"])("retains all entered values after %s and prevents duplicate pending submissions", async (failure) => {
+  let complete!: (value: object) => void;
+  mutateOpeningHoursAction.mockReturnValueOnce(new Promise((resolve, reject) => {
+    complete = failure === "failure" ? () => reject(new Error("Failure")) : resolve;
+  }));
+  renderHours(); time("Opening time", 0, "08:00");
+  fireEvent.submit(form()); fireEvent.submit(form());
   expect(mutateOpeningHoursAction).toHaveBeenCalledOnce();
   expect(screen.getByRole("button", { name: "Saving…" })).toHaveProperty("disabled", true);
-  expect(success).not.toHaveBeenCalled();
-  complete({ ok: true, intervals: [row(0, 480, 1320)] });
-  await waitFor(() => expect(success).toHaveBeenCalledOnce());
+  complete({ ok: false, reason: failure, weekdays: [0] });
+  await expectToast();
+  expect(screen.getByLabelText("Opening time")).toHaveProperty("value", "08:00");
+  expect(save()).toHaveProperty("disabled", false);
+  expect(toast.success).not.toHaveBeenCalled(); expect(onUpdated).not.toHaveBeenCalled();
 });
 
-const pricingConflict = {
-  ok: false, reason: "pricing-conflict", message: "These opening hours conflict with existing pricing on Monday (10:00–14:00).",
-  conflicts: [{ id: "rule-1", rule_set_id: "set-1", court_name: "Centre Court", court_state: "outdoor", weekday: 0,
-    starts_at_minute: 600, ends_at_minute: 840, starts_on: null, ends_on: null }],
-};
+it("uses authoritative mutation results across equivalent server rerenders and reload", async () => {
+  const original = [row(0)]; const saved = [row(0, 480)];
+  const view = render(<LocationOpeningHours locationId={locationId} intervals={original} schedules={[schedule]} today="2026-10-10" />);
+  time("Opening time", 0, "08:00"); fireEvent.click(save());
+  await waitFor(() => expect(toast.success).toHaveBeenCalledOnce());
+  expect(save()).toHaveProperty("disabled", true); expect(refresh).toHaveBeenCalledOnce();
+  view.rerender(<LocationOpeningHours locationId={locationId} intervals={original.map((h) => ({ ...h }))} schedules={[schedule]} today="2026-10-10" />);
+  expect(screen.getByLabelText("Opening time")).toHaveProperty("value", "08:00");
+  view.unmount();
+  render(<LocationOpeningHours locationId={locationId} intervals={saved} schedules={[{ ...schedule, revision: 2 }]} today="2026-10-10" />);
+  expect(save()).toHaveProperty("disabled", true);
+});
 
-it("checks dependencies before enabling deletion and shows success only after persistence", async () => {
-  let complete!: (result: { ok: true; intervals: OpeningInterval[] }) => void;
-  mutateOpeningHoursAction.mockReturnValue(new Promise((resolve) => { complete = resolve; }));
-  render(<LocationOpeningHours locationId={locationId} intervals={[row(0, 420, 1320)]} />);
-  fireEvent.click(screen.getByRole("button", { name: "Remove Mon 07:00–22:00" }));
-  const remove = screen.getByRole("button", { name: "Remove hours" });
-  expect(remove).toHaveProperty("disabled", true);
-  await waitFor(() => expect(remove).toHaveProperty("disabled", false));
-  expect(checkOpeningHoursRemovalAction).toHaveBeenCalledExactlyOnceWith({ location_id: locationId, weekdays: [0],
-    replace_ids: [row(0, 420, 1320).id], intervals: [] });
+it("retains a dirty revision on refresh, then loads latest persisted hours on cancel", async () => {
+  const view = render(<LocationOpeningHours locationId={locationId} intervals={[row(0)]} schedules={[schedule]} today="2026-10-10" />);
+  time("Opening time", 0, "08:00");
+  view.rerender(<LocationOpeningHours locationId={locationId} intervals={[row(0, 540)]} schedules={[{ ...schedule, revision: 2 }]} today="2026-10-10" />);
+  mutateOpeningHoursAction.mockResolvedValueOnce({ ok: false, reason: "stale" });
+  fireEvent.click(save()); await expectToast();
+  expect(mutateOpeningHoursAction.mock.calls[0][0]).toMatchObject({ revision: 1, replace_ids: [row(0).id] });
+  expect(screen.getByLabelText("Opening time")).toHaveProperty("value", "08:00");
+  fireEvent.click(screen.getByRole("button", { name: "Cancel edit" }));
+  expect(screen.getByLabelText("Opening time")).toHaveProperty("value", "09:00");
+});
+
+it("protects dirty drafts when selecting scheduled policies or History; expired hours are read-only", () => {
+  const expired = { ...schedule, id: "c6000000-0000-4000-8000-000000000097", starts_on: "2025-01-01", ends_on: "2025-12-31" };
+  render(<ProfileUnsavedChanges onDeparture={() => {}}><OpeningHours locationId={locationId} schedules={[expired, schedule, future]}
+    today="2026-10-10" intervals={[row(0), { ...row(0, 540), schedule_id: expired.id }]} onUpdated={onUpdated} /></ProfileUnsavedChanges>);
+  expect(screen.getByLabelText("Current/Scheduled schedule")).toHaveProperty("value", schedule.id);
+  time("Opening time", 0, "08:00");
+  fireEvent.change(screen.getByLabelText("Current/Scheduled schedule"), { target: { value: future.id } });
+  expect(screen.getByRole("dialog")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
+  expect(screen.getByLabelText("Valid from")).toHaveProperty("value", future.starts_on);
+  fireEvent.change(screen.getByLabelText("Valid until (optional)"), { target: { value: "2027-12-31" } });
+  fireEvent.click(screen.getByRole("button", { name: "History" }));
+  expect(screen.getByRole("dialog")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
+  expect(screen.getByLabelText("Opening time")).toHaveProperty("disabled", true);
+  expect(screen.queryByRole("button", { name: "Save changes" })).toBeNull();
   expect(mutateOpeningHoursAction).not.toHaveBeenCalled();
-  expect(success).not.toHaveBeenCalled();
-  fireEvent.click(remove);
-  expect(mutateOpeningHoursAction).toHaveBeenCalledExactlyOnceWith({ location_id: locationId, weekdays: [0],
-    replace_ids: [row(0, 420, 1320).id], intervals: [] });
-  expect(success).not.toHaveBeenCalled();
-  expect(screen.getByRole("button", { name: "Edit Mon 07:00–22:00" })).toBeTruthy();
-  complete({ ok: true, intervals: [] });
-  await waitFor(() => expect(success).toHaveBeenCalledExactlyOnceWith("Opening hours updated."));
-  expect(screen.queryByRole("dialog")).toBeNull();
-  expect(screen.queryByRole("button", { name: "Edit Mon 07:00–22:00" })).toBeNull();
-  expect(refresh).toHaveBeenCalledOnce();
 });
 
-it("identifies conflicting rules, disables deletion and links to this location's Pricing tab", async () => {
-  checkOpeningHoursRemovalAction.mockResolvedValue(pricingConflict);
-  renderHours([row(0, 420, 1320)]);
-  fireEvent.click(screen.getByRole("button", { name: "Remove Mon 07:00–22:00" }));
-  const conflicts = await screen.findByRole("list", { name: "Conflicting pricing rules" });
-  expect(conflicts.textContent).toContain("Centre Court · Outdoor · Monday · 10:00–14:00");
-  expect(screen.getByText(/Update or remove the affected pricing rules/)).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Remove hours" })).toHaveProperty("disabled", true);
-  const manage = screen.getByRole("link", { name: "Manage conflicting pricing" });
-  expect(manage.getAttribute("href")).toBe(`/admin/locations/${locationId}?tab=pricing`);
-  fireEvent.click(screen.getByRole("button", { name: "Remove hours" }));
-  expect(mutateOpeningHoursAction).not.toHaveBeenCalled();
-  expect(success).not.toHaveBeenCalled();
-  fireEvent.click(manage);
-  expect(screen.queryByRole("dialog")).toBeNull();
-});
-
-it("permits deletion after conflicting pricing has been resolved and checked again", async () => {
-  checkOpeningHoursRemovalAction.mockResolvedValueOnce(pricingConflict).mockResolvedValueOnce({ ok: true, intervals: [row(0)] });
-  renderHours([row(0, 420, 1320)]);
-  fireEvent.click(screen.getByRole("button", { name: "Remove Mon 07:00–22:00" }));
-  await screen.findByRole("list", { name: "Conflicting pricing rules" });
-  fireEvent.click(screen.getByRole("button", { name: "Check dependencies again" }));
-  await waitFor(() => expect(screen.getByRole("button", { name: "Remove hours" })).toHaveProperty("disabled", false));
-  expect(screen.queryByRole("list", { name: "Conflicting pricing rules" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Remove hours" }));
-  await waitFor(() => expect(success).toHaveBeenCalledOnce());
-});
-
-it.each(["dependency failure", "persistence failure", "new conflict"])("preserves the schedule without success after %s", async (failure) => {
-  if (failure === "dependency failure") checkOpeningHoursRemovalAction.mockRejectedValueOnce(new Error("Read failed"));
-  else if (failure === "persistence failure") mutateOpeningHoursAction.mockRejectedValueOnce(new Error("Delete failed"));
-  else mutateOpeningHoursAction.mockResolvedValueOnce(pricingConflict);
-  renderHours([row(0, 420, 1320)]);
-  fireEvent.click(screen.getByRole("button", { name: "Remove Mon 07:00–22:00" }));
-  if (failure !== "dependency failure") {
-    await waitFor(() => expect(screen.getByRole("button", { name: "Remove hours" })).toHaveProperty("disabled", false));
-    fireEvent.click(screen.getByRole("button", { name: "Remove hours" }));
-  }
-  await screen.findByRole("alert");
-  expect(screen.getByRole("button", { name: "Edit Mon 07:00–22:00" })).toBeTruthy();
-  expect(onUpdated).not.toHaveBeenCalled();
-  expect(success).not.toHaveBeenCalled();
-  expect(refresh).not.toHaveBeenCalled();
-  if (failure !== "persistence failure") expect(screen.getByRole("button", { name: "Remove hours" })).toHaveProperty("disabled", true);
-  if (failure === "new conflict") expect(screen.getByRole("list", { name: "Conflicting pricing rules" })).toBeTruthy();
+it("rejects ambiguous future overlaps and retains the original cutoff preview across refresh", async () => {
+  const view = render(<OpeningHours locationId={locationId} intervals={[row(0)]} schedules={[schedule]} today="2026-10-10" onUpdated={onUpdated} />);
+  fireEvent.click(screen.getByRole("button", { name: "New schedule" }));
+  fireEvent.change(screen.getByLabelText("Valid from"), { target: { value: "2026-11-01" } });
+  view.rerender(<OpeningHours locationId={locationId} intervals={[row(0, 540)]} schedules={[{ ...schedule, revision: 2 }, future]} today="2026-10-10" onUpdated={onUpdated} />);
+  fireEvent.click(save());
+  await waitFor(() => expect(mutateOpeningHoursAction).toHaveBeenCalledWith(expect.objectContaining({ adjustment: { id: schedule.id, revision: 1 } })));
+  fireEvent.click(screen.getByRole("button", { name: "New schedule" }));
+  fireEvent.change(screen.getByLabelText("Valid from"), { target: { value: "2026-11-01" } });
+  expect(screen.getByRole("alert").textContent).toContain("scheduled future policies");
+  expect(save()).toHaveProperty("disabled", true);
 });

@@ -2,9 +2,11 @@
 import { act, useRef } from "react";
 import { hydrateRoot } from "react-dom/client";
 import { renderToString } from "react-dom/server";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ModalDialog } from "../../src/components/modal-dialog";
+import { AppToaster } from "../../src/components/app-toaster";
+import { toast } from "sonner";
 
 function TwoDialogs({ first, second }: { first: boolean; second: boolean }) {
   const firstRef = useRef<HTMLDialogElement>(null);
@@ -22,6 +24,7 @@ beforeEach(() => {
   document.documentElement.style.overflow = "scroll";
 });
 afterEach(() => {
+  toast.dismiss();
   cleanup();
   document.body.style.overflow = "";
   document.documentElement.style.overflow = "";
@@ -55,11 +58,21 @@ it.each([true])("hydrates a ModalDialog with active=%s", async (active) => {
   }
 });
 
-it("keeps the lock until the last modal closes and releases it on unmount", () => {
-  const view = render(<TwoDialogs first second />);
-  view.rerender(<TwoDialogs first={false} second />);
+it("keeps the lock and the single accessible Toaster in the active modal until it closes", async () => {
+  const view = render(<><TwoDialogs first second /><AppToaster /></>);
+  const host = document.querySelector("[data-notification-host]");
+  await waitFor(() => expect(host?.parentElement?.getAttribute("aria-label")).toBe("Second"));
+  act(() => { toast.loading("Testing notifications"); });
+  await waitFor(() => expect(document.querySelectorAll("[data-sonner-toaster]")).toHaveLength(1));
+  const notification = document.querySelector("[data-sonner-toast]");
+  expect(document.querySelectorAll("[data-sonner-toaster]")).toHaveLength(1);
+  view.rerender(<><TwoDialogs first={false} second /><AppToaster /></>);
   expect(document.body.style.overflow).toBe("hidden");
   expect(document.documentElement.style.overflow).toBe("hidden");
+  view.rerender(<><TwoDialogs first={false} second={false} /><AppToaster /></>);
+  await waitFor(() => expect(host?.parentElement).toBe(view.container));
+  expect(document.querySelector("[data-sonner-toast]")).toBe(notification);
+  expect(document.querySelectorAll("[data-sonner-toaster]")).toHaveLength(1);
   view.unmount();
   expect(document.body.style.overflow).toBe("auto");
   expect(document.documentElement.style.overflow).toBe("scroll");

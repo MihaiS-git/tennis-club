@@ -1,3 +1,4 @@
+import { insertOpeningHoursFixture } from "../opening-hours-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test, vi } from "vitest";
@@ -68,7 +69,7 @@ test("court administration persists edits, moves and status with real authorizat
       .toEqual({ ok: false, reason: "duplicate-slug" });
     expect((await listAdminCourts(admin.client)).find((row) => row.id === result.id)?.location_id).toBe(locationIds[2]);
     // The TypeScript relationship checks reject before UPDATE; SQL FKs remain.
-    const hours = await service.from("location_opening_hours").insert({ location_id: locationIds[2], weekday: 0,
+    const hours = await insertOpeningHoursFixture(service, { location_id: locationIds[2], weekday: 0,
       opens_at_minute: 480, closes_at_minute: 1200 });
     assert.strictEqual(hours.error, null);
     const ruleSet = await service.from("pricing_rule_sets").insert({ location_id: locationIds[2] }).select("id").single();

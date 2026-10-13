@@ -1,13 +1,13 @@
-import { AdminPageHeader } from "@/components/admin-page-controls";
-import { RouteSubmenu } from "@/components/route-submenu";
+import { requireActiveAdmin } from "@/lib/admin/authorization";
 
-export default function PaymentsLayout({ children }: { children: React.ReactNode }) {
+import { AdminPageHeader } from "@/components/admin-page-controls";
+
+export const instant = false;
+
+export default async function PaymentsLayout({ children }: { children: React.ReactNode }) {
+  await requireActiveAdmin();
   return <>
     <AdminPageHeader title="Payments" description="Review transactions and manage payment provider settings." />
-    <RouteSubmenu label="Payments navigation" sections={[
-      { label: "Transactions", href: "/admin/payments" },
-      { label: "Settings", href: "/admin/payments/settings" },
-    ]} />
     {children}
   </>;
 }

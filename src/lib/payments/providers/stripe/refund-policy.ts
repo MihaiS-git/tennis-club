@@ -4,7 +4,7 @@ import type { paymentFactSchema, providerEventFactSchema } from "@/lib/payments/
 type Payment = Omit<z.infer<typeof paymentFactSchema>, "created_at" | "expires_at">;
 type Event = z.infer<typeof providerEventFactSchema>;
 export function refundRetryEligible(status: string | null | undefined, provider: string | null) {
-  return provider === "stripe" && (status === "pending_retry" || status === "failed");
+  return provider === "stripe" && (status === "pending" || status === "pending_retry" || status === "failed");
 }
 export function successfulRefundPayment(payments: readonly z.infer<typeof paymentFactSchema>[]) {
   return [...payments].filter((p) => p.status === "succeeded" && p.method === "online" && p.provider === "stripe")
@@ -16,9 +16,10 @@ export function refundableLateCapture(event: Event, payment: Payment, bookingSta
     && payment.provider === "stripe" && payment.method === "online"
     && payment.id === event.attempt_id && payment.provider_payment_id === event.provider_payment_id
     && payment.amount_minor === event.amount_minor && payment.currency === event.currency
-    && ["expired", "cancelled", "failed"].includes(payment.status)
-    && ["expired", "failed", "cancelled"].includes(bookingStatus)
-    && ["released", "cancelled"].includes(reservationStatus);
+    && (payment.adjustment_id ? payment.status === "succeeded"
+      : ["expired", "cancelled", "failed"].includes(payment.status)
+        && ["expired", "failed", "cancelled"].includes(bookingStatus)
+        && ["released", "cancelled"].includes(reservationStatus));
 }
 export function resolvableRefundEvents(context: { payments: readonly Payment[]; events: readonly Event[]; booking: { status: string }; reservation: { status: string } }, attemptId: string) {
   const payment = context.payments.find((p) => p.id === attemptId);

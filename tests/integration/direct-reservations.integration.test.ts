@@ -1,3 +1,4 @@
+import { insertOpeningHoursFixture } from "./opening-hours-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test } from "vitest";
@@ -40,7 +41,7 @@ test("Admin cancellation preserves the creator and reservation, releases occupan
       timezone: "UTC", is_active: true, is_public: false })).error, null);
     assert.strictEqual((await service.from("courts").insert({ id: courtId, location_id: locationId, name: "Court 1", slug: "court-1",
       surface: "clay", environment: "outdoor", is_active: true })).error, null);
-    assert.strictEqual((await service.from("location_opening_hours").insert({ location_id: locationId,
+    assert.strictEqual((await insertOpeningHoursFixture(service, { location_id: locationId,
       weekday: mondayWeekday(date), opens_at_minute: 600, closes_at_minute: 720 })).error, null);
     const admin = await account("admin");
     const coach = await account("coach");
@@ -125,7 +126,7 @@ test("Admin edits another creator's row atomically while preserving owner-only e
       { id: ids.otherCourt, location_id: ids.otherLocation, name: "Other", slug: "other", surface: "clay", environment: "outdoor", is_active: true },
       { id: ids.inactiveCourt, location_id: ids.location, name: "Closed", slug: "closed", surface: "clay", environment: "outdoor", is_active: false },
     ])).error, null);
-    assert.strictEqual((await service.from("location_opening_hours").insert([
+    assert.strictEqual((await insertOpeningHoursFixture(service, [
       { location_id: ids.location, weekday: mondayWeekday(date), opens_at_minute: 600, closes_at_minute: 900 },
       { location_id: ids.location, weekday: mondayWeekday(nextDate), opens_at_minute: 600, closes_at_minute: 900 },
       { location_id: ids.otherLocation, weekday: mondayWeekday(nextDate), opens_at_minute: 600, closes_at_minute: 900 },
@@ -227,7 +228,7 @@ test("in-progress Admin edit changes only the reason on the same row", async () 
       slug: `current-${locationId}`, timezone: zone, is_public: false })).error, null);
     assert.strictEqual((await service.from("courts").insert({ id: courtId, location_id: locationId,
       name: "Court", slug: "court", surface: "clay", environment: "outdoor", is_active: true })).error, null);
-    assert.strictEqual((await service.from("location_opening_hours").insert({ location_id: locationId,
+    assert.strictEqual((await insertOpeningHoursFixture(service, { location_id: locationId,
       weekday: mondayWeekday(date), opens_at_minute: startMinute - 30, closes_at_minute: endMinute + 30 })).error, null);
     const password = "in-progress-admin-edit-password-123";
     async function account(role: "admin" | "coach") {
@@ -293,7 +294,7 @@ test("an in-progress owner may edit reason while scheduling stays locked and can
       timezone, is_active: true, is_public: false })).error, null);
     assert.strictEqual((await service.from("courts").insert({ id: courtId, location_id: locationId, name: "Court", slug: "court",
       surface: "clay", environment: "outdoor", is_active: true })).error, null);
-    assert.strictEqual((await service.from("location_opening_hours").insert({ location_id: locationId,
+    assert.strictEqual((await insertOpeningHoursFixture(service, { location_id: locationId,
       weekday: mondayWeekday(date), opens_at_minute: 0, closes_at_minute: 1440 })).error, null);
     assert.strictEqual((await service.from("court_reservations").insert({ court_id: courtId, booking_date: date,
       starts_at_minute: startMinute, ends_at_minute: startMinute + 90, reason: "Training",
@@ -359,7 +360,7 @@ test("personal edits lock and update the same row without losing it on stale or 
       { id: ids.inactiveCourt, location_id: ids.location, name: "D", slug: "d", surface: "clay", environment: "outdoor", is_active: false },
       { id: ids.inactiveLocationCourt, location_id: ids.inactiveLocation, name: "E", slug: "e", surface: "clay", environment: "outdoor", is_active: true },
     ])).error, null);
-    assert.strictEqual((await service.from("location_opening_hours").insert([
+    assert.strictEqual((await insertOpeningHoursFixture(service, [
       { location_id: ids.location, weekday: mondayWeekday(date), opens_at_minute: 600, closes_at_minute: 1200 },
       { location_id: ids.location, weekday: mondayWeekday(targetDate), opens_at_minute: 600, closes_at_minute: 1200 },
       { location_id: ids.otherLocation, weekday: mondayWeekday(targetDate), opens_at_minute: 600, closes_at_minute: 1200 },
@@ -489,7 +490,7 @@ test("direct reservations require active staff, opening hours and an available a
       { id: inactiveCourtId, location_id: locationId, name: "Inactive", slug: "inactive", surface: "clay", environment: "outdoor", is_active: false },
       { id: wrongCourtId, location_id: otherLocationId, name: "Other", slug: "other", surface: "clay", environment: "outdoor", is_active: true },
     ])).error, null);
-    assert.strictEqual((await service.from("location_opening_hours").insert([
+    assert.strictEqual((await insertOpeningHoursFixture(service, [
       { location_id: locationId, weekday: mondayWeekday(date), opens_at_minute: 600, closes_at_minute: 660 },
       { location_id: locationId, weekday: mondayWeekday(date), opens_at_minute: 720, closes_at_minute: 780 },
       { location_id: locationId, weekday: mondayWeekday("2099-10-16"), opens_at_minute: 600, closes_at_minute: 780 },
@@ -499,6 +500,10 @@ test("direct reservations require active staff, opening hours and an available a
     assert.strictEqual((await service.from("location_pricing_rules").insert({ location_id: locationId,
       rule_set_id: ruleSetId, court_id: courtId, court_state: "outdoor", weekday: mondayWeekday(date),
       starts_at_minute: 600, ends_at_minute: 660, price_per_hour_minor: 5000 })).error, null);
+    assert.strictEqual((await service.from("location_pricing_rules").insert([
+      { location_id: locationId, rule_set_id: ruleSetId, court_id: courtId, court_state: "outdoor", weekday: mondayWeekday(date), starts_at_minute: 720, ends_at_minute: 780, price_per_hour_minor: 5000 },
+      { location_id: locationId, rule_set_id: ruleSetId, court_id: courtId, court_state: "outdoor", weekday: mondayWeekday("2099-10-16"), starts_at_minute: 600, ends_at_minute: 780, price_per_hour_minor: 5000 },
+    ])).error, null);
     const admin = await account("admin");
     const coach = await account("coach");
     const member = await account();
@@ -556,7 +561,8 @@ test("direct reservations require active staff, opening hours and an available a
     expect(await readCreators()).toContainEqual(expect.objectContaining({ id: rows.data![0].id, created_by_user_id: null, creator_name: null }));
     await manager.update(CourtReservationEntity, { id: rows.data![0].id }, { createdByUserId: admin.id });
     const coachDay = await getReservationDay(locations.find((location) => location.id === locationId)!, date, now, coach.client);
-    expect(coachDay.adminOccupancy).toEqual([]);
+    expect(coachDay.adminOccupancy).toEqual(await readCreators());
+    expect(coachDay.canManage).toBe(false);
     expect(coachDay.courts[0].cells.filter((cell) => cell === "booked")).toHaveLength(4);
     const adminPersonal = await listOwnUpcomingReservations(admin.client, now);
     const coachPersonal = await listOwnUpcomingReservations(coach.client, now);

@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
+
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { CourtTimelineGrid } from "@/components/court-timeline-grid";
 import { BookingCancellationTerms } from "@/components/booking-cancellation-terms";
@@ -34,10 +36,14 @@ export function BookingCalendar({ day, date, locationName, currency, initialCont
   const contentRef = useRef<HTMLDivElement>(null);
   const actionBarRef = useRef<HTMLElement>(null);
   const [selection, setSelection] = useState<CalendarSelection | null>(null);
-  const [contact, setContact] = useState(initialContact);
+  // Capture defaults when the form first opens; later refreshes must preserve edits.
+  const [contact, setContact] = useState<BookingContact | null>(null);
   const [confirming, setConfirming] = useState(false);
-  const [availabilityError, setAvailabilityError] = useState("");
   const [committed, setCommitted] = useState<(BookingSummaryDetails & { paymentMethod: PaymentMethod; cancellationPolicy: ConfirmedCancellationPolicy | null }) | null>(null);
+  // Next.js preserves route state in React Activity when navigating away.
+  // Activity disconnects effects while hidden, so discard only the completed
+  // workflow on departure. Refreshing this active checkout keeps confirmation.
+  useLayoutEffect(() => () => { setCommitted(null); }, []);
   const hasSelection = selection !== null;
   useEffect(() => {
     const content = contentRef.current;
@@ -74,7 +80,7 @@ export function BookingCalendar({ day, date, locationName, currency, initialCont
   if (committed) return <section aria-label="Booking confirmed" className="mt-5 max-w-xl rounded-card border border-success bg-surface p-5 sm:p-6">
     <CheckCircle2 aria-hidden className="mb-3 size-9 text-success" />
     <h2 className="font-heading text-2xl font-semibold text-primary">Booking confirmed</h2>
-    <p className="mt-2 text-sm text-muted-foreground">Your court is booked. A confirmation email will be sent to {contact.customerEmail}. {committed.paymentMethod === "pay_at_club" ? "Payment is due at the club." : "Online payment received."}</p>
+    <p className="mt-2 text-sm text-muted-foreground">Your court is booked. A confirmation email will be sent to {contact?.customerEmail}. {committed.paymentMethod === "pay_at_club" ? "Payment is due at the club." : "Online payment received."}</p>
     <div className="mt-4"><BookingSummary details={committed} /></div>
     <div>{committed.cancellationPolicy && <BookingCancellationTerms noticeMinutes={committed.cancellationPolicy.noticeMinutes} cutoff={committed.cancellationPolicy.cutoff} timezone={timezone} />}</div>
     <div className="mt-5 flex flex-wrap gap-2">
@@ -88,13 +94,11 @@ export function BookingCalendar({ day, date, locationName, currency, initialCont
     const obscuredHeight = event.target.getBoundingClientRect().bottom - bar.getBoundingClientRect().top;
     if (obscuredHeight > 0) window.scrollBy({ top: obscuredHeight + 8 });
   }}>
-    {availabilityError && <p role="alert" className="mt-4 rounded-control bg-danger-background px-3 py-2 text-sm text-danger">{availabilityError}</p>}
     {day.times.length === 0 ? <p className="mt-5 rounded-card border border-border bg-surface p-5 text-muted-foreground">
       {locationName} is closed on {dateLabel}.
     </p> : <>
       <p className="mt-3 text-xs text-muted-foreground">Prices in {currency}/hour. Select a half-hour cell to start a one-hour interval, then click adjacent cells to adjust. This does not reserve a court.</p>
       <BookingTimetable day={day} date={date} timezone={timezone} selection={selection} onSelect={(courtDay, rowIndex) => {
-        setAvailabilityError("");
         setSelection((current) => selectCalendarCell({ courtId: courtDay.court.id,
           times: day.times, cells: courtDay.cells, hourlyPrices: courtDay.hourlyPrices }, current, rowIndex));
       }} />
@@ -108,17 +112,17 @@ export function BookingCalendar({ day, date, locationName, currency, initialCont
           <p className="mt-1 text-sm text-foreground">Total: <strong>{formatMoney(selection.priceMinor, currency)}</strong></p>
         </div>
         <div className="flex gap-2"><button type="button" onClick={() => setSelection(null)} className="min-h-9 rounded-control border border-border-strong px-3 text-sm font-semibold text-primary">Clear selection</button>
-          <button type="button" onClick={() => setConfirming(true)} className="min-h-10 rounded-control bg-primary px-5 text-sm font-semibold text-primary-foreground">Continue</button></div>
+          <button type="button" onClick={() => { setContact((current) => current ?? initialContact); setConfirming(true); }} className="min-h-10 rounded-control bg-primary px-5 text-sm font-semibold text-primary-foreground">Continue</button></div>
       </div>
     </section>}
-    {confirming && selection && details && <BookingConfirmation onlinePaymentAvailable={onlinePaymentAvailable} allowPayAtClub={allowPayAtClub} cancellationNoticeMinutes={cancellationNoticeMinutes} timezone={timezone} selection={selection} details={details} contact={contact}
+    {confirming && selection && details && contact && <BookingConfirmation onlinePaymentAvailable={onlinePaymentAvailable} allowPayAtClub={allowPayAtClub} cancellationNoticeMinutes={cancellationNoticeMinutes} timezone={timezone} selection={selection} details={details} contact={contact}
       onContactChange={setContact} onBack={() => setConfirming(false)}
-      onAbandoned={() => { setConfirming(false); setSelection(null); setAvailabilityError(""); router.refresh(); }}
+      onAbandoned={() => { setConfirming(false); setSelection(null); router.refresh(); }}
       onCommitted={(totalAmountMinor, confirmedCurrency, cancellationPolicy, paymentMethod) => {
         setCommitted({ ...details, paymentMethod, priceMinor: totalAmountMinor, currency: confirmedCurrency, cancellationPolicy });
         setConfirming(false); setSelection(null); router.refresh();
       }}
-      onUnavailable={(message) => { setConfirming(false); setSelection(null); setAvailabilityError(message); router.refresh(); }} />}
+      onUnavailable={(message) => { setConfirming(false); setSelection(null); toast.warning(message); router.refresh(); }} />}
   </div>;
 }
 

@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
+import { expectToast, lastToast } from "../helpers/notifications";
+import { toast } from "sonner";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { PaymentSettings } from "../../src/lib/payments/domain";
-const mocks = vi.hoisted(() => ({ save: vi.fn(), refresh: vi.fn(), success: vi.fn() }));
+const mocks = vi.hoisted(() => ({ save: vi.fn(), refresh: vi.fn() }));
 vi.mock("../../src/app/admin/payments/actions", () => ({ selectPaymentProviderAction: mocks.save }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: mocks.refresh }) }));
-vi.mock("sonner", () => ({ toast: { success: mocks.success } }));
 import { PaymentProviderSettings } from "../../src/app/admin/payments/provider-settings";
 const settings: PaymentSettings = { activeProvider: "stripe", providers: [{ id: "stripe", configured: true }, { id: "netopia", configured: true }] };
 beforeEach(() => { vi.clearAllMocks(); mocks.save.mockResolvedValue({ ok: true, activeProvider: "netopia" }); });
@@ -33,7 +34,10 @@ it("balances configuration and selection sections, initializes persisted selecti
   await waitFor(() => expect(screen.getByText("Persisted active provider: NETOPIA")).toBeTruthy());
   expect(mocks.save).toHaveBeenCalledExactlyOnceWith({ provider: "netopia" });
   expect(save).toHaveProperty("disabled", true);
-  expect(screen.getByRole("status").textContent).toBe("Payment provider settings saved.");
+  expect(lastToast("success")).toBe("Payment provider settings saved.");
+  expect(toast.promise).toHaveBeenCalledOnce();
+  expect(toast.success).not.toHaveBeenCalled();
+  expect(screen.queryByRole("status")).toBeNull();
   expect(mocks.refresh).toHaveBeenCalledOnce();
 });
 it("keeps unconfigured providers disabled and rejects invalid selections", () => {
@@ -57,13 +61,20 @@ it.each([false, true])("preserves failed selection for retry and blocks duplicat
   expect(screen.getByRole("button", { name: "Saving…" })).toHaveProperty("disabled", true);
   fireEvent.submit(form);
   expect(mocks.save).toHaveBeenCalledOnce();
+  expect(toast.promise).toHaveBeenCalledOnce();
+  const notificationId = vi.mocked(toast.promise).mock.calls[0][1]?.id;
+  expect(lastToast("loading")).toBe("Saving payment provider settings…");
   finish();
-  await screen.findByRole("alert");
+  await expectToast();
+  expect(lastToast()).toBe(throws ? "Unable to change the payment provider. Try again." : "Unable to save.");
+  expect(screen.queryByRole("alert")).toBeNull();
   expect(select).toHaveProperty("value", "netopia");
   expect(screen.getByText("Persisted active provider: Stripe")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
   await waitFor(() => expect(screen.getByText("Persisted active provider: NETOPIA")).toBeTruthy());
   expect(mocks.save).toHaveBeenCalledTimes(2);
+  expect(vi.mocked(toast.promise).mock.calls[1][1]?.id).toBe(notificationId);
+  expect(toast.getToasts().filter((item) => item.id === notificationId)).toHaveLength(1);
 });
 it("allows explicitly disabling online payments", async () => {
   mocks.save.mockResolvedValue({ ok: true, activeProvider: null });

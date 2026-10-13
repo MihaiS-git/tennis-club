@@ -1,3 +1,4 @@
+import { insertOpeningHoursFixture } from "./opening-hours-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test } from "vitest";
@@ -33,7 +34,7 @@ test("Admin reschedules the same rows with acknowledged pricing, stale/overlap p
       slug: `booking-cancel-${locationId}`, timezone: "UTC", is_public: true, currency: "RON" })).error, null);
     assert.strictEqual((await service.from("courts").insert({ id: courtId, location_id: locationId,
       name: "Court 1", slug: "court-1", surface: "clay", environment: "outdoor", is_active: true })).error, null);
-    assert.strictEqual((await service.from("location_opening_hours").insert({ location_id: locationId,
+    assert.strictEqual((await insertOpeningHoursFixture(service, { location_id: locationId,
       weekday: mondayWeekday(date), opens_at_minute: 600, closes_at_minute: 780 })).error, null);
     const admin = await account("admin"), coach = await account("coach"), owner = await account();
     assert.strictEqual((await service.from("court_reservations").insert([
@@ -53,6 +54,37 @@ test("Admin reschedules the same rows with acknowledged pricing, stale/overlap p
     assert.strictEqual((await service.from("location_pricing_rules").insert({ location_id: locationId,
       court_id: courtId, rule_set_id: ruleSetId, court_state: "outdoor", weekday: mondayWeekday(date),
       starts_at_minute: 600, ends_at_minute: 780, price_per_hour_minor: 9001 })).error, null);
+    // Paid/legacy totals cannot be changed by acknowledgement, retries or
+    // concurrent requests. Test both directions before the club-debt workflow.
+    for (const method of [null] as const) {
+      for (const originalTotal of [8000, 15000]) {
+        expect((await service.from("bookings").update({ payment_method: method, total_amount_minor: originalTotal }).eq("id", bookingId)).error).toBeNull();
+        const financialBefore = (await service.from("payment_attempts").select("*").eq("booking_id", bookingId)).data;
+        const lockedContext = await getAdminBookingEditDay(bookingId, date, admin.client, now);
+        const paidInput = { id: bookingId, expectedUpdatedAt: lockedContext.booking.updated_at,
+          expectedBookingUpdatedAt: lockedContext.booking.booking_updated_at, courtId, date,
+          startMinute: 720, endMinute: 780, save: true, expectedTotal: 9001, priceAcknowledged: true };
+        const originalBooking = (await service.from("bookings").select("*").eq("id", bookingId).single()).data;
+        const originalReservation = (await service.from("court_reservations").select("*").eq("id", reservationId).single()).data;
+        const results = await Promise.all([rescheduleCustomerBookingAsAdmin(paidInput, admin.client), rescheduleCustomerBookingAsAdmin(paidInput, admin.client)]);
+        for (const result of results) expect(result).toMatchObject({ ok: false, message: expect.stringContaining("no verified payment method") });
+        expect((await service.from("bookings").select("*").eq("id", bookingId).single()).data).toEqual(originalBooking);
+        expect((await service.from("court_reservations").select("*").eq("id", reservationId).single()).data).toEqual(originalReservation);
+        expect((await service.from("payment_attempts").select("*").eq("booking_id", bookingId)).data).toEqual(financialBefore);
+        expect((await service.from("payment_refunds").select("id").eq("booking_id", bookingId)).data).toEqual([]);
+
+      }
+    }
+    // Same-price online edits still use the existing schedule/concurrency path.
+    expect((await service.from("bookings").update({ payment_method: "online", total_amount_minor: 9001 }).eq("id", bookingId)).error).toBeNull();
+    const samePrice = await getAdminBookingEditDay(bookingId, date, admin.client, now);
+    expect(await rescheduleCustomerBookingAsAdmin({ id: bookingId, expectedUpdatedAt: samePrice.booking.updated_at,
+      expectedBookingUpdatedAt: samePrice.booking.booking_updated_at, courtId, date, startMinute: 720, endMinute: 780,
+      save: true, expectedTotal: 9001, priceAcknowledged: false }, admin.client)).toEqual({ ok: true, totalAmountMinor: 9001 });
+    expect((await service.from("court_reservations").update({ starts_at_minute: 600, ends_at_minute: 660 }).eq("id", reservationId)).error).toBeNull();
+    expect((await service.from("bookings").update({ payment_method: "pay_at_club", total_amount_minor: 8000 }).eq("id", bookingId)).error).toBeNull();
+    expect((await service.from("payment_attempts").insert({ booking_id: bookingId, method: "pay_at_club",
+      amount_minor: 8000, currency: "RON", status: "due" })).error).toBeNull();
     const beforeBooking = (await service.from("bookings").select("*").eq("id", bookingId).single()).data!;
     const beforeReservation = (await service.from("court_reservations").select("*").eq("id", reservationId).single()).data!;
     const context = await getAdminBookingEditDay(bookingId, date, admin.client, now);
@@ -82,6 +114,8 @@ test("Admin reschedules the same rows with acknowledged pricing, stale/overlap p
     for (const key of ["id", "reservation_id", "account_user_id", "customer_name", "customer_email", "customer_phone",
       "currency", "cancellation_notice_minutes", "created_at", "status"] as const) expect(afterBooking[key]).toBe(beforeBooking[key]);
     expect(afterBooking.total_amount_minor).toBe(10001);
+    expect((await service.from("payment_attempts").select("amount_minor,status,method").eq("booking_id", bookingId)).data)
+      .toEqual([{ amount_minor: 10001, status: "due", method: "pay_at_club" }]);
     for (const key of ["id", "created_by_user_id", "created_at", "reason", "status", "cancelled_at", "cancelled_by_user_id"] as const)
       expect(afterReservation[key]).toBe(beforeReservation[key]);
     expect(afterReservation).toMatchObject({ starts_at_minute: 720, ends_at_minute: 780 });
@@ -92,6 +126,13 @@ test("Admin reschedules the same rows with acknowledged pricing, stale/overlap p
     const personal = (await listOwnUpcomingCustomerBookings(owner.client)).filter((b) => b.id === bookingId);
     expect(personal).toHaveLength(1);
     expect(personal[0]).toMatchObject({ booking_date: date, court_name: "Court 1", starts_at_minute: 720, ends_at_minute: 780, total_amount_minor: 10001 });
+    expect((await service.from("location_pricing_rules").update({ price_per_hour_minor: 5000 }).eq("court_id", courtId)).error).toBeNull();
+    const cheaper = await getAdminBookingEditDay(bookingId, date, admin.client, now);
+    expect(await rescheduleCustomerBookingAsAdmin({ ...input, expectedUpdatedAt: cheaper.booking.updated_at,
+      expectedBookingUpdatedAt: cheaper.booking.booking_updated_at, startMinute: 600, endMinute: 660,
+      expectedTotal: 5000, priceAcknowledged: true }, admin.client)).toEqual({ ok: true, totalAmountMinor: 5000 });
+    expect((await service.from("payment_attempts").select("amount_minor,status,method").eq("booking_id", bookingId)).data)
+      .toEqual([{ amount_minor: 5000, status: "due", method: "pay_at_club" }]);
     expect((await cancelCustomerBookingAsAdmin(bookingId, admin.client)).ok).toBe(true);
     expect((await listOwnCourtHistory(1, owner.client)).rows).toContainEqual(expect.objectContaining({ id: bookingId, status: "cancelled" }));
   } finally {

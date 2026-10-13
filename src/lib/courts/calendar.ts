@@ -39,22 +39,11 @@ export function buildCourtDay(input: {
   const dayHours = input.hours.filter(
     (row) => row.weekday === mondayWeekday(input.date),
   );
-  if (!dayHours.length)
-    return {
-      times: [],
-      courts: input.courts.map((court) => ({
-        court,
-        cells: [],
-        hourlyPrices: [],
-        stateLabel: "Closed",
-      })),
-    };
-  const first =
-    Math.floor(Math.min(...dayHours.map((row) => row.opens_at_minute)) / 30) *
-    30;
-  const last =
-    Math.ceil(Math.max(...dayHours.map((row) => row.closes_at_minute)) / 30) *
-    30;
+  const reservationsForDate = input.reservations.filter((r) => r.booking_date === input.date && input.courts.some((c) => c.id === r.court_id));
+  const starts = [...dayHours.map((h) => h.opens_at_minute), ...reservationsForDate.map((r) => r.starts_at_minute)];
+  const ends = [...dayHours.map((h) => h.closes_at_minute), ...reservationsForDate.map((r) => r.ends_at_minute)];
+  const first = starts.length ? Math.floor(Math.min(...starts) / 30) * 30 : 0;
+  const last = ends.length ? Math.ceil(Math.max(...ends) / 30) * 30 : 0;
   const times = Array.from(
     { length: (last - first) / 30 },
     (_, index) => first + index * 30,
@@ -72,6 +61,13 @@ export function buildCourtDay(input: {
     const slots = times.map(
       (minute): { state: CalendarCellState; hourlyPrice: number | null } => {
         if (
+          reservations.some(
+            (row) =>
+              row.starts_at_minute < minute + 30 && minute < row.ends_at_minute,
+          )
+        )
+          return { state: "booked", hourlyPrice: null };
+        if (
           !dayHours.some(
             (row) =>
               row.opens_at_minute <= minute &&
@@ -84,13 +80,6 @@ export function buildCourtDay(input: {
           (input.date === input.today && minute < input.currentMinute)
         )
           return { state: "past", hourlyPrice: null };
-        if (
-          reservations.some(
-            (row) =>
-              row.starts_at_minute < minute + 30 && minute < row.ends_at_minute,
-          )
-        )
-          return { state: "booked", hourlyPrice: null };
         const rule = resolvePricingRule(pricing, {
           court_id: court.id,
           court_state: courtState,

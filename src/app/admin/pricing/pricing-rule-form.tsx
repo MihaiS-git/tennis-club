@@ -8,7 +8,7 @@ import { useEditableFormBaseline } from "@/components/use-editable-form-baseline
 import type { AdminLocation } from "@/lib/admin/locations";
 import type { AdminCourt } from "@/lib/admin/courts";
 import { courtSurfaceLabels, courtEnvironmentLabels } from "@/lib/admin/courts-validation";
-import { groupedWeeklySchedule, minuteToTime, timeToMinute, weekdayGroupLabel, weekdays, type OpeningInterval } from "@/lib/admin/opening-hours-validation";
+import { groupedWeeklySchedule, minuteToTime, timeToMinute, weekdayGroupLabel, weekdays, scheduleStatus, type DatedOpeningInterval, type OpeningHoursSchedule } from "@/lib/admin/opening-hours-validation";
 import { courtStates, courtStateLabels, pricingDefinitionSchema, type PricingRuleSet } from "@/lib/pricing/validation";
 import { useProfileFormDirty } from "@/app/profile/unsaved-changes";
 import { minorToMajor } from "@/lib/pricing/money";
@@ -19,9 +19,11 @@ const timeSuggestions = Array.from({ length: 48 }, (_, index) => minuteToTime(in
 const startTimeOptions = timeSuggestions.map((time) => ({ value: time, label: time }));
 const endTimeOptions = [...startTimeOptions, { value: "24:00", label: "24:00" }];
 
-export function PricingRuleForm({ location, courts, rule, openingHours, pending, fieldErrors, onSave, onRemove, onEdit }: {
+export function PricingRuleForm({ location, courts, rule, openingHours, schedules, today, pending, fieldErrors, onSave, onRemove, onEdit }: {
   location: Pick<AdminLocation, "id" | "currency">; courts: PricingCourt[]; rule?: PricingRuleSet;
-  openingHours: OpeningInterval[];
+  openingHours: DatedOpeningInterval[];
+  schedules: OpeningHoursSchedule[];
+  today: string;
   pending: boolean; fieldErrors: Record<string, string>; onSave: (input: unknown) => void;
   onRemove?: (trigger: HTMLButtonElement) => void;
   onEdit?: () => void;
@@ -32,7 +34,10 @@ export function PricingRuleForm({ location, courts, rule, openingHours, pending,
   const [selectedCourts, setSelectedCourts] = useState(rule?.court_ids ?? []);
   const [state, setState] = useState(rule?.court_state ?? "outdoor");
   const [localHoursError, setLocalHoursError] = useState("");
-  const schedule = groupedWeeklySchedule(location.id, openingHours);
+  const weeklySchedules = schedules.map((schedule) => ({
+    ...schedule,
+    groups: groupedWeeklySchedule(location.id, openingHours.filter((h) => h.schedule_id === schedule.id)),
+  })).sort((a, b) => a.starts_on.localeCompare(b.starts_on));
   function parsedDefinition(form: HTMLFormElement) {
     const data = new FormData(form);
     return pricingDefinitionSchema.safeParse({
@@ -47,9 +52,9 @@ export function PricingRuleForm({ location, courts, rule, openingHours, pending,
     const parsed = parsedDefinition(form);
     if (!parsed.success) return null;
     return pricingOpeningHoursError(openingHours, {
-      location_id: location.id, weekdays: parsed.data.weekdays,
+      location_id: location.id, weekdays: parsed.data.weekdays, starts_on: parsed.data.starts_on, ends_on: parsed.data.ends_on,
       starts_at_minute: timeToMinute(parsed.data.starts_at), ends_at_minute: timeToMinute(parsed.data.ends_at),
-    });
+    }, today);
   }
   const { attach, dirty, valid, sync } = useEditableFormBaseline(
     ["court_ids", "court_state", "weekdays", "starts_at", "ends_at", "starts_on", "ends_on", "price_per_hour"],
@@ -73,7 +78,7 @@ export function PricingRuleForm({ location, courts, rule, openingHours, pending,
       const currentHoursError = hoursError(event.currentTarget);
       if (currentHoursError) { setLocalHoursError(currentHoursError); return; }
       const data = new FormData(event.currentTarget);
-      onSave({ ...(rule ? { rule_set_id: rule.rule_set_id } : {}), location_id: location.id,
+      onSave({ ...(rule ? { rule_set_id: rule.rule_set_id, revision: rule.revision } : {}), location_id: location.id,
         court_ids: selectedCourts, court_state: state, weekdays: selectedDays,
         starts_at: data.get("starts_at"), ends_at: data.get("ends_at"), starts_on: data.get("starts_on"), ends_on: data.get("ends_on"),
         price_per_hour: data.get("price_per_hour"),
@@ -118,13 +123,16 @@ export function PricingRuleForm({ location, courts, rule, openingHours, pending,
       </fieldset>
       <section aria-label="Opening hours" className="rounded-control border border-border bg-surface-muted p-3 text-sm sm:col-span-2">
         <h3 className="mb-2 font-semibold">Opening hours</h3>
-        {!openingHours.length && <p>Not configured. Configure this location&apos;s opening hours before saving pricing.</p>}
-        {openingHours.length > 0 && <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
-          {schedule.map((group) => <div key={group.weekdays.join(",")} className="contents">
+        {!schedules.length && <p>Not configured. Configure this location&apos;s opening hours before saving pricing.</p>}
+        {weeklySchedules.map((schedule) => <div key={schedule.id} className="mb-3 last:mb-0">
+          <p className="mb-1 font-medium">{schedule.starts_on} – {schedule.ends_on ?? "Unlimited"} · {scheduleStatus(schedule, today)}</p>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
+          {schedule.groups.map((group) => <div key={group.weekdays.join(",")} className="contents">
             <dt className="font-medium">{weekdayGroupLabel(group.weekdays)}</dt>
             <dd>{group.intervals.length ? group.intervals.map((interval) => `${minuteToTime(interval.opens_at_minute)}–${minuteToTime(interval.closes_at_minute)}`).join(", ") : "Closed"}</dd>
           </div>)}
-        </dl>}
+          </dl>
+        </div>)}
       </section>
       {([
         ["starts_at", "Start time", "text", rule ? minuteToTime(rule.starts_at_minute) : ""],

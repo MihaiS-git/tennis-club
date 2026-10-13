@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { lastToast } from "../helpers/notifications";
 import { installDialogMock } from "../helpers/dialog";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -15,7 +16,6 @@ vi.mock("next/navigation", () => ({
 vi.mock("../../src/lib/admin/courts", () => ({ listAdminCourts }));
 vi.mock("../../src/lib/admin/locations", () => ({ listAdminLocations }));
 vi.mock("../../src/app/admin/courts/actions", () => ({ saveCourtAction, removeCoverageAction }));
-vi.mock("sonner", () => ({ toast: { success: vi.fn() } }));
 vi.mock("../../src/lib/admin/court-coverage", () => ({ listAdminCourtCoverage }));
 import { CourtItem } from "../../src/app/admin/courts/court-item";
 import { CourtDialog } from "../../src/app/admin/courts/court-dialog";
@@ -97,7 +97,7 @@ it("keeps a rejected court deactivation open with an error", async () => {
   fireEvent.change(screen.getByLabelText("Status"), { target: { value: "false" } });
   fireEvent.submit(screen.getByRole("button", { name: "Save court" }).closest("form")!);
   fireEvent.click(within(screen.getByRole("dialog", { name: "Deactivate Court One?" })).getByRole("button", { name: "Deactivate court" }));
-  await waitFor(() => expect(within(screen.getByRole("dialog", { name: "Deactivate Court One?" })).getByRole("alert").textContent).toContain("no longer exists"));
+  await waitFor(() => expect(lastToast()).toContain("no longer exists"));
   expect((screen.getByLabelText("Status") as HTMLSelectElement).value).toBe("false");
 });
 
@@ -113,8 +113,8 @@ it("explains that pricing must be changed before a dependent court can move", as
   saveCourtAction.mockResolvedValue({ ok: false, reason: "has-pricing" });
   openEditCourt();
   fireEvent.submit(screen.getByRole("button", { name: "Save court" }).closest("form")!);
-  await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("pricing rules still depend on it"));
-  expect(screen.getByRole("alert").textContent).not.toContain("pricing_court_fk");
+  await waitFor(() => expect(lastToast()).toContain("pricing rules still depend on it"));
+  expect(lastToast()).not.toContain("pricing_court_fk");
 });
 
 
@@ -166,7 +166,7 @@ it.each(["create", "edit"])("disables pending %s court saves and preserves valid
   fireEvent.click(save);
   expect(saveCourtAction).toHaveBeenCalledTimes(1);
   await act(async () => rejectSave(new Error("Unavailable")));
-  expect(screen.getByRole("alert").textContent).toContain("Unable to save court");
+  expect(lastToast()).toContain("Unable to save court");
   expect(screen.getByLabelText("Name")).toHaveProperty("value", "Retry draft");
   expect(save).toHaveProperty("disabled", false);
   fireEvent.click(save);

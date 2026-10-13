@@ -7,6 +7,7 @@ import type { PaymentMethod, PaymentProvider } from "@/lib/payments/domain";
 import { BookingEntity } from "./booking.entity";
 
 @Entity({ schema: "public", name: "payment_attempts" })
+@Index("payment_attempts_one_adjustment", ["adjustmentId"], { unique: true, where: "adjustment_id IS NOT NULL" })
 @Index("payment_attempts_booking_idx", ["bookingId"])
 @Index("payment_attempts_one_pending", ["bookingId"], { unique: true, where: "(status = 'pending'::text)" })
 @Index("payment_attempts_provider_id", ["provider", "providerPaymentId"], { unique: true, where: "(provider_payment_id IS NOT NULL)" })
@@ -21,6 +22,9 @@ import { BookingEntity } from "./booking.entity";
 @Check("payment_attempts_status_check", "(status = ANY (ARRAY['pending'::text, 'succeeded'::text, 'failed'::text, 'cancelled'::text, 'expired'::text, 'due'::text]))")
 @ForeignKey(() => BookingEntity, ["bookingId"], ["id"], { name: "payment_attempts_booking_id_fkey", onDelete: "CASCADE" })
 export class PaymentAttemptEntity {
+  @Column({ name: "adjustment_id", type: "uuid", nullable: true })
+  adjustmentId!: string | null;
+
   @PrimaryColumn({ name: "id", type: "uuid", default: () => "gen_random_uuid()", primaryKeyConstraintName: "payment_attempts_pkey" })
   id!: string;
 

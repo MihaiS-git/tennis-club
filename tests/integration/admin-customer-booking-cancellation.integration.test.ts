@@ -1,3 +1,4 @@
+import { insertOpeningHoursFixture } from "./opening-hours-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test } from "vitest";
@@ -35,7 +36,7 @@ test("Admin cancellation atomically preserves snapshots, frees occupancy and mov
       slug: `booking-cancel-${locationId}`, timezone: "UTC", is_public: true, currency: "RON" })).error, null);
     assert.strictEqual((await service.from("courts").insert({ id: courtId, location_id: locationId,
       name: "Court 1", slug: "court-1", surface: "clay", environment: "outdoor", is_active: true })).error, null);
-    assert.strictEqual((await service.from("location_opening_hours").insert({ location_id: locationId,
+    assert.strictEqual((await insertOpeningHoursFixture(service, { location_id: locationId,
       weekday: mondayWeekday(date), opens_at_minute: 600, closes_at_minute: 780 })).error, null);
     const admin = await account("admin"), secondAdmin = await account("admin"), coach = await account("coach"), owner = await account();
     assert.strictEqual((await service.from("court_reservations").insert([

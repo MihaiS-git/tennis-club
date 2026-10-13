@@ -16,18 +16,19 @@ export type AdminRefundClaim = {
 };
 type Preparation = { outcome: "unavailable" | "already_refunded" | "busy" }
   | { outcome: "ready"; bookingId: string; claim: AdminRefundClaim }
-  | { outcome: "resolved"; bookingId: string };
+  | { outcome: "resolved"; bookingId: string; refundId: string };
 
 // The caller discovers identity without locks. All aggregate commands then use
 // booking -> reservation -> selected attempt -> ordered events -> refund.
-async function lockAggregate(manager: EntityManager, bookingId: string, attemptId: string) {
+async function lockAggregate(manager: EntityManager, bookingId: string, attemptId: string, refundId?: string) {
   const booking = await lockSettlementBooking(manager, bookingId);
   if (!booking) return null;
   const reservation = await findReservationForUpdate(manager, booking.reservation_id);
   const payment = await payments.lockSettlementAttempt(manager, attemptId);
   if (!reservation || !payment || payment.booking_id !== booking.id) return null;
   const events = await payments.lockRefundEventsForAttempt(manager, payment.id);
-  const refund = await payments.lockRefundForProcessing(manager, { bookingId });
+  const selectedRefundId = refundId ?? await payments.refundForAttempt(manager, attemptId);
+  const refund = selectedRefundId ? await payments.lockRefundForProcessing(manager, { id: selectedRefundId }) : null;
   return { booking, reservation, payments: [payment], payment, events, refund };
 }
 
@@ -37,7 +38,7 @@ export async function prepareAdminRefund(kind: "retry" | "reconcile", id: string
     const attemptId = source?.payment_attempt_id ?? (kind === "reconcile" ? await payments.discoverEventAttempt(manager, id) : null);
     const bookingId = source?.booking_id ?? (attemptId ? await payments.findSettlementBookingId(manager, attemptId) : null);
     if (!bookingId || !attemptId) return { outcome: "unavailable" };
-    const context = await lockAggregate(manager, bookingId, attemptId);
+    const context = await lockAggregate(manager, bookingId, attemptId, kind === "retry" ? id : undefined);
     if (!context) return { outcome: "unavailable" };
     const actor = await lockReservationActorFacts(manager, actorId);
     if (actor?.status !== "active" || !actor.roles.includes("admin")) throw new Error("Admin authorization changed");
@@ -46,7 +47,7 @@ export async function prepareAdminRefund(kind: "retry" | "reconcile", id: string
     const event = kind === "reconcile" ? events.find(e => e.provider === "stripe" && e.event_id === id) : null;
     const late = events.some(e => refundableLateCapture(e, payment, booking.status, reservation.status));
     if (payment.provider !== "stripe" || payment.method !== "online" || !payment.provider_payment_id
-      || (!(payment.status === "succeeded" && booking.status === "cancelled") && !late)
+      || (!(payment.status === "succeeded" && (booking.status === "cancelled" || kind === "retry" && refund?.operation_key !== "cancellation")) && !late)
       || (kind === "reconcile" && (!event || !refundableLateCapture(event, payment, booking.status, reservation.status)))
       || (refund && !refundFinancialSnapshotMatches(refund, payment))) return { outcome: "unavailable" };
     if (kind === "retry" && refund?.status === "succeeded") return { outcome: "already_refunded" };
@@ -64,13 +65,17 @@ export async function prepareAdminRefund(kind: "retry" | "reconcile", id: string
     }
     if (refund.status === "succeeded") {
       await payments.writeRefundEventResolution(manager, resolvableRefundEvents(context, payment.id), payment.id, actorId);
-      return { outcome: "resolved", bookingId };
+      return { outcome: "resolved", bookingId, refundId: refund.id };
     }
     // Evaluate the wall clock after every potentially blocking lock, including
     // the actor fence. Keep the lossless deadline projection for execution.
     refund = await payments.lockRefundForProcessing(manager, { id: refund.id });
     if (!refund) throw new Error("Refund request missing");
     if (refund.lease_busy) return { outcome: "busy" };
+    if (refund.status === "failed" && refund.operation_key && refund.operation_key !== "cancellation") {
+      const generation = (refund.provider_generation ?? 0) + (refund.provider_refund_id ? 1 : 0);
+      await payments.restartFailedRefund(manager, refund.id, generation, refund.provider_refund_id);
+    }
     const token = randomUUID();
     await payments.writeRefundLease(manager, refund.id, token, actorId);
     const claimed = await payments.lockRefundForProcessing(manager, { id: refund.id });
@@ -81,7 +86,7 @@ export async function prepareAdminRefund(kind: "retry" | "reconcile", id: string
 
 async function verifyAutomaticRefund(manager: EntityManager, refund: payments.ProcessingRefund) {
   const { payment, events } = await payments.findRefundCaptureEvidence(manager, refund.payment_attempt_id);
-  if (!payment || !refundFinancialSnapshotMatches(refund, payment) || !paymentHasCapturedEvidence(payment, events))
+  if (!payment || await payments.refundObligationsForAttempt(manager, payment.id) > payment.amount_minor || !refundFinancialSnapshotMatches(refund, payment) || !paymentHasCapturedEvidence(payment, events))
     throw new Error("Refund financial evidence changed");
 }
 export async function prepareAutomaticRefund(id: string) {
@@ -115,6 +120,15 @@ export async function commitAutomaticRefund(id: string, result: ProviderResult, 
     compatibleReference(refund, result.providerRefundId);
     if (refund.status === "succeeded" || refund.status === "failed") return refund.status;
     await payments.writeRefundResult(manager, id, { ...result, clearLease: false });
+    if (result.status === "succeeded" && refund.operation_key && refund.operation_key !== "cancellation") {
+      const { payment, events } = await payments.findRefundCaptureEvidence(manager, refund.payment_attempt_id);
+      if (payment?.adjustment_id && refund.amount_minor === payment.amount_minor) {
+        const resolved = events.filter(e => e.reconciliation_required && e.outcome === "succeeded"
+          && e.provider_payment_id === payment.provider_payment_id && e.amount_minor === payment.amount_minor
+          && e.currency === payment.currency && ["expired","cancelled","failed"].includes(e.settlement_result));
+        await payments.writeRefundEventResolution(manager, resolved, payment.id, null);
+      }
+    }
     return result.status;
   });
 }
@@ -125,7 +139,7 @@ export async function commitAdminRefund(claim: AdminRefundClaim, result: Provide
     const source = await payments.discoverRefundBooking(manager, claim.refund.id);
     if (!source || source.booking_id !== claim.bookingId || source.payment_attempt_id !== claim.refund.payment_attempt_id)
       throw new Error("Refund aggregate changed");
-    const context = await lockAggregate(manager, source.booking_id, source.payment_attempt_id);
+    const context = await lockAggregate(manager, source.booking_id, source.payment_attempt_id, claim.refund.id);
     const refund = context?.refund;
     if (!context || !refund || refund.id !== claim.refund.id || !refundFinancialSnapshotMatches(refund, context.payment)
       || !sameRefundSnapshot(refund, claim.refund)

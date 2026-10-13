@@ -27,5 +27,5 @@ async function ReservationDay({ location, date, now }: {
 }) {
   const day = await getReservationDay(location, date, now);
   return <ReservationCalendar key={`${location.id}:${date}`} day={day} date={date} location={location}
-    occupancy={day.occupancy} adminOccupancy={day.adminOccupancy} />;
+    occupancy={day.occupancy} adminOccupancy={day.adminOccupancy} canManage={day.canManage} actorUserId={day.actorUserId} />;
 }

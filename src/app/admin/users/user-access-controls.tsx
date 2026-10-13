@@ -35,8 +35,6 @@ export function UserAccessControls({ user, currentAdminId }: {
   const [status, setStatus] = useState(user.status);
   const [roles, setRoles] = useState(user.roles);
   const managementDisabled = pending;
-  const [statusError, setStatusError] = useState("");
-  const [roleError, setRoleError] = useState("");
   const [confirmation, setConfirmation] = useState<{ kind: "suspend" } | { kind: "revoke"; role: UserRole } | null>(null);
   const [serverState, setServerState] = useState({
     id: user.id,
@@ -49,8 +47,6 @@ export function UserAccessControls({ user, currentAdminId }: {
     setServerState({ id: user.id, status: user.status, roles: incomingRoles });
     setStatus(user.status);
     setRoles(user.roles);
-    setStatusError("");
-    setRoleError("");
     setConfirmation(null);
   }
 
@@ -58,8 +54,8 @@ export function UserAccessControls({ user, currentAdminId }: {
     if (pendingRef.current || isOwnAccount) return;
     pendingRef.current = true;
     setPending(true);
-    setStatusError("");
 
+    const notification = toast.loading("Updating user status…");
     const nextStatus = status === "active" ? "suspended" : "active";
     try {
       const result = await updateUserStatusAction({ userId: user.id, status: nextStatus });
@@ -67,18 +63,16 @@ export function UserAccessControls({ user, currentAdminId }: {
         setStatus(result.user.status);
         setConfirmation(null);
         router.refresh();
-        toast.success(result.user.status === "suspended" ? "User suspended." : "User reactivated.");
+        toast.success(result.user.status === "suspended" ? "User suspended." : "User reactivated.", { id: notification });
       } else {
         const message = result.reason === "self-management"
           ? "Your account status can only be changed by another administrator."
           : failureMessages[result.reason];
-        setStatusError(message);
-        toast.error(message);
+        toast.error(message, { id: notification });
       }
     } catch {
       const message = "Unable to update user. Please try again.";
-      setStatusError(message);
-      toast.error(message);
+      toast.error(message, { id: notification });
     } finally {
       pendingRef.current = false;
       setPending(false);
@@ -89,8 +83,8 @@ export function UserAccessControls({ user, currentAdminId }: {
     if (pendingRef.current || (isOwnAccount && role === "admin")) return;
     pendingRef.current = true;
     setPending(true);
-    setRoleError("");
 
+    const notification = toast.loading("Updating user role…");
     const operation = assigned ? "revoke" : "assign";
     try {
       const result = await updateUserRoleAction({ userId: user.id, role, operation });
@@ -98,18 +92,16 @@ export function UserAccessControls({ user, currentAdminId }: {
         setRoles(result.user.roles);
         setConfirmation(null);
         router.refresh();
-        toast.success(`${roleLabels[role]} role ${operation === "assign" ? "assigned" : "removed"}.`);
+        toast.success(`${roleLabels[role]} role ${operation === "assign" ? "assigned" : "removed"}.`, { id: notification });
       } else {
         const message = result.reason === "self-management"
           ? "Your admin role can only be changed by another administrator."
           : failureMessages[result.reason];
-        setRoleError(message);
-        toast.error(message);
+        toast.error(message, { id: notification });
       }
     } catch {
       const message = "Unable to update user. Please try again.";
-      setRoleError(message);
-      toast.error(message);
+      toast.error(message, { id: notification });
     } finally {
       pendingRef.current = false;
       setPending(false);
@@ -128,7 +120,6 @@ export function UserAccessControls({ user, currentAdminId }: {
     <div className="grid items-start gap-6 md:grid-cols-2">
       <section className="min-w-0" aria-labelledby={statusId}>
         <h3 id={statusId} className="font-heading text-base font-semibold">Account status</h3>
-        <p role={statusError && confirmation?.kind !== "suspend" ? "alert" : undefined} className="min-h-5 pt-1 text-sm text-danger">{confirmation?.kind === "suspend" ? "" : statusError}</p>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
           <span className={`inline-flex rounded-control px-2.5 py-1 text-xs font-semibold ${
             status === "active" ? "bg-success-background text-success" : "bg-danger-background text-danger"
@@ -142,7 +133,6 @@ export function UserAccessControls({ user, currentAdminId }: {
             onClick={(event) => {
               if (status === "active") {
                 confirmationTriggerRef.current = event.currentTarget;
-                setStatusError("");
                 setConfirmation({ kind: "suspend" });
               } else void changeStatus();
             }}
@@ -156,7 +146,6 @@ export function UserAccessControls({ user, currentAdminId }: {
 
       <section className="min-w-0" aria-labelledby={rolesId}>
         <h3 id={rolesId} className="font-heading text-base font-semibold">Roles</h3>
-        <p role={roleError && confirmation?.kind !== "revoke" ? "alert" : undefined} className="min-h-5 pt-1 text-sm text-danger">{confirmation?.kind === "revoke" ? "" : roleError}</p>
         <ul className="mt-3 divide-y divide-border">
           {(["admin", "coach"] as const).map((role) => {
             const assigned = roles.includes(role);
@@ -176,7 +165,6 @@ export function UserAccessControls({ user, currentAdminId }: {
                   onClick={(event) => {
                     if (assigned) {
                       confirmationTriggerRef.current = event.currentTarget;
-                      setRoleError("");
                       setConfirmation({ kind: "revoke", role });
                     } else void changeRole(role, false);
                   }}
@@ -196,7 +184,7 @@ export function UserAccessControls({ user, currentAdminId }: {
         ? `${user.email} will lose access until reactivated.`
         : `${user.email} will lose ${confirmation?.kind === "revoke" ? roleLabels[confirmation.role] : ""} access.`}
       confirmLabel={confirmation?.kind === "suspend" ? "Suspend user" : `Remove ${confirmation?.kind === "revoke" ? roleLabels[confirmation.role] : ""} role`}
-      pending={pending} error={confirmation?.kind === "suspend" ? statusError : roleError}
+      pending={pending}
       returnFocusRef={confirmationTriggerRef} onClose={() => { if (!pendingRef.current) setConfirmation(null); }}
       onConfirm={() => { if (confirmation?.kind === "suspend") void changeStatus();
         else if (confirmation?.kind === "revoke") void changeRole(confirmation.role, true); }} />
