@@ -17,7 +17,9 @@ export function CourtTimelineGrid<T extends { court: { id: string; name: string 
   const headerRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const initialized = useRef<string | null>(null);
-  const loadKey = `${date}:${timezone}:${rows.map((row) => row.court.id).join(",")}`;
+  const orderedRows = [...rows].sort((a, b) => a.court.name.localeCompare(b.court.name, "en", { numeric: true, sensitivity: "base" })
+    || a.court.id.localeCompare(b.court.id));
+  const loadKey = `${date}:${timezone}:${orderedRows.map((row) => row.court.id).join(",")}`;
   const sizing: CSSProperties & { "--timeline-slot-count": number } = { "--timeline-slot-count": times.length };
   const columns: CSSProperties = { gridTemplateColumns: `var(--court-column) repeat(${times.length}, minmax(var(--timeline-slot-min), 1fr))`, minWidth: `calc(var(--court-column) + ${times.length} * var(--timeline-slot-min))` };
 
@@ -78,7 +80,7 @@ export function CourtTimelineGrid<T extends { court: { id: string; name: string 
         if (focused.left < bounds.left + courtWidth) viewport.scrollLeft -= bounds.left + courtWidth - focused.left;
         else if (focused.right > bounds.right) viewport.scrollLeft += focused.right - bounds.right;
       }}>
-      {rows.map((row) => <div key={row.court.id} role="row" className="grid h-11" style={columns}>
+      {orderedRows.map((row) => <div key={row.court.id} role="row" className="grid h-11" style={columns}>
         <div role="rowheader" className="sticky left-0 z-10 flex min-w-0 flex-col justify-center border-b border-r border-border bg-surface px-2 text-primary shadow-[2px_0_4px_var(--shadow-neutral)]">
           <span className="truncate font-heading text-sm font-semibold" title={row.court.name}>{row.court.name}</span>
           {renderCourtContext && <span className="mt-1 truncate text-[10px] text-muted-foreground">{renderCourtContext(row)}</span>}

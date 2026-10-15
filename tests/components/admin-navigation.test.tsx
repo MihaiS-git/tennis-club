@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, expect, expectTypeOf, it, vi } from "vitest";
+import type { ComponentProps } from "react";
 
 const navigation = vi.hoisted(() => ({ pathname: "/admin/locations", push: vi.fn(), redirect: vi.fn(), requireActiveAdmin: vi.fn(), requireReservationRole: vi.fn() }));
 vi.mock("next/navigation", () => ({ redirect: navigation.redirect, usePathname: () => navigation.pathname, useRouter: () => ({ push: navigation.push }) }));
@@ -12,7 +13,11 @@ import PaymentsLayout from "../../src/app/admin/payments/layout";
 import AdminPage from "../../src/app/admin/page";
 import { PricingLocationSelect } from "../../src/app/admin/pricing/location-select";
 
-afterEach(() => { cleanup(); vi.clearAllMocks(); });
+afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
+
+it("requires an explicit Admin role flag", () => {
+  expectTypeOf<ComponentProps<typeof AdminNavigation>>().toEqualTypeOf<{ isAdmin: boolean }>();
+});
 
 it.each([
   ["/admin/locations", "Locations"],
@@ -27,7 +32,7 @@ it.each([
   ["/admin/users/user-id", "Users"],
 ])("activates only %s's primary section", (pathname, label) => {
   navigation.pathname = pathname;
-  render(<AdminNavigation />);
+  render(<AdminNavigation isAdmin={true} />);
   const nav = screen.getByRole("navigation", { name: "Management navigation" });
   const links = within(nav).getAllByRole("link");
   expect(links.map((link) => link.textContent)).toEqual(["Locations", "Reservations", "Transactions", "Settings", "Users"]);
@@ -42,7 +47,7 @@ it.each([
 it.each(["/admin", "/admin/locations-extra", "/admin/payments-extra", "/admin/users-extra", "/administrator", "/admin/unknown", "/admin/reservations-extra"])(
   "does not activate a section for unrelated pathname %s", (pathname) => {
     navigation.pathname = pathname;
-    render(<AdminNavigation />);
+    render(<AdminNavigation isAdmin={true} />);
     expect(screen.getAllByRole("link").every((link) => !link.hasAttribute("aria-current"))).toBe(true);
   },
 );
@@ -51,7 +56,7 @@ it.each(["details", "opening-hours", "courts", "pricing", "public-booking"])(
   "keeps Locations active for workspace tab %s", (tab) => {
     navigation.pathname = "/admin/locations/location-id";
     window.history.replaceState(null, "", `${navigation.pathname}?tab=${tab}`);
-    render(<AdminNavigation />);
+    render(<AdminNavigation isAdmin={true} />);
     expect(screen.getByRole("link", { name: "Locations" }).getAttribute("aria-current")).toBe("page");
   },
 );
@@ -61,7 +66,7 @@ it.each([
   ["/admin/payments/settings", "Settings", "Transactions"],
 ])("keeps Payments active on %s with the correct secondary tab", async (pathname, active, inactive) => {
   navigation.pathname = pathname;
-  render(<><AdminNavigation />{await PaymentsLayout({ children: <p>Settings content</p> })}</>);
+  render(<><AdminNavigation isAdmin={true} />{await PaymentsLayout({ children: <p>Settings content</p> })}</>);
   expect(screen.queryByRole("link", { name: "Payments" })).toBeNull();
   expect(within(screen.getByRole("navigation", { name: "Management navigation" })).getByText("Payments").className).toContain("text-primary");
   expect(screen.queryByRole("navigation", { name: "Payments navigation" })).toBeNull();
@@ -100,7 +105,7 @@ it("shows only Reservations to Coaches", () => {
 });
 
 it("closes the drawer with Escape and restores focus", () => {
-  render(<AdminNavigation />);
+  render(<AdminNavigation isAdmin={true} />);
   const trigger = screen.getByRole("button", { name: "Management menu" });
   fireEvent.click(trigger);
   const drawer = screen.getByRole("dialog", { name: "Management menu" });
@@ -118,15 +123,67 @@ it("closes the drawer with Escape and restores focus", () => {
 });
 
 it("closes after navigation and browser route changes", () => {
-  const { rerender } = render(<AdminNavigation />);
+  const { rerender } = render(<AdminNavigation isAdmin={true} />);
   fireEvent.click(screen.getByRole("button", { name: "Management menu" }));
   fireEvent.click(screen.getByRole("link", { name: "Users" }));
   expect(screen.queryByRole("dialog")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Management menu" }));
   navigation.pathname = "/admin/payments/settings";
-  rerender(<AdminNavigation />);
+  rerender(<AdminNavigation isAdmin={true} />);
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(screen.getByRole("link", { name: "Settings" }).getAttribute("aria-current")).toBe("page");
+});
+
+it.each(["backdrop", "close button"])("closes with the %s and restores focus and scrolling", (control) => {
+  render(<AdminNavigation isAdmin={true} />);
+  const trigger = screen.getByRole("button", { name: "Management menu" });
+  fireEvent.click(trigger);
+  expect(document.body.style.overflow).toBe("hidden");
+  const button = control === "backdrop"
+    ? screen.getByLabelText("Close management backdrop")
+    : screen.getByRole("button", { name: "Close management menu" });
+  fireEvent.click(button);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(trigger.getAttribute("aria-expanded")).toBe("false");
+  expect(document.activeElement).toBe(trigger);
+  expect(document.body.style.overflow).toBe("");
+});
+
+it.each([
+  [true, "/admin/users", "Users"],
+  [false, "/admin/reservations", "Reservations"],
+  [true, "/admin/unknown", "Locations"],
+] as const)("moves hidden mobile-control focus to a desktop destination (Admin: %s, path: %s)", (isAdmin, pathname, label) => {
+  const desktop = new EventTarget();
+  const matchMedia = vi.fn(() => desktop);
+  vi.stubGlobal("matchMedia", matchMedia);
+  navigation.pathname = pathname;
+  render(<AdminNavigation isAdmin={isAdmin} />);
+  const trigger = screen.getByRole("button", { name: "Management menu" });
+  fireEvent.click(trigger);
+  expect(matchMedia).toHaveBeenCalledWith("(min-width: 1024px)");
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "Close management menu" }));
+  act(() => { desktop.dispatchEvent(Object.assign(new Event("change"), { matches: true })); });
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(document.activeElement).toBe(screen.getByRole("link", { name: label }));
+  expect(trigger.getAttribute("aria-expanded")).toBe("false");
+  expect(document.body.style.overflow).toBe("");
+});
+
+it("preserves focus on a visible destination when resizing to desktop", () => {
+  const desktop = new EventTarget();
+  vi.stubGlobal("matchMedia", vi.fn(() => desktop));
+  navigation.pathname = "/admin/users";
+  render(<AdminNavigation isAdmin={true} />);
+  fireEvent.click(screen.getByRole("button", { name: "Management menu" }));
+  const destination = screen.getByRole("link", { name: "Reservations" });
+  destination.focus();
+  const focus = vi.spyOn(destination, "focus");
+  act(() => { desktop.dispatchEvent(Object.assign(new Event("change"), { matches: true })); });
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(document.activeElement).toBe(destination);
+  expect(focus).not.toHaveBeenCalled();
+  expect(document.body.style.overflow).toBe("");
 });
 
 it("redirects the Coach entry route to Reservations after authorization", async () => {

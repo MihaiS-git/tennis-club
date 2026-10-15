@@ -6,7 +6,7 @@ import { parseActivityQuery } from "@/lib/bookings/activity-query";
 const { account, dataSource, queryRead } = vi.hoisted(() => ({ account: vi.fn(), dataSource: vi.fn(), queryRead: vi.fn() }));
 vi.mock("@/lib/auth/account", () => ({ readCurrentAccount: account }));
 vi.mock("@/lib/db/data-source", () => ({ getDataSource: dataSource }));
-import { listOwnCourtActivity } from "@/lib/bookings/activity-service";
+import { listOwnCourtActivity, listOwnUpcomingActivity } from "@/lib/bookings/activity-service";
 
 const id = (n: number) => `ca000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const owner = id(1);
@@ -144,6 +144,12 @@ test("maps database failures to a safe error", async () => {
     .rejects.toThrow("Unable to load your court activity. Try again.");
 });
 
+test.each([null, undefined, "obsolete"])("rejects a booking without a valid contractual payment method: %j", async paymentMethod => {
+  serve([{ ...booking, payment_method: paymentMethod }]);
+  await expect(listOwnCourtActivity("upcoming", parseActivityQuery({}, "upcoming"), userClient, now))
+    .rejects.toThrow("Unable to load your court activity. Try again.");
+});
+
 test("uses PostgreSQL-compatible DST disambiguation and end minute 1440", async () => {
   serve([{ ...booking, reservation: { ...interval, booking_date: "2026-10-25", starts_at_minute: 180, ends_at_minute: 210 } }]);
   const beforeEnd = await listOwnCourtActivity("upcoming", parseActivityQuery({}, "upcoming"), userClient, new Date("2026-10-25T01:00:00Z"));
@@ -162,4 +168,30 @@ test("regular users cannot request direct reservations; empty and high pages kee
   const empty = await listOwnCourtActivity("upcoming", parseActivityQuery({ page: "1000000" }, "upcoming"), userClient, now);
   expect(empty).toMatchObject({ rows: [], hasNext: false, locations: result.locations, courts: result.courts });
 
+});
+
+test("upcoming DTO supplies ordered interleaved records, options and pagination without raw rows", async () => {
+  account.mockResolvedValue({ state: "active", userId: owner, roles: ["coach"] });
+  const future = { ...interval, booking_date: "2099-10-15" };
+  serve([{ ...booking, reservation: { ...future, starts_at_minute: 840, ends_at_minute: 900 } },
+    { ...booking, id: id(6), reservation: { ...future, starts_at_minute: 1020, ends_at_minute: 1080 } }],
+  [{ ...reservation, ...future, reason: null, creator: null }]);
+  const result = await listOwnUpcomingActivity({}, userClient);
+  expect(Object.keys(result).sort()).toEqual(["bookings", "courts", "hasNext", "locations", "ordered", "upcoming"]);
+  expect(result.ordered.map(item => [item.kind, item.row.id]))
+    .toEqual([["booking", booking.id], ["reservation", reservation.id], ["booking", id(6)]]);
+  expect(result.bookings).toEqual([result.ordered[0].row, result.ordered[2].row]);
+  expect(result.upcoming).toEqual([result.ordered[1].row]);
+  expect(result.upcoming[0]).toMatchObject({ reason: null, creator_name: null, cancelled_at: null, cancelled_by_name: null });
+  expect(result.locations).toEqual([{ id: id(3), name: "Club A" }]);
+  expect(result.courts).toEqual([{ id: id(2), name: "Court A", location_id: id(3) }]);
+  expect(result.hasNext).toBe(false);
+  const empty = await listOwnUpcomingActivity({ location: id(999) }, userClient);
+  expect(empty).toEqual({ ordered: [], bookings: [], upcoming: [], hasNext: false,
+    locations: result.locations, courts: result.courts });
+  serve(Array.from({ length: 21 }, (_, n) => ({ ...booking, id: id(n + 100), reservation: future })));
+  expect((await listOwnUpcomingActivity({}, userClient)).hasNext).toBe(true);
+  const second = await listOwnUpcomingActivity({ page: "2" }, userClient);
+  expect(second.hasNext).toBe(false);
+  expect(second.ordered).toHaveLength(1);
 });

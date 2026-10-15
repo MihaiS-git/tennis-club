@@ -5,6 +5,19 @@ import { ReservationTimetable } from "@/components/reservation-timetable";
 
 afterEach(cleanup);
 
+it("renders natural name order independent of occupancy and preserves selection and court identity", () => {
+  const courts = [10, 3, 1, 4, 2].map(number => ({ court: { id: `${number}`, name: `C${number}` }, cells: ["available", "available"] as const }));
+  const onChoose = vi.fn();
+  const day = { times: [600, 630], courts: courts.map(row => ({ ...row, cells: [...row.cells] })) };
+  const view = render(<ReservationTimetable day={day} date="2099-10-15" selection={{ courtId: "10", startRow: 0, endRow: 2, startMinute: 600, endMinute: 660 }} onChoose={onChoose} />);
+  expect(screen.getAllByRole("rowheader").map(element => element.textContent)).toEqual(["C1", "C2", "C3", "C4", "C10"]);
+  expect(screen.getByRole("button", { name: /C10 .*10:00–10:30/ })).toHaveProperty("ariaPressed", "true");
+  fireEvent.click(screen.getByRole("button", { name: /C3 .*10:00–10:30/ }));
+  expect(onChoose).toHaveBeenCalledWith("3", ["available", "available"], 0);
+  view.rerender(<ReservationTimetable day={{ ...day, courts: [...day.courts].reverse() }} date="2099-10-15" selection={null} onChoose={onChoose} />);
+  expect(screen.getAllByRole("rowheader").map(element => element.textContent)).toEqual(["C1", "C2", "C3", "C4", "C10"]);
+});
+
 it("renders one duration-spanning reservation block without invoking creation", () => {
   const onChoose = vi.fn();
   const onOccupiedClick = vi.fn();

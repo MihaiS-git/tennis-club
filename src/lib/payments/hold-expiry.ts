@@ -1,6 +1,6 @@
 import "server-only";
 
-import { expireAdjustmentsAtLocation } from "@/lib/db/repositories/booking-adjustments.repository";
+import * as adjustments from "@/lib/db/repositories/booking-adjustments.repository";
 import type { EntityManager } from "typeorm";
 import { z } from "zod";
 import { getDataSource } from "@/lib/db/data-source";
@@ -8,7 +8,7 @@ import { inTransaction } from "@/lib/db/transaction";
 import * as payments from "@/lib/db/repositories/payments.repository";
 import * as bookings from "@/lib/db/repositories/bookings.repository";
 import * as reservations from "@/lib/db/repositories/reservations.repository";
-import { instantMicroseconds } from "./domain";
+import { timestampToEpochMicroseconds } from "@/lib/precise-time";
 
 // Caller holds this location FOR UPDATE. Occupancy writers use blocking cleanup
 // before their own row locks; polling skips busy aggregates and retries next poll.
@@ -20,7 +20,7 @@ export async function expirePaymentHoldsAtLocation(manager: EntityManager, locat
   const candidates = await payments.lockExpiredHoldBookings(manager, locationId, { ...input, skipLocked });
   let expired = 0;
   for (const candidate of candidates) {
-    const booking = await bookings.lockSettlementBooking(manager, candidate.id);
+    const booking = await bookings.findBookingForUpdate(manager, candidate.id);
     const reservation = await reservations.findReservationForUpdate(manager, candidate.reservation_id, undefined, skipLocked);
     if (!booking || !reservation || booking.reservation_id !== reservation.id
       || !["pending_payment", "cancelled"].includes(booking.status) || reservation.status !== "held" || !reservation.hold_expires_at) continue;
@@ -36,7 +36,7 @@ export async function expirePaymentHoldsAtLocation(manager: EntityManager, locat
       continue;
     }
     const now = await reservations.readReservationClockTime(manager);
-    if (instantMicroseconds(reservation.hold_expires_at) > instantMicroseconds(now)) continue;
+    if (timestampToEpochMicroseconds(reservation.hold_expires_at) > timestampToEpochMicroseconds(now)) continue;
     if (booking.status !== "cancelled") await bookings.updateSettlementBookingStatus(manager, booking.id, "expired");
     for (const attempt of attempts) if (attempt.status === "pending") await payments.expirePendingAttempt(manager, attempt.id);
     await reservations.updateSettlementReservationStatus(manager, reservation.id, "released");
@@ -61,4 +61,19 @@ export async function expirePaymentHolds(scope: payments.HoldExpiryScope = {}, b
     if (expired >= batchSize) break;
   }
   return expired;
+}
+
+// Caller holds the existing location mutex; expiry decisions stay in TypeScript.
+export async function expireAdjustmentsAtLocation(manager: EntityManager, locationId: string) {
+  const candidates = await adjustments.listExpiredAdjustmentCandidates(manager, locationId);
+  for (const row of candidates) {
+    await bookings.lockCheckoutBooking(manager, row.booking_id);
+    const current = await adjustments.findAdjustment(manager, row.id);
+    if (!current || !["pending", "cancelled"].includes(current.status)) continue;
+    if (current.status === "pending") await adjustments.updateAdjustment(manager, row.id, "expired");
+    const attempt = await adjustments.adjustmentAttempt(manager, row.id);
+    if (attempt) await payments.expirePendingAttempt(manager, attempt.id);
+    await adjustments.releaseAdjustmentHolds(manager, row.id);
+  }
+  return candidates.length;
 }

@@ -269,3 +269,62 @@ one pending booking, one temporary reservation hold and one payment attempt.
 Pay at club confirms immediately only when enabled for that location. Confirmation
 email follows actual confirmation; expired holds stop blocking using database time
 and transactional cleanup, with the same reservation GiST constraint.
+
+
+## Implemented immutable booking contracts
+
+A booking is a permanent identity linked to its account owner and one mutable
+court-reservation occupancy row. `bookings.current_revision_id` points to the
+sole authoritative commercial snapshot in `booking_revisions`; price, contact,
+currency, method and cancellation notice are not duplicated on `bookings`.
+Operational checkout/hold status and processing timestamps remain on the identity.
+PostgreSQL rejects every ownership change after creation, including NULL-to-account,
+account-to-NULL and account-to-account changes. Unchanged ownership writes are allowed.
+Guest email equality never establishes account ownership.
+
+Revisions record their number, predecessor, stable operation key/intent hash,
+operation kind, effective state, local schedule, location/court identities and
+historical names/timezone, customer contact, total/currency/method/policy, recorded
+actor scope/time, adjustment source and cancellation cause. Pricing evidence is
+versioned, typed and bounded to 48 half-hour slots, preserving rule/rule-set IDs,
+rates and date scope. It has no live FK to replaceable pricing rules. Existing
+calendar pricing and rounding functions remain the price authority.
+
+Online creation records a pending revision and held occupancy. Verified successful
+settlement appends one confirmed revision and activates the same reservation.
+Duplicate receipts or distinct observations of the same capture cannot append
+another confirmation. Failed/expired checkout changes processing state without
+creating a fictional confirmed contract. Pay-at-club creation records a confirmed
+contract with an uncollected `due` request, never a captured online payment.
+
+Owner same-price and Pay-at-club changes append one applied revision and move
+occupancy atomically. Pay-at-club debt derives from the current revision; its
+original payment-request amount remains unchanged. Online reductions also create
+newest-capture-first refund obligations atomically. Online increases retain the
+proposal, surcharge and hold-fragment workflow: the base revision and confirmed
+occupancy remain unchanged until verified capture passes current eligibility,
+pricing and concurrency checks. An unapplied capture retains its evidence and
+compensation obligation without a rescheduled revision.
+
+Owners retain existing active-account, fixed-location, notice and before-start
+rules, including Coach/Admin owner notice bypass. The revision UUID is the booking
+concurrency token; the lossless reservation timestamp remains the occupancy fence.
+Stable operation keys reject changed intent. Identical effective saves leave the
+pointer, timestamps, payments, refunds and notifications unchanged; a genuine
+price-only contractual change appends a revision.
+
+Owner/Admin cancellation appends a final snapshot, releases occupancy and creates
+remaining captured-funds obligations in one transaction. Cancellation without a
+refund still replays successfully. Admins can cancel customer/guest bookings and
+refund captured online funds automatically; they cannot reschedule someone else's
+booking or choose to retain captured funds. Uncollected Pay-at-club debt is never
+refunded. Admin direct-reservation editing is unchanged. Checkout abandonment uses
+the capability boundary, records cancellation intent and releases occupancy;
+provider calls follow commit, with compensation for later exact captures.
+
+Composite FKs enforce same-booking predecessor, current-head and adjustment lineage;
+the initial current-pointer FK is deferred to allow identity/revision insertion in
+one transaction. Unique numbering, predecessor and operation keys protect identity.
+Native integrity triggers reject non-linear appends, orphan/rewound heads and any
+revision UPDATE/DELETE/TRUNCATE and ownership changes. They validate structure only, never pricing,
+eligibility, refunds or application workflows. Revisions never cascade away.

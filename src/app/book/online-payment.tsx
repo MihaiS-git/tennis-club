@@ -176,7 +176,7 @@ function PaymentForm({ checkout, holdExpiresAt, onConfirmed, onPaymentStatus, di
   }
   const canPay = paymentStatus === "pending" || paymentStatus === "processing";
   return <form onSubmit={pay} className="mt-5 space-y-4" aria-label="Online payment">
-    {canPay && <p className="text-sm text-muted-foreground">Your court hold ends at {new Date(holdExpiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.</p>}
+    {canPay && <p className="rounded-control border border-border bg-surface-muted p-3 text-sm text-foreground">Temporary hold deadline: <time dateTime={holdExpiresAt} className="font-semibold">{new Date(holdExpiresAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</time></p>}
     {canPay && <div inert={disabled || processing || paymentStatus !== "pending"} aria-describedby={fieldError ? "payment-field-error" : undefined}><PaymentElement onReady={() => { if (!finished.current) setReady(true); }} onLoadError={() => {
       if (!finished.current) toast.error("Unable to load payment details. Please try again later.", { id: `payment-element-${checkout.attemptId}` });
     }} /></div>}

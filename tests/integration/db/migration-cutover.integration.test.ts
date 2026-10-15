@@ -1,3 +1,5 @@
+import { insertBookingRecords } from "../../local/booking-fixtures";
+import { appendBookingContractFixture } from "../checkout-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import sharp from "sharp";
@@ -46,6 +48,86 @@ afterAll(async () => {
     expect((await localFixtureClient().auth.admin.deleteUser(id)).error).toBeNull();
   }
   await database.destroy();
+});
+
+test("three consolidated migrations match application metadata without schema changes", async () => {
+  expect((await database.query("SELECT name FROM public.migrations ORDER BY timestamp")).map((row: { name: string }) => row.name))
+    .toEqual(["InitialApplicationSchema1791462257924", "ApplicationNativeIntegrity1791462257925", "SupabaseAuthStorage1791462257926"]);
+  const diff = await database.driver.createSchemaBuilder().log();
+  expect(diff.upQueries).toEqual([]);
+  expect(diff.downQueries).toEqual([]);
+  expect(database.getMetadata("auth.users").synchronize).toBe(false);
+  expect(database.getMetadata("public.payment_refunds").findColumnWithPropertyName("capturedAmountMinor"))
+    .toMatchObject({ databaseName: "captured_amount_minor", isNullable: false });
+  const booking = database.getMetadata("public.bookings");
+  expect(booking.findColumnWithPropertyName("accountUserId")).toMatchObject({ databaseName: "account_user_id", isNullable: true });
+  expect(booking.foreignKeys.find(key => key.name === "bookings_account_user_id_fkey"))
+    .toMatchObject({ onDelete: "RESTRICT" });
+});
+
+test("booking ownership is permanent for guests and accounts, without blocking aggregate updates", async () => {
+  const owners: string[] = [];
+  for (let i = 0; i < 2; i++) {
+    const created = await localFixtureClient().auth.admin.createUser({
+      email: `ownership-${randomUUID()}@example.test`, password: "ownership-integrity-password-123", email_confirm: true,
+    });
+    expect(created.error).toBeNull(); expect(created.data.user).toBeTruthy();
+    owners.push(created.data.user!.id); userIds.push(created.data.user!.id);
+  }
+  const runner = database.createQueryRunner();
+  await runner.startTransaction();
+  try {
+    const location = randomUUID(), court = randomUUID();
+    const guest = randomUUID(), member = randomUUID(), guestReservation = randomUUID(), memberReservation = randomUUID();
+    await runner.query("INSERT INTO public.locations(id,name,slug,timezone) VALUES($1,'Ownership integrity',$2,'UTC')", [location, `ownership-${location}`]);
+    await runner.query("INSERT INTO public.courts(id,location_id,name,slug,surface,environment) VALUES($1,$2,'Court','court','hard','outdoor')", [court, location]);
+    await runner.query(`INSERT INTO public.court_reservations(id,court_id,booking_date,starts_at_minute,ends_at_minute)
+      VALUES($1,$3,'2099-10-15',600,660),($2,$3,'2099-10-15',660,720)`, [guestReservation, memberReservation, court]);
+    for (const [id, reservationId, owner] of [[guest, guestReservation, null], [member, memberReservation, owners[0]]] as const)
+      await insertBookingRecords(runner.manager, { id, reservation_id: reservationId, account_user_id: owner,
+        customer_name: "Customer", customer_email: "ownership@example.test", customer_phone: "123", total_amount_minor: 5000,
+        currency: "EUR", payment_method: "pay_at_club", cancellation_notice_minutes: 1440 });
+    await runner.query("SET CONSTRAINTS ALL IMMEDIATE");
+    await runner.query("SET CONSTRAINTS ALL DEFERRED");
+    const snapshot = async () => ({
+      bookings: await runner.query("SELECT * FROM public.bookings WHERE id=ANY($1::uuid[]) ORDER BY id", [[guest, member]]),
+      revisions: await runner.query("SELECT * FROM public.booking_revisions WHERE booking_id=ANY($1::uuid[]) ORDER BY booking_id,revision_number", [[guest, member]]),
+      occupancy: await runner.query("SELECT * FROM public.court_reservations WHERE id=ANY($1::uuid[]) ORDER BY id", [[guestReservation, memberReservation]]),
+    });
+    const before = await snapshot();
+    // Reject every transfer direction after provisional revision/occupancy writes.
+    // Savepoint rollback must restore the entire aggregate, including its head.
+    for (const [id, reservationId, replacement] of [
+      [guest, guestReservation, owners[0]], [member, memberReservation, null], [member, memberReservation, owners[1]],
+    ] as const) {
+      await runner.query("SAVEPOINT ownership_change");
+      try {
+        await appendBookingContractFixture(id, { booking_date: "2099-10-16", total_amount_minor: 6000 }, runner.manager);
+        expect(await runner.query("SELECT booking_date::text FROM public.court_reservations WHERE id=$1", [reservationId]))
+          .toEqual([{ booking_date: "2099-10-16" }]);
+        await expect(runner.query("UPDATE public.bookings SET account_user_id=$2,status='cancelled',updated_at=clock_timestamp() WHERE id=$1", [id, replacement]))
+          .rejects.toMatchObject({ driverError: { code: "23514", message: "Booking ownership is immutable" } });
+      } finally { await runner.query("ROLLBACK TO SAVEPOINT ownership_change"); }
+      expect(await snapshot()).toEqual(before);
+    }
+    // Explicitly rewriting the same owner (including NULL) still permits status,
+    // immutable revision-head and occupancy changes in the same transaction.
+    for (const [id, reservationId, owner] of [[guest, guestReservation, null], [member, memberReservation, owners[0]]] as const) {
+      await appendBookingContractFixture(id, { booking_date: "2099-10-16" }, runner.manager);
+      await runner.query("UPDATE public.bookings SET account_user_id=$2,status='cancelled',updated_at=clock_timestamp() WHERE id=$1", [id, owner]);
+      await runner.query("UPDATE public.court_reservations SET status='cancelled',cancelled_at=clock_timestamp(),cancelled_by_user_id=$2 WHERE id=$1", [reservationId, owners[1]]);
+      expect(await runner.query("SELECT account_user_id,status FROM public.bookings WHERE id=$1", [id]))
+        .toEqual([{ account_user_id: owner, status: "cancelled" }]);
+      expect(await runner.query("SELECT revision_number,booking_date::text FROM public.booking_revisions WHERE id=(SELECT current_revision_id FROM public.bookings WHERE id=$1)", [id]))
+        .toEqual([{ revision_number: 2, booking_date: "2099-10-16" }]);
+    }
+    await runner.query("SET CONSTRAINTS ALL IMMEDIATE");
+    await runner.query("SAVEPOINT owner_delete");
+    try {
+      await expect(runner.query("DELETE FROM public.users WHERE id=$1", [owners[0]]))
+        .rejects.toMatchObject({ driverError: { code: "23503", constraint: "bookings_account_user_id_fkey" } });
+    } finally { await runner.query("ROLLBACK TO SAVEPOINT owner_delete"); }
+  } finally { await runner.rollbackTransaction(); await runner.release(); }
 });
 
 const smoke = test;
@@ -134,8 +216,8 @@ smoke("Admin configuration services persist and publication readiness still gate
   const court = await saveAdminCourt({ fields: { location_id: location.id, name: "Court 1", surface: "clay",
     environment: "outdoor", has_lighting: false, is_active: true } }, admin);
   expect(court.ok).toBe(true); if (!court.ok) throw new Error(JSON.stringify(court));
-  const openingHours = await mutateAdminOpeningHours({ operation: "create", starts_on: "0001-01-01", location_id: location.id, weekdays: [0,1,2,3,4,5,6], replace_ids: [],
-    intervals: [{ opens_at: "08:00", closes_at: "22:00" }] }, admin);
+  const openingHours = await mutateAdminOpeningHours({ operation: "create", starts_on: "0001-01-01", location_id: location.id, replace_ids: [],
+    rows: [{ weekdays: [0,1,2,3,4,5,6], opens_at: "08:00", closes_at: "22:00" }] }, admin);
   expect(openingHours.ok).toBe(true);
   if (!openingHours.ok || !openingHours.schedules?.[0]) throw new Error("Opening-hours fixture failed.");
   const schedule = openingHours.schedules[0];
@@ -145,8 +227,8 @@ smoke("Admin configuration services persist and publication readiness still gate
   expect(await setAdminLocationPublication({ id: location.id, is_public: true }, admin)).toEqual({ ok: true, id: location.id });
   expect((await listPublicLocationsWithCourts()).some((row) => row.id === location.id)).toBe(true);
   const hours = await database.query("SELECT id FROM public.location_opening_hours WHERE location_id=$1", [location.id]);
-  expect((await mutateAdminOpeningHours({ operation: "update", schedule_id: schedule.id, revision: schedule.revision, location_id: location.id, weekdays: [0,1,2,3,4,5,6],
-    replace_ids: hours.map((row: { id: string }) => row.id), intervals: [{ opens_at: "09:00", closes_at: "22:00" }] }, admin)))
+  expect((await mutateAdminOpeningHours({ operation: "update", schedule_id: schedule.id, revision: schedule.revision, location_id: location.id,
+    replace_ids: hours.map((row: { id: string }) => row.id), rows: [{ weekdays: [0,1,2,3,4,5,6], opens_at: "09:00", closes_at: "22:00" }] }, admin)))
     .toMatchObject({ ok: true, pricingAdjusted: true });
 });
 
@@ -181,19 +263,129 @@ smoke("native overlap, partial payment uniqueness and refund constraints reject 
     const reservation = "INSERT INTO public.court_reservations(court_id,booking_date,starts_at_minute,ends_at_minute) VALUES($1,'2099-01-01',$2,$3)";
     await rejects(reservation, [courtId, 540, 660], "23P01");
     await runner.query(reservation, [courtId, 600, 720]);
-    await runner.query(`INSERT INTO public.bookings(id,reservation_id,customer_name,customer_email,customer_phone,total_amount_minor,currency,cancellation_notice_minutes,status,payment_method)
-      VALUES($1,$2,'Customer','customer@example.test','123',5000,'EUR',1440,'pending_payment','online')`, [bookingId, reservationId]);
+    await insertBookingRecords(runner.manager, { id: bookingId, reservation_id: reservationId, customer_name: "Customer", customer_email: "customer@example.test", customer_phone: "123", total_amount_minor: 5000, currency: "EUR", cancellation_notice_minutes: 1440, status: "pending_payment", payment_method: "online" });
     const attemptId = randomUUID();
     const attempt = `INSERT INTO public.payment_attempts(id,booking_id,method,provider,provider_payment_id,amount_minor,currency,status,expires_at,checkout_token_hash)
       VALUES($1,$2,'online','stripe','pi_cutover_integrity',5000,'EUR','pending',clock_timestamp()+interval '10 minutes','cutover-token')`;
     await runner.query(attempt, [attemptId, bookingId]);
     await rejects(attempt, [randomUUID(), bookingId], "23505");
     await rejects("UPDATE public.payment_attempts SET amount_minor=0 WHERE id=$1", [attemptId], "23514");
-    const refund = `INSERT INTO public.payment_refunds(booking_id,payment_attempt_id,provider,provider_payment_id,amount_minor,currency)
-      VALUES($1,$2,'stripe','pi_cutover_integrity',$3,'EUR')`;
+    await rejects("UPDATE public.payment_attempts SET provider_payment_id='pi_changed' WHERE id=$1", [attemptId], "23514");
+    await runner.query("UPDATE public.payment_attempts SET status='failed',completed_at=clock_timestamp(),updated_at=now() WHERE id=$1", [attemptId]);
+    const captureId = randomUUID(), eventId = `evt_${randomUUID()}`;
+    await runner.query(`INSERT INTO public.payment_capture_receipts(id,payment_attempt_id,provider,provider_payment_id,provider_capture_id,amount_minor,currency)
+      VALUES($1,$2,'stripe','pi_cutover_integrity','pi_cutover_integrity',5000,'EUR')`, [captureId, attemptId]);
+    await runner.query(`INSERT INTO public.payment_capture_receipts(payment_attempt_id,provider,provider_payment_id,provider_capture_id,amount_minor,currency)
+      VALUES($1,'stripe','pi_cutover_integrity','pi_cutover_integrity',5000,'EUR')
+      ON CONFLICT(provider,provider_capture_id) DO UPDATE SET last_observed_at=clock_timestamp()`, [attemptId]);
+    expect(await runner.query("SELECT count(*)::integer AS total FROM public.payment_capture_receipts WHERE payment_attempt_id=$1", [attemptId]))
+      .toEqual([{ total: 1 }]);
+    await rejects("UPDATE public.payment_capture_receipts SET amount_minor=4999 WHERE id=$1", [captureId], "23514");
+    await runner.query(`INSERT INTO public.payment_provider_events(provider,event_id,attempt_id,capture_receipt_id,provider_payment_id,
+      outcome,settlement_result,reconciliation_required,amount_minor,currency)
+      VALUES('stripe',$1,$2,$3,'pi_cutover_integrity','succeeded','failed',true,5000,'EUR')`, [eventId, attemptId, captureId]);
+    await rejects("UPDATE public.payment_provider_events SET amount_minor=4999 WHERE event_id=$1", [eventId], "23514");
+    await runner.query(`UPDATE public.payment_provider_events SET reconciliation_required=false,resolved_at=clock_timestamp()
+      WHERE provider='stripe' AND event_id=$1`, [eventId]);
+    await rejects("DELETE FROM public.payment_provider_events WHERE event_id=$1", [eventId], "23514");
+    await rejects("DELETE FROM public.payment_capture_receipts WHERE id=$1", [captureId], "23514");
+    await rejects("TRUNCATE public.payment_capture_receipts CASCADE", [], "23514");
+    const refund = `INSERT INTO public.payment_refunds(booking_id,payment_attempt_id,provider,provider_payment_id,amount_minor,captured_amount_minor,currency,reason,context_revision_id)
+      VALUES($1,$2,'stripe','pi_cutover_integrity',$3,5000,'EUR','late_capture_compensation',(SELECT current_revision_id FROM public.bookings WHERE id=$1))`;
+    await rejects(refund.replace("$3,5000,'EUR'", "$3,NULL,'EUR'"), [bookingId, attemptId, 5000], "23502");
+    await rejects(refund.replace("amount_minor,captured_amount_minor,", "amount_minor,")
+      .replace("$3,5000,'EUR'", "$3,'EUR'"), [bookingId, attemptId, 5000], "23502");
+    await rejects(refund.replace("$3,5000,'EUR'", "$3,0,'EUR'"), [bookingId, attemptId, 5000], "23514");
+    await rejects(refund, [bookingId, attemptId, 5001], "23514");
     await rejects(refund, [bookingId, attemptId, 0], "23514");
     await rejects(refund, [bookingId, randomUUID(), 5000], "23503");
     await runner.query(refund, [bookingId, attemptId, 5000]);
     await rejects(refund, [bookingId, attemptId, 5000], "23505");
+    await rejects("DELETE FROM public.bookings WHERE id=$1", [bookingId], "23503");
+    await rejects("DELETE FROM public.payment_attempts WHERE id=$1", [attemptId], "23514");
+    await rejects("UPDATE public.payment_refunds SET captured_amount_minor=4999 WHERE payment_attempt_id=$1", [attemptId], "23514");
+    await rejects("UPDATE public.payment_refunds SET provider_generation=-1 WHERE payment_attempt_id=$1", [attemptId], "42703");
+    await rejects("UPDATE public.payment_refunds SET provider_history='{}'::jsonb WHERE payment_attempt_id=$1", [attemptId], "42703");
+    await rejects("UPDATE public.payment_refunds SET adjustment_id=$1 WHERE payment_attempt_id=$2", [randomUUID(), attemptId], "23514");
+    await rejects("UPDATE public.payment_attempts SET adjustment_id=$1 WHERE id=$2", [randomUUID(), attemptId], "23514");
+    await rejects("UPDATE public.court_reservations SET hold_expires_at=NULL WHERE id=$1", [reservationId], "23514");
+    await rejects(reservation, [courtId, 720, 750], "23514");
+    const schedule = "INSERT INTO public.opening_hours_schedules(location_id,starts_on,ends_on) VALUES($1,$2,$3)";
+    await rejects(schedule, [locationId, "2099-01-01", "2099-12-31"], "23P01");
+    await rejects(schedule, [locationId, "2100-12-31", "2100-01-01"], "23514");
+    const adjustmentId = randomUUID();
+    const adjustment = `INSERT INTO public.booking_adjustments(id,booking_id,base_revision_id,actor_id,scope,request_key,target,original_total,new_total,currency,status,expires_at)
+      VALUES($1,$2,(SELECT current_revision_id FROM public.bookings WHERE id=$2),$3,'owner',$4,'{"courtName":"Court","locationName":"Location","timezone":"UTC"}',5000,6000,'EUR','pending',clock_timestamp()+interval '10 minutes')`;
+    await runner.query(adjustment, [adjustmentId, bookingId, userIds[0], "first"]);
+    await rejects(adjustment, [randomUUID(), bookingId, userIds[0], "first"], "23505");
+    await rejects(adjustment, [randomUUID(), bookingId, userIds[0], "second"], "23505");
+    for (const change of ["scope='invalid'", "target='[]'::jsonb", "original_total=0", "new_total=0", "status='invalid'", "expires_at='infinity'"]) {
+      await rejects(`UPDATE public.booking_adjustments SET ${change} WHERE id=$1`, [adjustmentId], "23514");
+    }
+    await rejects("UPDATE public.payment_attempts SET adjustment_id=$1 WHERE id=$2", [adjustmentId, attemptId], "23514");
+    await runner.query(`INSERT INTO public.payment_attempts(booking_id,adjustment_id,method,amount_minor,currency,status)
+      VALUES($1,$2,'pay_at_club',1000,'EUR','due')`, [bookingId, adjustmentId]);
+    await rejects(`INSERT INTO public.payment_attempts(booking_id,adjustment_id,method,amount_minor,currency,status)
+      VALUES($1,$2,'pay_at_club',1000,'EUR','due')`, [bookingId, adjustmentId], "23505");
+    const fragment = `INSERT INTO public.court_reservations(id,court_id,adjustment_id,booking_date,starts_at_minute,ends_at_minute,status,hold_expires_at)
+      VALUES($1,$2,$3,'2099-01-01',720,750,'held',clock_timestamp()+interval '10 minutes')`;
+    const fragmentId = randomUUID();
+    await rejects(fragment, [fragmentId, courtId, randomUUID()], "23503");
+    await runner.query(fragment, [fragmentId, courtId, adjustmentId]);
+    await rejects("UPDATE public.court_reservations SET status='active',hold_expires_at=NULL WHERE id=$1", [fragmentId], "23514");
+    await rejects("DELETE FROM public.booking_adjustments WHERE id=$1", [adjustmentId], "23503");
+    await rejects("UPDATE public.payment_refunds SET adjustment_id=$1,captured_amount_minor=5000 WHERE payment_attempt_id=$2", [adjustmentId, attemptId], "23514");
+    await runner.query(`INSERT INTO public.payment_refunds(booking_id,payment_attempt_id,adjustment_id,operation_key,provider,provider_payment_id,amount_minor,captured_amount_minor,currency,reason,context_revision_id)
+      VALUES($1,$2,$3,'adjustment','stripe','pi_cutover_integrity',1000,5000,'EUR','failed_adjustment_compensation',(SELECT current_revision_id FROM public.bookings WHERE id=$1))`, [bookingId, attemptId, adjustmentId]);
+    await runner.query("UPDATE public.court_reservations SET status='released',hold_expires_at=NULL WHERE id=$1", [fragmentId]);
+
   } finally { await runner.rollbackTransaction(); await runner.release(); }
+});
+
+test("revision history rejects cross-booking pointers, non-linear appends, orphan heads and UPDATE/DELETE/TRUNCATE", async () => {
+  const runner=database.createQueryRunner();await runner.startTransaction();
+  const location=randomUUID(),court=randomUUID(),first=randomUUID(),second=randomUUID(),r1=randomUUID(),r2=randomUUID();
+  async function rejects(work:()=>Promise<unknown>,code:string) {
+    await runner.query("SAVEPOINT invalid_revision");
+    try {await expect(work()).rejects.toMatchObject({driverError:{code}});}
+    finally {await runner.query("ROLLBACK TO SAVEPOINT invalid_revision");}
+  }
+  try {
+    await runner.query("INSERT INTO public.locations(id,name,slug,timezone) VALUES($1::uuid,'Revision integrity',($1::uuid)::text,'UTC')",[location]);
+    await runner.query("INSERT INTO public.courts(id,location_id,name,slug,surface,environment) VALUES($1,$2,'Court','court','hard','outdoor')",[court,location]);
+    await runner.query(`INSERT INTO public.court_reservations(id,court_id,booking_date,starts_at_minute,ends_at_minute)
+      VALUES($1,$3,'2099-10-15',600,660),($2,$3,'2099-10-15',660,720)`,[r1,r2,court]);
+    for(const [id,reservation_id] of [[first,r1],[second,r2]]) await insertBookingRecords(runner.manager,{id,reservation_id,
+      customer_name:"Customer",customer_email:"revision@example.test",customer_phone:"123",total_amount_minor:5000,currency:"EUR",payment_method:"pay_at_club",cancellation_notice_minutes:1440});
+    await runner.query("SET CONSTRAINTS ALL IMMEDIATE");await runner.query("SET CONSTRAINTS ALL DEFERRED");
+    const rows:{id:string;current_revision_id:string}[]=await runner.query("SELECT id,current_revision_id FROM public.bookings WHERE id=ANY($1::uuid[])",[[first,second]]);
+    const head=rows.find(b=>b.id===first)!.current_revision_id,other=rows.find(b=>b.id===second)!.current_revision_id;
+    await rejects(async()=>{
+      await runner.query("UPDATE public.bookings SET current_revision_id=$1 WHERE id=$2",[other,first]);
+      await runner.query("SET CONSTRAINTS bookings_current_revision_fkey IMMEDIATE");
+    },"23503");
+    for(const sql of ["UPDATE public.booking_revisions SET total_amount_minor=1 WHERE id=$1",
+      "DELETE FROM public.booking_revisions WHERE id=$1","TRUNCATE public.booking_revisions CASCADE"])
+      await rejects(()=>runner.query(sql,sql.startsWith("TRUNCATE") ? []:[head]),"23514");
+    const append=`INSERT INTO public.booking_revisions SELECT $1,booking_id,$3,$4,'probe','probe','rescheduled','confirmed',
+      location_id,court_id,location_name,court_name,timezone,booking_date,starts_at_minute,ends_at_minute,customer_name,customer_email,customer_phone,
+      total_amount_minor,currency,payment_method,cancellation_notice_minutes,actor_user_id,actor_scope,recorded_at,NULL,NULL,pricing_evidence
+      FROM public.booking_revisions WHERE id=$2`;
+    await rejects(()=>runner.query(append,[randomUUID(),head,2,other]),"23514");
+    await rejects(()=>runner.query(append,[randomUUID(),head,3,head]),"23514");
+    await rejects(async()=>{
+      await runner.query(append,[randomUUID(),head,2,head]);
+      await runner.query("SET CONSTRAINTS ALL IMMEDIATE");
+    },"23514");
+    const next=randomUUID();await runner.query(append,[next,head,2,head]);
+    await runner.query("UPDATE public.bookings SET current_revision_id=$1 WHERE id=$2",[next,first]);
+    await runner.query("SET CONSTRAINTS ALL IMMEDIATE");await runner.query("SET CONSTRAINTS ALL DEFERRED");
+    await rejects(async()=>{
+      await runner.query("UPDATE public.bookings SET current_revision_id=$1 WHERE id=$2",[head,first]);
+      await runner.query("SET CONSTRAINTS ALL IMMEDIATE");
+    },"23514");
+    await rejects(()=>runner.query("DELETE FROM public.bookings WHERE id=$1",[first]),"23503");
+    expect(await runner.query("SELECT revision_number FROM public.booking_revisions WHERE booking_id=$1 ORDER BY revision_number",[first]))
+      .toEqual([{revision_number:1},{revision_number:2}]);
+  } finally {await runner.rollbackTransaction();await runner.release();}
 });

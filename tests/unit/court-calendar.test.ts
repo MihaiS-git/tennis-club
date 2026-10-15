@@ -3,6 +3,7 @@ import { buildCourtDay } from "@/lib/courts/calendar";
 import { getCalendarSelection, selectCalendarCell } from "@/lib/courts/interval-selection";
 import type { OpeningInterval } from "@/lib/admin/opening-hours-validation";
 import type { PricingRule } from "@/lib/pricing/validation";
+import { mondayWeekday } from "@/lib/pricing/resolution";
 
 const locationId = "11111111-1111-4111-8111-111111111111";
 const courtId = "22222222-2222-4222-8222-222222222222";
@@ -28,6 +29,31 @@ function grid(day: ReturnType<typeof buildCourtDay>, courtIndex = 0) {
 }
 
 describe("one-day court availability", () => {
+  it.each([
+    ["2026-10-14", "Outdoor", 1200],
+    ["2026-10-15", "Covered", 2400],
+    ["2027-04-15", "Covered", 2400],
+    ["2027-04-16", "Outdoor", 1200],
+  ])("uses seasonal pricing and booking totals on %s at inclusive coverage boundaries", (date, stateLabel, amount) => {
+    const weekday = mondayWeekday(date);
+    const day = buildCourtDay({ ...base, date, courts: [courts[0], { ...courts[1], environment: "indoor" }],
+      hours: [{ ...hours(1020, 1200), weekday }],
+      coverage: courts.map((court) => ({ id: crypto.randomUUID(), court_id: court.id,
+        starts_on: "2026-10-15", ends_on: "2027-04-15", created_at: stamp, updated_at: stamp })),
+      pricing: [
+        { ...pricing(courtId, 1020, 1200, 1200), weekday },
+        { ...pricing(courtId, 1020, 1200, 2400), weekday, court_state: "covered" },
+        { ...pricing(otherId, 1020, 1200, 3600), weekday, court_state: "indoor" },
+      ],
+    });
+    expect(day.courts[0].court.environment).toBe("outdoor");
+    expect(day.courts[0].stateLabel).toBe(stateLabel);
+    expect(day.courts[0].hourlyPrices).toEqual(Array(6).fill(amount));
+    expect(selectCalendarCell(grid(day), null, 0)?.priceMinor).toBe(amount);
+    expect(day.courts[1].stateLabel).toBe("Indoor");
+    expect(selectCalendarCell(grid(day, 1), null, 0)?.priceMinor).toBe(3600);
+  });
+
   it("derives 30-minute cells for every supplied active court and their hourly prices", () => {
     const day = buildCourtDay(base);
     expect(day.courts.map((item) => item.court.id)).toEqual([courtId, otherId]);

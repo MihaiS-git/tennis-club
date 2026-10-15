@@ -27,6 +27,77 @@ const courts: CourtDay[] = [1, 2].map((index) => ({
   cells: ["available", "available", "available", "available"], hourlyPrices: [1200, 1200, 2000, 2000], stateLabel: "outdoor",
 }));
 
+it("renders natural court order and keeps the selected court when input order changes", () => {
+  const unordered = [10, 3, 1, 4, 2].map((number) => ({ ...courts[0], court: { ...courts[0].court, id: `${number}`, name: `C${number}` } }));
+  const props = { onlinePaymentAvailable: true, day: { times: [960, 990, 1020, 1050], courts: unordered }, date: "2099-10-15", locationName: "Club", currency: "RON" as const, cancellationNoticeMinutes: 120, timezone: "UTC" };
+  const view = render(<BookingCalendar {...props} />);
+  expect(screen.getAllByRole("rowheader").map((element) => element.textContent)).toEqual(["C1outdoor", "C2outdoor", "C3outdoor", "C4outdoor", "C10outdoor"]);
+  fireEvent.click(screen.getByRole("button", { name: /C10 2099-10-15 16:00–16:30/ }));
+  view.rerender(<BookingCalendar {...props} day={{ ...props.day, courts: [...unordered].reverse() }} />);
+  expect(screen.getByRole("button", { name: /C10 2099-10-15 16:00–16:30/ })).toHaveProperty("ariaPressed", "true");
+  expect(screen.getByRole("region", { name: "Selected interval" }).textContent).toContain("C10");
+});
+
+it.each([false, true])("validates required contact fields after submit, retains whitespace values and clears only corrected errors (authenticated=%s)", async (authenticated) => {
+  render(<BookingCalendar onlinePaymentAvailable authenticated={authenticated}
+    initialContact={authenticated ? { customerName: "", customerEmail: "", customerPhone: "" } : undefined}
+    day={{ times: [960, 990, 1020, 1050], courts }} date="2026-10-01" locationName="Club" currency="RON" cancellationNoticeMinutes={120} timezone="Europe/Bucharest" />);
+  fireEvent.click(screen.getByRole("button", { name: /Court 1 2026-10-01 16:00–16:30/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  const dialog = screen.getByRole("dialog");
+  expect(within(dialog).queryAllByRole("alert")).toHaveLength(0);
+  const fields = [["Name", "Name is required."], ["Email", "Email address is required."], ["Phone", "Phone number is required."]] as const;
+  fireEvent.click(within(dialog).getByRole("button", { name: "Continue to payment" }));
+  for (const [label, message] of fields) {
+    const field = within(dialog).getByLabelText(label);
+    const error = within(dialog).getByText(message);
+    expect(field.getAttribute("aria-describedby")).toBe(error.id);
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+    fireEvent.change(field, { target: { value: "   " } });
+    expect(within(dialog).getByText(message)).toBeTruthy();
+    // Native email inputs strip surrounding ASCII whitespace themselves.
+    expect(field).toHaveProperty("value", label === "Email" ? "" : "   ");
+  }
+  fireEvent.click(within(dialog).getByRole("button", { name: "Continue to payment" }));
+  expect(confirm).not.toHaveBeenCalled();
+  fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "  Ana  " } });
+  expect(within(dialog).queryByText("Name is required.")).toBeNull();
+  expect(within(dialog).getByText("Email address is required.")).toBeTruthy();
+  expect(within(dialog).getByText("Phone number is required.")).toBeTruthy();
+  fireEvent.change(within(dialog).getByLabelText("Email"), { target: { value: "bad-email" } });
+  expect(within(dialog).getByText("Enter a valid email address.")).toBeTruthy();
+  fireEvent.change(within(dialog).getByLabelText("Phone"), { target: { value: "call me" } });
+  expect(within(dialog).getByText("Enter a valid phone number, for example +40 712 345 678.")).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Continue to payment" }));
+  expect(confirm).not.toHaveBeenCalled();
+  expect(within(dialog).getByLabelText("Name")).toHaveProperty("value", "  Ana  ");
+  expect(within(dialog).getByLabelText("Email")).toHaveProperty("value", "bad-email");
+  expect(within(dialog).getByLabelText("Phone")).toHaveProperty("value", "call me");
+  fireEvent.change(within(dialog).getByLabelText("Email"), { target: { value: "  ana@example.test  " } });
+  fireEvent.change(within(dialog).getByLabelText("Phone"), { target: { value: "  +40 712 345 678  " } });
+  expect(within(dialog).queryAllByRole("alert")).toHaveLength(0);
+  expect(within(dialog).queryByText(/Too small|expected string|Zod/)).toBeNull();
+  confirm.mockResolvedValue({ ok: false, message: "Please try again." });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Continue to payment" }));
+  await waitFor(() => expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ customerName: "Ana", customerEmail: "ana@example.test", customerPhone: "+40 712 345 678" })));
+  await waitFor(() => expect(within(dialog).getByRole("button", { name: "Continue to payment" })).toHaveProperty("disabled", false));
+  expect(within(dialog).getByLabelText("Name")).toHaveProperty("value", "  Ana  ");
+});
+
+it.each([false, true])("shows errors on blur only for touched contact fields (authenticated=%s)", (authenticated) => {
+  render(<BookingCalendar onlinePaymentAvailable authenticated={authenticated} day={{ times: [960, 990, 1020, 1050], courts }}
+    date="2026-10-01" locationName="Club" currency="RON" cancellationNoticeMinutes={120} timezone="Europe/Bucharest" />);
+  fireEvent.click(screen.getByRole("button", { name: /Court 1 2026-10-01 16:00–16:30/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  expect(screen.queryAllByRole("alert")).toHaveLength(0);
+  fireEvent.blur(screen.getByLabelText("Name"));
+  expect(screen.getByText("Name is required.")).toBeTruthy();
+  expect(screen.queryByText("Email address is required.")).toBeNull();
+  expect(screen.queryByText("Phone number is required.")).toBeNull();
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Ana" } });
+  expect(screen.queryAllByRole("alert")).toHaveLength(0);
+});
+
 it("shows one shared court matrix, hourly prices, and one active selection", () => {
   render(<BookingCalendar onlinePaymentAvailable day={{ times: [960, 990, 1020, 1050], courts }} date="2026-10-01" locationName="Club" currency="RON" cancellationNoticeMinutes={120} timezone="Europe/Bucharest" />);
   expect(screen.queryByRole("button", { name: "Continue" })).toBeNull();

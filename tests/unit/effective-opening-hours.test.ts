@@ -69,18 +69,18 @@ test("closed days still display grandfathered occupancy without making it select
   expect(day.courts[0].cells).toEqual(["booked","booked"]);
 });
 test("24:00 and multiple intervals remain valid; reversed validity and time overlaps fail", () => {
-  const input = { operation: "create", location_id: locationId, starts_on: "2026-11-01", ends_on: "2026-11-30", weekdays: [0,1], replace_ids: [],
-    intervals: [{ opens_at: "08:00", closes_at: "12:00" }, { opens_at: "13:00", closes_at: "24:00" }] };
+  const input = { operation: "create", location_id: locationId, starts_on: "2026-11-01", ends_on: "2026-11-30", replace_ids: [],
+    rows: [{ weekdays: [0,1], opens_at: "08:00", closes_at: "12:00" }, { weekdays: [0,1], opens_at: "13:00", closes_at: "24:00" }] };
   expect(weeklyHoursMutationSchema.safeParse(input).success).toBe(true);
   expect(weeklyHoursMutationSchema.safeParse({ ...input, ends_on: "2026-10-31" }).success).toBe(false);
-  expect(weeklyHoursMutationSchema.safeParse({ ...input, intervals: [...input.intervals,{ opens_at: "11:00", closes_at: "14:00" }] }).success).toBe(false);
+  expect(weeklyHoursMutationSchema.safeParse({ ...input, rows: [...input.rows,{ weekdays: [0,1], opens_at: "11:00", closes_at: "14:00" }] }).success).toBe(false);
 });
 
 test("mutations require explicit operations and existing schedule identities and revisions", () => {
-  const fields = { location_id: locationId, weekdays: [0], replace_ids: [], intervals: [{ opens_at: "08:00", closes_at: "20:00" }] };
+  const fields = { location_id: locationId, replace_ids: [], rows: [{ weekdays: [0], opens_at: "08:00", closes_at: "20:00" }] };
   expect(weeklyHoursMutationSchema.safeParse(fields).success).toBe(false);
   for (const operation of ["update", "delete"] as const) {
-    const input = { ...fields, operation, ...(operation === "delete" ? { weekdays: [], intervals: [] } : {}) };
+    const input = operation === "delete" ? { location_id: locationId, operation } : { ...fields, operation };
     expect(weeklyHoursMutationSchema.safeParse(input).success).toBe(false);
     expect(weeklyHoursMutationSchema.safeParse({ ...input, schedule_id: courtId }).success).toBe(false);
     expect(weeklyHoursMutationSchema.safeParse({ ...input, revision: 1 }).success).toBe(false);

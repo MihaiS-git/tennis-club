@@ -1,13 +1,14 @@
 import "server-only";
 
-import { Column, Entity, Index, PrimaryColumn } from "typeorm";
+import { Column, Entity, ForeignKey, Index, PrimaryColumn } from "typeorm";
+
+import { AuthUserEntity } from "./auth-user.entity";
 
 @Entity({ schema: "public", name: "users" })
 // Expression index UNIQUE (lower(email)) requires explicit SQL in a TypeORM migration.
 @Index("users_email_lower_unique", { synchronize: false })
+@ForeignKey(() => AuthUserEntity, ["id"], ["id"], { name: "users_id_fkey", onDelete: "RESTRICT" })
 export class UserEntity {
-  // users_id_fkey -> auth.users(id) ON DELETE RESTRICT requires explicit migration SQL.
-  // Supabase owns auth.users; it is not an application entity.
   @PrimaryColumn({ name: "id", type: "uuid", primaryKeyConstraintName: "users_pkey" })
   id!: string;
 

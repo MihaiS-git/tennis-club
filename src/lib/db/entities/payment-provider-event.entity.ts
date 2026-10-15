@@ -4,14 +4,17 @@ import { Check, Column, Entity, ForeignKey, Index, PrimaryColumn } from "typeorm
 import type { PaymentProvider, paymentTransition } from "@/lib/payments/domain";
 
 import { PaymentAttemptEntity } from "./payment-attempt.entity";
+import { PaymentCaptureReceiptEntity } from "./payment-capture-receipt.entity";
 import { UserEntity } from "./user.entity";
 
 @Entity({ schema: "public", name: "payment_provider_events" })
 @Index("payment_reconciliation_idx", ["attemptId"], { where: "reconciliation_required" })
 @Check("payment_event_resolution_check", "(((resolved_at IS NULL) AND (resolved_by_user_id IS NULL)) OR ((resolved_at IS NOT NULL) AND (NOT reconciliation_required)))")
+@Check("payment_event_capture_check", "(outcome='succeeded') = (capture_receipt_id IS NOT NULL)")
 @Check("payment_provider_events_outcome_check", "(outcome = ANY (ARRAY['succeeded'::text, 'failed'::text, 'retryable_failed'::text, 'cancelled'::text]))")
 @Check("payment_provider_events_provider_check", "(provider = ANY (ARRAY['stripe'::text, 'netopia'::text]))")
-@ForeignKey(() => PaymentAttemptEntity, ["attemptId"], ["id"], { name: "payment_provider_events_attempt_id_fkey", onDelete: "CASCADE" })
+@ForeignKey(() => PaymentAttemptEntity, ["attemptId"], ["id"], { name: "payment_provider_events_attempt_id_fkey", onDelete: "RESTRICT" })
+@ForeignKey(() => PaymentCaptureReceiptEntity, ["attemptId", "captureReceiptId"], ["paymentAttemptId", "id"], { name: "payment_provider_events_capture_receipt_fkey", onDelete: "RESTRICT" })
 @ForeignKey(() => UserEntity, ["resolvedByUserId"], ["id"], { name: "payment_provider_events_resolved_by_user_id_fkey", onDelete: "SET NULL" })
 export class PaymentProviderEventEntity {
   @PrimaryColumn({ name: "provider", type: "text", primaryKeyConstraintName: "payment_provider_events_pkey" })
@@ -22,6 +25,9 @@ export class PaymentProviderEventEntity {
 
   @Column({ name: "attempt_id", type: "uuid" })
   attemptId!: string;
+
+  @Column({ name: "capture_receipt_id", type: "uuid", nullable: true })
+  captureReceiptId!: string | null;
 
   @Column({ name: "provider_payment_id", type: "text" })
   providerPaymentId!: string;

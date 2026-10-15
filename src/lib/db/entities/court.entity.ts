@@ -1,6 +1,6 @@
 import "server-only";
 
-import { Check, Column, Entity, JoinColumn, ManyToOne, PrimaryColumn, Unique, type Relation } from "typeorm";
+import { Check, Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn, Unique, type Relation } from "typeorm";
 import type { courtSurfaces, courtEnvironments } from "@/lib/admin/courts-validation";
 
 import { LocationEntity } from "./location.entity";
@@ -10,7 +10,7 @@ import { LocationEntity } from "./location.entity";
 @Check("courts_environment_check", "environment = ANY (ARRAY['outdoor'::text, 'indoor'::text])")
 @Check("courts_surface_check", "surface = ANY (ARRAY['clay'::text, 'hard'::text, 'grass'::text, 'carpet'::text])")
 export class CourtEntity {
-  @PrimaryColumn({ name: "id", type: "uuid", default: () => "gen_random_uuid()", primaryKeyConstraintName: "courts_pkey" })
+  @PrimaryGeneratedColumn("uuid", { name: "id", primaryKeyConstraintName: "courts_pkey" })
   id!: string;
 
   @Column({ name: "location_id", type: "uuid" })

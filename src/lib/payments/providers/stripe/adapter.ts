@@ -24,52 +24,76 @@ export const stripeAdapter: OnlinePaymentAdapter = {
         : intent.status === "processing" || intent.status === "requires_capture" || intent.status === "requires_action" ? "processing" : "pending",
       amountMinor: intent.status === "succeeded" ? intent.amount_received : intent.amount,
       currency: intent.currency.toUpperCase(),
+      // This integration creates automatic-capture PaymentIntents. The intent
+      // is the stable provider identity for its one successful collection.
+      providerCaptureId: intent.status === "succeeded" ? intent.id : null,
     };
   },
   async refundPayment(refund) {
-    try {
-      const client = stripeClient();
-      let result;
-      if (refund.providerRefundId)
+    const client = stripeClient();
+    let result: Stripe.Refund | undefined;
+    let operation: "discover" | "retrieve" | "create" = "discover";
+    if (refund.providerRefundId) {
+      operation = "retrieve";
+      try {
         result = await client.refunds.retrieve(refund.providerRefundId);
-      else {
-        // Recover an accepted response even after Stripe's idempotency retention expires.
+      } catch {
+        throw new RefundProviderError({ kind: "lookup_failed", operation,
+          providerRefundId: refund.providerRefundId });
+      }
+    } else {
+      try {
         for await (const existing of client.refunds.list({
-          payment_intent: refund.providerPaymentId,
-          limit: 100,
+          payment_intent: refund.providerPaymentId, limit: 100,
         })) {
-          if (existing.metadata?.payment_refund_id === refund.id && Number(existing.metadata.refund_generation ?? 0) === (refund.generation ?? 0)) {
+          if (existing.metadata?.payment_refund_id === refund.id
+            && existing.metadata.refund_execution_id === refund.executionId) {
             result = existing;
             break;
           }
         }
-        result ??= await client.refunds.create(
-          {
-            payment_intent: refund.providerPaymentId,
-            amount: refund.amountMinor,
-            metadata: { payment_refund_id: refund.id, ...(refund.generation ? { refund_generation: String(refund.generation) } : {}) },
-          },
-          { idempotencyKey: `court-payment-refund-${refund.id}${refund.generation ? `-retry-${refund.generation}` : ""}` },
-        );
+      } catch {
+        throw new RefundProviderError({ kind: "lookup_failed", operation, providerRefundId: null });
       }
-      if (
-        result.amount !== refund.amountMinor ||
-        result.currency.toUpperCase() !== refund.currency ||
-        result.payment_intent !== refund.providerPaymentId
-      )
-        throw new StripeProviderError("refund");
-      return {
-        providerRefundId: result.id,
-        status:
-          result.status === "succeeded"
-            ? "succeeded"
-            : result.status === "failed" || result.status === "canceled"
-              ? "failed"
-              : "pending",
-      };
-    } catch (error) {
-      throw new RefundProviderError(!(error instanceof Stripe.errors.StripeInvalidRequestError));
+      if (!result) {
+        // An empty lookup cannot prove that an earlier request was not accepted.
+        // Recovery must not rely on indefinite provider idempotency retention.
+        if (refund.operation === "recover")
+          throw new RefundProviderError({ kind: "not_found", operation, providerRefundId: null });
+        operation = "create";
+        try {
+          result = await client.refunds.create(
+            {
+              payment_intent: refund.providerPaymentId,
+              amount: refund.amountMinor,
+              metadata: { payment_refund_id: refund.id, refund_execution_id: refund.executionId },
+            },
+            { idempotencyKey: refund.idempotencyKey },
+          );
+        } catch (error) {
+          // Require an actual rejection response, not merely an exception class.
+          // Conflict/idempotency errors may concern an already running operation.
+          const rejected = error instanceof Stripe.errors.StripeInvalidRequestError
+            && [400, 404, 422].includes(error.statusCode ?? 0)
+            && error.code !== "idempotency_key_in_use";
+          throw new RefundProviderError({ kind: rejected ? "request_rejected" : "uncertain",
+            operation, providerRefundId: null });
+        }
+      }
     }
+    if ((refund.providerRefundId && result.id !== refund.providerRefundId)
+      || result.metadata?.payment_refund_id !== refund.id
+      || result.metadata.refund_execution_id !== refund.executionId
+      || result.amount !== refund.amountMinor
+      || result.currency.toUpperCase() !== refund.currency
+      || result.payment_intent !== refund.providerPaymentId)
+      throw new RefundProviderError({ kind: "evidence_mismatch", operation,
+        providerRefundId: refund.providerRefundId ?? result.id });
+    return {
+      providerRefundId: result.id,
+      status: result.status === "succeeded" ? "succeeded"
+        : result.status === "failed" || result.status === "canceled" ? "failed" : "pending",
+    };
   },
   async cancelPayment(attempt) {
     try {
@@ -157,6 +181,7 @@ export function verifyStripeEvent(
     eventId: event.id,
     attemptId: attemptId.data,
     providerPaymentId: intent.id,
+    providerCaptureId: event.type === "payment_intent.succeeded" ? intent.id : undefined,
     outcome:
       event.type === "payment_intent.succeeded"
         ? "succeeded"

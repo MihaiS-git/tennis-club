@@ -1,6 +1,8 @@
 import { z } from "zod";
+import { timestampToEpochMicroseconds } from "@/lib/precise-time";
 import { cancellationNoticeMinutesSchema } from "@/lib/bookings/cancellation-policy";
 import { locationCurrencies } from "@/lib/admin/locations-validation";
+import type { RefundStatus } from "./refunds";
 
 export const paymentMethodSchema = z.enum(["online", "pay_at_club"]);
 export const paymentProviderSchema = z.enum(["stripe", "netopia"]);
@@ -13,6 +15,10 @@ export function checkoutPersistence(method: PaymentMethod) {
     attempt_status: online ? "pending" : "due", hold_seconds: online ? paymentHoldDurationSeconds : null } as const;
 }
 export const attentionRefundStatuses = ["pending_retry", "failed"];
+export function summarizeRefunds(statuses: RefundStatus[]): RefundStatus | undefined {
+  return statuses.includes("failed") ? "failed" : statuses.includes("pending_retry") ? "pending_retry"
+    : statuses.includes("pending") ? "pending" : statuses.length ? "succeeded" : undefined;
+}
 export function paymentNeedsAttention(refundStatus: string | null | undefined, events: readonly { reconciliation_required: boolean }[]) {
   return attentionRefundStatuses.includes(refundStatus ?? "") || events.some((event) => event.reconciliation_required);
 }
@@ -48,7 +54,7 @@ export function paymentTransition(input: {
   if (input.attemptStatus !== "pending") return { result: input.attemptStatus, targets: null, deadline: null };
   // Booking cancellation intent is durable even while Stripe is uncertain.
   // Never turn a later capture into a booking confirmation.
-  if (input.bookingStatus === "cancelled" && input.reservationStatus === "held") {
+  if (input.bookingStatus === "cancelled" && ["held", "released"].includes(input.reservationStatus)) {
     if (input.outcome === "retryable_failed") return { result: "pending", targets: null, deadline: null };
     return { result: input.outcome, deadline: null, targets: {
       attempt: input.outcome, booking: "cancelled", reservation: "released",
@@ -57,9 +63,9 @@ export function paymentTransition(input: {
   if (input.bookingStatus !== "pending_payment" || input.reservationStatus !== "held")
     return { result: "unavailable", targets: null, deadline: null };
   if (input.reservationExpiry === null || input.attemptExpiry === null) throw new Error("Payment hold deadline missing.");
-  const deadlineValue = instantMicroseconds(input.reservationExpiry) <= instantMicroseconds(input.attemptExpiry)
+  const deadlineValue = timestampToEpochMicroseconds(input.reservationExpiry) <= timestampToEpochMicroseconds(input.attemptExpiry)
     ? input.reservationExpiry : input.attemptExpiry;
-  const expired = instantMicroseconds(deadlineValue) <= instantMicroseconds(input.now);
+  const expired = timestampToEpochMicroseconds(deadlineValue) <= timestampToEpochMicroseconds(input.now);
   const outcome = expired ? "expired" : input.outcome;
   const deadline = expired ? null : deadlineValue;
   if (outcome === "retryable_failed") return { result: "pending", targets: null, deadline };
@@ -68,10 +74,4 @@ export function paymentTransition(input: {
     booking: outcome === "succeeded" ? "confirmed" : outcome === "failed" ? "failed" : "expired",
     reservation: outcome === "succeeded" ? "active" : "released",
   } };
-}
-
-// Keep PostgreSQL's sub-millisecond precision when comparing locked deadlines.
-export function instantMicroseconds(value: string): bigint {
-  const fraction = value.match(/\.(\d+)(?:Z|[+-]\d{2}:\d{2})$/)?.[1] ?? "";
-  return BigInt(Date.parse(value)) * BigInt(1000) + BigInt(fraction.padEnd(6, "0").slice(3, 6));
 }

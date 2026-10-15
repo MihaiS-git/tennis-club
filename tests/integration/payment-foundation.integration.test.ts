@@ -1,3 +1,4 @@
+import { readBookingContracts } from "./checkout-fixtures";
 import { insertOpeningHoursFixture } from "./opening-hours-fixtures";
 import type { BookingEmailEvent } from "@/lib/notifications/booking-email";
 const sent = vi.hoisted(() => vi.fn());
@@ -6,8 +7,8 @@ vi.mock("@/lib/notifications/booking-email", async importOriginal => ({
 }));
 const notifications = (id: string): BookingEmailEvent[] => sent.mock.calls.map(([event]) => event).filter(event => event.payload.booking_id === id);
 import { expirePaymentHolds } from "@/lib/payments/hold-expiry";
-import { settleOnlinePayment } from "@/lib/payments/service";
-import { insertCheckoutFixture } from "./checkout-fixtures";
+import { processOnlinePaymentEvent, settleOnlinePayment } from "@/lib/payments/service";
+import { cleanupBookingFixtures, insertCheckoutFixture } from "./checkout-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { expect, test, vi } from "vitest";
@@ -36,11 +37,19 @@ test("payment lifecycle keeps one reservation, protects overlap, releases expiry
   const emails = async (id: string) => {
     return notifications(id).map(({ event_kind }) => ({ event_kind }));
   };
-  const booking = async (id: string) => (await db.from("bookings").select("*").eq("id", id).single()).data!;
+  const booking = async (id: string) => (await Promise.resolve({ error:null, data:(await readBookingContracts(db, { ids: [id] }))[0] })).data!;
   const reservation = async (id: string) => (await db.from("court_reservations").select("*").eq("id", id).single()).data!;
-  const settle = (row: { payment_attempt_id: string }, outcome: "succeeded" | "failed" | "cancelled") => settleOnlinePayment({
-    attemptId: row.payment_attempt_id, provider: "netopia", providerPaymentId: `provider-${row.payment_attempt_id}`, outcome: outcome,
-  });
+  const settle = async (row: { payment_attempt_id: string }, outcome: "succeeded" | "failed" | "cancelled") => {
+    if (outcome === "succeeded") {
+      expect((await db.from("payment_attempts").update({ provider_payment_id:`provider-${row.payment_attempt_id}` })
+        .eq("id",row.payment_attempt_id)).error).toBeNull();
+      return processOnlinePaymentEvent({ attemptId: row.payment_attempt_id, provider: "netopia",
+        providerPaymentId: `provider-${row.payment_attempt_id}`, providerCaptureId: `capture-${row.payment_attempt_id}`,
+        eventId: randomUUID(), outcome, amountMinor: 5000, currency: "RON" });
+    }
+    return settleOnlinePayment({ attemptId: row.payment_attempt_id, provider: "netopia",
+      providerPaymentId: `provider-${row.payment_attempt_id}`, outcome });
+  };
   try {
     vi.stubEnv("NETOPIA_API_KEY", "foundation-fixture"); vi.stubEnv("NETOPIA_POS_SIGNATURE", "foundation-pos"); vi.stubEnv("NETOPIA_ENVIRONMENT", "sandbox");
     expect((await db.from("payment_provider_settings").update({ active_provider: "netopia" }).eq("id", true)).error).toBeNull();
@@ -73,12 +82,14 @@ test("payment lifecycle keeps one reservation, protects overlap, releases expiry
     expect(await emails(held.booking_id)).toEqual([]);
     expect((await db.from("court_reservations").insert({ court_id: courtId, booking_date: date,
       starts_at_minute: 600, ends_at_minute: 660 })).error?.code).toBe("23P01");
-    const location = (await listPublicLocationsWithCourts(guest)).find((l) => l.id === locationId)!;
-    const day = () => getPublicCourtDay(location, date, "2026-10-05", new Date(), guest);
+    const location = (await listPublicLocationsWithCourts()).find((l) => l.id === locationId)!;
+    const day = () => getPublicCourtDay(location, date, "2026-10-05", new Date());
     expect((await day()).courts[0].cells.slice(0, 2)).toEqual(["booked", "booked"]);
     expect((await guest.from("payment_attempts").select("*")).error).not.toBeNull();
     expect((await settleOnlinePayment({ attemptId: held.payment_attempt_id,
       provider: "stripe", providerPaymentId: "wrong-provider", outcome: "succeeded" }))).toBe("unavailable");
+    expect((await db.from("payment_attempts").update({ provider_payment_id:`provider-${held.payment_attempt_id}` })
+      .eq("id",held.payment_attempt_id)).error).toBeNull();
     const settlements = await Promise.all([settle(held, "succeeded"), settle(held, "succeeded")]);
     expect(settlements.every((r) => r === "succeeded")).toBe(true);
     expect(await booking(held.booking_id)).toMatchObject({ status: "confirmed", reservation_id: held.reservation_id });
@@ -122,7 +133,7 @@ test("payment lifecycle keeps one reservation, protects overlap, releases expiry
     await db.from("payment_provider_settings").update({ active_provider: previousProvider }).eq("id", true);
     const ids = (await db.from("court_reservations").select("id").eq("court_id", courtId)).data?.map((r) => r.id) ?? [];
     const bookings = (await db.from("bookings").select("id").in("reservation_id", ids)).data?.map((b) => b.id) ?? [];
-    await db.from("bookings").delete().in("id", bookings);
+    await cleanupBookingFixtures({ bookingIds: bookings });
     await db.from("court_reservations").delete().eq("court_id", courtId);
     await db.from("location_pricing_rules").delete().eq("location_id", locationId);
     await db.from("pricing_rule_sets").delete().eq("id", ruleId);

@@ -1,3 +1,4 @@
+import { cleanupBookingFixtures } from "../checkout-fixtures";
 const sent = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/notifications/booking-email", async importOriginal => ({
   ...await importOriginal<typeof import("@/lib/notifications/booking-email")>(), sendBookingNotification: sent,
@@ -64,7 +65,7 @@ beforeAll(async () => {
 });
 
 async function clearBookings() {
-  await database.query("DELETE FROM public.bookings WHERE reservation_id IN (SELECT id FROM public.court_reservations WHERE court_id=$1)", [courtId]);
+  await cleanupBookingFixtures({ courtIds: [courtId] });
   await database.query("DELETE FROM public.court_reservations WHERE court_id=$1", [courtId]);
 }
 beforeEach(async () => {
@@ -99,15 +100,15 @@ afterAll(async () => {
 async function counts() {
   const rows: unknown = await database.query(`SELECT
     (SELECT count(*)::integer FROM public.court_reservations WHERE court_id=$1) AS reservations,
-    (SELECT count(*)::integer FROM public.bookings b JOIN public.court_reservations r ON r.id=b.reservation_id WHERE r.court_id=$1) AS bookings,
-    (SELECT count(*)::integer FROM public.payment_attempts p JOIN public.bookings b ON b.id=p.booking_id JOIN public.court_reservations r ON r.id=b.reservation_id WHERE r.court_id=$1) AS attempts`, [courtId]);
+    (SELECT count(*)::integer FROM public.bookings b JOIN public.booking_revisions v ON v.id=b.current_revision_id JOIN public.court_reservations r ON r.id=b.reservation_id WHERE r.court_id=$1) AS bookings,
+    (SELECT count(*)::integer FROM public.payment_attempts p JOIN public.bookings b JOIN public.booking_revisions v ON v.id=b.current_revision_id ON b.id=p.booking_id JOIN public.court_reservations r ON r.id=b.reservation_id WHERE r.court_id=$1) AS attempts`, [courtId]);
   return z.array(z.object({ reservations: z.number(), bookings: z.number(), attempts: z.number() })).length(1).parse(rows)[0];
 }
 async function stored() {
-  return database.query(`SELECT b.id,b.account_user_id,b.customer_name,b.customer_email,b.customer_phone,b.status AS booking_status,
-    b.total_amount_minor,b.currency,b.payment_method,r.id AS reservation_id,r.status AS reservation_status,r.reason,r.created_by_user_id,
+  return database.query(`SELECT b.id,b.account_user_id,v.customer_name,v.customer_email,v.customer_phone,b.status AS booking_status,
+    v.total_amount_minor,v.currency,v.payment_method,r.id AS reservation_id,r.status AS reservation_status,r.reason,r.created_by_user_id,
     r.hold_expires_at::text,p.id AS attempt_id,p.status AS attempt_status,p.provider,p.provider_payment_id,p.checkout_token_hash,
-    p.expires_at::text,p.completed_at,p.amount_minor FROM public.bookings b JOIN public.court_reservations r ON r.id=b.reservation_id
+    p.expires_at::text,p.completed_at,p.amount_minor FROM public.bookings b JOIN public.booking_revisions v ON v.id=b.current_revision_id JOIN public.court_reservations r ON r.id=b.reservation_id
     JOIN public.payment_attempts p ON p.booking_id=b.id WHERE r.court_id=$1 ORDER BY r.starts_at_minute,b.created_at`, [courtId]);
 }
 function deferred<T>() {
@@ -155,6 +156,11 @@ test.each(["pay_at_club", "online"] as const)("concurrent identical %s submissio
 });
 
 test("Pay at club commits contact/policy snapshots and due payment plus exact confirmation payload", async () => {
+  sent.mockImplementation(async () => {
+    // These reads use another connection and must already see the committed aggregate.
+    expect(await counts()).toEqual({ reservations: 1, bookings: 1, attempts: 1 });
+    expect(await stored()).toMatchObject([{ booking_status: "confirmed", reservation_status: "active" }]);
+  });
   expect(await createCustomerBooking(input, guest, now)).toMatchObject({ ok: true, status: "confirmed", holdExpiresAt: null,
     cancellationPolicy: { noticeMinutes: 1440, cutoff: null } });
   expect(await stored()).toMatchObject([{ account_user_id: null, customer_name: "Guest Name", customer_email: "Guest@Example.test",
@@ -174,7 +180,7 @@ test("online creation shares the full-precision DB deadline and initialization a
     provider: "stripe", provider_payment_id: null, checkout_token_hash: null, amount_minor: 5000, completed_at: null }]);
   const rows: unknown = await database.query(`SELECT r.hold_expires_at=p.expires_at AS same,
     extract(epoch FROM (r.hold_expires_at - r.created_at)) AS duration
-    FROM public.court_reservations r JOIN public.bookings b ON b.reservation_id=r.id JOIN public.payment_attempts p ON p.booking_id=b.id WHERE r.court_id=$1`, [courtId]);
+    FROM public.court_reservations r JOIN public.bookings b JOIN public.booking_revisions v ON v.id=b.current_revision_id ON b.reservation_id=r.id JOIN public.payment_attempts p ON p.booking_id=b.id WHERE r.court_id=$1`, [courtId]);
   const clock = z.array(z.object({ same: z.boolean(), duration: z.string() })).parse(rows)[0];
   expect(clock.same).toBe(true); expect(Number(clock.duration)).toBeGreaterThanOrEqual(600); expect(Number(clock.duration)).toBeLessThan(605);
   createPayment.mockImplementation(async () => {
@@ -190,6 +196,7 @@ test("online creation shares the full-precision DB deadline and initialization a
   expect(await counts()).toEqual({ reservations: 1, bookings: 1, attempts: 1 });
   await expect(readOnlineCheckout({ attemptId: checkout.attemptId, token: "0".repeat(64) })).rejects.toThrow();
   expect(await readOnlineCheckout({ attemptId: checkout.attemptId, token: checkout.token })).toMatchObject({ status: "pending_payment", totalAmountMinor: 5000, currency: "RON" });
+  expect(sent).not.toHaveBeenCalled();
 });
 
 async function changeConfiguration(manager: EntityManager, kind: "hours" | "resource" | "pricing") {
@@ -286,7 +293,7 @@ test("provider success and attachment rollback withholds presentation and create
   expect(await stored()).toMatchObject([{ reservation_status: "held", booking_status: "pending_payment", attempt_status: "pending",
     provider_payment_id: null, checkout_token_hash: null }]);
   expect(await counts()).toEqual({ reservations: 1, bookings: 1, attempts: 1 });
-  const rows: unknown = await database.query("SELECT id FROM public.payment_attempts WHERE booking_id IN (SELECT b.id FROM public.bookings b JOIN public.court_reservations r ON r.id=b.reservation_id WHERE r.court_id=$1)", [courtId]);
+  const rows: unknown = await database.query("SELECT id FROM public.payment_attempts WHERE booking_id IN (SELECT b.id FROM public.bookings b JOIN public.booking_revisions v ON v.id=b.current_revision_id JOIN public.court_reservations r ON r.id=b.reservation_id WHERE r.court_id=$1)", [courtId]);
   const attemptId = z.array(z.object({ id: z.uuid() })).length(1).parse(rows)[0].id;
   expect(createPayment).toHaveBeenCalledTimes(1);
   expect(createPayment.mock.calls[0][1]).toEqual({ idempotencyKey: `court-payment-${attemptId}` });
@@ -415,16 +422,16 @@ test("adjacent customer and direct reservations both commit", async () => {
     .toEqual([{starts_at_minute:600,ends_at_minute:660},{starts_at_minute:660,ends_at_minute:720}]);
 });
 async function ownerReschedule(bookingId:string) {
-  const context=await readCustomerBookingEditContext(bookingId,date,userId,"owner");
+  const context=await readCustomerBookingEditContext(bookingId,date,userId);
   if (!context) throw new Error("Missing booking edit context");
   return {id:bookingId,courtId,date,startMinute:720,endMinute:780,save:true,expectedTotal:5000,priceAcknowledged:true,
-    expectedUpdatedAt:context.updated_at,expectedBookingUpdatedAt:context.booking_updated_at};
+    expectedUpdatedAt:context.updated_at,expectedRevisionId:context.current_revision_id};
 }
 test.each(["creation"])("%s first prevents overlapping reschedule/new checkout before the losing write", async first => {
   const original=await createCustomerBooking(input,member,now); if(!original.ok) throw new Error("Missing original booking");
   const edit=await ownerReschedule(original.bookingId);
   const update=vi.spyOn(reservations,"updateCustomerReservationSchedule"), insert=vi.spyOn(reservations,"insertCustomerReservation");
-  const reschedule=()=>runBookingReschedule(edit,member,userId,"owner");
+  const reschedule=()=>runBookingReschedule(edit,userId);
   const create=()=>createCustomerBooking({...input,startMinute:720,endMinute:780},guest,now);
   const results=await (first==="reschedule" ? occupancyRace(reschedule,create) : occupancyRace(create,reschedule));
   expect(results[0]).toMatchObject({ok:true}); expect(results[1]).toMatchObject({ok:false,message:expect.stringContaining("no longer available")});
@@ -479,4 +486,34 @@ test("expiry versus real insertion serializes cleanup, then late success is reco
   expect(await database.query("SELECT reconciliation_required FROM public.payment_provider_events WHERE attempt_id=$1",[created.paymentAttemptId]))
     .toEqual([{reconciliation_required:true}]);
   expect(await stored()).toMatchObject([{booking_status:"expired",reservation_status:"released"},{booking_status:"confirmed",reservation_status:"active"}]);
+});
+
+test("initial online pending revision confirms exactly once across duplicate and distinct verified receipts",async()=>{
+  const held=await attachedOnline();
+  const history=()=>database.query("SELECT id,revision_number,previous_revision_id,kind,booking_state,total_amount_minor,customer_email FROM public.booking_revisions WHERE booking_id=$1 ORDER BY revision_number",[held.bookingId]);
+  const initial=await history();expect(initial).toHaveLength(1);
+  expect(initial[0]).toMatchObject({revision_number:1,previous_revision_id:null,kind:"created",booking_state:"pending_payment",total_amount_minor:5000});
+  expect(await database.query("SELECT status FROM public.court_reservations WHERE id=$1",[held.reservationId])).toEqual([{status:"held"}]);
+  const event=successEvent(held);expect(await processOnlinePaymentEvent(event)).toBe("succeeded");
+  expect(await processOnlinePaymentEvent(event)).toBe("succeeded");
+  expect(await processOnlinePaymentEvent({...event,eventId:randomUUID()})).toBe("succeeded");
+  const confirmed=await history();expect(confirmed).toHaveLength(2);expect(confirmed[0]).toEqual(initial[0]);
+  expect(confirmed[1]).toMatchObject({revision_number:2,previous_revision_id:initial[0].id,kind:"confirmed",booking_state:"confirmed",total_amount_minor:5000});
+  expect(await database.query("SELECT current_revision_id FROM public.bookings WHERE id=$1",[held.bookingId])).toEqual([{current_revision_id:confirmed[1].id}]);
+  expect(await database.query("SELECT status FROM public.court_reservations WHERE id=$1",[held.reservationId])).toEqual([{status:"active"}]);
+  expect(sent).toHaveBeenCalledTimes(1);
+});
+
+test("Pay-at-club creation and modification use revision debt while preserving the initial uncollected request",async()=>{
+  const created=await createCustomerBooking(input,member,now);if(!created.ok)throw new Error("Fixture failed");
+  const original=await database.query("SELECT * FROM public.payment_attempts WHERE id=$1",[created.paymentAttemptId]);
+  expect(original[0]).toMatchObject({method:"pay_at_club",status:"due",amount_minor:5000,provider:null});
+  const edit=await ownerReschedule(created.bookingId);
+  const result=await runBookingReschedule({...edit,startMinute:720,endMinute:810,expectedTotal:7500},userId);
+  expect(result).toMatchObject({ok:true,totalAmountMinor:7500});
+  expect(await database.query("SELECT * FROM public.payment_attempts WHERE id=$1",[created.paymentAttemptId])).toEqual(original);
+  expect(await database.query("SELECT revision_number,kind,booking_state,total_amount_minor,payment_method FROM public.booking_revisions WHERE booking_id=$1 ORDER BY revision_number",[created.bookingId]))
+    .toEqual([{revision_number:1,kind:"created",booking_state:"confirmed",total_amount_minor:5000,payment_method:"pay_at_club"},
+      {revision_number:2,kind:"rescheduled",booking_state:"confirmed",total_amount_minor:7500,payment_method:"pay_at_club"}]);
+  expect(await database.query("SELECT * FROM public.payment_refunds WHERE booking_id=$1",[created.bookingId])).toEqual([]);
 });

@@ -91,7 +91,7 @@ export function OpeningHours({ locationId, intervals, schedules = [], today = ""
   }
   const selectedIntervals = savedHours.filter((h) => h.schedule_id === selectedSchedule?.id);
   const payload = {
-    location_id: locationId, operation: creating ? "create" : "update", weekdays: [], intervals: [],
+    location_id: locationId, operation: creating ? "create" : "update",
     replace_ids: creating ? [] : selectedIntervals.map((h) => h.id),
     rows: draft.rows.map(({ weekdays, opens_at, closes_at }) => ({ weekdays, opens_at, closes_at })),
     starts_on: draft.starts_on, ends_on: draft.ends_on,
@@ -118,7 +118,7 @@ export function OpeningHours({ locationId, intervals, schedules = [], today = ""
   const scheduleError = fieldErrors.form ?? fieldErrors.rows ?? issues.find((issue) => issue.path.length === 1 && issue.path[0] === "rows")?.message;
 
   async function save() {
-    if (!canSave || pendingRef.current) return;
+    if (!canSave || !validation.success || validation.data.operation === "delete" || pendingRef.current) return;
     pendingRef.current = true; setPending(true); setFieldErrors({}); setOpenDays(null);
     const notification = toast.loading("Saving opening hours…");
     try {
@@ -129,7 +129,7 @@ export function OpeningHours({ locationId, intervals, schedules = [], today = ""
       const replaceIds = selectedIntervals.filter((saved) => !draft.rows.some((row) => row.weekdays.some((day) => matches(saved, row, day)))).map((saved) => saved.id);
       const rows = draft.rows.map((row) => ({ opens_at: row.opens_at, closes_at: row.closes_at,
         weekdays: row.weekdays.filter((day) => !selectedIntervals.some((saved) => matches(saved, row, day))) })).filter((row) => row.weekdays.length);
-      const result: OpeningHoursMutationResult = await mutateOpeningHoursAction({ ...payload, replace_ids: replaceIds, rows,
+      const result: OpeningHoursMutationResult = await mutateOpeningHoursAction({ ...validation.data, replace_ids: replaceIds, rows,
         ...(creating && period?.ok ? { adjustment: period.adjustment ? { id: period.adjustment.id, revision: period.adjustment.revision } : null } : {}),
       });
       if (result.ok) {

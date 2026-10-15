@@ -217,8 +217,14 @@ export function BookingConfirmation({ selection, details, contact, onContactChan
         <Input id={`${fieldPrefix}-${key}`} name={key} type={type} autoComplete={autoComplete} required
           value={contact[key]} disabled={pending} aria-invalid={Boolean(fieldErrors[key])}
           aria-describedby={fieldErrors[key] ? `${fieldPrefix}-${key}-error` : undefined}
+          onBlur={(event) => {
+            const parsed = customerBookingInputSchema.shape[key].safeParse(event.currentTarget.value);
+            setFieldErrors((current) => ({ ...current, [key]: parsed.success ? "" : parsed.error.issues[0].message }));
+          }}
           onChange={(event) => { onContactChange({ ...contact, [key]: event.target.value });
-            setFieldErrors((current) => ({ ...current, [key]: "" })); }} />
+            const parsed = customerBookingInputSchema.shape[key].safeParse(event.target.value);
+            setFieldErrors((current) => current[key] === undefined ? current
+              : { ...current, [key]: parsed.success ? "" : parsed.error.issues[0].message }); }} />
       </FormField>)}
       </section>
       <fieldset disabled={pending} className="mt-4 space-y-2 text-sm">

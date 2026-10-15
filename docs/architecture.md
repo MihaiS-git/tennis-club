@@ -34,15 +34,15 @@ Architectural rule:
 
 > Next.js is the complete primary application authorization boundary, TypeScript decides business behavior, PostgreSQL guarantees data integrity, application table grants deny direct browser access and Storage RLS protects private objects, and Stripe owns payment processing.
 
-`src/lib/db/data-source.ts` registers all 17 entities and lazily initializes a
-module-scoped connection. This preserves constructor identity across Next.js route/action
+`src/lib/db/data-source.ts` registers all 21 application entities and the
+additional non-synchronized reference to Supabase-managed `auth.users`, and lazily initializes a module-scoped connection. This preserves constructor identity across Next.js route/action
 bundles; do not move the connection into a process-global registry. `DATABASE_POOL_MAX`
 defaults to 2. Synchronization, dropping schemas and automatic migrations are disabled.
 The standalone migration CLI reuses the DataSource and TypeScript loader.
 
 ## Resource persistence
 
-All application reads/writes use TypeORM. Supabase verifies Auth identity and accesses
+All application reads/writes use TypeORM Data Mapper repositories. Supabase verifies Auth identity and accesses
 private Storage only. Repositories receive an explicit EntityManager and never start
 transactions. Services authorize verified actors, explicitly scope private/public
 projections, and use READ COMMITTED transactions for coupled persistence. Application
@@ -60,7 +60,7 @@ TypeScript validates publication readiness, coverage/court compatibility, pricin
 and opening-hours containment under these locks. Rule-set replacement preserves its
 parent and atomically replaces children. No coordination tables, aggregate policy triggers,
 pricing-hours bridge or application business functions are installed. PostgreSQL retains
-PK/FK/UNIQUE/CHECK integrity and the four GiST overlap exclusions.
+PK/FK/UNIQUE/CHECK integrity and the five GiST overlap exclusions.
 
 Identity services preserve Admin self-management/final-active-Admin checks in TypeScript,
 serialize authoritative role/account reads, and explicitly persist attribution/timestamps.
@@ -240,7 +240,29 @@ public.player_profiles
 
 `public.users` owns account and personal/contact data; `player_profiles` owns optional tennis data. Future `coach_profiles` is a sibling domain entity. The `/profile` Server Component authorizes through the user-scoped Auth client and reads through `loadProfile` and TypeORM repositories, and route-local Server Actions delegate mutations to TypeScript application functions. The private `profile-avatars` bucket stores uploaded player images; profile rows contain only object paths. Browser-side Supabase access is not introduced. See `profiles.md`.
 
-Unreleased development schema is evolved in its owning migration, with focused migrations for new domains/infrastructure; released production migrations remain immutable. Rebuilding local history requires explicit approval for a destructive database reset.
+The three consolidated migrations are `InitialApplicationSchema1791462257924`,
+`ApplicationNativeIntegrity1791462257925` and `SupabaseAuthStorage1791462257926`.
+The initial migration is TypeORM-generated from the same metadata used at runtime,
+including schedules, adjustments, adjustment holds/payment links and refund operations.
+Its only handwritten setup configures `btree_gist` and the transaction search path
+before the generated exclusions. The native migration owns the email expression
+index, minimal bootstrap records and ownership/revision/financial-context integrity guards; the integration migration owns Auth hooks,
+Storage policies and browser-role restrictions. No business policy is added in SQL.
+
+UUID defaults use generated-column metadata with the PostgreSQL `pgcrypto` UUID
+strategy; extension installation remains migration-controlled. A non-synchronized
+`AuthUserEntity` describes only the existing Supabase Auth identity needed by the
+application FK. TypeORM never creates or changes `auth.users`. Exclusion decorators
+and the non-synchronized expression-index declaration protect native objects during
+schema comparison. The production entity-constructor naming safeguard remains.
+
+Financial dependencies (adjustments, attempts, receipts, refunds and adjustment
+fragments) use restrictive deletes rather than destructive cascades. Disposable
+test fixtures explicitly delete children in dependency order; application workflows
+remain unchanged. Immutable booking revisions and refund executions are implemented.
+
+Unreleased development schema is evolved in its owning initial migration without
+patch chains; released production migrations remain immutable. Rebuilding local history requires explicit approval for a destructive database reset.
 
 Future domain entities are introduced when their workflow is implemented rather than creating the full future schema mechanically.
 
@@ -285,69 +307,55 @@ forgot password
 
 Redirect-based auth messages use the global Sonner toaster. Field and form validation remains inline. The client removes consumed `message` and `error` URL parameters while preserving unrelated parameters.
 
-## Customer booking mutations (Phase 6)
+## Booking revisions and owner/Admin boundaries
 
-Owner/Admin cancellation and rescheduling, including focused edit/quote contexts,
-use `src/lib/bookings/commands.ts` and TypeORM READ COMMITTED transactions. Identity
-verification and structural validation precede transactions; no Auth, Supabase HTTP,
-Stripe or mail request runs inside them. Upcoming/history, public loaders and
-Admin operational/report reads also use TypeORM.
+See [the implemented booking contract](booking-domain.md#implemented-immutable-booking-contracts).
+The permanent identity contains ID, reservation/account links, processing status,
+current-revision reference and timestamps. Commercial terms exist only in immutable
+`BookingRevisionEntity` rows. Current reads join that pointer, and personal activity
+uses historical names and schedules from the current contract. No booking-history
+side table or legacy mutable commercial columns remain.
 
-The lock order is optional configuration advisory SHARE → location UPDATE → booking
-UPDATE → linked reservation UPDATE → selected attempt UPDATE → existing refund
-UPDATE → ordered Admin/Coach assignments SHARE → account SHARE.
-Reschedule uses the shared configuration advisory fence. Cancellation omits it and retries only changed parent discovery in a fresh
-bounded transaction. Repositories perform focused persistence; TypeScript owns policy.
+Creation, confirmation, owner modification and owner/Admin cancellation use the
+focused pure `buildBookingRevision()` snapshot builder. TypeScript decides the
+state, price, eligibility, no-op and refund allocation. Repositories perform inserts,
+pointer advancement, queries and locks with an explicit EntityManager. Confirmation,
+occupancy changes, revision/pointer changes and applicable financial obligations
+commit atomically; notifications and provider calls remain post-commit.
 
-Ownership is exclusively `bookings.account_user_id` bound to the verified actor.
-Owners require an active account; Admin commands require current active Admin status.
-Owner cancellation ignores resource activation/publication and current pricing/currency.
-New Admin cancellation and both reschedule scopes require active original resources,
-with matching current location currency additionally required for reschedule. Guests
-cannot self-manage; Admin reschedule may manage guests. Notice uses the booking snapshot
-and current location timezone via `localStartInstant()`. Current Admin/Coach owners
-bypass notice; all mutations must precede start. Post-lock `clock_timestamp()` is
-compared at microsecond precision and rechecked immediately before writes.
+The existing configuration/location/booking/reservation/financial/actor lock order,
+role fences, bounded changed-parent retries and reservation microsecond token remain.
+Owner edits compare the current revision identity rather than a booking timestamp.
+Same intent replays; changed intent with a reused key rejects. No-op saves do not
+write or notify. Pay-at-club requests remain original evidence while current debt
+comes from the current contract. The existing refund allocator remains the only
+newest-capture-first allocation implementation.
 
-Cancellation locks the earliest succeeded online Stripe attempt ordered by
-`created_at,id`, then any existing refund. Owner cancellation always requests its full
-attempt amount/currency; Admin must explicitly choose if a qualifying attempt exists.
-Both cancelled lifecycle rows plus an existing refund yield the same replay ID; a
-cancelled booking without a refund remains unavailable. Lifecycle, immutable financial
-request commit atomically; notification delivery follows commit. `finishBookingCancellation()` and optional
-`processBookingRefund()` still execute after commit using the Phase 8 boundary below.
+Admin management rescheduling services, actions and UI controls are removed.
+Admins and Coaches may still modify their own bookings through the owner boundary;
+Admins may cancel customer/guest bookings with automatic captured-funds refunds.
+Direct-reservation editing remains separate. Cancellation is replayable independently
+of whether a refund was needed. Shared owner booking editing lives in
+`src/components/booking-edit-form.tsx`.
 
-Reschedule compares textual pre-hydration booking/reservation tokens using PostgreSQL
-`timestamptz` equality. Authorization, lifecycle and original notice/resource eligibility
-precede stale detection; stale precedes target/pricing checks. Occupancy precedes price
-acknowledgement. Revision/location locks stabilize target court, hours, coverage and
-pricing; active occupancy and unexpired holds exclude the current reservation. Existing
-TypeScript court-state, half-hour pricing and rounding helpers remain authoritative.
-Only exact `23P01` / `court_reservation_no_overlap` maps to court conflict. Other SQL
-failures roll back and return safe failures, including deadlocks/serialization errors.
-
-Save updates only reservation schedule and booking total. Payment attempts/refunds
-remain unchanged, including original captured financial evidence after price increases
-or decreases. Reservation `updated_at` retains the `greatest(clock_timestamp(), old +
-1 microsecond)` floor. The booking repository explicitly persists transaction
-`now()`; it is not made monotonic. Quotes never write. Unchanged schedules (including
-price-only saves) update rows as before but send no reschedule email.
-
-Email delivery follows aggregate commit. Cancellation uses `customer_cancelled` or
-`admin_cancelled` and optional `refund_status: requested`. Reschedule uses
-`customer_rescheduled` or `admin_rescheduled`, with previous/new schedule snapshots
-and the immutable booking recipient. Failed, quoted, stale and replayed operations
-send no email.
-All booking mutations use TypeORM; email delivery uses Brevo HTTP. Command snapshots, actor comparisons and generic fingerprint SQL are absent.
-
+The initial migration remains TypeORM-generated. It includes the deferred composite
+current-pointer FK, all revision checks/keys and adjustment-base/source relationships.
+The native migration adds permanent-ownership and append-only/linear-history/current-head integrity guards,
+the expression index and bootstrap records. Supabase integration and browser-role
+restrictions remain the third migration. The Auth reference stays non-synchronized;
+no application schema generation manages `auth.users`. No patch migration or backfill
+is introduced. Refund executions are implemented; expanded capture/return observations remain deferred.
 
 ## Payment settlement (Phase 7)
 
 Webhook signature verification, event normalization/Zod validation and Stripe calls remain
-outside persistence. Settlement discovers the metadata attempt's booking, then uses one
-TypeORM READ COMMITTED transaction: booking FOR UPDATE → linked reservation FOR UPDATE →
-selected attempt FOR UPDATE → global provider-event lookup → post-lock clock_timestamp().
-No configuration, location, court, refund or actor locks are needed. Locked attempt snapshots
+outside persistence. The TypeORM READ COMMITTED transaction takes the shared configuration
+advisory fence, discovers attempt → booking → location, then locks location → booking →
+linked reservation → selected attempt FOR UPDATE and rechecks the parent. It reads the
+global provider-event receipt and PostgreSQL wall time. Confirmation revalidates current
+hours, pricing and publication under that fence; adjustment application also fences
+its actor. Exact late captures lock or allocate their compensation obligation before
+commit. Changed parents retry in a fresh transaction at most three times. Locked attempt snapshots
 are financial authority, independent of rescheduled booking totals.
 TypeScript chooses lifecycle/result/reconciliation against lossless effective deadlines and
 rechecks wall time before writes. The attempt UPDATE fences deadline-sensitive transitions;
@@ -359,49 +367,36 @@ stored result, preserving later Admin resolution. Late success/mismatch never re
 Receiptless abandonment uses the same local transaction after provider-confirmed cancellation.
 TypeScript hold expiry uses TypeORM.
 
+Booking revision history is implemented; the remaining financial-model work is
+described in [Task 4 limitations](payments-memberships.md#remaining-financial-model-work-task-4).
+
 ## Refund execution and reconciliation (Phase 8)
 
-Automatic post-cancellation processing uses refund-only FOR UPDATE preparation/result
-transactions, separated by the Stripe request. It is intentionally unleased, short-circuits
-failed/succeeded and conditionally overwrites only pending/pending_retry. It acquires no
-aggregate locks afterward and does not clear Admin leases or resolve events.
+Automatic and Admin processing share immutable refund executions and five-minute
+execution leases. Preparation locks booking → reservation → selected attempt → ordered
+capture receipts → refund obligation → execution; Admin preparation also fences the
+active Admin's roles/account. A READY execution's dispatch timestamp commits in a
+separate transaction before Stripe is contacted. The adapter uses its stored request,
+exact idempotency key, obligation ID and execution ID metadata. Previously dispatched
+executions use retrieval or metadata discovery only; lookup failure, an empty search,
+lease expiry and a crash do not authorize another creation.
 
-Admin preparation discovers identity without locks, then locks booking → reservation →
-selected attempt → provider events ordered by provider,event_id → refund FOR UPDATE,
-followed by lockReservationActorFacts() roles ordered by role_code → account FOR SHARE.
-TypeScript checks active Admin authority, exact original financial relationships and the
-existing retry/late-capture policy. Missing requests use insertBookingRefundRequest() under
-the booking lock. No configuration, location, court, hours or pricing locks are acquired.
-
-An unexpired deadline strictly greater than clock_timestamp() is busy; equality/null/expiry
-is reclaimable. Claims overwrite token, actor and a clock_timestamp()+5-minute deadline.
-Text projections preserve microseconds; refund updated_at is explicitly persisted with now().
-Preparation commits before Stripe. The unchanged adapter retrieves an established refund,
-recovers matching metadata, or creates using court-payment-refund-<refund-id>; original
-attempt/refund financial snapshots, never booking totals, determine the full amount.
-
-The Admin result transaction discovers/verifies the aggregate and repeats booking →
-reservation → selected attempt → ordered events → refund locks, with no actor fence.
-It requires matching non-null token+actor and immutable financial tuple/reference, but
-never checks expiry. Authority loss after claim does not block completion; replacement
-tokens reject stale results. Stored success cannot downgrade. Result, compatible coalesced
-provider ID, error, lease clearing and TypeScript-selected event resolution are atomic.
-Resolution changes only required/resolved timestamp/actor, validates affected-row count and
-preserves existing attribution on replay. Already-succeeded reconciliation resolves in
-preparation without a new provider lease/call. Amount mismatch stays attention-required/manual.
-No lifecycle, occupancy, financial receipt evidence or email is changed by reconciliation.
-
-If Stripe accepts but local persistence fails, durable prior state remains and the service
-returns pending_retry-style behavior; retry recovers the same financial identity. No
-compensation, lease renewal or recovery worker is introduced.
-The final schema contains no refund command RPCs.
+Result transactions retain write-once identity, uncertainty and terminal evidence.
+Current lease tokens fence error/check updates and lease clearing; stale workers may
+record valid historical provider facts without clearing a newer lease. Verified success
+cannot regress. Eligible receipt resolution commits atomically with completion; existing
+automatic adjustment and Admin reconciliation attribution rules remain. Admin retry may
+allocate a distinct execution only after verified failure or definitive rejection.
+Automatic processing retains terminal short-circuits. PaymentRefund stores immutable
+obligation terms plus status/timestamps; provider references/errors come from executions.
+No refund notifications, scheduled worker, dual writes or provider history JSON remain.
 
 ## Booking email delivery
 
-Booking confirmation, customer/Admin cancellation and customer/Admin rescheduling
+Booking confirmation, customer/Admin cancellation and owner rescheduling
 capture the booking contact and schedule within the successful transaction, then
 send the preserved text template through Brevo's transactional HTTP API after commit.
-Use only the snapshotted `bookings.customer_email`, never the current account email.
+Use only the snapshotted the current revision’s `customer_email`, never the current account email.
 Quote, stale, failed and unchanged-schedule saves send no rescheduling email;
 pending/failed/expired checkout sends no confirmation. Transition and webhook receipt
 checks prevent replayed operations from sending again. Delivery is best-effort with

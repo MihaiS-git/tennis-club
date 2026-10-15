@@ -62,7 +62,7 @@ test("court administration persists edits, moves and status with real authorizat
       expect(selectLocationCourts(inventory, locationIds[2], options).find((row) => row.id === result.id))
         .toMatchObject({ name: "Renamed", is_active });
       expect(Date.parse(saved.updated_at)).toBeGreaterThan(Date.parse("2000-01-01T00:00:00Z"));
-      const visible = (await listPublicLocationsWithCourts(publicClient())).filter((row) => locationIds.includes(row.id));
+      const visible = (await listPublicLocationsWithCourts()).filter((row) => locationIds.includes(row.id));
       expect(visible).toEqual([]);
     }
     expect(await saveAdminCourt({ id: result.id, fields: { ...edited, location_id: locationIds[1] } }, admin.client))
@@ -104,7 +104,7 @@ test("court administration persists edits, moves and status with real authorizat
     await expect(saveAdminCourt({ id: result.id, fields }, suspended.client)).rejects.toThrow();
     await expect(listAdminCourts(suspended.client)).rejects.toThrow();
     assert.strictEqual((await service.from("courts").update({ is_active: false }).eq("id", result.id)).error, null);
-    expect((await listPublicLocationsWithCourts(admin.client)).some((row) => locationIds.includes(row.id))).toBe(false);
+    expect((await listPublicLocationsWithCourts()).some((row) => locationIds.includes(row.id))).toBe(false);
   } finally {
     assert.strictEqual((await service.from("pricing_rule_sets").delete().in("location_id", locationIds)).error, null);
     assert.strictEqual((await service.from("location_opening_hours").delete().in("location_id", locationIds)).error, null);

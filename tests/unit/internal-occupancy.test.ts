@@ -22,7 +22,7 @@ const direct = { ...common, kind: "reservation", id: id(5), reason: "Practice", 
   creator_name: "Own Name", customer_name: null, customer_email: null, customer_phone: null };
 const booking = { ...common, kind: "booking", id: id(7), starts_at_minute: 660, ends_at_minute: 720,
   reason: null, created_by_user_id: null, creator_name: null, customer_name: "Snapshot", customer_email: "snapshot@example.test",
-  customer_phone: "123", cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON" };
+  customer_phone: "123", cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON", payment_method: "pay_at_club" };
 
 beforeEach(() => {
   vi.clearAllMocks(); query.mockReset();

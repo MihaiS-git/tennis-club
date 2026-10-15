@@ -16,6 +16,7 @@ import { formatMoney } from "@/lib/pricing/money";
 import { reservationDateLabel } from "@/components/reservation-details";
 import { minuteToTime } from "@/lib/admin/opening-hours-validation";
 import type { AdminPaymentTransaction } from "@/lib/payments/admin";
+import { refundReasonLabels } from "@/lib/payments/financial-history-context";
 import {
   paymentMethodLabels,
   paymentProviderLabels,
@@ -29,6 +30,13 @@ const refundLabels = {
   succeeded: "Completed",
   failed: "Failed",
 };
+const executionStatusLabels = {
+  ready: "Ready — not dispatched", pending: "Pending — outcome unconfirmed", uncertain: "Uncertain — outcome unconfirmed",
+  succeeded: "Verified success", failed: "Verified failure", rejected: "Definitively rejected",
+};
+const bookingStatusLabels: Record<string, string> = {
+  confirmed: "Confirmed", cancelled: "Cancelled", pending_payment: "Pending payment", failed: "Failed", expired: "Expired",
+};
 const date = (value: string) =>
   new Intl.DateTimeFormat("en-GB", {
     dateStyle: "medium",
@@ -39,6 +47,11 @@ const refundErrors: Record<string, string> = {
   provider_request_incomplete:
     "The refund request did not complete or its result could not be confirmed.",
   provider_refund_failed: "The provider reported that the refund failed.",
+  provider_request_rejected: "The provider definitively rejected this refund request.",
+  uncertain: "The refund request may have been accepted. Its outcome is not yet confirmed.",
+  lookup_failed: "The provider refund could not be checked. Its outcome remains unconfirmed.",
+  not_found: "The previous refund request could not be recovered. Its outcome remains uncertain.",
+  evidence_mismatch: "The provider response did not match the stored refund request. Review is required.",
 };
 const settlementReasons: Record<string, string> = {
   expired:
@@ -49,6 +62,12 @@ const settlementReasons: Record<string, string> = {
   pending: "Successful payment remains unresolved in the payment lifecycle.",
   cancelled: "Successful payment was recorded for a cancelled attempt.",
   failed: "Successful payment was recorded for a failed attempt.",
+};
+const captureDiscrepancyLabels = {
+  provider: "provider",
+  provider_payment_id: "provider payment identity",
+  amount: "amount",
+  currency: "currency",
 };
 function Fields({ entries }: { entries: [string, string][] }) {
   return entries.map(([label, value]) => (
@@ -135,6 +154,9 @@ export function TransactionRow({
         </td>
         <td className="font-mono text-xs">#{t.booking_id.slice(0, 8)}</td>
         <td><Link href={href} className="text-primary underline">{t.operation_label}</Link>
+          {t.proposal && !t.proposal.acceptedRevisionId && <span className="block text-xs text-muted-foreground">
+            Proposed modification · {t.proposal.status === "pending" ? "Pending" : "Not applied"}
+          </span>}
           <span className="block font-mono text-xs">{t.transaction_id}</span></td>
         <td className="whitespace-nowrap">
           {formatMoney(t.amount_minor, t.currency)}
@@ -175,12 +197,18 @@ export function TransactionRow({
         ]}
       />
     </DetailSection>
-    <DetailSection title="Booking">
+    <DetailSection title="Transaction context">
       <Fields
         entries={[
           ["Booking ID", t.booking_id],
           ["Customer name", t.customer_name],
           ["Customer email", t.customer_email],
+          ["Customer phone", t.customer_phone],
+          ["Context revision", t.context.revisionId],
+          ["Contract state", t.context.bookingState === "pending_payment" ? "Original pending checkout request"
+            : t.context.bookingState === "cancelled" ? "Accepted cancellation" : "Accepted booking"],
+          ["Contract total", formatMoney(t.booking_total_minor, t.context.currency)],
+          ...(t.context.confirmationRevisionId ? [["Confirmation revision", t.context.confirmationRevisionId] satisfies [string, string]] : []),
           ["Reservation ID", t.reservation_id],
           ["Location", t.location_name],
           ["Court", t.court_name],
@@ -191,11 +219,58 @@ export function TransactionRow({
         ]}
       />
     </DetailSection>
+    {t.previous_context && <DetailSection title="Previous accepted contract">
+      <Fields entries={[
+        ["Location", t.previous_context.locationName], ["Court", t.previous_context.courtName],
+        ["Schedule", `${reservationDateLabel(t.previous_context.bookingDate)} · ${minuteToTime(t.previous_context.startMinute)}–${minuteToTime(t.previous_context.endMinute)} (${t.previous_context.timezone})`],
+        ["Contract total", formatMoney(t.previous_context.totalAmountMinor, t.previous_context.currency)],
+      ]} />
+    </DetailSection>}
+    {t.proposal && <DetailSection title="Modification proposal">
+      <Fields entries={[
+        ["Proposal status", t.proposal.acceptedRevisionId ? "Applied" : t.proposal.status === "pending" ? "Proposed — Pending" : `Proposed — Not applied (${t.proposal.status})`],
+        ["Proposed location", t.proposal.locationName], ["Proposed court", t.proposal.courtName],
+        ["Proposed schedule", `${reservationDateLabel(t.proposal.date)} · ${minuteToTime(t.proposal.startMinute)}–${minuteToTime(t.proposal.endMinute)} (${t.proposal.timezone})`],
+        ["Proposed total", formatMoney(t.proposal.totalAmountMinor, t.proposal.currency)],
+      ]} />
+    </DetailSection>}
+    {refund && <section className="mt-4">
+      <h3 className="mb-2 text-sm font-semibold text-primary">Refund execution history</h3>
+      <p className="text-sm text-muted-foreground">Provider operations for this one refund obligation. Requested amounts are not additional obligations or verified returns.</p>
+      {refund.executions.length === 0 && <p className="text-sm">No executions recorded.</p>}
+      {refund.executions.map(execution => <div key={execution.id} className="mt-3 rounded-lg border border-border p-4">
+        <h3 className="mb-3 font-medium">Execution {execution.executionNumber}</h3>
+        <h4 className="mb-2 text-sm font-medium">Stored request and verified provider outcome</h4>
+        <dl className="grid grid-cols-[7rem_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm break-words">
+          <Fields entries={[
+            ["Execution ID", execution.id], ["Provider", paymentProviderLabels[execution.provider]],
+            ["Requested amount", formatMoney(execution.amountMinor, execution.currency)],
+            ["Provider payment ID", execution.providerPaymentId], ["Provider refund ID", execution.providerRefundId ?? "—"],
+            ["Created", `${date(execution.createdAt)} UTC`],
+            ["Dispatch initiated", execution.dispatchInitiatedAt ? `${date(execution.dispatchInitiatedAt)} UTC` : "Not established"],
+            ["First uncertain outcome", execution.firstUncertainAt ? `${date(execution.firstUncertainAt)} UTC` : "—"],
+            ["Verified outcome", execution.terminalResult ? executionStatusLabels[execution.terminalResult] : "No confirmed outcome"],
+            ["Verified completion", execution.completedAt ? `${date(execution.completedAt)} UTC` : "—"],
+          ]} />
+        </dl>
+        <h4 className="mt-4 mb-2 text-sm font-medium">Current operational status</h4>
+        <dl className="grid grid-cols-[7rem_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm break-words">
+          <Fields entries={[
+            ["Processing status", executionStatusLabels[execution.status]],
+            ["Unresolved", execution.unresolved ? "Yes" : "No"],
+            ["Last checked", execution.lastCheckedAt ? `${date(execution.lastCheckedAt)} UTC` : "—"],
+            ["Operational error", execution.lastError ? Object.hasOwn(refundErrors, execution.lastError)
+              ? refundErrors[execution.lastError] : "A refund processing error was recorded." : "—"],
+          ]} />
+        </dl>
+      </div>)}
+    </section>}
     {refund && (
       <DetailSection title="Refund">
         <Fields
           entries={[
             ["Refund ID", refund.id],
+            ["Reason", refundReasonLabels[refund.reason]],
             ["Captured payment amount", refund.captured_amount_minor ? formatMoney(refund.captured_amount_minor, refund.currency) : "—"],
             [
               "Amount",
@@ -223,9 +298,6 @@ export function TransactionRow({
               : []),
           ]}
         />
-        {refund.provider_history?.map(reference => <p key={reference.provider_refund_id} className="mt-2 text-sm">
-          Previous provider refund: {reference.provider_refund_id} · {reference.status} · {date(reference.recorded_at)} UTC
-        </p>)}
         {t.canRetryRefund && (
           <div className="mt-3 flex justify-end">
             <Button
@@ -243,20 +315,38 @@ export function TransactionRow({
       </DetailSection>
     )}
     {t.financials && <section aria-label="Financial history" className="mt-4 space-y-2 text-sm">
-      <h3 className="font-semibold">Financial history</h3>
-      <p>Booking total: {formatMoney(t.booking_total_minor ?? t.amount_minor, t.currency)}</p>
-      <p>Pending or failed refund obligations: {formatMoney(t.financials.refundObligations - t.financials.refunded, t.currency)}</p>
-      <p>Collected: {formatMoney(t.financials.captured, t.currency)} · Refunded: {formatMoney(t.financials.refunded, t.currency)}</p>
-      <p>Net paid: {formatMoney(t.financials.netPaid, t.currency)} · Outstanding: {formatMoney(t.financials.outstanding, t.currency)}</p>
+      <h3 className="font-semibold">Current booking summary</h3>
+      <p>Current booking status: {bookingStatusLabels[t.current_booking.status] ?? t.current_booking.status}</p>
+      <p>Booking total: {formatMoney(t.current_booking.totalAmountMinor, t.current_booking.currency)}</p>
+      <p>Outstanding: {formatMoney(t.financials.outstanding, t.current_booking.currency)}</p>
+      <h4 className="font-medium">Verified money movements by currency</h4>
+      {t.financials.totals.length === 0 && <p>No verified money movements.</p>}
+      {t.financials.totals.map(total => <p key={total.currency}>
+        {total.currency}: Captured {formatMoney(total.captured, total.currency)} · Refunded {formatMoney(total.refunded, total.currency)} · Net {formatMoney(total.netPaid, total.currency)}
+        {total.uncompletedRefundObligations > 0 && <> · Pending or failed refund obligations {formatMoney(total.uncompletedRefundObligations, total.currency)}</>}
+      </p>)}
+      <h4 className="font-medium">Verified capture receipts</h4>
+      {t.financials.captures.length === 0 && <p>No verified capture receipts.</p>}
+      {t.financials.captures.map(capture => <div key={capture.id} className="rounded-lg border border-border p-3">
+        <p>Capture {capture.providerCaptureId}: {formatMoney(capture.amount, capture.currency)} · payment {capture.providerPaymentId}</p>
+        {capture.discrepancies.length > 0 ? <p className="text-danger">
+          Discrepancy: {capture.discrepancies.map(discrepancy => captureDiscrepancyLabels[discrepancy]).join(", ")}.
+          {capture.expectedAmount !== null && capture.expectedCurrency !== null
+            ? ` Requested ${formatMoney(capture.expectedAmount, capture.expectedCurrency)}.` : " Payment request unavailable."}
+        </p> : <p>Matches the stored payment request.</p>}
+        {capture.attemptStatus && capture.attemptStatus !== "succeeded" && <p>
+          Capture was received after the payment attempt became {capture.attemptStatus}.
+        </p>}
+      </div>)}
       {t.financials.payments.map(p => <div key={p.id}>
-        <p><Link href={adminTransactionHref("payment", p.id)} className="text-primary underline">Payment {p.id}</Link> {formatMoney(p.amount, t.currency)} · {p.status} · {p.reference ?? "No provider reference"}</p>
+        <p><Link href={adminTransactionHref("payment", p.id)} className="text-primary underline">Payment request {p.id}</Link> {formatMoney(p.amount, p.currency)} · {p.status} · {p.reference ?? "No provider reference"}</p>
         {p.adjustmentId && p.status !== "succeeded" && <Button type="button" size="small" variant="secondary"
           disabled={pending} onClick={() => { if (p.adjustmentId) void act("recover",p.adjustmentId); }}>Check modification payment</Button>}
       </div>)}
       {t.financials.refunds.map(r => <div key={r.id}>
-        <p><Link href={adminTransactionHref("refund", r.id)} className="text-primary underline">Refund {r.id}</Link> {formatMoney(r.amount, t.currency)} · {r.status} · {r.reference ?? "Awaiting provider reference"}</p>
+        <p><Link href={adminTransactionHref("refund", r.id)} className="text-primary underline">Refund obligation {r.id}</Link> {formatMoney(r.amount, r.currency)} · {r.status}{r.verified ? " · verified successful execution" : " · not counted as refunded"} · {r.reference ?? "No verified provider refund reference"}</p>
         {["pending", "pending_retry", "failed"].includes(r.status) && <Button type="button" size="small" variant="secondary"
-          disabled={pending} onClick={() => void act("retry", r.id)}>Retry refund {formatMoney(r.amount, t.currency)}</Button>}
+          disabled={pending} onClick={() => void act("retry", r.id)}>Retry refund {formatMoney(r.amount, r.currency)}</Button>}
       </div>)}
     </section>}
     {(t.needsAttention ||

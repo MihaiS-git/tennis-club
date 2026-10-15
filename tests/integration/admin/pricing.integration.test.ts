@@ -107,8 +107,8 @@ test("multi-court rule-set lifecycle is atomic and scoped to active admins", asy
     const [schedule] = await clubs.listOpeningHoursSchedules((await getDataSource()).manager, pricingLocationId);
     const deletionHours = await service.from("location_opening_hours").select("id").eq("location_id", location_id).eq("weekday", 0);
     assert.strictEqual(deletionHours.error, null); assert.ok(deletionHours.data);
-    expect(await mutateAdminOpeningHours({ operation: "update", schedule_id: schedule.id, revision: schedule.revision, location_id, weekdays: [0],
-      replace_ids: deletionHours.data.map((row) => row.id), intervals: [] }, admin))
+    expect(await mutateAdminOpeningHours({ operation: "update", schedule_id: schedule.id, revision: schedule.revision, location_id,
+      replace_ids: deletionHours.data.map((row) => row.id), rows: [] }, admin))
       .toMatchObject({ ok: true, pricingAdjusted: true });
     expect((await service.from("location_opening_hours").select("weekday").eq("location_id", location_id).eq("weekday", 0)).data).toHaveLength(0);
     const afterHours = await service.from("location_pricing_rules").select("court_id, weekday, starts_at_minute, ends_at_minute").eq("rule_set_id", setId);
@@ -117,8 +117,8 @@ test("multi-court rule-set lifecycle is atomic and scoped to active admins", asy
     assert.strictEqual(sundayHours.error, null); assert.ok(sundayHours.data);
     const [updatedSchedule] = await clubs.listOpeningHoursSchedules((await getDataSource()).manager, pricingLocationId);
     const [hoursRace, pricingRace] = await Promise.all([
-      mutateAdminOpeningHours({ operation: "update", schedule_id: updatedSchedule.id, revision: updatedSchedule.revision, location_id, weekdays: [6], replace_ids: [sundayHours.data.id],
-        intervals: [{ opens_at: "07:00", closes_at: "20:00" }] }, admin),
+      mutateAdminOpeningHours({ operation: "update", schedule_id: updatedSchedule.id, revision: updatedSchedule.revision, location_id, replace_ids: [sundayHours.data.id],
+        rows: [{ weekdays: [6], opens_at: "07:00", closes_at: "20:00" }] }, admin),
       saveAdminPricingRule({ ...base, court_ids: [court3], weekdays: [6], starts_at: "18:00", ends_at: "21:00" }, admin),
     ]);
     expect(hoursRace.ok).toBe(true);
@@ -188,6 +188,29 @@ async function pricingBackendPid(runner: QueryRunner) {
   const rows: unknown = await runner.query("SELECT pg_backend_pid() AS pid");
   return z.array(z.object({ pid: z.number().int() })).length(1).parse(rows)[0].pid;
 }
+
+test("creating and editing Covered pricing preserves Outdoor rules for the same court and schedule", async () => {
+  const fixture = await pricingLockFixture();
+  const { admin, location_id, definition } = fixture;
+  try {
+    const outdoor = await saveAdminPricingRule(definition, admin); assert.ok(outdoor.ok);
+    const original = (await listAdminPricingRules(location_id, admin)).find((rule) => rule.rule_set_id === outdoor.id);
+    assert.ok(original);
+    const covered = await saveAdminPricingRule({ ...definition, court_state: "covered", price_per_hour: "25.00" }, admin);
+    assert.ok(covered.ok);
+    expect(covered.id).not.toBe(outdoor.id);
+    const rules = await listAdminPricingRules(location_id, admin);
+    expect(rules).toHaveLength(2);
+    expect(rules.find((rule) => rule.rule_set_id === outdoor.id)).toEqual(original);
+    const winter = rules.find((rule) => rule.rule_set_id === covered.id); assert.ok(winter);
+    expect(winter).toMatchObject({ court_ids: original.court_ids, court_state: "covered", price_per_hour_minor: 2500 });
+    expect(await saveAdminPricingRule({ ...definition, rule_set_id: winter.rule_set_id, revision: winter.revision,
+      court_state: "covered", price_per_hour: "30.00" }, admin)).toEqual({ ok: true, id: covered.id });
+    const updated = await listAdminPricingRules(location_id, admin);
+    expect(updated.find((rule) => rule.rule_set_id === outdoor.id)).toEqual(original);
+    expect(updated.find((rule) => rule.rule_set_id === covered.id)).toMatchObject({ court_state: "covered", price_per_hour_minor: 3000 });
+  } finally { await fixture.cleanup(); }
+}, 30000);
 
 async function waitForPricingWriter(observer: QueryRunner, blocker: number, queryPart: string) {
   const deadline = Date.now() + 8000;

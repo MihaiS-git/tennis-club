@@ -64,6 +64,8 @@ export class SupabaseAuthStorage1791462257926 implements MigrationInterface {
       await queryRunner.query(`DROP POLICY profile_avatars_${operation} ON storage.objects`);
     }
     // Refuse to discard stored objects; empty the bucket through Storage first.
+    // Native Storage guards direct SQL deletes; the bucket FK still refuses stored objects.
+    await queryRunner.query(`SET LOCAL storage.allow_delete_query = 'true'`);
     await queryRunner.query(`DELETE FROM storage.buckets WHERE id = 'profile-avatars'`);
     await queryRunner.query(`DROP FUNCTION public.has_active_avatar_account()`);
     await queryRunner.query(`DROP TRIGGER on_auth_user_email_updated ON auth.users`);

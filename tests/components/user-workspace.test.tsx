@@ -82,7 +82,7 @@ it.each(["?tab=unknown", "?tab=tennis&tab=personal", ""])("defaults invalid or m
 it("uses URL-backed tabs, handles refreshed selection and popstate, and keeps Users active", async () => {
   navigate("?q=member&page=2&tab=personal");
   const view = await page();
-  render(<AdminNavigation />);
+  render(<AdminNavigation isAdmin={true} />);
   const nav = screen.getByRole("navigation", { name: "User management" });
   expect(within(nav).getAllByRole("link")).toHaveLength(3);
   expect(within(nav).getByRole("link", { name: "Tennis profile" }).getAttribute("href")).toBe(`${pathname}?q=member&page=2&tab=tennis`);

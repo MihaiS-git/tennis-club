@@ -1,23 +1,29 @@
 import "server-only";
 import { hasBookingAdjustments } from "@/lib/db/repositories/booking-adjustments.repository";
-import { readAdjustmentStatus, cancelAdjustmentIntent } from "./booking-adjustments";
-import { createHash, randomBytes } from "node:crypto";
+import * as adjustments from "@/lib/db/repositories/booking-adjustments.repository";
+import type { EntityManager } from "typeorm";
+import { buildBookingRevision } from "@/lib/bookings/revision";
+import { advanceRevision } from "@/lib/db/repositories/booking-revisions.repository";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { getDataSource } from "@/lib/db/data-source";
 import { inTransaction } from "@/lib/db/transaction";
 import { lockCheckoutBooking, findCheckoutBookingStatus } from "@/lib/db/repositories/bookings.repository";
 import { findCheckoutAttempt, lockCheckoutAttempt, attachCheckoutPayment } from "@/lib/db/repositories/payments.repository";
-import { expirePaymentHolds } from "./hold-expiry";
+import { expirePaymentHolds, expireAdjustmentsAtLocation } from "./hold-expiry";
 import { readCreatedBookingCancellationPolicy } from "@/lib/bookings/confirmation-policy";
-import { paymentProviderSchema, type OnlineCheckout } from "./domain";
-import { onlinePaymentAdapter } from "./providers";
+import { paymentProviderSchema, summarizeRefunds, type OnlineCheckout } from "./domain";
+import { onlinePaymentAdapter, supportsOnlineCheckout } from "./providers";
+import { logger } from "@/lib/logger";
+import { normalizeDatabaseError } from "@/lib/db/errors";
 import { locationCurrencies } from "@/lib/admin/locations-validation";
 import { processOnlinePaymentEvent, settleOnlinePayment } from "./service";
 import * as payments from "@/lib/db/repositories/payments.repository";
 import * as bookings from "@/lib/db/repositories/bookings.repository";
 import * as reservations from "@/lib/db/repositories/reservations.repository";
 import { lockLocations } from "@/lib/db/repositories/clubs.repository";
+import { allocateBookingRefund } from "./financials";
 import { processBookingRefund } from "./refunds";
 import { revalidateCourtActivity } from "@/lib/reservations/revalidation";
 
@@ -27,17 +33,48 @@ const attemptSchema = z.object({ id: z.uuid(), bookingId: z.uuid(), method: z.li
 const checkoutAccessSchema = z.strictObject({ attemptId: z.uuid(), token: z.string().regex(/^[a-f0-9]{64}$/) });
 const tokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
 
+// Presentation of an existing checkout capability only. Owner recovery may
+// initialize payment or rotate tokens; opening this link must do neither.
+export async function readAdjustmentPaymentLink(input: unknown) {
+  const parsed = z.object({ adjustmentId: z.uuid(), token: checkoutAccessSchema.shape.token }).safeParse(input);
+  const unavailable = { kind: "unavailable" } as const;
+  if (!parsed.success) return unavailable;
+  try {
+    const manager = (await getDataSource()).manager;
+    const adjustment = await adjustments.findAdjustment(manager, parsed.data.adjustmentId);
+    const attempt = await adjustments.adjustmentAttempt(manager, parsed.data.adjustmentId);
+    if (!adjustment || adjustment.id !== parsed.data.adjustmentId || !attempt?.providerPaymentId
+      || attempt.adjustmentId !== adjustment.id || attempt.bookingId !== adjustment.bookingId
+      || attempt.checkoutTokenHash !== tokenHash(parsed.data.token)
+      || attempt.method !== "online" || !attempt.provider || !supportsOnlineCheckout(attempt.provider)) return unavailable;
+    const currency = z.enum(locationCurrencies).parse(adjustment.currency);
+    const presentation = await (await onlinePaymentAdapter(attempt.provider)).resumePayment({
+      id: attempt.id, providerPaymentId: attempt.providerPaymentId,
+    });
+    // Terminal states and hold expiry remain handled by the existing capability
+    // polling/OnlinePayment flow. Presentation does not settle or expire anything.
+    return { kind: "checkout" as const, originalTotal: adjustment.originalTotal, newTotal: adjustment.newTotal, currency,
+      checkout: { attemptId: attempt.id, token: parsed.data.token, presentation },
+      holdExpiresAt: adjustment.expiresAt.toISOString() };
+  } catch (error: unknown) {
+    logger.error({ event: "payments.adjustment_link_read_failed", code: normalizeDatabaseError(error).sqlState },
+      "Unable to present adjustment payment link");
+    return unavailable;
+  }
+}
+
 class CheckoutParentChanged extends Error {}
 
-// Record customer intent before contacting Stripe. Keep uncertain occupancy
-// until provider cancellation, captured-payment refund preparation, or hold expiry.
+// Accept cancellation and release occupancy before contacting Stripe. The
+// attempt remains uncertain until provider evidence arrives; late capture is
+// compensated by the existing settlement service without reclaiming occupancy.
 async function requestCheckoutCancellation(access: z.infer<typeof checkoutAccessSchema>, retry = 0): Promise<void> {
   try {
     await inTransaction(async manager => {
       const parent = await payments.discoverSettlementParent(manager, access.attemptId);
       if (!parent) throw new Error("Payment unavailable.");
       await lockLocations(manager, [parent.location_id]);
-      const booking = await bookings.lockSettlementBooking(manager, parent.booking_id);
+      const booking = await bookings.findBookingForUpdate(manager, parent.booking_id);
       const reservation = booking && await reservations.findReservationForUpdate(manager, booking.reservation_id);
       const attempt = await lockCheckoutAttempt(manager, access.attemptId);
       const resource = reservation && await reservations.findReservationResourceFacts(manager, reservation.court_id);
@@ -48,22 +85,29 @@ async function requestCheckoutCancellation(access: z.infer<typeof checkoutAccess
         throw new CheckoutParentChanged();
       // Initial checkout capability cannot undo later management operations or
       // override an explicit owner/Admin cancellation/refund decision.
-      if (reservation.status === "cancelled" || booking.status === "confirmed" && await hasBookingAdjustments(manager,booking.id))
+      if (reservation.status === "cancelled" || booking.status === "confirmed" && (booking.revision.revisionNumber > 2 || await hasBookingAdjustments(manager,booking.id)))
         throw new Error("This checkout is now managed through booking management.");
       // A checkout capability is not an indefinite guest booking-management
       // permission. Only a completion racing the original hold may be undone.
       if (booking.status === "confirmed" && (!attempt.expiresAt
         || new Date(await reservations.readReservationClockTime(manager)).getTime() >= attempt.expiresAt.getTime()))
         throw new Error("This checkout has already confirmed. Use booking management to cancel it.");
-      if (booking.status !== "cancelled")
-        await bookings.updateSettlementBookingStatus(manager, booking.id, "cancelled");
+      let contextRevisionId = booking.current_revision_id;
+      if (booking.status !== "cancelled") {
+        const revision = buildBookingRevision(booking.revision, { id: randomUUID(), bookingId: booking.id,
+          kind: "cancelled", bookingState: "cancelled", operationKey: "cancellation", intentHash: "checkout_abandoned",
+          actorUserId: null, actorScope: "guest", recordedAt: new Date(await reservations.readReservationClockTime(manager)),
+          adjustmentId: null, cancellationCause: "checkout_abandoned" }, booking.revision);
+        await advanceRevision(manager, { revision, previousId: booking.current_revision_id, status: "cancelled" });
+        contextRevisionId = revision.id;
+        await reservations.updateSettlementReservationStatus(manager, reservation.id, "released");
+      }
       if (attempt.status === "succeeded" && attempt.provider === "stripe" && attempt.providerPaymentId) {
         if (reservation.status === "active") await reservations.updateSettlementReservationStatus(manager, reservation.id, "released");
-        if (!await payments.findAndLockRefundByBooking(manager, booking.id))
-          await payments.insertBookingRefundRequest(manager, booking.id, null, {
-            id: attempt.id, provider: "stripe", provider_payment_id: attempt.providerPaymentId,
-            amount_minor: attempt.amountMinor, currency: attempt.currency,
-          });
+        if (!await payments.findAndLockRefundByBooking(manager, booking.id, attempt.id))
+          await allocateBookingRefund(manager, { bookingId: booking.id, actorId: null,
+            operationKey: "cancellation", amount: attempt.amountMinor, onlyAttemptId: attempt.id,
+            reason: "booking_cancellation", contextRevisionId });
       }
     });
   } catch (error) {
@@ -81,7 +125,8 @@ async function observeCheckoutPayment(attempt: z.infer<typeof attemptSchema> & {
   if (result.status === "succeeded" || result.status === "cancelled") {
     await processOnlinePaymentEvent({ attemptId: attempt.id, provider: attempt.provider,
       providerPaymentId: attempt.providerPaymentId, eventId: `checkout-observation-${attempt.id}-${result.status}`,
-      outcome: result.status, amountMinor: result.amountMinor, currency: result.currency });
+      outcome: result.status, amountMinor: result.amountMinor, currency: result.currency,
+      ...(result.providerCaptureId ? { providerCaptureId: result.providerCaptureId } : {}) });
     revalidateCourtActivity("create");
   }
   return result.status;
@@ -172,10 +217,11 @@ export async function readOnlineCheckout(input: unknown) {
       current = attemptSchema.parse(await findCheckoutAttempt(manager, access.attemptId, tokenHash(access.token)));
     } catch { providerStatus = "unknown"; }
   }
-  const { payment, events } = await payments.findRefundCaptureEvidence(manager, attempt.id);
+  const { captures } = await payments.findRefundCaptureEvidence(manager, attempt.id);
   const refund = await payments.findCheckoutRefund(manager, attempt.id);
-  const captured = payment?.status === "succeeded" || events.some(e => e.outcome === "succeeded"
-    && e.provider_payment_id === attempt.providerPaymentId && e.amount_minor === attempt.amountMinor && e.currency === attempt.currency);
+  const captured = captures.some(receipt => receipt.provider === attempt.provider
+    && receipt.providerPaymentId === attempt.providerPaymentId
+    && receipt.amountMinor === attempt.amountMinor && receipt.currency === attempt.currency);
   const paymentStatus = refund ? refund.status === "succeeded" ? "refunded" as const
     : refund.status === "failed" ? "refund_failed" as const : "refund_pending" as const
     : captured && status !== "confirmed" ? "refund_pending" as const
@@ -190,4 +236,48 @@ export async function readOnlineCheckout(input: unknown) {
     && (providerStatus === "unknown" || providerStatus === "processing"),
     cancellationRequested: status === "cancelled", totalAmountMinor: attempt.amountMinor, currency: attempt.currency,
     cancellationPolicy: status === "confirmed" ? await readCreatedBookingCancellationPolicy(attempt.bookingId) : null };
+}
+
+export async function readAdjustmentStatus(manager: EntityManager, id: string) {
+  const adjustment = await adjustments.findAdjustment(manager, id);
+  if (!adjustment) throw new Error("Adjustment unavailable");
+  // Only the location mutex can release target holds. Polling uses that same lock.
+  if (["pending","cancelled"].includes(adjustment.status) && adjustment.expiresAt.getTime() <= Date.now()) {
+    const parent = await bookings.discoverBookingLocation(manager, adjustment.bookingId);
+    if (parent) await inTransaction(async m => {
+      await lockLocations(m, [parent.location_id]);
+      await expireAdjustmentsAtLocation(m, parent.location_id);
+    });
+  }
+  const current = await adjustments.findAdjustment(manager, id);
+  if (!current) throw new Error("Adjustment unavailable");
+  const refunds = await adjustments.listAdjustmentRefunds(manager, id);
+  const refundStatus = summarizeRefunds(refunds.map(r => r.status));
+  const attempt = await adjustments.adjustmentAttempt(manager, id);
+  revalidateCourtActivity("edit");
+  return { status: current.status === "applied" ? "confirmed" as const
+    : current.status === "pending" ? "pending_payment" as const : current.status === "cancelled" ? "cancelled" as const : "expired" as const,
+    paymentStatus: refundStatus === "succeeded" ? "refunded" as const : refundStatus === "failed" ? "refund_failed" as const
+      : refundStatus ? "refund_pending" as const : attempt?.status === "succeeded" ? "succeeded" as const
+      : current.status === "pending" ? "pending" as const : current.status === "cancelled" ? "cancelled" as const : "expired" as const,
+    paymentUncertain: false, cancellationRequested: current.status === "cancelled", totalAmountMinor: current.newTotal,
+    currency: z.enum(locationCurrencies).parse(current.currency), cancellationPolicy: null };
+}
+export async function cancelAdjustmentIntent(attemptId: string) {
+  const manager = (await getDataSource()).manager;
+  const attempt = await payments.findCheckoutAttempt(manager, attemptId);
+  if (!attempt?.adjustmentId) throw new Error("Adjustment unavailable");
+  const parent = await bookings.discoverBookingLocation(manager, attempt.bookingId);
+  if (!parent) throw new Error("Booking unavailable");
+  const adjustmentId = attempt.adjustmentId;
+  await inTransaction(async m => {
+    await lockLocations(m, [parent.location_id]);
+    await bookings.lockCheckoutBooking(m, attempt.bookingId);
+    await payments.lockCheckoutAttempt(m, attemptId);
+    const adjustment = await adjustments.findAdjustment(m, adjustmentId);
+    if (!adjustment || adjustment.status === "applied") throw new Error("Modification already completed");
+    await adjustments.updateAdjustment(m, adjustment.id, "cancelled");
+    await adjustments.releaseAdjustmentHolds(m, adjustment.id);
+  });
+  revalidateCourtActivity("edit");
 }

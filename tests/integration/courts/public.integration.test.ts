@@ -1,6 +1,5 @@
 import { insertOpeningHoursFixture } from "../opening-hours-fixtures";
 import { randomUUID } from "node:crypto";
-import { createClient } from "@supabase/supabase-js";
 import { expect, test } from "vitest";
 
 import { getPublicCourtDay } from "@/lib/courts/public-calendar";
@@ -12,9 +11,6 @@ test("public discovery includes only published, configured locations and orders 
   const service = localFixtureClient();
   const ids: string[] = Array.from({ length: 6 }, () => randomUUID());
   const courtIds: string[] = Array.from({ length: 9 }, () => randomUUID());
-  const anonymous = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_PUBLISHABLE_KEY!, {
-    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-  });
   try {
     expect((await service.from("locations").insert(ids.map((id, index) => ({
       id, slug: `test-${id}`, name: ["Zulu", "Beta", "Alpha", "Empty", "Hidden", "Only inactive"][index],
@@ -42,7 +38,7 @@ test("public discovery includes only published, configured locations and orders 
       weekday: 0, starts_at_minute: 480, ends_at_minute: 1200, price_per_hour_minor: 5000,
     })))).error).toBeNull();
 
-    const read = await listPublicLocationsWithCourts(anonymous);
+    const read = await listPublicLocationsWithCourts();
     const locations = read.filter((location) => ids.includes(location.id));
     expect(locations.map((location) => location.id)).toEqual([ids[0], ids[2], ids[1]]);
     expect(locations[0].courts.map((court) => court.id)).toEqual([
@@ -73,7 +69,7 @@ test("public discovery includes only published, configured locations and orders 
       expect(court).not.toHaveProperty("supports_balloon");
       expect(court).not.toHaveProperty("balloon_installed");
     }
-    expect(await listPublicLocationsWithCourts(anonymous)).toEqual(read);
+    expect(await listPublicLocationsWithCourts()).toEqual(read);
     const manager = (await getDataSource()).manager;
     const selected = locations[0], date = "2099-10-12";
     // Test privileged SQL visibility even when passed a stale discovered parent.
@@ -93,9 +89,9 @@ test("public discovery includes only published, configured locations and orders 
     for (const mutation of ["is_public=false", "is_active=false", "is_active=false,archived_at=clock_timestamp()"] ) {
       await manager.query(`UPDATE public.locations SET ${mutation} WHERE id=$1`, [selected.id]);
       expect(await listPublicDayOccupancy(manager, selected.id, [courtIds[0]], date)).toEqual([]);
-      const day = await getPublicCourtDay(selected, date, date, new Date(`${date}T00:00:00Z`), anonymous);
+      const day = await getPublicCourtDay(selected, date, date, new Date(`${date}T00:00:00Z`));
       expect(day.times).toEqual([]);
-      expect((await listPublicLocationsWithCourts(anonymous)).map((row) => row.id)).not.toContain(selected.id);
+      expect((await listPublicLocationsWithCourts()).map((row) => row.id)).not.toContain(selected.id);
       await manager.query("UPDATE public.locations SET is_active=true,is_public=true,archived_at=NULL WHERE id=$1", [selected.id]);
     }
     await manager.query("UPDATE public.courts SET is_active=false WHERE id=$1", [courtIds[0]]);

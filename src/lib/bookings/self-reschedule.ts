@@ -19,7 +19,7 @@ export async function getOwnBookingEditDay(id: unknown, date: unknown, supabase?
   const client = supabase ?? await createClient();
   const access = await checkOwnEditableBooking(id, client);
   if (!access.ok) throw new Error(access.message);
-  return loadBookingEditDay(id, date, client, "owner", now);
+  return loadBookingEditDay(id, date, client, now);
 }
 
 export async function rescheduleOwnCustomerBooking(input: unknown, supabase?: Client): Promise<BookingRescheduleResult> {
@@ -29,7 +29,7 @@ export async function rescheduleOwnCustomerBooking(input: unknown, supabase?: Cl
   try {
     const access = await checkOwnEditableBooking(parsed.data.id, client);
     if (!access.ok) return access;
-    return await runBookingReschedule(input, client, access.account.userId, "owner");
+    return await runBookingReschedule(input, access.account.userId);
   } catch {
     logger.error({ event: "bookings.self_reschedule_failed", bookingId: parsed.data.id }, "Unable to reschedule own customer booking");
     return { ok: false, message: "This booking is no longer available to reschedule. Check your account and booking notice window." };

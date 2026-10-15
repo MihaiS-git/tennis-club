@@ -1,3 +1,5 @@
+import { insertBookingFixture } from "./checkout-fixtures";
+import { cleanupBookingFixtures } from "./checkout-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test } from "vitest";
@@ -48,7 +50,7 @@ test("upcoming customer booking reads are owner scoped for members and staff", a
       cancelled_at: options.reservationStatus === "cancelled" ? now.toISOString() : null,
       cancelled_by_user_id: options.reservationStatus === "cancelled" ? accountUserId : null })).error, null);
     const id = randomUUID();
-    assert.strictEqual((await service.from("bookings").insert({ id, reservation_id: reservationId,
+    assert.strictEqual((await insertBookingFixture(service, { id, reservation_id: reservationId,
       account_user_id: accountUserId, payment_method: "pay_at_club", customer_name: "Snapshot Name", customer_email: options.email ?? "snapshot@example.test",
       customer_phone: "+40 123", cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON",
       status: options.bookingStatus ?? "confirmed" })).error, null);
@@ -105,7 +107,7 @@ test("upcoming customer booking reads are owner scoped for members and staff", a
     expect((await listOwnUpcomingActivity({}, member.client)).upcoming).toEqual([]);
     expect((await member.client.from("bookings").select("id")).error?.code).toBe("42501");
   } finally {
-    if (reservationIds.length) assert.strictEqual((await service.from("bookings").delete().in("reservation_id", reservationIds)).error, null);
+    await cleanupBookingFixtures({ reservationIds });
     if (reservationIds.length) assert.strictEqual((await service.from("court_reservations").delete().in("id", reservationIds)).error, null);
     if (courtIds.length) assert.strictEqual((await service.from("courts").delete().in("id", courtIds)).error, null);
     assert.strictEqual((await service.from("locations").delete().eq("id", locationId)).error, null);

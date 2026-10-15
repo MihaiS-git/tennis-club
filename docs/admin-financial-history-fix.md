@@ -1,5 +1,48 @@
 # Admin financial history and booking-loading correction
 
+## Immutable transaction context (Task 3F.2)
+
+Admin lists and exact transaction details share `readFinancialHistory()`. Original
+payment requests and bookings without attempts use revision 1. Original payment
+confirmation is identified separately by its unique confirmation operation; a late
+capture without confirmation remains an original checkout request. Adjustment
+payments use the unique applied revision when present, otherwise their base revision.
+Unapplied targets remain explicitly proposed, using the adjustment's immutable
+court/location names, timezone, date, interval and proposed total.
+
+Every refund uses its required `contextRevisionId` and immutable reason. Reduction
+and cancellation reference their accepted revisions; failed-adjustment compensation
+references its base contract; late-checkout compensation references the initial
+request. Shared operation keys never redefine those reasons. Historical schedules,
+customer contact and resource names never come from current occupancy/configuration.
+
+The set-based SQL query selects related revision identities and historical contact
+for searching before filtering, sorting and 20-row pagination. Operation labels and
+context presentation are TypeScript. TypeORM batches load only references and financial
+facts for the selected page's bookings; the existing financial summarizer runs once
+per distinct booking. There are no per-row entity queries. Current totals, outstanding
+debt and operational state appear separately under Current booking summary. Original
+Pay-at-club requests remain uncollected historical requests, independent of current debt.
+
+## Refund execution history (Task 4B.3)
+
+The same paginated/exact Admin read now batches execution histories for only the
+selected refund obligations, ordered by execution number. Details retain each
+request's identity, provider, requested amount/currency, payment/refund references,
+creation/dispatch timestamps, first uncertainty and verified terminal outcome/time.
+Current processing status, unresolved flag, last check and safe operational error
+are shown separately. Unknown error text becomes a generic code on the server;
+request keys, lease tokens and raw provider evidence are never selected for history.
+
+One obligation remains one transaction and contributes once to existing summaries,
+regardless of retry count. Pending and uncertain operations show no verified outcome.
+Historical context/reasons and existing reconciliation actions remain unchanged.
+History has no separate management actions or scheduled refresh; existing navigation,
+refresh and handled reconciliation actions reload it. Provider evidence payloads and
+worker lease details are deliberately omitted.
+
+The earlier investigation and validation below describe their original scope.
+
 ## Financial integrity check
 
 Read-only inspection of the development database identified booking

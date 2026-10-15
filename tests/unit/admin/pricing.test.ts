@@ -54,6 +54,26 @@ it("checks all courts belong to the location and share a state", async () => {
   expect(await saveAdminPricingRule(input)).toMatchObject({ ok: false, fieldErrors: { court_state: expect.any(String) } });
   expect(mocks.insertRuleSet).not.toHaveBeenCalled();
 });
+it.each(["outdoor", "covered"])("persists independent %s pricing for outdoor courts with the same schedule", async (court_state) => {
+  mocks.listLocationPricingRules.mockResolvedValue([{ courtId: court1, courtState: court_state === "outdoor" ? "covered" : "outdoor",
+    weekday: 0, startsAtMinute: 420, endsAtMinute: 960, startsOn: null, endsOn: null, ruleSetId: "other-season" }]);
+  expect(await saveAdminPricingRule({ ...input, court_state })).toEqual({ ok: true, id: ruleSet });
+  expect(mocks.insertPricingRules).toHaveBeenCalledWith(mocks.manager,
+    expect.arrayContaining([expect.objectContaining({ courtId: court1, courtState: court_state, pricePerHourMinor: 1250 })]));
+  expect(mocks.insertPricingRules.mock.calls[0][1]).toHaveLength(10);
+  expect(mocks.deleteRuleSetRules).not.toHaveBeenCalled();
+});
+it.each(["indoor", "outdoor", "covered"])("keeps indoor courts restricted when saving %s pricing", async (court_state) => {
+  mocks.findPricingCourts.mockResolvedValue([court1, court2].map((id) => ({ id, locationId: location_id, environment: "indoor" })));
+  const result = await saveAdminPricingRule({ ...input, court_state });
+  if (court_state === "indoor") {
+    expect(result).toEqual({ ok: true, id: ruleSet });
+    expect(mocks.insertPricingRules).toHaveBeenCalledWith(mocks.manager, expect.arrayContaining([expect.objectContaining({ courtState: "indoor" })]));
+  } else {
+    expect(result).toMatchObject({ ok: false, fieldErrors: { court_state: expect.any(String) } });
+    expect(mocks.insertPricingRules).not.toHaveBeenCalled();
+  }
+});
 it.each(["23P01", "23503"])("preserves SQLSTATE %s translation", async (code) => {
   mocks.insertPricingRules.mockRejectedValueOnce(new QueryFailedError("test statement", [], Object.assign(new Error("driver failure"), { code, constraint: "test_constraint" })));
   expect(await saveAdminPricingRule(input)).toEqual({ ok: false, reason: code === "23503" ? "not-found" : "overlap" });

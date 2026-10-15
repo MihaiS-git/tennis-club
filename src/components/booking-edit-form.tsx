@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ReservationEditForm, type ReservationEditDraft } from "@/components/reservation-edit-form";
+import { Button } from "@/components/button";
 import type { AdminBooking, InternalLocation } from "@/lib/reservations/service";
 import type { BookingEditContext } from "@/lib/bookings/reschedule";
 import { OnlinePayment } from "@/app/book/online-payment";
@@ -10,21 +11,21 @@ import { abandonCheckoutAction } from "@/app/book/actions";
 import type { BookingRescheduleResult } from "@/lib/bookings/reschedule";
 import { minuteToTime } from "@/lib/admin/opening-hours-validation";
 import { formatMoney } from "@/lib/pricing/money";
-import { loadAdminBookingEditDayAction, quoteAdminBookingAction, rescheduleAdminBookingAction } from "./actions";
+import { loadOwnBookingEditDayAction, quoteOwnBookingAction, rescheduleOwnBookingAction } from "@/app/my-activity/bookings/actions";
 
 export type BookingEditActions = {
-  load: typeof loadAdminBookingEditDayAction;
-  quote: typeof quoteAdminBookingAction;
-  save: typeof rescheduleAdminBookingAction;
+  load: typeof loadOwnBookingEditDayAction;
+  quote: typeof quoteOwnBookingAction;
+  save: typeof rescheduleOwnBookingAction;
 };
-const adminActions: BookingEditActions = { load: loadAdminBookingEditDayAction, quote: quoteAdminBookingAction, save: rescheduleAdminBookingAction };
+const ownerActions: BookingEditActions = { load: loadOwnBookingEditDayAction, quote: quoteOwnBookingAction, save: rescheduleOwnBookingAction };
 
 type Quote = { key: string; total: number; requiresConfirmation?: boolean };
 function draftKey(draft: ReservationEditDraft) {
   return `${draft.date}/${draft.selection?.courtId}/${draft.selection?.startMinute}/${draft.selection?.endMinute}`;
 }
 function editInput(id: string, context: BookingEditContext, draft: ReservationEditDraft) {
-  return { id, expectedUpdatedAt: context.updated_at, expectedBookingUpdatedAt: context.booking_updated_at,
+  return { id, expectedUpdatedAt: context.updated_at, expectedRevisionId: context.current_revision_id,
     courtId: draft.selection?.courtId, date: draft.date, startMinute: draft.selection?.startMinute,
     endMinute: draft.selection?.endMinute };
 }
@@ -43,14 +44,14 @@ function BookingPrice({ id, context, draft, currency, quote, acknowledged, onQuo
     if (!courtId || startMinute === undefined || endMinute === undefined) return;
     let notification: string | number | undefined;
     actions.quote({ id, expectedUpdatedAt: context.updated_at,
-      expectedBookingUpdatedAt: context.booking_updated_at, courtId, date: draft.date, startMinute, endMinute,
+      expectedRevisionId: context.current_revision_id, courtId, date: draft.date, startMinute, endMinute,
       save: false, expectedTotal: null, priceAcknowledged: false }).then((result) => {
       if (disposed) return;
       if (result.ok) { onQuote({ key, total: result.totalAmountMinor }); }
       else notification = toast.error(result.message);
     }).catch(() => { if (!disposed) notification = toast.error("Unable to calculate the new total. Choose the interval again."); });
     return () => { disposed = true; if (notification !== undefined) toast.dismiss(notification); };
-  }, [id, context.updated_at, context.booking_updated_at, courtId, draft.date, startMinute, endMinute, key, onQuote, actions]);
+  }, [id, context.updated_at, context.current_revision_id, courtId, draft.date, startMinute, endMinute, key, onQuote, actions]);
   const currentQuote = quote?.key === key ? quote : null;
   return <section aria-label="Booking price" className="rounded-control border border-border p-3 text-sm">
     <p>Current total: {formatMoney(context.total_amount_minor, currency)}</p>
@@ -59,7 +60,7 @@ function BookingPrice({ id, context, draft, currency, quote, acknowledged, onQuo
       {currentQuote.total > context.total_amount_minor ? "Additional amount payable: " : "Eligible refund: "}
       {formatMoney(Math.abs(currentQuote.total - context.total_amount_minor), currency)}
     </p>}
-    {context.refunds?.map(refund => <p key={refund.id} className="mt-2">
+    {context.refunds.map(refund => <p key={refund.id} className="mt-2">
       Refund {formatMoney(refund.amount, currency)}: {refund.status === "succeeded" ? "completed" : refund.status === "failed" ? "failed; the club can retry it" : "pending or awaiting retry"}
     </p>)}
     {currentQuote && (currentQuote.total !== context.total_amount_minor || currentQuote.requiresConfirmation) && <label className="mt-2 flex items-center gap-2">
@@ -69,7 +70,7 @@ function BookingPrice({ id, context, draft, currency, quote, acknowledged, onQuo
   </section>;
 }
 
-export function BookingEditForm({ booking, location, onCancel, onSaved, onPendingChange, actions = adminActions }: {
+export function BookingEditForm({ booking, location, onCancel, onSaved, onPendingChange, actions = ownerActions }: {
   booking: Pick<AdminBooking, "id" | "booking_date" | "currency">; location?: Pick<InternalLocation, "name" | "courts">; actions?: BookingEditActions; onCancel: () => void;
   onSaved: () => Promise<void>; onPendingChange: (value: boolean) => void;
 }) {
@@ -107,27 +108,45 @@ export function BookingEditForm({ booking, location, onCancel, onSaved, onPendin
   if (!context) return <div className="mt-4 min-h-20 text-sm" aria-busy={!error}>
     <p role={error ? "alert" : "status"}>{error || "Loading booking…"}</p>
     <button type="button" onClick={onCancel} className="mt-3 underline">Back to details</button></div>;
-  if (adjustment) return <section aria-label="Booking modification" className="mt-4 space-y-3 text-sm">
-    {adjustment.target && <p>New interval: {context.location.courts.find(c => c.id === adjustment.target?.courtId)?.name ?? "Court"} · {adjustment.target.date} · {minuteToTime(adjustment.target.startMinute)}–{minuteToTime(adjustment.target.endMinute)}</p>}
-    <p>Current total: {formatMoney(context.total_amount_minor, booking.currency)}</p>
-    <p>New total: {formatMoney(adjustment.totalAmountMinor, booking.currency)}</p>
-    <p className="font-semibold">{adjustment.totalAmountMinor >= context.total_amount_minor ? "Additional amount payable: " : "Eligible refund: "}
-      {formatMoney(Math.abs(adjustment.totalAmountMinor - context.total_amount_minor), booking.currency)}</p>
+  if (adjustment) return <section aria-label="Booking modification" data-booking-modification className="mx-auto mt-4 max-w-xl space-y-4 text-sm">
+    <div className="rounded-control border border-border bg-surface-muted p-4">
+      <h3 className="mb-3 font-heading text-base font-semibold text-primary">{adjustment.adjustmentStatus === "pending" ? "Complete your modification"
+        : adjustment.adjustmentStatus === "applied" ? "Booking modification completed" : "Modification ended"}</h3>
+      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 [&_dd]:text-right [&_dd]:font-semibold">
+        <dt className="text-muted-foreground">Location</dt><dd>{context.location.name}</dd>
+        {adjustment.target && <>
+          <dt className="text-muted-foreground">Court</dt><dd>{context.location.courts.find(c => c.id === adjustment.target?.courtId)?.name ?? "Court"}</dd>
+          <dt className="text-muted-foreground">Date</dt><dd>{adjustment.target.date}</dd>
+          <dt className="text-muted-foreground">Time</dt><dd>{minuteToTime(adjustment.target.startMinute)}–{minuteToTime(adjustment.target.endMinute)}</dd>
+        </>}
+        <dt className="text-muted-foreground">Current total</dt><dd>{formatMoney(context.total_amount_minor, booking.currency)}</dd>
+        <dt className="text-muted-foreground">{adjustment.adjustmentStatus === "applied" ? "Updated total" : "Proposed total"}</dt><dd>{formatMoney(adjustment.totalAmountMinor, booking.currency)}</dd>
+      </dl>
+      <div className="mt-3 flex flex-wrap items-baseline justify-between gap-2 border-t border-border pt-3 text-primary">
+        <span className="font-semibold">{adjustment.refundStatus || adjustment.totalAmountMinor < context.total_amount_minor ? "Refund amount" : "Additional amount payable"}</span>
+        <strong className="text-2xl tabular-nums">{formatMoney(Math.abs(adjustment.totalAmountMinor - context.total_amount_minor), booking.currency)}</strong>
+      </div>
+      {adjustment.refundStatus && <dl className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+        <dt className="text-muted-foreground">Refund status</dt>
+        <dd role="status" className={`rounded-full px-3 py-1 text-xs font-semibold ${adjustment.refundStatus === "succeeded" ? "bg-success-background text-success" : adjustment.refundStatus === "failed" ? "bg-danger-background text-danger" : "bg-warning-background text-foreground"}`}>
+          {adjustment.refundStatus === "succeeded" ? "Refund completed" : adjustment.refundStatus === "failed" ? "Refund failed; the club can retry it" : "Refund pending; the club can reconcile or retry it"}
+        </dd>
+      </dl>}
+    </div>
     {adjustment.adjustmentStatus === "pending" ? <>
-      <p>The modification is pending. Your original booking remains confirmed until payment and the change are verified.</p>
+      <p className="text-muted-foreground">Your original booking remains confirmed until payment and the change are verified.</p>
       {adjustment.checkout && adjustment.holdExpiresAt ? <OnlinePayment checkout={adjustment.checkout}
         holdExpiresAt={adjustment.holdExpiresAt} disabled={cancelling} confirmationMessage="Booking modification completed."
         onPaymentStatus={(status) => { if (["cancelled", "expired", "refunded", "refund_pending", "refund_failed"].includes(status)) setPaymentEnded(true); }}
         onConfirmed={() => { if (!active.current) return; void onSaved().catch(() => toast.warning("Booking modification completed. Unable to refresh its details.")); }} />
-        : <button type="button" className="underline" onClick={() => {
+        : <Button type="button" variant="secondary" onClick={() => {
           void actions.load(booking.id, booking.booking_date).then(result => {
             if (!active.current) return;
             if (result.adjustment) setAdjustment(current => current && ({ ...current, ...result.adjustment }));
             else toast.info("The payment is no longer pending. Close and reopen booking details.");
           }).catch(() => { if (active.current) toast.error("Unable to recover payment. Please try again."); });
-        }}>Recover additional payment</button>}
-      {adjustment.paymentUrl && <p><a href={adjustment.paymentUrl} target="_blank" rel="noreferrer" className="underline">Customer payment link</a></p>}
-      {adjustment.checkout && !paymentEnded && <button type="button" disabled={cancelling} className="underline" onClick={() => {
+        }}>Recover additional payment</Button>}
+      {adjustment.checkout && !paymentEnded && <Button type="button" variant="secondary" fullWidth disabled={cancelling} aria-busy={cancelling} onClick={() => {
         const checkout = adjustment.checkout;
         if (cancelling || !checkout) return;
         setCancelling(true);
@@ -137,22 +156,20 @@ export function BookingEditForm({ booking, location, onCancel, onSaved, onPendin
           else toast.warning(result.message);
         }).catch(() => { if (active.current) toast.warning("Cancellation outcome is uncertain. Reopen details to recover it."); })
           .finally(() => setCancelling(false));
-      }}>Cancel modification</button>}
+      }}>Cancel modification</Button>}
     </> : <>
-      <p>{adjustment.adjustmentStatus === "applied" ? "Booking modification completed." : "Modification ended. The original booking was preserved."}</p>
+      {adjustment.adjustmentStatus !== "applied" && <p className="text-muted-foreground">The original booking was preserved.</p>}
       {adjustment.paymentRecoveryRequired && <>
         <p>The additional payment cancellation is still being checked. Do not pay again yet.</p>
-        <button type="button" className="underline" onClick={() => {
+        <Button type="button" variant="secondary" onClick={() => {
           void actions.load(booking.id,booking.booking_date).then(result => {
             if (!active.current) return;
             if (!result.booking.pending_adjustment_id) void onSaved();
             else toast.warning("Payment outcome is still uncertain. Retry recovery shortly.");
           }).catch(() => { if (active.current) toast.warning("Unable to establish the payment outcome. Retry recovery shortly."); });
-        }}>Recover payment outcome</button>
+        }}>Recover payment outcome</Button>
       </>}
-      {adjustment.refundStatus && <p>Refund status: {adjustment.refundStatus === "succeeded" ? "Refund completed" : adjustment.refundStatus === "failed" ? "Refund failed; the club can retry it" : "Refund pending; the club can reconcile or retry it"}</p>}
     </>}
-    <button type="button" className="underline" onClick={() => { if (adjustment.adjustmentStatus === "applied") void onSaved(); else onCancel(); }}>Close</button>
   </section>;
   const fixedLocation = location ?? context.location;
   return <ReservationEditForm reservation={{ ...context, id: booking.id, reason: null,

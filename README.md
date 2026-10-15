@@ -349,7 +349,7 @@ under Booking policy. `locations.customer_cancellation_notice_minutes` stores
 0–43,200 elapsed minutes (up to 30 days), defaulting to 1,440 (24 hours).
 The final schema stores the configured location default and the authoritative booking snapshot.
 The TypeORM checkout transaction reads and stores the selected location policy as
-`bookings.cancellation_notice_minutes`; later location changes leave that snapshot
+`booking_revisions.cancellation_notice_minutes`; later location changes leave that snapshot
 unchanged. Personal upcoming/history and Admin operational reads return the booking's
 own snapshot. The configuration read is Admin-only; public location reads retain
 their previous columns. Customer intent cannot supply a policy value.
@@ -530,10 +530,11 @@ refund obligations. The original confirmed booking stays intact during surcharge
 payment; GiST-protected hold fragments reserve target time outside the original
 interval. Verified settlement atomically applies the edit, or records compensation
 without changing the original booking. My Activity Edit recovers the registered
-intent after refresh; Admin-created changes expose a capability-bound customer
-payment link. Same-price edits save directly. Pay-at-club edits update uncollected
-amount due without Stripe. Captured payment amounts remain immutable; cancellation
-allocates only remaining funds across all captures and preserves Admin refund choices.
+intent after refresh. Only eligible owners, including Admin/Coach owners, may
+reschedule; Admins cannot reschedule other customers' bookings. Same-price edits
+save directly. Pay-at-club edits append a contract revision: current debt changes,
+while the original request amount remains unchanged. Cancellation automatically
+allocates remaining captured funds after existing refund obligations.
 See [implemented workflow and validation](docs/booking-payment-workflow-audit.md).
 
 Members should be able to choose between rescheduling and cancellation/refund.
@@ -594,9 +595,10 @@ post-commit delivery described in [Booking notifications](docs/booking-notificat
 ## Cancellation and refunds
 
 Eligible customer self-cancellation of a confirmed Stripe-paid booking cancels both
-booking and reservation and requests a full refund of the original captured amount.
+booking and reservation and requests a refund of remaining captured funds after
+existing refund obligations.
 Existing cancellation notice and start-time rules remain unchanged. Admin cancellation
-before start explicitly chooses whether to refund the full payment. Pay-at-club
+before start automatically requests applicable online refunds. Pay-at-club
 cancellation has no refund operation.
 
 The durable `payment_refunds` record retains the original successful attempt, provider,
@@ -604,9 +606,12 @@ amount and currency. Cancellation, occupancy release, refund request and cancell
 email snapshot commit together. Stripe runs after commit; failures never restore the
 court. Repeated requests reuse the record and its stable idempotency key. See
 [refund lifecycle and retry handling](docs/payments-memberships.md#stripe-cancellation-refunds).
-Partial and NETOPIA refunds and generic manual reconciliation are outside the implemented scope.
+Partial refunds for eligible booking reductions are implemented. NETOPIA refunds
+and generic manual reconciliation remain outside the implemented scope.
 Admin payment transactions and persisted reconciliation reasons can be reviewed
 at `/admin/payments/transactions`, with focused Stripe refund retry and late-capture refund actions; provider settings are at `/admin/payments/settings`.
+Booking history is implemented; [remaining financial-model work](docs/payments-memberships.md#remaining-financial-model-work-task-4)
+is explicitly deferred to Task 4.
 
 ---
 
@@ -1118,10 +1123,9 @@ The cutoff, revision increment, creation and pricing reconciliation commit atomi
 
 `opening_hours_schedules` owns each location's validity period;
 `location_opening_hours.schedule_id` associates the existing weekday intervals.
-The additive `EffectiveOpeningHours` TypeORM migration preserves all existing interval
-IDs, values and timestamps beneath a baseline from 0001-01-01 with no expiration.
-It does not touch reservations or financial records. PostgreSQL excludes overlapping
-schedule periods for a location and overlapping intervals within a schedule/weekday.
+The consolidated initial TypeORM migration creates schedules and their weekday
+intervals directly. No legacy baseline backfill or patch migration is retained.
+PostgreSQL excludes overlapping schedule periods for a location and overlapping intervals within a schedule/weekday.
 Minutes retain the 0–1440 convention, including 24:00. Closed weekdays have no intervals.
 Reads use the requested playing date in the location's IANA timezone; a date without
 an applicable schedule is closed for new reservations. Future schedules apply to
@@ -1247,22 +1251,15 @@ token and fixed location, leaving it unchanged on a stale edit or GiST conflict.
 The creator and lifecycle fields remain intact. The personal owner-only edit
 mutation remains separate.
 
-Admins can reschedule future confirmed customer bookings from the booking details
-dialog on `/admin/reservations`. The booking-specific timetable keeps the location fixed,
-preselects the current interval and excludes its own reservation from occupancy.
-Contact snapshots remain read-only. The shared TypeScript rescheduling service reuses
-public-calendar court-state, pricing and rounding functions, then evaluates price
-acknowledgement. The TypeORM transaction locks shared configuration advisory fence,
-location FOR UPDATE, booking then reservation FOR UPDATE, and actor roles/account
-FOR SHARE. It compares both browser tokens losslessly in PostgreSQL after lifecycle
-and policy checks. Configuration writers serialize against those locks so pricing,
-coverage, hours and resource reads remain coherent throughout quote/save.
-Changed totals require explicit acknowledgement; a changed save quote returns
-`price_changed` without writing. Rescheduling preserves identity,
-contact and cancellation-policy snapshots, and invalidates `/book`, `/admin/reservations`
-and `/my-activity/bookings`, without invalidating History. The owner-scoped
-self-rescheduling workflow above reuses this implementation. Stripe one-time checkout
-and full Stripe cancellation refunds are implemented. Booking lifecycle notifications use best-effort post-commit Brevo delivery.
+Booking modifications are owner-only, including Coach/Admin owners. Admins can
+cancel customer/guest bookings with automatic refunds of captured online funds;
+they cannot reschedule other customers' bookings. Admin editing of direct court
+reservations remains available. The owner timetable keeps location fixed, uses the
+current revision UUID plus the lossless occupancy token, and retains authoritative
+pricing, acknowledgement, notice and concurrency checks. Applied changes append
+immutable contracts and move occupancy atomically. Identical saves are no-ops;
+Pay-at-club request amounts remain unchanged while current debt comes from the
+current revision. See [booking revisions](docs/booking-domain.md#implemented-immutable-booking-contracts).
 
 On `/my-activity/bookings`, active Admins and Coaches can cancel only their own active Upcoming
 reservations after explicit confirmation. The Server Action rechecks staff authorization,
@@ -1539,7 +1536,7 @@ npm run test:e2e
 
 Both commands discover and verify test credentials automatically. Integration files
 are serialized because final-admin tests modify shared test administrator statuses.
-Playwright builds and starts its own production Next.js server on port 3000 with
+Playwright builds and starts its own production Next.js server on port 3100 with
 those same isolated connections; stop any application server on that port first.
 Existing servers cannot be reused. No development seed or rebuild command is needed.
 See [test setup and safeguards](docs/testing.md).
@@ -1605,10 +1602,10 @@ Before expanding the platform, prove the following cases locally:
 
 ## Booking email notifications
 
-Booking confirmation, customer/Admin cancellation and customer/Admin rescheduling
+Booking confirmation, customer/Admin cancellation and owner rescheduling
 capture the booking contact and schedule within the successful transaction, then
 send the preserved text template through Brevo's transactional HTTP API after commit.
-Use only the snapshotted `bookings.customer_email`, never the current account email.
+Use only the snapshotted the current revision’s `customer_email`, never the current account email.
 Quote, stale, failed and unchanged-schedule saves send no rescheduling email;
 pending/failed/expired checkout sends no confirmation. Transition and webhook receipt
 checks prevent replayed operations from sending again. Delivery is best-effort with
@@ -1623,14 +1620,24 @@ The `/book` confirmation UI reads only the selected eligible public location’s
 
 ## Refund persistence (Phase 8)
 
-Automatic post-cancellation refund preparation/result persistence uses short TypeORM
-transactions locking only the refund; automatic processing intentionally remains unleased.
-Admin retry/reconciliation uses aggregate transactions and a five-minute token+actor lease,
-with transaction-time active-Admin fencing during preparation. Stripe runs after commit.
-The result transaction uses the lease identity without fresh authorization or expiry checks;
-stored success wins and qualifying provider-event resolution commits atomically with the
-refund result and lease clearing. Original attempt/refund snapshots remain financial authority.
-No new refund notifications are written.
+Automatic and Admin processing share immutable refund executions and five-minute
+execution leases. Preparation locks booking → reservation → selected attempt → ordered
+capture receipts → refund obligation → execution; Admin preparation also fences the
+active Admin's roles/account. A READY execution's dispatch timestamp commits in a
+separate transaction before Stripe is contacted. The adapter uses its stored request,
+exact idempotency key, obligation ID and execution ID metadata. Previously dispatched
+executions use retrieval or metadata discovery only; lookup failure, an empty search,
+lease expiry and a crash do not authorize another creation.
+
+Result transactions retain write-once identity, uncertainty and terminal evidence.
+Current lease tokens fence error/check updates and lease clearing; stale workers may
+record valid historical provider facts without clearing a newer lease. Verified success
+cannot regress. Eligible receipt resolution commits atomically with completion; existing
+automatic adjustment and Admin reconciliation attribution rules remain. Admin retry may
+allocate a distinct execution only after verified failure or definitive rejection.
+Automatic processing retains terminal short-circuits. PaymentRefund stores immutable
+obligation terms plus status/timestamps; provider references/errors come from executions.
+No refund notifications, scheduled worker, dual writes or provider history JSON remain.
 
 ## Application migrations and fresh local setup
 
@@ -1646,9 +1653,13 @@ For a **fresh, empty** local project:
 3. Run `npm run db:dev:rebuild -- --discard-local-data` to initialize the local application schema.
 4. Run `npm run db:dev:seed` separately if fixtures are needed.
 
-The initial migration creates all 17 entity tables. The native integrity migration
-installs `btree_gist`, four overlap exclusions, the case-insensitive email index,
-the Auth user FK, `admin`/`coach` roles and the provider-settings singleton. The
+The initial migration is generated from the shared TypeORM metadata and creates all
+21 application tables, including effective opening hours, booking adjustments, immutable booking revisions and refund executions.
+It configures `btree_gist` before the five entity-declared overlap exclusions. The
+Auth user FK is generated from a non-synchronized reference entity: Supabase alone
+owns `auth.users`. The native integrity migration installs the case-insensitive
+email expression index, permanent-ownership and revision immutability/linear-head guards, `admin`/`coach` roles
+and the provider-settings singleton. The
 Supabase integration migration installs the two Auth provisioning/email-sync hooks,
 explicit email-change timestamps, private WebP avatar bucket and Storage policies.
 A secured active-account boolean helper keeps Storage working without browser

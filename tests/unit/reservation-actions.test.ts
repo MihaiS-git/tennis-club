@@ -13,14 +13,13 @@ vi.mock("@/lib/reservations/service", () => ({
   cancelCustomerBookingAsAdmin: services.adminBookingCancel,
 }));
 vi.mock("@/lib/bookings/self-reschedule", () => ({ rescheduleOwnCustomerBooking: services.ownerBookingReschedule }));
-vi.mock("@/lib/bookings/admin-reschedule", () => ({ rescheduleCustomerBookingAsAdmin: services.adminBookingReschedule }));
 vi.mock("@/lib/reservations/personal-service", () => ({
   editOwnDirectReservation: services.ownerEdit,
   cancelOwnDirectReservation: services.ownerCancel,
 }));
 
 import { cancelAdminCustomerBookingAction, cancelAdminReservationAction, editAdminReservationAction,
-  reserveCourtAction, rescheduleAdminBookingAction, quoteAdminBookingAction } from "@/app/admin/reservations/actions";
+  reserveCourtAction } from "@/app/admin/reservations/actions";
 import { cancelOwnReservationAction, editOwnReservationAction } from "@/app/my-activity/bookings/actions";
 
 const upcomingPaths = [["/book"], ["/admin/reservations"], ["/my-activity/bookings"]];
@@ -48,22 +47,6 @@ it.each(mutations)("$name invalidates exactly the affected reads after success a
   finish(result);
   expect(await pending).toBe(result);
   expect(services.revalidate.mock.calls).toEqual(paths);
-});
-
-it.each([
-  { quote: quoteAdminBookingAction, save: rescheduleAdminBookingAction, service: services.adminBookingReschedule },
-])("booking rescheduling invalidates Upcoming routes only after save, never after quote or rejection", async ({ quote, save, service }) => {
-  const result = { ok: true, totalAmountMinor: 9000 };
-  service.mockResolvedValue(result);
-  expect(await quote({ save: false })).toBe(result);
-  expect(services.revalidate).not.toHaveBeenCalled();
-  expect(await save({ save: true })).toBe(result);
-  expect(services.revalidate.mock.calls).toEqual(upcomingPaths);
-  services.revalidate.mockClear();
-  const failure = { ok: false, reason: "price_changed", totalAmountMinor: 10000 };
-  service.mockResolvedValue(failure);
-  expect(await save({ save: true })).toBe(failure);
-  expect(services.revalidate).not.toHaveBeenCalled();
 });
 
 it("owner cancellation rejection leaves all calendar caches unchanged", async () => {

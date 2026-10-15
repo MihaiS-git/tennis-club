@@ -59,7 +59,7 @@ const panel = (name: string) => screen.getByRole("region", { name });
 const unload = () => { const event = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented; };
 async function workspace() {
   const content = await LocationManagementPage({ params: Promise.resolve({ locationId: location.id }) });
-  return render(<ProfileDepartureProvider><AdminNavigation />{content}<Toaster /></ProfileDepartureProvider>);
+  return render(<ProfileDepartureProvider><AdminNavigation isAdmin={true} />{content}<Toaster /></ProfileDepartureProvider>);
 }
 beforeEach(() => {
   vi.resetAllMocks();
@@ -112,7 +112,7 @@ it.each(["?tab=pricing", "?tab=unknown", "?tab=pricing&tab=courts"])("resolves i
   const view = await workspace();
   const expected = query === "?tab=pricing" ? "Pricing" : "Details";
   expect(panel(expected)).toBeTruthy();
-  view.rerender(<ProfileDepartureProvider><AdminNavigation />{await LocationManagementPage({ params: Promise.resolve({ locationId: location.id }) })}<Toaster /></ProfileDepartureProvider>);
+  view.rerender(<ProfileDepartureProvider><AdminNavigation isAdmin={true} />{await LocationManagementPage({ params: Promise.resolve({ locationId: location.id }) })}<Toaster /></ProfileDepartureProvider>);
   expect(panel(expected)).toBeTruthy();
 });
 
@@ -127,7 +127,7 @@ it("preserves dirty Details through tabs, browser Back/Forward and sibling refre
   await act(async () => { window.history.forward(); await new Promise((resolve) => setTimeout(resolve, 20)); });
   expect(panel("Pricing")).toBeTruthy();
   mocks.readiness.mockResolvedValue([{ ...location, is_public: true, updated_at: "2026-10-02T00:00:00Z", missing: [] }]);
-  view.rerender(<ProfileDepartureProvider><AdminNavigation />{await LocationManagementPage({ params: Promise.resolve({ locationId: location.id }) })}<Toaster /></ProfileDepartureProvider>);
+  view.rerender(<ProfileDepartureProvider><AdminNavigation isAdmin={true} />{await LocationManagementPage({ params: Promise.resolve({ locationId: location.id }) })}<Toaster /></ProfileDepartureProvider>);
   tab("Details");
   expect(screen.getByLabelText("Name")).toBe(name);
   expect(name).toHaveProperty("value", "Draft name");
@@ -164,7 +164,11 @@ it("edits opening hours inline and retains its unsaved interval across tabs", as
   expect(unload()).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
   await waitFor(() => expect(screen.getByRole("button", { name: "Save changes" })).toHaveProperty("disabled", true));
-  expect(mocks.saveHours).toHaveBeenCalledWith(expect.objectContaining({ location_id: location.id, weekdays: [], intervals: [], replace_ids: [hours[0].id], rows: [{ weekdays: [0], opens_at: "09:00", closes_at: "20:00" }] }));
+  expect(mocks.saveHours).toHaveBeenCalledWith({
+    location_id: location.id, operation: "update", schedule_id: schedule.id, revision: schedule.revision,
+    starts_on: schedule.starts_on, ends_on: "", replace_ids: [hours[0].id],
+    rows: [{ weekdays: [0], opens_at: "09:00", closes_at: "20:00" }],
+  });
   expect(unload()).toBe(false);
 });
 
@@ -313,7 +317,7 @@ it("renders reconciled pricing and readiness from the opening-hours refresh", as
   mocks.pricing.mockResolvedValue([{ ...rule, starts_at_minute: 540 }]);
   mocks.readiness.mockResolvedValue([{ ...location, missing: ["pricing for every active court"] }]);
   const content = await LocationManagementPage({ params: Promise.resolve({ locationId: location.id }) });
-  view.rerender(<ProfileDepartureProvider><AdminNavigation />{content}<Toaster /></ProfileDepartureProvider>);
+  view.rerender(<ProfileDepartureProvider><AdminNavigation isAdmin={true} />{content}<Toaster /></ProfileDepartureProvider>);
   tab("Pricing");
   expect(panel("Pricing").textContent).toContain("09:00–10:00");
   expect(panel("Pricing").textContent).not.toContain("08:00–10:00");

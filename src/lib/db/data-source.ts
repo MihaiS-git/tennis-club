@@ -3,18 +3,22 @@ import "reflect-metadata";
 
 import { DataSource } from "typeorm";
 
+import { AuthUserEntity } from "./entities/auth-user.entity";
 import { PlayerProfileEntity } from "./entities/player-profile.entity";
 import { RoleEntity } from "./entities/role.entity";
 import { UserRoleEntity } from "./entities/user-role.entity";
 import { UserEntity } from "./entities/user.entity";
 
 import { LocationEntity } from "./entities/location.entity";
+import { BookingRevisionEntity } from "./entities/booking-revision.entity";
 import { BookingEntity } from "./entities/booking.entity";
 import { PaymentAttemptEntity } from "./entities/payment-attempt.entity";
+import { PaymentCaptureReceiptEntity } from "./entities/payment-capture-receipt.entity";
 import { PaymentProviderChangeEntity } from "./entities/payment-provider-change.entity";
 import { PaymentProviderEventEntity } from "./entities/payment-provider-event.entity";
 import { PaymentProviderSettingEntity } from "./entities/payment-provider-setting.entity";
 import { PaymentRefundEntity } from "./entities/payment-refund.entity";
+import { RefundExecutionEntity } from "./entities/refund-execution.entity";
 import { CourtReservationEntity } from "./entities/court-reservation.entity";
 import { CourtEntity } from "./entities/court.entity";
 import { CourtCoveragePeriodEntity } from "./entities/court-coverage-period.entity";
@@ -27,9 +31,12 @@ import { OpeningHoursScheduleEntity } from "./entities/opening-hours-schedule.en
 import { BookingAdjustmentEntity } from "./entities/booking-adjustment.entity";
 
 const entities = {
+  AuthUserEntity,
+  RefundExecutionEntity,
+  BookingRevisionEntity,
   BookingAdjustmentEntity,
   OpeningHoursScheduleEntity,
-  BookingEntity, PaymentAttemptEntity, PaymentProviderChangeEntity, PaymentProviderEventEntity,
+  BookingEntity, PaymentAttemptEntity, PaymentCaptureReceiptEntity, PaymentProviderChangeEntity, PaymentProviderEventEntity,
   PaymentProviderSettingEntity, PaymentRefundEntity, CourtReservationEntity,
   UserEntity, RoleEntity, UserRoleEntity, PlayerProfileEntity, LocationEntity, CourtEntity,
   CourtCoveragePeriodEntity, LocationOpeningHoursEntity, LocationPricingRuleEntity, PricingRuleSetEntity,
@@ -74,6 +81,7 @@ export function createDataSource(): DataSource {
     dropSchema: false,
     migrationsRun: false,
     installExtensions: false,
+    uuidExtension: "pgcrypto",
     entities: Object.values(entities),
     migrations: [],
   });

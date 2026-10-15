@@ -1,6 +1,6 @@
 import "server-only";
 
-import { Check, Column, Entity, Exclusion, JoinColumn, ManyToOne, PrimaryColumn, type Relation } from "typeorm";
+import { Check, Column, Entity, Exclusion, JoinColumn, ManyToOne, PrimaryGeneratedColumn, type Relation } from "typeorm";
 
 import { CourtEntity } from "./court.entity";
 
@@ -8,7 +8,7 @@ import { CourtEntity } from "./court.entity";
 @Check("court_coverage_dates_check", "starts_on <= ends_on AND isfinite(starts_on) AND isfinite(ends_on)")
 @Exclusion("court_coverage_no_overlap", "USING gist (court_id WITH =, daterange(starts_on, ends_on, '[]') WITH &&)")
 export class CourtCoveragePeriodEntity {
-  @PrimaryColumn({ name: "id", type: "uuid", default: () => "gen_random_uuid()", primaryKeyConstraintName: "court_coverage_periods_pkey" })
+  @PrimaryGeneratedColumn("uuid", { name: "id", primaryKeyConstraintName: "court_coverage_periods_pkey" })
   id!: string;
 
   @Column({ name: "court_id", type: "uuid" })

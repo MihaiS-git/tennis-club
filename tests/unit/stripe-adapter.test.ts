@@ -31,7 +31,7 @@ test("verifies raw signatures before translation, handles cancellation and ignor
   const verify = (body: string) => verifyStripeEvent(body, stripe.webhooks.generateTestHeaderString({ payload: body, secret: "whsec_Fixture" }));
   expect(() => verifyStripeEvent(payload("payment_intent.succeeded"), "invalid")).toThrow("Payment service unavailable.");
   expect(verify(payload("payment_intent.succeeded"))).toEqual({ provider: "stripe", eventId: "evt_fixture", attemptId: id,
-    providerPaymentId: "pi_fixture", amountMinor: 5000, currency: "RON", outcome: "succeeded" });
+    providerPaymentId: "pi_fixture", providerCaptureId: "pi_fixture", amountMinor: 5000, currency: "RON", outcome: "succeeded" });
   expect(verify(payload("payment_intent.canceled"))?.outcome).toBe("cancelled");
   expect(verify(payload("payment_intent.payment_failed"))?.outcome).toBe("retryable_failed");
   expect(verify(payload("payment_intent.succeeded", { payment_attempt_id: "other" }))).toBeNull();

@@ -12,7 +12,7 @@ import { normalizeDatabaseError } from "@/lib/db/errors";
 import { lockActiveAdminAccount } from "@/lib/db/repositories/accounts.repository";
 import * as clubs from "@/lib/db/repositories/clubs.repository";
 import * as pricing from "@/lib/db/repositories/pricing.repository";
-import { pricingRulesOverlap, pricingRemovalSchema, pricingMutationSchema, pricingRuleSchema, type PricingMutationResult, type PricingRule } from "@/lib/pricing/validation";
+import { supportsPricingState, pricingRulesOverlap, pricingRemovalSchema, pricingMutationSchema, pricingRuleSchema, type PricingMutationResult, type PricingRule } from "@/lib/pricing/validation";
 import { groupPricingRuleSets, pricingOpeningHoursError, pricingRuleSetRevision } from "@/lib/pricing/resolution";
 import { localToday } from "@/lib/courts/local-time";
 
@@ -71,7 +71,7 @@ async function mutatePricing(input: unknown, remove: boolean, supabase?: Client)
         if (courts.length !== rule.court_ids.length) {
           return { ok: false, reason: "invalid-input", fieldErrors: { court_ids: "Select existing courts belonging to this location." } };
         }
-        if (courts.some((court) => (court.environment === "indoor") !== (rule.court_state === "indoor"))) {
+        if (courts.some((court) => !supportsPricingState(court.environment, rule.court_state))) {
           return { ok: false, reason: "invalid-input", fieldErrors: { court_state: "Selected courts must share a valid state: indoor courts use Indoor; outdoor courts use Outdoor or Covered." } };
         }
         failureMessage = "Unable to validate pricing against opening hours.";

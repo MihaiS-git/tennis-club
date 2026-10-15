@@ -1,9 +1,15 @@
 # Booking email notifications
 
-Booking confirmation, customer/Admin cancellation and customer/Admin rescheduling
-capture the booking contact and schedule within the successful transaction, then
+Booking confirmation, customer/Admin cancellation and owner rescheduling
+map the accepted immutable booking revision within the successful transaction, then
 send the preserved text template through Brevo's transactional HTTP API after commit.
-Use only the snapshotted `bookings.customer_email`, never the current account email.
+Use only the revision's customer email, never the current account email. The same
+revision supplies historical location/court names, timezone, contractual schedule,
+total and currency. Online confirmation copies the checkout revision's terms;
+resource renames do not replace them. Rescheduling uses the newly applied revision
+and its predecessor for old/new schedule text. Pending paid adjustments send nothing;
+successful application returns its notification to the existing post-commit settlement
+workflow. Cancellation copies the current contract into its cancellation revision.
 Quote, stale, failed and unchanged-schedule saves send no rescheduling email;
 pending/failed/expired checkout sends no confirmation. Transition and webhook receipt
 checks prevent replayed operations from sending again. Delivery is best-effort with

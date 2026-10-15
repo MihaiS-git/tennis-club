@@ -50,7 +50,12 @@ async function processAdminOpeningHours(input: unknown, supabase?: Client): Prom
     for (const issue of parsed.error.issues) fieldErrors[String(issue.path.at(-1) ?? "form")] ??= issue.message;
     return { ok: false, reason: "invalid-input", fieldErrors };
   }
-  const { location_id, weekdays, replace_ids, intervals, operation, schedule_id, starts_on, ends_on, revision } = parsed.data;
+  const { location_id, operation } = parsed.data;
+  const { schedule_id, revision } = parsed.data.operation === "create"
+    ? { schedule_id: undefined, revision: undefined } : parsed.data;
+  const { starts_on, ends_on, replace_ids, rows } = parsed.data.operation === "delete"
+    ? { starts_on: undefined, ends_on: undefined, replace_ids: [], rows: [] } : parsed.data;
+  const weekdays = [...new Set(rows.flatMap((row) => row.weekdays))];
   let failureMessage = "Unable to change opening hours.";
   let result: OpeningHoursMutationResult;
   try {
@@ -91,7 +96,6 @@ async function processAdminOpeningHours(input: unknown, supabase?: Client): Prom
       if (current.filter((row) => selected.has(row.id)).length !== selected.size) {
         return { ok: false, reason: "not-found" };
       }
-      const rows = parsed.data.rows ?? intervals.map((interval) => ({ ...interval, weekdays }));
       const replacements: clubs.OpeningHoursFields[] = rows.flatMap((interval) => interval.weekdays.map((weekday) => ({
         locationId: location.id, weekday,
         opensAtMinute: timeToMinute(interval.opens_at), closesAtMinute: timeToMinute(interval.closes_at),

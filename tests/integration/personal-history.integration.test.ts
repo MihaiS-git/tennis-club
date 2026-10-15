@@ -1,3 +1,5 @@
+import { insertBookingFixture } from "./checkout-fixtures";
+import { cleanupBookingFixtures } from "./checkout-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test } from "vitest";
@@ -38,7 +40,7 @@ test("mixed history is owner scoped, time zone aware, globally ordered and paged
       reason: input.kind === "reservation" ? "Training" : null })).error, null);
     if (input.kind === "reservation") return reservationId;
     const id = randomUUID(); bookings.push(id);
-    assert.strictEqual((await service.from("bookings").insert({ id, reservation_id: reservationId,
+    assert.strictEqual((await insertBookingFixture(service, { id, reservation_id: reservationId,
       account_user_id: input.owner, payment_method: "pay_at_club", customer_name: "Stored Customer", customer_email: input.email ?? "stored@example.test",
       customer_phone: "+40 999", cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON", status: input.status ?? "confirmed" })).error, null);
     return id;
@@ -110,7 +112,7 @@ test("mixed history is owner scoped, time zone aware, globally ordered and paged
     expect((await listOwnCourtHistory(1, member.client, now)).rows.find((row) => row.id === memberCancelled)?.history_at).toBe(stored.data!.updated_at);
 
   } finally {
-    if (bookings.length) assert.strictEqual((await service.from("bookings").delete().in("id", bookings)).error, null);
+    await cleanupBookingFixtures({ bookingIds: bookings });
     for (let offset = 0; offset < reservations.length; offset += 100)
       assert.strictEqual((await service.from("court_reservations").delete().in("id", reservations.slice(offset, offset + 100))).error, null);
     if (courts.length) assert.strictEqual((await service.from("courts").delete().in("id", courts)).error, null);

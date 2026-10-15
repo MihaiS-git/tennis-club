@@ -10,7 +10,7 @@ import { cancelOwnReservationAction, editOwnReservationAction, loadReservationEd
 import { CustomerBookingCancellation } from "@/app/my-activity/bookings/customer-booking-cancellation";
 import { localStartInstant } from "@/lib/courts/local-time";
 import { cancelledBookingMessage } from "@/lib/payments/refund-message";
-import { BookingEditForm, type BookingEditActions } from "./booking-edit-form";
+import { BookingEditForm, type BookingEditActions } from "@/components/booking-edit-form";
 import { minuteToTime } from "@/lib/admin/opening-hours-validation";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { DialogHeader, DialogFooter } from "@/components/dialog-layout";
@@ -44,7 +44,6 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
   const [editToken, setEditToken] = useState<string | null>(null);
   const [editError, setEditError] = useState("");
   const [updatedReservation, setUpdatedReservation] = useState<AdminReservation | null>(null);
-  const [refundPayment, setRefundPayment] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [cancelPending, setCancelPending] = useState(false);
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -109,7 +108,7 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
     const notification = toast.loading("Cancelling…");
     setCancelPending(true);
     try {
-      const result = await cancelAdminCustomerBookingAction({ id: selectedBooking.id, refund: selectedBooking.stripe_refund_available ? refundPayment : null });
+      const result = await cancelAdminCustomerBookingAction({ id: selectedBooking.id });
       if (!result.ok) { toast.error(result.message, { id: notification }); return; }
       setConfirming(false);
       dialogRef.current?.close();
@@ -162,36 +161,36 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
       <ModalDialog ref={dialogRef} active aria-labelledby={titleId}
         onCancel={(event) => { if (cancelPending) event.preventDefault(); }}
         onClose={() => { setSelectedOccupancyId(null); setEditing(false); setEditToken(null);
+          if (dialogRef.current?.querySelector("[data-booking-modification]")) router.refresh();
           setUpdatedReservation(null); setConfirming(false); returnFocusRef.current?.focus(); }}
-        className={`fixed inset-0 m-auto w-[calc(100%-2rem)] rounded-card border border-border bg-surface p-5 text-foreground shadow-floating backdrop:bg-foreground/50 ${editing && !editInProgress ? "max-w-6xl" : "max-w-md"}`}>
+        className={`fixed inset-0 m-auto w-[calc(100%-2rem)] rounded-card border border-border bg-surface p-5 text-foreground shadow-floating backdrop:bg-foreground/50 has-[[data-booking-modification]]:max-w-lg ${editing && !editInProgress ? "max-w-6xl" : "max-w-md"}`}>
         <DialogHeader titleId={titleId} title={selectedGenericOccupancy ? "Occupied court details" : selectedBooking ? editing ? "Edit booking" : "Booking details" : editing ? "Edit reservation" : "Reservation details"} status={editing || selectedGenericOccupancy ? undefined : selectedBooking ? "Confirmed" : "Active"} disabled={cancelPending} onClose={() => dialogRef.current?.close()} />
         {selectedBooking ? <>
+          {!editing && <>
           <BookingDetails booking={{ ...selectedBooking, location_name: location.name,
             location_timezone: location.timezone, court_name: selectedCourtName }} />
           <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
-            <dt className="text-muted-foreground">Customer type</dt><dd>{selectedBooking.account_user_id ? "Authenticated customer" : "Guest"}</dd>
+            <dt className="text-muted-foreground">Customer type</dt><dd>{selectedBooking.account_user_id === null ? "Guest" : "Authenticated customer"}</dd>
             <dt className="text-muted-foreground">Currency</dt><dd>{selectedBooking.currency}</dd>
-            <dt className="text-muted-foreground">Payment method</dt><dd>{selectedBooking.payment_method === "online" ? "Online" : selectedBooking.payment_method === "pay_at_club" ? "Pay at club" : "Unknown"}</dd>
-            {selectedBooking.payments?.map((payment) => <div key={payment.id} className="contents">
+            <dt className="text-muted-foreground">Payment method</dt><dd>{selectedBooking.payment_method === "online" ? "Online" : "Pay at club"}</dd>
+            {selectedBooking.payments.map((payment) => <div key={payment.id} className="contents">
               <dt className="text-muted-foreground">Payment{payment.provider ? ` (${payment.provider})` : ""}</dt><dd>{payment.status}</dd>
             </div>)}
           </dl>
+          </>}
           {editing ? <BookingEditForm booking={selectedBooking} location={location}
-            actions={canManage ? undefined : ownBookingActions}
+            actions={ownBookingActions}
             onCancel={() => setEditing(false)} onPendingChange={setCancelPending}
             onSaved={async () => { dialogRef.current?.close(); setSelectedOccupancyId(null); setEditing(false);
               setSelection(null); router.refresh(); }} />
             : <DialogFooter>
-            {!canManage && ownsBooking && <CustomerBookingCancellation
+            {ownsBooking && <CustomerBookingCancellation
               booking={{ ...selectedBooking, starts_at_instant: localStartInstant(location.timezone, selectedBooking.booking_date, selectedBooking.starts_at_minute),
                 location_name: location.name, location_timezone: location.timezone, court_name: selectedCourtName }} staff
               onEdit={() => setEditing(true)} onPendingChange={setCancelPending}
               onCancelled={async () => { dialogRef.current?.close(); setSelectedOccupancyId(null); setSelection(null); router.refresh(); }} />}
-            {canManage && isReservationBeforeStart({ ...selectedBooking, location_timezone: location.timezone }, new Date())
-              && <button type="button" disabled={cancelPending} onClick={() => setEditing(true)}
-                className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold text-primary">Edit booking</button>}
-            {canManage && isReservationBeforeStart({ ...selectedBooking, location_timezone: location.timezone }, new Date()) && <button ref={cancelButtonRef} type="button" disabled={cancelPending}
-              onClick={() => {  setRefundPayment(false); setConfirming(true); }}
+            {canManage && !ownsBooking && isReservationBeforeStart({ ...selectedBooking, location_timezone: location.timezone }, new Date()) && <button ref={cancelButtonRef} type="button" disabled={cancelPending}
+              onClick={() => {  setConfirming(true); }}
               className="min-h-10 rounded-control border border-danger px-4 text-sm font-semibold text-danger">Cancel booking</button>}
             <button type="button" disabled={cancelPending} onClick={() => dialogRef.current?.close()}
               className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button>
@@ -236,7 +235,7 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
           {canEditReservation && <button type="button" disabled={cancelPending} onClick={openEdit}
               className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold text-primary">Edit reservation</button>}
           {canCancelReservation && <button ref={cancelButtonRef} type="button" disabled={cancelPending}
-            onClick={() => {  setRefundPayment(false); setConfirming(true); }}
+            onClick={() => {  setConfirming(true); }}
             className="min-h-10 rounded-control border border-danger px-4 text-sm font-semibold text-danger">Cancel reservation</button>}
           <button type="button" disabled={cancelPending} onClick={() => dialogRef.current?.close()}
           className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button></DialogFooter>
@@ -259,10 +258,7 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
       cancelLabel={selectedBooking ? "Keep booking" : "Keep reservation"} pending={cancelPending}
       onConfirm={selectedBooking ? cancelBooking : cancelReservation}
       onClose={() => { if (!cancelPending) setConfirming(false); }} returnFocusRef={cancelButtonRef}>
-      {selectedBooking?.stripe_refund_available && <label className="mt-3 flex items-center gap-2 text-sm">
-        <input type="checkbox" checked={refundPayment} disabled={cancelPending}
-          onChange={(event) => setRefundPayment(event.target.checked)} />Refund full payment
-      </label>}
+      {selectedBooking?.stripe_refund_available && <p className="mt-3 text-sm">Captured online funds will be refunded automatically.</p>}
     </ConfirmationDialog>
   </>;
 }

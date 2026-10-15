@@ -89,7 +89,7 @@ reads and preserve their transactional price acknowledgement rules.
 Pricing entities and native overlap integrity are installed by the TypeORM history.
 See [fresh setup](../README.md#application-migrations-and-fresh-local-setup) and
 [focused disposable validation](testing.md#typeorm-cutover-validation). The initial cutover still requires separate authorization for populated databases;
-the subsequent `EffectiveOpeningHours` migration is additive and data preserving.
-No reset is part of validation. See the opening-hours PostgreSQL integration tests
-for baseline migration, concurrent period exclusion, date-scoped pricing, contract
+effective schedules and interval ownership are created directly by the consolidated
+initial migration. Validation uses only isolated disposable test infrastructure. See the opening-hours PostgreSQL integration tests
+for fresh-schema metadata alignment, concurrent period exclusion, date-scoped pricing, contract
 preservation and pending-policy revalidation.

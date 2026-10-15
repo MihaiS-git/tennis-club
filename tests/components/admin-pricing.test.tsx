@@ -21,6 +21,7 @@ vi.mock("next/navigation", () => ({
   )),
 }));
 import { PricingRules } from "../../src/app/admin/pricing/pricing-rules";
+import { PricingRuleForm } from "../../src/app/admin/pricing/pricing-rule-form";
 import type { PricingRuleSet } from "../../src/lib/pricing/validation";
 const location = { id: "c7000000-0000-4000-8000-000000000011", name: "Central Club", currency: "EUR", timezone: "Europe/Bucharest" } as const;
 const courts = [
@@ -38,6 +39,86 @@ const openingHours = Array.from({ length: 7 }, (_, weekday) => ({
   created_at: "2026-09-29T00:00:00Z", updated_at: "2026-09-29T00:00:00Z",
 }));
 const schedules = [{ id: rule.rule_set_id, location_id: location.id, starts_on: "0001-01-01", ends_on: null, revision: 1 }];
+const seasonalCourts = Array.from({ length: 4 }, (_, index) => ({ ...courts[0],
+  id: `c7000000-0000-4000-8000-00000000003${index + 1}`, name: `C${index + 1}` }));
+const indoorCourts = [5, 6].map((index) => ({ ...courts[2], id: `c7000000-0000-4000-8000-00000000003${index}`, name: `I${index}` }));
+
+it.each(["create", "edit"])("%s keeps C1–C4 Covered selection through errors and submits the correct rule identity", async (mode) => {
+  const onSave = vi.fn();
+  const original: PricingRuleSet = { ...rule, court_ids: seasonalCourts.map((court) => court.id), weekdays: [...rule.weekdays] };
+  const before = structuredClone(original);
+  const props = { location, courts: seasonalCourts, openingHours, schedules, today: "2026-07-01", pending: false,
+    onSave, rule: mode === "edit" ? original : undefined };
+  const view = render(<PricingRuleForm {...props} fieldErrors={{}} />);
+  fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+  const select = screen.getByLabelText("Court state");
+  expect(within(select).getAllByRole("option").map((option) => option.textContent)).toEqual(["Outdoor", "Covered"]);
+  for (const option of within(select).getAllByRole("option")) expect(option).toHaveProperty("disabled", false);
+  // Chromium emits input before change for native keyboard selection. The form's
+  // input handler can rerender the controlled select before change is dispatched.
+  fireEvent.input(select, { target: { value: "covered" } });
+  expect(select).toHaveProperty("value", "covered");
+  fireEvent.change(select, { target: { value: "covered" } });
+  fireEvent.change(screen.getByLabelText("Start time"), { target: { value: "08:00" } });
+  fireEvent.change(screen.getByLabelText("End time"), { target: { value: "09:00" } });
+  fireEvent.change(screen.getByLabelText("Price per hour (EUR)"), { target: { value: "25.00" } });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Save rule" })).toHaveProperty("disabled", false));
+  fireEvent.click(screen.getByRole("button", { name: "Save rule" }));
+  expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ court_ids: seasonalCourts.map((court) => court.id), court_state: "covered" }));
+  if (mode === "create") expect(onSave.mock.calls[0][0]).not.toHaveProperty("rule_set_id");
+  else expect(onSave.mock.calls[0][0]).toMatchObject({ rule_set_id: original.rule_set_id, revision: original.revision });
+  view.rerender(<PricingRuleForm {...props} fieldErrors={{ price_per_hour: "Review this price." }} />);
+  expect(screen.getByLabelText("Court state")).toHaveProperty("value", "covered");
+  expect(screen.getByLabelText("Price per hour (EUR)")).toHaveProperty("value", "25.00");
+  for (const court of seasonalCourts) expect(screen.getByRole("checkbox", { name: new RegExp(court.name) })).toHaveProperty("checked", true);
+  expect(original).toEqual(before);
+});
+
+it.each(["create", "edit"])("%s supports environment-scoped Select all, Clear all, individual selection and automatic Indoor submission", async (mode) => {
+  const onSave = vi.fn();
+  render(<PricingRuleForm location={location} courts={[...seasonalCourts, ...indoorCourts]} openingHours={openingHours}
+    schedules={schedules} today="2026-07-01" pending={false} fieldErrors={{}} onSave={onSave}
+    rule={mode === "edit" ? { ...rule, court_ids: [seasonalCourts[0].id], weekdays: [...rule.weekdays] } : undefined} />);
+  fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+  for (const court of seasonalCourts) expect(screen.getByRole("checkbox", { name: new RegExp(court.name) })).toHaveProperty("checked", true);
+  expect(screen.getByRole("checkbox", { name: /I5/ })).toHaveProperty("checked", false);
+  fireEvent.click(screen.getByRole("checkbox", { name: /C2/ }));
+  expect(screen.getByRole("checkbox", { name: /C2/ })).toHaveProperty("checked", false);
+  fireEvent.click(screen.getByRole("button", { name: "Clear all" }));
+  for (const court of seasonalCourts) expect(screen.getByRole("checkbox", { name: new RegExp(court.name) })).toHaveProperty("checked", false);
+  fireEvent.click(screen.getByRole("checkbox", { name: /I5/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+  expect(screen.getByRole("checkbox", { name: /I6/ })).toHaveProperty("checked", true);
+  expect(screen.getByRole("checkbox", { name: /C1/ })).toHaveProperty("checked", false);
+  expect(screen.queryByLabelText("Court state")).toBeNull();
+  fireEvent.change(screen.getByLabelText("Start time"), { target: { value: "08:00" } });
+  fireEvent.change(screen.getByLabelText("End time"), { target: { value: "09:00" } });
+  fireEvent.change(screen.getByLabelText("Price per hour (EUR)"), { target: { value: "25.00" } });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Save rule" })).toHaveProperty("disabled", false));
+  fireEvent.click(screen.getByRole("button", { name: "Save rule" }));
+  expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ court_ids: indoorCourts.map((court) => court.id), court_state: "indoor" }));
+});
+
+it.each(["create", "edit"])("%s blocks mixed environment submission and recovers without losing Covered or other values", async (mode) => {
+  const onSave = vi.fn();
+  render(<PricingRuleForm location={location} courts={[...seasonalCourts, ...indoorCourts]} openingHours={openingHours}
+    schedules={schedules} today="2026-07-01" pending={false} fieldErrors={{}} onSave={onSave}
+    rule={mode === "edit" ? { ...rule, court_ids: [seasonalCourts[0].id], weekdays: [...rule.weekdays] } : undefined} />);
+  if (mode === "create") fireEvent.click(screen.getByRole("checkbox", { name: /C1/ }));
+  fireEvent.change(screen.getByLabelText("Court state"), { target: { value: "covered" } });
+  fireEvent.change(screen.getByLabelText("Start time"), { target: { value: "08:00" } });
+  fireEvent.change(screen.getByLabelText("End time"), { target: { value: "09:00" } });
+  fireEvent.change(screen.getByLabelText("Price per hour (EUR)"), { target: { value: "25.00" } });
+  fireEvent.click(screen.getByRole("checkbox", { name: /I5/ }));
+  expect(screen.getByText(/Indoor and Outdoor courts cannot share/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Save rule" })).toHaveProperty("disabled", true);
+  fireEvent.submit(screen.getByRole("form", { name: "Pricing rule" }));
+  expect(onSave).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("checkbox", { name: /I5/ }));
+  expect(screen.getByLabelText("Court state")).toHaveProperty("value", "covered");
+  expect(screen.getByLabelText("Price per hour (EUR)")).toHaveProperty("value", "25.00");
+  await waitFor(() => expect(screen.getByRole("button", { name: "Save rule" })).toHaveProperty("disabled", false));
+});
 beforeEach(() => { vi.resetAllMocks(); savePricingRuleAction.mockResolvedValue({ ok: true, id: rule.rule_set_id }); removePricingRuleAction.mockResolvedValue({ ok: true, id: rule.rule_set_id });
   window.history.replaceState(null, "", `/admin/locations/${location.id}?tab=pricing`);
   const originalPush = window.history.pushState.bind(window.history);
@@ -144,6 +225,25 @@ it("cancels pricing removal and keeps a failed removal open with its error", asy
 });
 
 const multiRule: PricingRuleSet = { ...rule, court_ids: [...rule.court_ids], weekdays: [...rule.weekdays] };
+it.each(["outdoor", "covered"])("offers and saves %s pricing for the same outdoor courts independently of today", async (state) => {
+  render(<PricingRules schedules={schedules} openingHours={openingHours} location={location} courts={[...courts]} rules={[]} />);
+  fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
+  const form = screen.getByRole("form", { name: "Pricing rule" });
+  fireEvent.click(within(form).getByRole("checkbox", { name: /Court 1/ }));
+  fireEvent.click(within(form).getByRole("checkbox", { name: /Court 2/ }));
+  const select = within(form).getByLabelText("Court state");
+  expect(within(select).getByRole("option", { name: "Outdoor" })).toBeTruthy();
+  expect(within(select).getByRole("option", { name: "Covered" })).toBeTruthy();
+  fireEvent.change(select, { target: { value: state } });
+  fireEvent.change(within(form).getByLabelText("Start time"), { target: { value: "08:00" } });
+  fireEvent.change(within(form).getByLabelText("End time"), { target: { value: "09:00" } });
+  fireEvent.change(within(form).getByLabelText("Price per hour (EUR)"), { target: { value: "25.00" } });
+  expect(within(form).getByRole("button", { name: "Save rule" })).toHaveProperty("disabled", false);
+  fireEvent.submit(form);
+  await waitFor(() => expect(savePricingRuleAction).toHaveBeenCalledWith(expect.objectContaining({
+    court_ids: [courts[0].id, courts[1].id], court_state: state,
+  })));
+});
 const indoorRule: PricingRuleSet = { ...multiRule, rule_set_id: "c7000000-0000-4000-8000-000000000042",
   court_ids: [courts[2].id], court_state: "indoor", weekdays: [5, 6], starts_at_minute: 540, ends_at_minute: 660,
   starts_on: "2026-10-01", ends_on: "2026-10-31", price_per_hour_minor: 900 };

@@ -1,3 +1,6 @@
+import { readBookingContracts } from "./checkout-fixtures";
+import { insertBookingFixture } from "./checkout-fixtures";
+import { cleanupBookingFixtures } from "./checkout-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test } from "vitest";
@@ -36,13 +39,13 @@ test("self-cancellation enforces account ownership, snapshot notice, staff exemp
     const minute = localMinute(timezone, start);
     assert.strictEqual((await service.from("court_reservations").insert({ id: reservationId, court_id: courtId,
       booking_date: localToday(timezone, start), starts_at_minute: minute, ends_at_minute: minute + 60 })).error, null);
-    assert.strictEqual((await service.from("bookings").insert({ id: bookingId, reservation_id: reservationId,
+    assert.strictEqual((await insertBookingFixture(service, { id: bookingId, reservation_id: reservationId,
       account_user_id: owner, payment_method: "pay_at_club", customer_name: "Stored Owner", customer_email: email, customer_phone: "123",
       cancellation_notice_minutes: notice, total_amount_minor: 9000, currency: "RON" })).error, null);
     return { id: bookingId, reservationId, courtId, start };
   }
   const read = async (item: Awaited<ReturnType<typeof booking>>) => {
-    const b = await service.from("bookings").select("*").eq("id", item.id).single();
+    const b = await Promise.resolve({ error:null, data:(await readBookingContracts(service, { ids: [item.id] }))[0] });
     const r = await service.from("court_reservations").select("*").eq("id", item.reservationId).single();
     assert.strictEqual(b.error, null); assert.strictEqual(r.error, null);
     return { booking: b.data!, reservation: r.data! };
@@ -66,7 +69,7 @@ test("self-cancellation enforces account ownership, snapshot notice, staff exemp
     const after = await read(eligible);
     expect(after.booking.status).toBe("cancelled"); expect(after.reservation.status).toBe("cancelled");
     expect(after.reservation.cancelled_at).not.toBeNull(); expect(after.reservation.cancelled_by_user_id).toBe(owner.id);
-    for (const key of Object.keys(before.booking).filter((key) => !["status", "updated_at"].includes(key)))
+    for (const key of ["id", "reservation_id", "account_user_id", "customer_name", "customer_email", "customer_phone", "total_amount_minor", "currency", "payment_method", "cancellation_notice_minutes", "location_id", "court_id", "location_name", "court_name", "timezone", "booking_date", "starts_at_minute", "ends_at_minute", "pricing_evidence", "created_at"])
       expect(after.booking[key]).toEqual(before.booking[key]);
     for (const key of Object.keys(before.reservation).filter((key) => !["status", "updated_at", "cancelled_at", "cancelled_by_user_id"].includes(key)))
       expect(after.reservation[key]).toEqual(before.reservation[key]);
@@ -74,7 +77,7 @@ test("self-cancellation enforces account ownership, snapshot notice, staff exemp
     expect((await listOwnCourtHistory(1, owner.client)).rows).toContainEqual(expect.objectContaining({
       id: eligible.id, status: "cancelled", cancellation_notice_minutes: 60 }));
     expect((await reader().from("court_reservations").select("court_id, starts_at_minute").eq("court_id", eligible.courtId)).error?.code).toBe("42501");
-    expect(await cancelOwnCustomerBooking(eligible.id, owner.client)).toMatchObject({ ok: false });
+    expect(await cancelOwnCustomerBooking(eligible.id, owner.client)).toMatchObject({ ok: true });
     expect(await read(eligible)).toEqual(after);
 
     const expired = await booking(owner.id, 180, 1440);
@@ -104,15 +107,30 @@ test("self-cancellation enforces account ownership, snapshot notice, staff exemp
     expect((await read(inactive)).booking.status).toBe("confirmed");
     const race = await booking(owner.id, 180, 0);
     const attempts = await Promise.all([1, 2].map(() => cancelOwnCustomerBooking(race.id, owner.client)));
-    expect(attempts.map((row) => row.ok).sort()).toEqual([false, true]);
+    expect(attempts.map((row) => row.ok)).toEqual([true, true]);
     const raceAfter = await read(race);
+    const revisions = await service.from("booking_revisions").select("id,kind,operation_key,intent_hash,booking_state")
+      .eq("booking_id", race.id).order("revision_number");
+    expect(revisions.error).toBeNull();
+    expect(revisions.data).toEqual([
+      expect.objectContaining({ kind: "created", booking_state: "confirmed" }),
+      expect.objectContaining({ kind: "cancelled", operation_key: "cancellation", intent_hash: "cancellation", booking_state: "cancelled" }),
+    ]);
+    expect(raceAfter.booking.current_revision_id).toBe(revisions.data![1].id);
+    expect(raceAfter.reservation.status).toBe("cancelled");
+    expect((await service.from("payment_refunds").select("id").eq("booking_id", race.id)).data).toEqual([]);
+    expect(await cancelOwnCustomerBooking(race.id, owner.client)).toEqual({ ok: true });
+    for (const actor of [other, admin, coach])
+      expect(await cancelOwnCustomerBooking(race.id, actor.client)).toMatchObject({ ok: false });
     expect(await read(race)).toEqual(raceAfter);
     const suspended = await booking(owner.id, 180, 0);
     assert.strictEqual((await service.from("users").update({ status: "suspended" }).eq("id", owner.id)).error, null);
     expect(await cancelOwnCustomerBooking(suspended.id, owner.client)).toMatchObject({ ok: false });
+    expect(await cancelOwnCustomerBooking(race.id, owner.client)).toMatchObject({ ok: false });
+    expect(await read(race)).toEqual(raceAfter);
     expect((await read(suspended)).booking.status).toBe("confirmed");
   } finally {
-    if (bookings.length) assert.strictEqual((await service.from("bookings").delete().in("id", bookings)).error, null);
+    await cleanupBookingFixtures({ bookingIds: bookings });
     if (reservations.length) assert.strictEqual((await service.from("court_reservations").delete().in("id", reservations)).error, null);
     if (courts.length) assert.strictEqual((await service.from("courts").delete().in("id", courts)).error, null);
     assert.strictEqual((await service.from("locations").delete().eq("id", locationId)).error, null);

@@ -38,49 +38,32 @@ const editorIntervalSchema = z.strictObject({
 const hoursMutationFields = {
   location_id: z.uuid(),
   starts_on: z.iso.date().optional(), ends_on: z.union([z.iso.date(), z.literal(""), z.null()]).optional(),
-  weekdays: z.array(z.number().int().min(0).max(6)),
-  replace_ids: z.array(z.uuid()), intervals: z.array(editorIntervalSchema),
+  replace_ids: z.array(z.uuid()),
   rows: z.array(editorIntervalSchema.safeExtend({
     weekdays: z.array(z.number().int().min(0).max(6)).min(1, "Select at least one day.")
       .refine((days) => new Set(days).size === days.length, "Select each day only once."),
-  })).optional(),
+  })),
 };
 const existingScheduleFields = { schedule_id: z.uuid(), revision: z.number().int().positive() };
 export const weeklyHoursMutationSchema = z.discriminatedUnion("operation", [
   z.strictObject({ ...hoursMutationFields, operation: z.literal("create"), starts_on: z.iso.date(),
-    adjustment: z.object({ id: z.uuid(), revision: z.number().int().positive() }).nullable().optional(),
-    schedule_id: z.never().optional(), revision: z.never().optional() }),
+    adjustment: z.object({ id: z.uuid(), revision: z.number().int().positive() }).nullable().optional() }),
   z.strictObject({ ...hoursMutationFields, ...existingScheduleFields, operation: z.literal("update") }),
-  z.strictObject({ ...hoursMutationFields, ...existingScheduleFields, operation: z.literal("delete") }),
+  z.strictObject({ location_id: z.uuid(), ...existingScheduleFields, operation: z.literal("delete") }),
 ]).superRefine((value, context) => {
+  if (value.operation === "delete") return;
   if (value.starts_on && value.ends_on && value.ends_on < value.starts_on) context.addIssue({ code: "custom", path: ["ends_on"], message: "Valid until must be on or after valid from." });
-  if (value.operation === "delete") {
-    if (value.weekdays.length || value.replace_ids.length || value.intervals.length || value.rows?.length) context.addIssue({ code: "custom", path: ["form"], message: "Delete the schedule without interval changes." });
-    return;
-  }
   if (value.operation === "create" && value.replace_ids.length) context.addIssue({ code: "custom", path: ["replace_ids"], message: "A new schedule cannot replace existing intervals." });
-  if (value.intervals.length && !value.weekdays.length) context.addIssue({ code: "custom", path: ["weekdays"], message: "Select at least one day." });
-  if (new Set(value.weekdays).size !== value.weekdays.length) context.addIssue({ code: "custom", path: ["weekdays"], message: "Select each day only once." });
   if (new Set(value.replace_ids).size !== value.replace_ids.length) context.addIssue({ code: "custom", path: ["replace_ids"], message: "Duplicate interval selection." });
-  if (value.rows !== undefined) {
-    if (value.weekdays.length || value.intervals.length) context.addIssue({ code: "custom", path: ["rows"], message: "Use individual rows or shared weekdays, not both." });
-    for (let day = 0; day < 7; day++) {
-      const valid = value.rows.filter((row) => row.weekdays.includes(day) && editorIntervalSchema.safeParse({ opens_at: row.opens_at, closes_at: row.closes_at }).success)
-        .map((row) => ({ start: timeToMinute(row.opens_at), end: timeToMinute(row.closes_at) })).sort((a, b) => a.start - b.start);
-      if (valid.some((row, index) => index > 0 && row.start < valid[index - 1].end)) {
-        context.addIssue({ code: "custom", path: ["rows"], message: `${weekdays[day]} intervals cannot overlap.` });
-      }
+  for (let day = 0; day < 7; day++) {
+    const valid = value.rows.filter((row) => row.weekdays.includes(day) && editorIntervalSchema.safeParse({ opens_at: row.opens_at, closes_at: row.closes_at }).success)
+      .map((row) => ({ start: timeToMinute(row.opens_at), end: timeToMinute(row.closes_at) })).sort((a, b) => a.start - b.start);
+    if (valid.some((row, index) => index > 0 && row.start < valid[index - 1].end)) {
+      context.addIssue({ code: "custom", path: ["rows"], message: `${weekdays[day]} intervals cannot overlap.` });
     }
-    return;
-  }
-  if (value.intervals.length === 0 && value.replace_ids.length === 0 && !value.starts_on) context.addIssue({ code: "custom", path: ["intervals"], message: "Add an interval." });
-  const valid = value.intervals.filter((interval) => editorIntervalSchema.safeParse(interval).success)
-    .map((interval) => ({ start: timeToMinute(interval.opens_at), end: timeToMinute(interval.closes_at) }))
-    .sort((a, b) => a.start - b.start);
-  if (valid.some((interval, index) => index > 0 && interval.start < valid[index - 1].end)) {
-    context.addIssue({ code: "custom", path: ["intervals"], message: "Intervals cannot overlap." });
   }
 });
+export type OpeningHoursMutation = z.infer<typeof weeklyHoursMutationSchema>;
 
 export type OpeningHoursMutationResult =
   | { ok: true; intervals: OpeningInterval[]; schedules?: OpeningHoursSchedule[]; scheduleId?: string; pricingAdjusted?: boolean; missingPricing?: boolean }

@@ -7,7 +7,6 @@ import { z } from "zod";
 import { logger } from "@/lib/logger";
 import { getDataSource } from "@/lib/db/data-source";
 import { listPublicLocationFacts } from "@/lib/db/repositories/clubs.repository";
-import { createClient } from "@/lib/supabase/server";
 import { locationCurrencies } from "@/lib/admin/locations-validation";
 import { isPubliclyEligible, publicationToday } from "@/lib/locations/publication";
 
@@ -43,10 +42,7 @@ const locationSchema = z.object({
 export type PublicCourt = Omit<z.infer<typeof courtSchema>, "location_pricing_rules" | "is_active">;
 export type PublicLocation = Omit<z.infer<typeof locationSchema>, "is_active" | "is_public" | "archived_at" | "location_opening_hours" | "courts"> & { courts: PublicCourt[] };
 
-export async function listPublicLocationsWithCourts(
-  _supabase?: Awaited<ReturnType<typeof createClient>>,
-): Promise<PublicLocation[]> {
-  void _supabase; // Retained only for fixture compatibility.
+export async function listPublicLocationsWithCourts(): Promise<PublicLocation[]> {
   try {
     const data = await listPublicLocationFacts((await getDataSource()).manager);
     const parsed = z.array(locationSchema).safeParse(data);

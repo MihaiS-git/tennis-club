@@ -9,7 +9,7 @@ import type { AdminLocation } from "@/lib/admin/locations";
 import type { AdminCourt } from "@/lib/admin/courts";
 import { courtSurfaceLabels, courtEnvironmentLabels } from "@/lib/admin/courts-validation";
 import { groupedWeeklySchedule, minuteToTime, timeToMinute, weekdayGroupLabel, weekdays, scheduleStatus, type DatedOpeningInterval, type OpeningHoursSchedule } from "@/lib/admin/opening-hours-validation";
-import { courtStates, courtStateLabels, pricingDefinitionSchema, type PricingRuleSet } from "@/lib/pricing/validation";
+import { supportsPricingState, courtStates, courtStateLabels, pricingDefinitionSchema, type PricingRuleSet } from "@/lib/pricing/validation";
 import { useProfileFormDirty } from "@/app/profile/unsaved-changes";
 import { minorToMajor } from "@/lib/pricing/money";
 import { pricingOpeningHoursError } from "@/lib/pricing/resolution";
@@ -32,7 +32,12 @@ export function PricingRuleForm({ location, courts, rule, openingHours, schedule
   const formRef = useRef<HTMLFormElement | null>(null);
   const [selectedDays, setSelectedDays] = useState(rule?.weekdays ?? [0]);
   const [selectedCourts, setSelectedCourts] = useState(rule?.court_ids ?? []);
-  const [state, setState] = useState(rule?.court_state ?? "outdoor");
+  const [outdoorState, setOutdoorState] = useState<"outdoor" | "covered">(rule?.court_state === "covered" ? "covered" : "outdoor");
+  const selected = courts.filter((court) => selectedCourts.includes(court.id));
+  const environment = selected[0]?.environment ?? courts[0]?.environment;
+  const mixedEnvironments = selected.some((court) => court.environment !== environment);
+  const indoorOnly = selected.length > 0 && environment === "indoor" && !mixedEnvironments;
+  const state = indoorOnly ? "indoor" : outdoorState;
   const [localHoursError, setLocalHoursError] = useState("");
   const weeklySchedules = schedules.map((schedule) => ({
     ...schedule,
@@ -66,15 +71,25 @@ export function PricingRuleForm({ location, courts, rule, openingHours, schedule
     (form) => parsedDefinition(form).success && !hoursError(form),
   );
   useProfileFormDirty("Pricing", dirty);
-  const incompatible = courts.filter((court) => selectedCourts.includes(court.id))
-    .some((court) => (court.environment === "indoor") !== (state === "indoor"));
+  const incompatible = mixedEnvironments || selected
+    .some((court) => !supportsPricingState(court.environment, state));
+  const courtsError = mixedEnvironments
+    ? "Indoor and Outdoor courts cannot share a pricing rule. Select courts from one environment, or clear the selection to switch."
+    : fieldErrors.court_ids ?? "";
   const stateError = fieldErrors.court_state ?? (incompatible
     ? "Selected courts must share a valid state: indoor courts use Indoor; outdoor courts use Outdoor or Covered." : "");
   function update(form: HTMLFormElement) { sync(); setLocalHoursError(hoursError(form) ?? ""); }
+  function changeCourts(ids: string[]) {
+    setSelectedCourts(ids);
+    onEdit?.();
+    // Recheck the rendered controls, including the derived Indoor hidden input.
+    requestAnimationFrame(() => { if (formRef.current) update(formRef.current); });
+  }
   return <form aria-label="Pricing rule" ref={(form) => { formRef.current = form; attach(form); }}
     onInput={(event) => { onEdit?.(); update(event.currentTarget); }} onChange={(event) => { onEdit?.(); update(event.currentTarget); }}
     onSubmit={(event) => {
       event.preventDefault();
+      if (pending || incompatible || !parsedDefinition(event.currentTarget).success) return;
       const currentHoursError = hoursError(event.currentTarget);
       if (currentHoursError) { setLocalHoursError(currentHoursError); return; }
       const data = new FormData(event.currentTarget);
@@ -85,27 +100,35 @@ export function PricingRuleForm({ location, courts, rule, openingHours, schedule
       });
     }}>
     <fieldset disabled={pending} className="grid gap-4 sm:grid-cols-2">
-      <fieldset className="sm:col-span-2" aria-invalid={Boolean(fieldErrors.court_ids)} aria-describedby={`${prefix}-courts-error`}>
+      <fieldset className="sm:col-span-2" aria-invalid={Boolean(courtsError)} aria-describedby={`${prefix}-courts-help ${prefix}-courts-error`}>
         <legend className="mb-2 text-sm font-medium">Courts</legend>
+        <div className="mb-2 flex gap-2">
+          <Button type="button" variant="secondary" size="small" disabled={!courts.length}
+            onClick={() => changeCourts(courts.filter((court) => court.environment === environment).map((court) => court.id))}>Select all</Button>
+          <Button type="button" variant="secondary" size="small" disabled={!selectedCourts.length}
+            onClick={() => changeCourts([])}>Clear all</Button>
+        </div>
+        {environment && <p id={`${prefix}-courts-help`} className="mb-2 text-sm text-muted-foreground">Select all selects {courtEnvironmentLabels[environment]} courts. Select a court from one environment to choose that group.</p>}
         <div className="flex flex-wrap gap-x-4 gap-y-2">
           {courts.map((court) => <label key={court.id} className="flex items-center gap-2 text-sm">
             <input type="checkbox" name="court_ids" value={court.id} checked={selectedCourts.includes(court.id)}
-              onChange={(event) => setSelectedCourts(event.target.checked ? [...selectedCourts, court.id] : selectedCourts.filter((id) => id !== court.id))} />
+              onChange={(event) => changeCourts(event.target.checked ? [...selectedCourts, court.id] : selectedCourts.filter((id) => id !== court.id))} />
             {court.name} — {courtSurfaceLabels[court.surface]} · {courtEnvironmentLabels[court.environment]}
           </label>)}
         </div>
         {!courts.length && <p>No courts at this location. Create a court first.</p>}
-        <p id={`${prefix}-courts-error`} className="mt-1 text-sm text-danger">{fieldErrors.court_ids ?? ""}</p>
+        <p id={`${prefix}-courts-error`} className="mt-1 text-sm text-danger">{courtsError}</p>
       </fieldset>
-      <div><label htmlFor={`${prefix}-state`} className="mb-1 block text-sm font-medium">Court state</label>
+      {indoorOnly ? <input type="hidden" name="court_state" value="indoor" /> : <div><label htmlFor={`${prefix}-state`} className="mb-1 block text-sm font-medium">Court state</label>
         <select id={`${prefix}-state`} value={state} name="court_state"
-          onChange={(event) => { const value = courtStates.find((item) => item === event.target.value); if (value) setState(value); }}
+          onInput={(event) => { const value = event.currentTarget.value; if (value === "outdoor" || value === "covered") setOutdoorState(value); }}
+          onChange={(event) => { const value = event.target.value; if (value === "outdoor" || value === "covered") setOutdoorState(value); }}
           className="min-h-11 w-full rounded-control border border-border-strong bg-surface px-3 text-sm"
           aria-invalid={Boolean(stateError)} aria-describedby={`${prefix}-state-error`}>
-          {courtStates.map((value) => <option key={value} value={value}>{courtStateLabels[value]}</option>)}
+          {courtStates.filter((value) => value !== "indoor").map((value) => <option key={value} value={value}>{courtStateLabels[value]}</option>)}
         </select>
         <p id={`${prefix}-state-error`} className="mt-1 text-sm text-danger">{stateError}</p>
-      </div>
+      </div>}
       <fieldset className="sm:col-span-2" aria-invalid={Boolean(fieldErrors.weekdays)} aria-describedby={`${prefix}-days-error`}>
         <legend className="mb-2 text-sm font-medium">Days</legend>
         <div className="mb-3 flex flex-wrap gap-2">

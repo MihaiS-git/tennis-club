@@ -46,7 +46,7 @@ it("loads every weekday group into one editable table and changes only the edite
   expect(screen.getAllByLabelText("Opening time")[1]).toHaveProperty("value", "09:00");
   fireEvent.click(save());
   await waitFor(() => expect(mutateOpeningHoursAction).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-    operation: "update", revision: 1, replace_ids: intervals.slice(0, 5).map((h) => h.id), weekdays: [], intervals: [],
+    operation: "update", revision: 1, replace_ids: intervals.slice(0, 5).map((h) => h.id),
     rows: [{ weekdays: [0,1,2,3,4], opens_at: "08:00", closes_at: "12:00" }],
   })));
 });

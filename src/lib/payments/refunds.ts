@@ -1,68 +1,76 @@
 import "server-only";
 
-import { z } from "zod";
+import type { BookingCancellationCommandResult } from "@/lib/bookings/domain";
+import { summarizeRefunds } from "./domain";
 import { logger } from "@/lib/logger";
 import { RefundProviderError } from "./providers/types";
 import { onlinePaymentAdapter } from "./providers";
-import { prepareAutomaticRefund, commitAutomaticRefund, commitAdminRefund, type AdminRefundClaim } from "./refund-commands";
+import { prepareAutomaticRefund, initiateRefundExecution, commitRefundExecution, type RefundExecutionClaim, type RefundObservation } from "./refund-commands";
 
 export type RefundStatus = "pending" | "pending_retry" | "succeeded" | "failed";
 export type BookingCancellationResult = { ok: true; refundStatus?: RefundStatus }
   | { ok: false; message: string };
 
-// Automatic processing intentionally has no lease.
 export async function processBookingRefund(id: string,
-  adminClaim?: AdminRefundClaim): Promise<RefundStatus> {
-  let refund;
+  preparedClaim?: RefundExecutionClaim): Promise<RefundStatus> {
+  let claim: RefundExecutionClaim;
+  let dispatch: Awaited<ReturnType<typeof initiateRefundExecution>>;
   try {
-    refund = adminClaim?.refund ?? await prepareAutomaticRefund(id);
-    if (!refund || refund.id !== id) throw new Error("Refund read failed");
+    const prepared = preparedClaim ? { outcome: "ready" as const, claim: preparedClaim } : await prepareAutomaticRefund(id);
+    if (prepared.outcome !== "ready") return prepared.status;
+    claim = prepared.claim;
+    if (claim.refund.id !== id) throw new Error("Refund read failed");
+    // This transaction commits dispatch evidence before any provider request.
+    dispatch = await initiateRefundExecution(claim);
+    if (dispatch.outcome === "terminal") return dispatch.status;
   } catch {
     logger.error({ event: "payments.refund_persistence_failed", refundId: id }, "Refund preparation failed");
     return "pending_retry";
   }
-  if (!adminClaim && (refund.status === "succeeded" || refund.status === "failed")) return refund.status;
-  let providerRefundId = refund.provider_refund_id;
-  let status: RefundStatus = "pending_retry";
-  let lastError: string | null = null;
+  const execution = dispatch.execution;
+  let observation: RefundObservation;
   try {
-    const result = await (await onlinePaymentAdapter(refund.provider)).refundPayment({
-      id: refund.id, ...(refund.provider_generation ? { generation: refund.provider_generation } : {}), providerPaymentId: refund.provider_payment_id, providerRefundId,
-      amountMinor: refund.amount_minor, currency: refund.currency,
+    const result = await (await onlinePaymentAdapter(execution.provider)).refundPayment({
+      id, executionId: execution.id, idempotencyKey: execution.idempotencyKey, operation: dispatch.operation,
+      providerPaymentId: execution.providerPaymentId, providerRefundId: execution.providerRefundId,
+      amountMinor: execution.amountMinor, currency: execution.currency,
     });
-    providerRefundId = result.providerRefundId;
-    status = result.status;
-    if (status === "failed") lastError = "provider_refund_failed";
+    observation = { kind: "verified", ...result };
   } catch (error) {
-    if (adminClaim && error instanceof RefundProviderError && !error.retryable) status = "failed";
-    lastError = status === "failed" ? "provider_refund_failed" : "provider_request_incomplete";
-    logger.error({ event: "payments.refund_retry_required", refundId: id }, "Full refund requires retry");
+    observation = { kind: "error", evidence: error instanceof RefundProviderError ? error.evidence
+      : dispatch.operation === "create" ? { kind: "uncertain", operation: "create", providerRefundId: null }
+        : { kind: "lookup_failed", operation: execution.providerRefundId ? "retrieve" : "discover",
+          providerRefundId: execution.providerRefundId } };
+    logger.error({ event: "payments.refund_retry_required", refundId: id }, "Refund requires recovery");
   }
   try {
-    const result = { status, providerRefundId, lastError };
-    const persisted = adminClaim ? await commitAdminRefund(adminClaim, result) : await commitAutomaticRefund(id, result, refund);
-    logger.info({ event: "payments.refund_result", refundId: id, status: persisted }, "Full refund result persisted");
-    return persisted;
+    const status = await commitRefundExecution(claim, observation);
+    logger.info({ event: "payments.refund_result", refundId: id, status }, "Refund result persisted");
+    return status;
   } catch {
     logger.error({ event: "payments.refund_persistence_failed", refundId: id }, "Refund result needs reconciliation");
     return "pending_retry";
   }
 }
 
-export async function finishBookingCancellation(data: unknown, unavailableMessage = "This booking is no longer available for cancellation."): Promise<BookingCancellationResult> {
-  const result = z.object({ outcome: z.string(), refund_id: z.uuid().nullable(), refund_ids: z.array(z.uuid()).optional() }).safeParse(data);
-  if (!result.success) return { ok: false, message: "Unable to cancel this booking. Try again." };
-  if (result.data.outcome !== "cancelled") {
-    const messages: Record<string, string> = {
-      started: "This booking has started and can no longer be cancelled here.",
-      notice_required: "The cancellation notice period for this booking has expired.",
-      refund_choice_required: "Choose whether to refund the full payment.",
-    };
-    return { ok: false, message: messages[result.data.outcome] ?? unavailableMessage };
+export async function finishBookingCancellation(result: BookingCancellationCommandResult,
+  unavailableMessage = "This booking is no longer available for cancellation."): Promise<BookingCancellationResult> {
+  switch (result.outcome) {
+    case "started":
+      return { ok: false, message: "This booking has started and can no longer be cancelled here." };
+    case "notice_required":
+      return { ok: false, message: "The cancellation notice period for this booking has expired." };
+    case "inactive":
+    case "unavailable":
+      return { ok: false, message: unavailableMessage };
+    case "cancelled": {
+      const statuses = await Promise.all(result.refundIds.map(id => processBookingRefund(id)));
+      const refundStatus = summarizeRefunds(statuses);
+      return refundStatus ? { ok: true, refundStatus } : { ok: true };
+    }
+    default: {
+      const exhaustive: never = result;
+      return exhaustive;
+    }
   }
-  const ids = result.data.refund_ids ?? (result.data.refund_id ? [result.data.refund_id] : []);
-  const statuses = await Promise.all(ids.map(id => processBookingRefund(id)));
-  const refundStatus = statuses.includes("failed") ? "failed" : statuses.includes("pending_retry") ? "pending_retry"
-    : statuses.includes("pending") ? "pending" : statuses.length ? "succeeded" : undefined;
-  return refundStatus ? { ok: true, refundStatus } : { ok: true };
 }

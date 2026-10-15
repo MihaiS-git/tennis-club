@@ -5,7 +5,7 @@ const logError = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/logger", () => ({ logger: { error: logError } }));
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); logError.mockClear(); });
 const event: BookingEmailEvent = {
-  recipient: "snapshot@example.test", event_kind: "admin_rescheduled", payload: {
+  recipient: "snapshot@example.test", event_kind: "customer_rescheduled", payload: {
     booking_id: "00000000-0000-4000-8000-000000000003", customer_name: "Ana", location_name: "Club",
     timezone: "Europe/Bucharest", court_name: "Court 2", booking_date: "2099-10-16",
     starts_at_minute: 600, ends_at_minute: 660, total_amount_minor: 9001, currency: "RON",
@@ -15,7 +15,7 @@ const event: BookingEmailEvent = {
 test("renders snapshot recipient and old/new schedule without payment claims", () => {
   const message = renderBookingEmail(event);
   expect(message.to).toBe("snapshot@example.test");
-  expect(message.text).toContain("administrator has rescheduled");
+  expect(message.text).toContain("You have rescheduled");
   expect(message.text).toContain("Previous: 2099-10-15, 11:00–12:00, Court 1");
   expect(message.text).toContain("New schedule: 2099-10-16, 10:00–11:00, Court 2");
   expect(message.text).toContain("Booking total: 90.01 RON");

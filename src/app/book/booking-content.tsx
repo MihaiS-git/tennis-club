@@ -37,7 +37,7 @@ async function BookingDay({ location, date, today, now }: {
 }) {
   const client = await createClient();
   const [day, contact, account, cancellationNoticeMinutes, onlineProvider] = await Promise.all([
-    getPublicCourtDay(location, date, today, now, client), bookingContactPrefill(client), readCurrentAccount(client), readPublicBookingCancellationNotice(location.id), activeOnlinePaymentProvider(),
+    getPublicCourtDay(location, date, today, now), bookingContactPrefill(client), readCurrentAccount(client), readPublicBookingCancellationNotice(location.id), activeOnlinePaymentProvider(),
   ]);
   return <BookingCalendar key={`${location.id}:${date}`} day={day} date={date}
     onlinePaymentAvailable={supportsOnlineCheckout(onlineProvider)} allowPayAtClub={location.allow_pay_at_club} timezone={location.timezone} cancellationNoticeMinutes={cancellationNoticeMinutes} locationName={location.name} currency={location.currency} initialContact={contact} authenticated={account.state === "active"} />;

@@ -1,6 +1,6 @@
 import "server-only";
 
-import { Column, Entity, JoinColumn, ManyToOne, PrimaryColumn, Unique, type Relation } from "typeorm";
+import { Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn, Unique, type Relation } from "typeorm";
 
 import { LocationEntity } from "./location.entity";
 
@@ -9,7 +9,7 @@ import { LocationEntity } from "./location.entity";
 // Reassess at migration cutover only together with the dependent FK.
 @Unique("pricing_rule_sets_id_location_id_key", ["id", "locationId"])
 export class PricingRuleSetEntity {
-  @PrimaryColumn({ name: "id", type: "uuid", default: () => "gen_random_uuid()", primaryKeyConstraintName: "pricing_rule_sets_pkey" })
+  @PrimaryGeneratedColumn("uuid", { name: "id", primaryKeyConstraintName: "pricing_rule_sets_pkey" })
   id!: string;
 
   @Column({ name: "location_id", type: "uuid" })

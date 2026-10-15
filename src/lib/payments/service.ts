@@ -1,4 +1,7 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
+import { buildBookingRevision } from "@/lib/bookings/revision";
+import { advanceRevision, findInitialRevision } from "@/lib/db/repositories/booking-revisions.repository";
 import { z } from "zod";
 import { inTransaction } from "@/lib/db/transaction";
 import * as clubs from "@/lib/db/repositories/clubs.repository";
@@ -10,13 +13,15 @@ import { mondayWeekday } from "@/lib/pricing/resolution";
 import { lockLocations } from "@/lib/db/repositories/clubs.repository";
 import { hasOccupancyConflict } from "@/lib/reservations/occupancy";
 import * as payments from "@/lib/db/repositories/payments.repository";
+import * as captures from "@/lib/db/repositories/payment-capture-receipts.repository";
 import * as bookings from "@/lib/db/repositories/bookings.repository";
 import * as reservations from "@/lib/db/repositories/reservations.repository";
 import { bookingNotification, sendBookingNotification, type BookingEmailEvent } from "@/lib/notifications/booking-email";
 import { logger } from "@/lib/logger";
 import { paymentProviderSchema, paymentTransition } from "./domain";
 import type { OnlinePaymentEvent } from "./providers/types";
-import { settleAdjustment } from "./booking-adjustments";
+import { settleAdjustment } from "./settle-adjustment";
+import { allocateBookingRefund } from "./financials";
 import { processBookingRefund } from "./refunds";
 
 const settlementSchema = z.strictObject({ attemptId: z.uuid(), provider: paymentProviderSchema,
@@ -27,7 +32,9 @@ type Settlement = z.infer<typeof settlementSchema>;
 function replay(receipt: payments.ProviderReceipt, event: OnlinePaymentEvent) {
   if (receipt.attempt_id !== event.attemptId || receipt.provider_payment_id !== event.providerPaymentId
     || receipt.outcome !== event.outcome || receipt.amount_minor !== event.amountMinor
-    || receipt.currency.toUpperCase() !== event.currency.toUpperCase()) throw new Error("Changed payment event evidence.");
+    || receipt.currency.toUpperCase() !== event.currency.toUpperCase()
+    || receipt.provider_capture_id !== (event.outcome === "succeeded" ? event.providerCaptureId ?? null : null))
+    throw new Error("Changed payment event evidence.");
   return receipt.settlement_result;
 }
 // Throw through inTransaction so even an identical insert-race winner never
@@ -51,7 +58,7 @@ async function commitSettlement(value: Settlement, event: OnlinePaymentEvent | n
       // cannot become active while a replacement is checking expired occupancy.
       const [location] = await lockLocations(manager, [parent.location_id]);
       if (!location) return { result: "unavailable", reconciliation: false };
-      const b = await bookings.lockSettlementBooking(manager, parent.booking_id);
+      const b = await bookings.findBookingForUpdate(manager, parent.booking_id);
       if (!b) return { result: "unavailable", reconciliation: false };
       const r = await reservations.findReservationForUpdate(manager, b.reservation_id);
       const attempt = await payments.lockSettlementAttempt(manager, value.attemptId);
@@ -59,9 +66,16 @@ async function commitSettlement(value: Settlement, event: OnlinePaymentEvent | n
         || (event ? attempt.provider_payment_id !== value.providerPaymentId
           : attempt.provider_payment_id !== null && attempt.provider_payment_id !== value.providerPaymentId))
         return { result: "unavailable", reconciliation: false };
+      if (value.outcome === "succeeded" && !event?.providerCaptureId)
+        throw new Error("Successful online settlement requires verified capture evidence.");
       const resourceFacts = await reservations.findReservationResourceFacts(manager, r.court_id);
       if (b.reservation_id !== parent.reservation_id || resourceFacts?.location_id !== parent.location_id)
         throw new SettlementParentChanged();
+      const capture = event?.outcome === "succeeded" ? await captures.recordCaptureReceipt(manager, {
+        payment_attempt_id: attempt.id, provider: event.provider, provider_payment_id: event.providerPaymentId,
+        provider_capture_id: event.providerCaptureId!, amount_minor: event.amountMinor,
+        currency: z.enum(["EUR", "USD", "GBP", "RON", "CHF"]).parse(event.currency.toUpperCase()),
+      }) : null;
       if (event) {
         const duplicate = await payments.findProviderEventReceipt(manager, event.provider, event.eventId);
         if (duplicate) return { result: replay(duplicate, event), reconciliation: false };
@@ -75,6 +89,7 @@ async function commitSettlement(value: Settlement, event: OnlinePaymentEvent | n
         const reconciliation = value.outcome === "succeeded" && adjusted.result !== "succeeded";
         if (event && !await payments.insertProviderEventReceipt(manager, {
           provider: event.provider, event_id: event.eventId, attempt_id: attempt.id,
+          capture_receipt_id: capture?.id ?? null, provider_capture_id: capture?.provider_capture_id ?? null,
           provider_payment_id: event.providerPaymentId, outcome: event.outcome, amount_minor: event.amountMinor,
           currency: event.currency.toUpperCase(), settlement_result: adjusted.result, reconciliation_required: reconciliation,
         })) {
@@ -112,7 +127,7 @@ async function commitSettlement(value: Settlement, event: OnlinePaymentEvent | n
             hourlyPrices: target.hourlyPrices }, day.times.indexOf(r.starts_at_minute), day.times.indexOf(r.ends_at_minute - 30) + 1);
           if (!location.isActive || location.archivedAt || !location.isPublic || !quote || quote.endMinute !== r.ends_at_minute
             || quote.priceMinor !== b.total_amount_minor || location.currency !== b.currency
-            || location.customerCancellationNoticeMinutes !== b.cancellation_notice_minutes) {
+            || location.customerCancellationNoticeMinutes !== b.cancellation_notice_minutes || location.timezone !== b.revision.timezone) {
             // Existing expiry/reconciliation handling refunds a late captured Stripe payment.
             return { result: "expired", targets: { attempt: "expired", booking: "expired", reservation: "released" }, deadline: null };
           }
@@ -123,9 +138,6 @@ async function commitSettlement(value: Settlement, event: OnlinePaymentEvent | n
         return transition;
       };
       let decision = await decide();
-      // Display metadata is not settlement authority and acquires no row locks.
-      const resource = decision.targets?.booking === "confirmed"
-        ? await reservations.findSettlementNotificationResource(manager, r.court_id) : null;
       // Re-read after all preceding reads. The UPDATE also fences the exact
       // deadline at the write statement; a crossed boundary is re-evaluated in TS.
       if (decision.targets) {
@@ -140,7 +152,17 @@ async function commitSettlement(value: Settlement, event: OnlinePaymentEvent | n
           });
         }
         if (decision.targets) {
-          await bookings.updateSettlementBookingStatus(manager, b.id, decision.targets.booking);
+          if (decision.targets.booking === "confirmed") {
+            const revision = buildBookingRevision(b.revision, { id: randomUUID(), bookingId: b.id, kind: "confirmed",
+              bookingState: "confirmed", operationKey: "confirmation", intentHash: "confirmation", actorUserId: null,
+              actorScope: "provider", recordedAt: new Date(await reservations.readReservationClockTime(manager)),
+              adjustmentId: null, cancellationCause: null }, b.revision);
+            await advanceRevision(manager, { revision, previousId: b.current_revision_id, status: "confirmed" });
+            notification = bookingNotification("confirmed", revision);
+          } else {
+            await bookings.updateSettlementBookingStatus(manager, b.id,
+              z.enum(["confirmed", "cancelled", "pending_payment", "failed", "expired"]).parse(decision.targets.booking));
+          }
           await reservations.updateSettlementReservationStatus(manager, r.id, decision.targets.reservation);
         }
       }
@@ -148,6 +170,7 @@ async function commitSettlement(value: Settlement, event: OnlinePaymentEvent | n
       if (event) {
         const inserted = await payments.insertProviderEventReceipt(manager, {
           provider: event.provider, event_id: event.eventId, attempt_id: attempt.id,
+          capture_receipt_id: capture?.id ?? null, provider_capture_id: capture?.provider_capture_id ?? null,
           provider_payment_id: event.providerPaymentId, outcome: event.outcome, amount_minor: event.amountMinor,
           currency: event.currency.toUpperCase(), settlement_result: z.enum([
             "succeeded", "pending", "failed", "cancelled", "expired", "unavailable", "amount_mismatch",
@@ -160,27 +183,21 @@ async function commitSettlement(value: Settlement, event: OnlinePaymentEvent | n
           throw new ReceiptRaceReplay(replay(winner, event));
         }
       }
-      // Captures after a capability-authorized checkout cancellation use the
-      // same unique refund record and provider idempotency as booking refunds.
-      // Checkout cancellation retains a held row until settlement, then releases
-      // it. Normal booking cancellation marks the row cancelled; duplicate
-      // settlement must preserve its refund state and the Admin's refund choice.
-      if (b.status === "cancelled" && (r.status === "held" || r.status === "released")
+      // Released checkout captures need the existing durable compensation
+      // obligation, including expiry during this settlement. Normal booking
+      // cancellation already allocates its remaining funds atomically.
+      const checkoutEnded = b.status === "cancelled" || b.status === "expired"
+        || decision.targets?.booking === "expired";
+      if (checkoutEnded && (r.status === "held" || r.status === "released")
         && value.outcome === "succeeded" && !mismatch
+        && (event || attempt.status === "succeeded" || decision.targets?.attempt === "succeeded")
         && attempt.provider === "stripe") {
-        const refund = await payments.findAndLockRefundByBooking(manager, b.id);
-        refundId = refund?.id ?? await payments.insertBookingRefundRequest(manager, b.id, null, {
-          id: attempt.id, provider: "stripe", provider_payment_id: value.providerPaymentId,
-          amount_minor: attempt.amount_minor, currency: attempt.currency,
-        });
-      }
-      if (decision.targets?.booking === "confirmed") {
-        if (!resource) throw new Error("Unable to read confirmation resources.");
-        notification = bookingNotification("confirmed", {
-          booking_id: b.id, customer_name: b.customer_name, location_name: resource.location_name, timezone: resource.timezone,
-          court_name: resource.court_name, booking_date: r.booking_date, starts_at_minute: r.starts_at_minute,
-          ends_at_minute: r.ends_at_minute, total_amount_minor: b.total_amount_minor, currency: b.currency, previous: null,
-        }, b.customer_email);
+        // A known capture may already have been refunded by checkout abandonment.
+        // Re-observation processes that obligation without changing its origin.
+        const existing = await payments.findAndLockRefundByBooking(manager, b.id, attempt.id);
+        refundId = existing?.id ?? (await allocateBookingRefund(manager, { bookingId: b.id, actorId: null,
+          operationKey: "cancellation", amount: event?.amountMinor ?? attempt.amount_minor, onlyAttemptId: attempt.id,
+          reason: "late_capture_compensation", contextRevisionId: (await findInitialRevision(manager, b.id)).id }))[0] ?? null;
       }
       return { result: decision.result, reconciliation };
     });
@@ -204,7 +221,13 @@ export async function settleOnlinePayment(input: unknown) {
 }
 export async function processOnlinePaymentEvent(input: OnlinePaymentEvent) {
   const value = settlementSchema.extend({ eventId: z.string().min(1).max(255),
-    amountMinor: z.number().int().nonnegative(), currency: z.string().length(3) }).parse(input);
+    amountMinor: z.number().int().nonnegative(), currency: z.string().length(3),
+    providerCaptureId: z.string().trim().min(1).max(255).optional() }).transform(event => ({
+      ...event,
+      // Automatic-capture Stripe PaymentIntents have one successful collection;
+      // normalize both signed webhooks and verified API reads to that identity.
+      providerCaptureId: event.outcome === "succeeded" ? event.providerCaptureId ?? event.providerPaymentId : undefined,
+    })).parse(input);
   return commitSettlement(settlementSchema.parse({ attemptId: value.attemptId, provider: value.provider,
     providerPaymentId: value.providerPaymentId, outcome: value.outcome }), value);
 }

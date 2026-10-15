@@ -1,12 +1,17 @@
 import { createClient } from "@supabase/supabase-js";
-import { beforeEach, expect, test, vi } from "vitest";
+import { QueryFailedError } from "typeorm";
+import { beforeEach, expect, expectTypeOf, test, vi } from "vitest";
+import type { AdminBooking, AdminReservation } from "@/lib/reservations/service";
+import type { BookingEditContext } from "@/lib/bookings/reschedule";
 import type { CurrentAccount } from "@/lib/auth/account";
 
 const { account, query, command } = vi.hoisted(() => ({ account: vi.fn(), query: vi.fn(), command: vi.fn() }));
 vi.mock("@/lib/auth/account", () => ({ readCurrentAccount: account }));
 vi.mock("@/lib/db/data-source", () => ({ getDataSource: async () => ({ manager: { query } }) }));
 vi.mock("@/lib/reservations/commands", () => ({ editDirectReservationCommand: command }));
-import { getAdminReservationEditDay } from "@/lib/reservations/service";
+import { getAdminReservationEditDay, getReservationDay } from "@/lib/reservations/service";
+import { logger } from "@/lib/logger";
+vi.mock("@/lib/logger", () => ({ logger: { error: vi.fn() } }));
 
 const id = (n: number) => `ca000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const now = new Date("2026-10-15T09:00:00Z"), date = "2026-10-15";
@@ -77,8 +82,92 @@ test("active/live held intervals block; equal and expired deadlines do not", asy
   expect(result.day.courts[1].cells.every((cell) => cell === "available")).toBe(true);
 });
 
-test.each([{ rows: [] }])("unavailable/malformed targets fail before occupancy: %j", async ({ rows }) => {
+test.each([{ rows: [] }])("unavailable targets fail before occupancy: %j", async ({ rows }) => {
   query.mockResolvedValueOnce(rows);
   await expect(load()).rejects.toThrow("This reservation is no longer available to edit.");
   expect(query).toHaveBeenCalledTimes(1);
+  expect(logger.error).not.toHaveBeenCalled();
+});
+
+test.each(["08006", "42P01", "23P01"])("SQLSTATE %s during an edit read is an operational failure, not unavailable occupancy", async code => {
+  query.mockRejectedValueOnce(new QueryFailedError("private SQL", ["private parameter"],
+    Object.assign(new Error("sensitive database detail"), { code, constraint: "court_reservation_no_overlap" })));
+  await expect(load()).rejects.toThrow(/^Unable to load reservation edit details\.$/);
+  expect(logger.error).toHaveBeenCalledWith({ event: "reservations.admin_edit_availability_failed", code }, "Failed to load Admin edit context");
+  expect(query).toHaveBeenCalledTimes(1);
+});
+
+test("malformed persistence results are operational failures", async () => {
+  query.mockResolvedValueOnce([{ ...target, court_id: "invalid" }]);
+  await expect(load()).rejects.toThrow(/^Unable to load reservation edit details\.$/);
+  expect(query).toHaveBeenCalledTimes(1);
+});
+
+test("occupancy read failures retain their safe operational error", async () => {
+  query.mockResolvedValueOnce([target]).mockRejectedValueOnce(new Error("private connection details"));
+  await expect(load()).rejects.toThrow(/^Unable to load court availability\.$/);
+  expect(query).toHaveBeenCalledTimes(2);
+});
+
+test("invalid input is rejected before persistence", async () => {
+  await expect(load("invalid")).rejects.toThrow(/^Choose a valid date\.$/);
+  expect(query).not.toHaveBeenCalled();
+});
+
+test.each(["online", "pay_at_club", null])("staff projection requires a contractual payment method for bookings: %j", async paymentMethod => {
+  const direct = { ...target, kind: "reservation", creator_name: null, creator_email: null, creator_phone: null,
+    account_user_id: null, payment_method: null, customer_name: null, customer_email: null, customer_phone: null,
+    cancellation_notice_minutes: null, total_amount_minor: null, currency: null, payment_facts: [] };
+  const booking = { ...direct, id: id(7), kind: "booking", payment_method: paymentMethod,
+    customer_name: "Customer", customer_email: "snapshot@example.test", customer_phone: "123",
+    cancellation_notice_minutes: 120, total_amount_minor: 5000, currency: "RON" };
+  query.mockImplementation(async (sql: string) => {
+    if (sql.includes("payment_facts")) return [direct, booking];
+    if (sql.includes("court_reservations")) return [row];
+    return [hours];
+  });
+  const result = getReservationDay(location, date, now, client);
+  if (paymentMethod === null) await expect(result).rejects.toThrow(/^Unable to load reservation details\.$/);
+  else expect((await result).adminOccupancy).toMatchObject([
+    { kind: "reservation", id: target.id }, { kind: "booking", payment_method: paymentMethod },
+  ]);
+});
+
+test("staff DTOs require identity, contacts, payments and refund state", () => {
+  expectTypeOf<Omit<AdminReservation, "creator_email">>().not.toExtend<AdminReservation>();
+  expectTypeOf<Omit<AdminReservation, "creator_phone">>().not.toExtend<AdminReservation>();
+  expectTypeOf<Omit<AdminReservation, "payment_method">>().not.toExtend<AdminReservation>();
+  expectTypeOf<Omit<AdminBooking, "account_user_id">>().not.toExtend<AdminBooking>();
+  expectTypeOf<Omit<AdminBooking, "payments">>().not.toExtend<AdminBooking>();
+  expectTypeOf<Omit<AdminBooking, "stripe_refund_available">>().not.toExtend<AdminBooking>();
+  expectTypeOf<Omit<BookingEditContext, "refunds">>().not.toExtend<BookingEditContext>();
+});
+
+test.each([false, true])("projects complete nullable staff details (captured Stripe payment=%s)", async captured => {
+  const direct = { ...target, kind: "reservation", creator_name: captured ? "Coach" : null,
+    creator_email: captured ? "coach@example.test" : null, creator_phone: captured ? "123" : null,
+    account_user_id: null, payment_method: null, customer_name: null, customer_email: null, customer_phone: null,
+    cancellation_notice_minutes: null, total_amount_minor: null, currency: null, payment_facts: [] };
+  const payment = { id: id(8), booking_id: id(7), method: "online", provider: "stripe", provider_payment_id: "pi_test",
+    amount_minor: 5000, currency: "RON", status: "succeeded", expires_at: null, created_at: token };
+  const booking = { ...direct, id: id(7), kind: "booking", account_user_id: captured ? id(6) : null,
+    payment_method: captured ? "online" : "pay_at_club", payment_facts: captured ? [payment] : [],
+    customer_name: "Customer", customer_email: "snapshot@example.test", customer_phone: "123",
+    cancellation_notice_minutes: 120, total_amount_minor: 5000, currency: "RON" };
+  query.mockImplementation(async (sql: string) => {
+    if (sql.includes("payment_facts")) return [direct, booking];
+    if (sql.includes("court_reservations")) return [row];
+    return [hours];
+  });
+  const result = await getReservationDay(location, date, now, client);
+  expect(result.adminOccupancy).toEqual([
+    { kind: "reservation", id: target.id, court_id: target.court_id, booking_date: date,
+      starts_at_minute: 600, ends_at_minute: 660, reason: target.reason, created_by_user_id: target.created_by_user_id,
+      creator_name: direct.creator_name, creator_email: direct.creator_email, creator_phone: direct.creator_phone, payment_method: null },
+    { kind: "booking", id: booking.id, court_id: booking.court_id, booking_date: date,
+      starts_at_minute: 600, ends_at_minute: 660, account_user_id: booking.account_user_id, payment_method: booking.payment_method,
+      payments: captured ? [{ id: payment.id, method: payment.method, provider: payment.provider, status: payment.status }] : [],
+      stripe_refund_available: captured, customer_name: booking.customer_name, customer_email: booking.customer_email,
+      customer_phone: booking.customer_phone, cancellation_notice_minutes: 120, total_amount_minor: 5000, currency: "RON" },
+  ]);
 });

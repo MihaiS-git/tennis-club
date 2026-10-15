@@ -1,9 +1,10 @@
+import { insertBookingFixture } from "./checkout-fixtures";
+import { cleanupBookingFixtures } from "./checkout-fixtures";
 import { insertOpeningHoursFixture } from "./opening-hours-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test } from "vitest";
 import { cancelCustomerBookingAsAdmin, cancelDirectReservationAsAdmin, editDirectReservationAsAdmin, getAdminReservationEditDay, getReservationDay } from "@/lib/reservations/service";
-import { getAdminBookingEditDay, rescheduleCustomerBookingAsAdmin } from "@/lib/bookings/admin-reschedule";
 import { mondayWeekday } from "@/lib/pricing/resolution";
 import { cleanupAuthFixtures, localFixtureClient } from "./auth-fixtures";
 
@@ -11,6 +12,7 @@ test("Admin and Coach share direct, customer and guest details while mutations r
   const service = localFixtureClient();
   const locationId = randomUUID(), courtId = randomUUID();
   const directId = randomUUID(), reservationId = randomUUID(), bookingId = randomUUID(), paymentId = randomUUID();
+  const guestReservationId = randomUUID(), guestBookingId = randomUUID(), guestPaymentId = randomUUID();
   const userIds: string[] = [];
   const date = "2099-10-15", now = new Date("2099-10-14T12:00:00Z");
   const location = { id: locationId, name: "Operations", timezone: "UTC", courts: [{ id: courtId, name: "Court 1" }] };
@@ -42,7 +44,7 @@ test("Admin and Coach share direct, customer and guest details while mutations r
       { id: reservationId, court_id: courtId, booking_date: date, starts_at_minute: 660,
         ends_at_minute: 750 },
     ])).error, null);
-    assert.strictEqual((await service.from("bookings").insert({ id: bookingId, reservation_id: reservationId,
+    assert.strictEqual((await insertBookingFixture(service, { id: bookingId, reservation_id: reservationId,
       account_user_id: member.id, payment_method: "pay_at_club", customer_name: "Ana Pop", customer_email: "ana@example.test",
       customer_phone: "+40 123", cancellation_notice_minutes: 120, total_amount_minor: 7500, currency: "RON" })).error, null);
 
@@ -51,8 +53,8 @@ test("Admin and Coach share direct, customer and guest details while mutations r
     const adminDay = await getReservationDay(location, date, now, admin.client);
     expect(adminDay.adminOccupancy).toHaveLength(2);
     expect(adminDay.adminOccupancy).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: "reservation", id: directId, creator_name: "Mihai Stan", reason: "Training" }),
-      expect.objectContaining({ kind: "booking", id: bookingId, account_user_id: member.id, payment_method: "pay_at_club", customer_name: "Ana Pop",
+      expect.objectContaining({ kind: "reservation", id: directId, creator_name: "Mihai Stan", reason: "Training", payment_method: null }),
+      expect.objectContaining({ kind: "booking", id: bookingId, account_user_id: member.id, payment_method: "pay_at_club", stripe_refund_available: false, customer_name: "Ana Pop",
         customer_email: "ana@example.test", customer_phone: "+40 123", cancellation_notice_minutes: 120, total_amount_minor: 7500, currency: "RON", payments: [{ id: paymentId, method: "pay_at_club", provider: null, status: "due" }],
         starts_at_minute: 660, ends_at_minute: 750 }),
     ]));
@@ -68,26 +70,29 @@ test("Admin and Coach share direct, customer and guest details while mutations r
     await expect(cancelDirectReservationAsAdmin(directId, coach.client)).rejects.toThrow();
     await expect(editDirectReservationAsAdmin({}, coach.client)).rejects.toThrow();
     await expect(getAdminReservationEditDay({ reservationId: directId, date }, coach.client, now)).rejects.toThrow();
-    await expect(cancelCustomerBookingAsAdmin({ id: bookingId, refund: true }, coach.client)).rejects.toThrow();
-    await expect(getAdminBookingEditDay(bookingId, date, coach.client, now)).rejects.toThrow();
-    await expect(rescheduleCustomerBookingAsAdmin({}, coach.client)).rejects.toThrow();
-    assert.strictEqual((await service.from("bookings").update({ account_user_id: null }).eq("id", bookingId)).error, null);
-    assert.strictEqual((await service.from("bookings").update({ payment_method: "online" }).eq("id", bookingId)).error, null);
-    assert.strictEqual((await service.from("payment_attempts").update({ method: "online", provider: "stripe",
-      provider_payment_id: `pi_${paymentId}`, status: "succeeded", expires_at: "2099-10-14T12:10:00Z",
-      completed_at: "2099-10-14T12:01:00Z" }).eq("id", paymentId)).error, null);
+    await expect(cancelCustomerBookingAsAdmin({ id: bookingId }, coach.client)).rejects.toThrow();
+    expect(await cancelCustomerBookingAsAdmin({ id: bookingId }, admin.client)).toMatchObject({ ok: true });
+    assert.strictEqual((await service.from("court_reservations").insert({ id: guestReservationId,
+      court_id: courtId, booking_date: date, starts_at_minute: 660, ends_at_minute: 750 })).error, null);
+    assert.strictEqual((await insertBookingFixture(service, { id: guestBookingId, reservation_id: guestReservationId,
+      account_user_id: null, payment_method: "online", customer_name: "Ana Pop", customer_email: "ana@example.test",
+      customer_phone: "+40 123", cancellation_notice_minutes: 120, total_amount_minor: 7500, currency: "RON" })).error, null);
+    assert.strictEqual((await service.from("payment_attempts").insert({ id: guestPaymentId, booking_id: guestBookingId,
+      amount_minor: 7500, currency: "RON", method: "online", provider: "stripe",
+      provider_payment_id: `pi_${guestPaymentId}`, status: "succeeded", expires_at: "2099-10-14T12:10:00Z",
+      completed_at: "2099-10-14T12:01:00Z" })).error, null);
     const guestAdminDay = await getReservationDay(location, date, now, admin.client);
     expect((await getReservationDay(location, date, now, coach.client)).adminOccupancy).toEqual(guestAdminDay.adminOccupancy);
     expect(guestAdminDay.adminOccupancy.find((row) => row.kind === "booking")).toMatchObject({
       account_user_id: null, customer_name: "Ana Pop", customer_email: "ana@example.test", customer_phone: "+40 123", payment_method: "online", stripe_refund_available: true,
-      payments: [{ id: paymentId, method: "online", provider: "stripe", status: "succeeded" }] });
+      payments: [{ id: guestPaymentId, method: "online", provider: "stripe", status: "succeeded" }] });
     expect(coachDay.courts[0].cells).toEqual(["booked", "booked", "booked", "booked", "booked", "available"]);
-    expect((await admin.client.from("bookings").select("customer_email")).error?.code).toBe("42501");
-    expect((await service.from("bookings").update({ status: "cancelled" }).eq("id", bookingId)).error).toBeNull();
+    expect((await admin.client.from("booking_revisions").select("customer_email")).error?.code).toBe("42501");
+    expect((await service.from("bookings").update({ status: "cancelled" }).eq("id", guestBookingId)).error).toBeNull();
     expect((await getReservationDay(location, date, now, admin.client)).adminOccupancy.map((item) => item.id)).toEqual([directId]);
   } finally {
-    await service.from("bookings").delete().eq("id", bookingId);
-    await service.from("court_reservations").delete().in("id", [directId, reservationId]);
+    await cleanupBookingFixtures({ bookingIds: [bookingId, guestBookingId] });
+    await service.from("court_reservations").delete().in("id", [directId, reservationId, guestReservationId]);
     await service.from("location_opening_hours").delete().eq("location_id", locationId);
     await service.from("courts").delete().eq("id", courtId);
     await service.from("locations").delete().eq("id", locationId);

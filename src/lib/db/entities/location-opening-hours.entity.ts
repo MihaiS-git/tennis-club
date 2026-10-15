@@ -1,6 +1,6 @@
 import "server-only";
 
-import { Check, Column, Entity, Exclusion, ForeignKey, JoinColumn, ManyToOne, PrimaryColumn, type Relation } from "typeorm";
+import { Check, Column, Entity, Exclusion, ForeignKey, JoinColumn, ManyToOne, PrimaryGeneratedColumn, type Relation } from "typeorm";
 
 import { OpeningHoursScheduleEntity } from "./opening-hours-schedule.entity";
 import { LocationEntity } from "./location.entity";
@@ -13,7 +13,7 @@ import { LocationEntity } from "./location.entity";
 @ForeignKey(() => OpeningHoursScheduleEntity, ["locationId", "scheduleId"], ["locationId", "id"], { name: "location_opening_hours_schedule_fkey", onDelete: "CASCADE" })
 @Exclusion("location_opening_hours_no_overlap", "USING gist (schedule_id WITH =, weekday WITH =, int4range(opens_at_minute, closes_at_minute, '[)') WITH &&)")
 export class LocationOpeningHoursEntity {
-  @PrimaryColumn({ name: "id", type: "uuid", default: () => "gen_random_uuid()", primaryKeyConstraintName: "location_opening_hours_pkey" })
+  @PrimaryGeneratedColumn("uuid", { name: "id", primaryKeyConstraintName: "location_opening_hours_pkey" })
   id!: string;
 
   @Column({ name: "location_id", type: "uuid" })

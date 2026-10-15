@@ -1,14 +1,16 @@
 # Implemented paid-booking modifications
 
-The authorized implementation replaces the temporary price-change restriction for
-consistent confirmed online bookings. The earlier review is retained below as history.
-No Brevo implementation/content, user assets, branches or commits were changed.
+The current implementation supports owner paid-booking changes through immutable
+booking revisions and adjustment proposals. Admin management is cancellation-only
+with automatic applicable online refunds. The earlier review and reported validation
+are retained below as historical evidence, not current branch validation.
 
 ## Schema
 
-One coherent, additive TypeORM migration: `1791809000000-BookingPaymentAdjustments.ts`.
+Booking-adjustment schema is now included directly in the entity-generated
+`1791462257924-InitialApplicationSchema.ts`; the development patch migration was removed.
 It creates `booking_adjustments` with booking/actor/scope, stable submission identity,
-original/new price, currency, target and original schedule/policy snapshots, outcome,
+original/new price, currency, immutable target and base-revision reference, outcome,
 expiry and timestamps. Unique indexes permit one unresolved pending edit per booking
 and one charge per adjustment; submission retries identify the existing operation.
 Application browser grants are explicitly denied.
@@ -24,9 +26,10 @@ with `(payment_attempt_id, operation_key)` uniqueness and retains unique provide
 refund identity. New adjustment linkage, original captured-amount snapshot, retry
 generation and archived failed-provider reference history support repeated partial
 refunds, compensation and later cancellation without overwriting captured transactions.
-Legacy refund capture snapshots are backfilled from their original attempts; no booking,
-capture amount or existing refund obligation is discarded. Down refuses to remove
-actual adjustment history. Migration execution does not reset the database.
+Refund obligations also retain immutable reasons and contractual revision references.
+The current schema uses three consolidated development migrations, without backfills
+or patch chains, on disposable development/test databases. The earlier populated-data
+additive migration is historical validation described below, not the current setup.
 
 ## Services and lifecycle
 
@@ -39,8 +42,8 @@ verified webhook use common `processOnlinePaymentEvent` settlement and receipt i
 No checked acknowledgement or browser Stripe response can apply a paid change.
 
 Verified capture revalidates original tokens, current actor eligibility, target hours,
-price/currency and occupancy, releases its own fragments and moves the original row /
-updates its total within one transaction. Both final writes fence the adjustment
+price/currency and occupancy, releases its own fragments, moves occupancy and appends
+an applied revision/current pointer within one transaction. Both final writes fence the adjustment
 expiry. A savepoint rolls back a failed move while retaining the captured financial
 record and creating a durable compensation obligation. Expired/cancelled/invalid
 operations never reclaim target occupancy or apply old edits. Refund processing runs
@@ -51,18 +54,18 @@ An eligible decrease applies the lower schedule/total and reserves the complete 
 difference across captured funds, newest first, in the same transaction. Every existing
 obligation reserves its amount, including pending and failed refunds. Cancellation
 therefore requests only the remaining captured balance across all attempts. Owner
-notice rules and current staff-owner bypass remain; Admin management stays Admin-only.
-Staff changes do not waive surcharges/refunds. Explicit Admin cancellation refund
-choices remain authoritative, and old checkout capabilities cannot override them or
-undo later adjustment management. Original cancellation refund processing remains
-compatible. Pay-at-club changes update only uncollected due amounts and use no Stripe.
+notice rules and current staff-owner bypass remain. Admins cannot reschedule other
+customers' bookings; Coaches have no Admin customer-management rights. Applicable
+online cancellation refunds are automatic. Old checkout capabilities cannot override
+accepted cancellation or adjustment management. Pay-at-club changes append a contract
+revision and change current debt; the original due request stays unchanged and no Stripe is used.
 Same-price changes save directly under existing policy and concurrency checks.
 
 Unknown provider outcomes retain their request identity and durable uncertainty.
 An adjustment refund verified as failed can be retried by an authorized Admin with a
 new provider generation; the previous failed reference is archived. Snapshot/lease /
-generation checks reject late results from superseded retries. Net paid is verified
-captures minus successful refunds; remaining refundable funds additionally subtract
+generation checks reject late results from superseded retries. Current net paid counts
+successfully settled attempts minus successful refund statuses; remaining refundable funds additionally subtract
 all durable obligations. No refund can allocate an already-reserved captured balance.
 
 ## UI and recovery
@@ -73,26 +76,28 @@ Element. Pending operations do not close as successful saves; completion comes o
 from authoritative backend status. Reductions show the durable refund status without
 claiming a pending/failed refund is complete. Recoverable quote errors preserve drafts.
 
-Active owners / authorized Admins reopen Edit to recover the registered intent after
+Active owners, including Admin/Coach owners, reopen Edit to recover the registered intent after
 refresh/closure, using verified identity rather than contact matching. Resume retrieves
 the same PaymentIntent and reissues a narrow checkout capability; it does not create a
-replacement charge. Admin-created edits provide a capability-bound customer payment
-link, including for guests. Initial creation uncertainty remains tied to the same
+replacement charge. Admin management cannot create customer surcharges; guest
+rescheduling is not implemented. Initial creation uncertainty remains tied to the same
 attempt/idempotency key. Uncertain cancelled/expired payments stay recoverable rather
 than permanently blocking edits or triggering a new charge. Admin Financial history
 can check provider outcomes after the booking scheduling edit window closes.
 
-Admin financial views retain original transaction evidence and show all payment/refund
-rows, net paid, outstanding amount, refund retry and payment-recovery actions. No guest
+Admin financial views use each transaction's historical revision/proposal context,
+with current-booking totals shown separately, refund retry and payment-recovery actions. No guest
 self-management of arbitrary bookings or account ownership by email was added. No
 background reconciliation worker was introduced; verified webhooks, polling, recovery
 and Admin checks remain the reconciliation transports. Inconsistent pre-existing
 ledgers are rejected visibly for review rather than silently charging against an
-unexplained balance. No retrospective financial policy was invented.
+unexplained balance. Complete immutable financial observations, refund executions,
+receipt-only capture summaries and independent scheduled reconciliation remain
+[Task 4 work](payments-memberships.md#remaining-financial-model-work-task-4).
 
 ## Files
 
-- Schema/registry: new booking-adjustment entity/migration; existing attempt, refund,
+- Schema/registry: booking-adjustment/revision entities and three consolidated migrations; attempt, refund,
   reservation entities and DataSource.
 - Persistence: booking-adjustments repository; existing payments, bookings and
   reservations repositories.
@@ -105,7 +110,7 @@ unexplained balance. No retrospective financial policy was invented.
   journey and isolated HTTP Stripe fixture; existing integration regressions. One
   activity fixture that had become elapsed on the current date now uses a future date.
 
-## Validation
+## Historical validation of the earlier paid-adjustment implementation
 
 The PostgreSQL tests use simulated Stripe responses with real isolated persistence.
 The browser test uses simulated Stripe.js/local HTTP Stripe responses with real Next.js
@@ -125,14 +130,18 @@ Final validation on `fix/admin-location-reservation-ui`:
   edit with a successful partial refund. Navigation and opening-hours/concurrent-edit
   browser regressions also pass.
 
-The additive adjustment migration was also applied to the existing local development
+At that earlier stage, the additive adjustment migration was applied to the local development
 database at port 54322. Before/after counts remained 10 bookings, 10 payment attempts
 and 2 refund records. Only this migration was executed; no reset, initial cutover,
 development-server restart or deployment to a remote database occurred.
 
 ---
 
-## Previous audit before financial-model authorization
+## Historical audit before financial-model authorization
+
+The findings, old file paths and command results below describe the earlier mutable
+model. They are retained as audit evidence; current behavior is described above and
+in [booking contracts](booking-domain.md#implemented-immutable-booking-contracts).
 
 # Booking and payment workflow review
 

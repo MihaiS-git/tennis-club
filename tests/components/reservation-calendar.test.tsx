@@ -3,6 +3,7 @@ import { expectToast, lastToast } from "../helpers/notifications";
 import { installDialogMock } from "../helpers/dialog";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
+import type { AdminOperationalOccupancy } from "@/lib/reservations/service";
 import { ReservationCalendar } from "@/app/admin/reservations/reservation-calendar";
 import { localMinute, localToday } from "@/lib/courts/local-time";
 
@@ -12,7 +13,7 @@ vi.mock("@/app/my-activity/bookings/actions", () => ({ cancelOwnReservationActio
   quoteOwnBookingAction: ownerBookingQuote, rescheduleOwnBookingAction: ownerBookingSave, cancelOwnCustomerBookingAction: ownerBookingCancel }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
 vi.mock("@/app/admin/reservations/actions", () => ({ reserveCourtAction: vi.fn(), cancelAdminReservationAction: cancelAction,
-  cancelAdminCustomerBookingAction: cancelBookingAction, editAdminReservationAction: editAction, loadAdminBookingEditDayAction: vi.fn(), quoteAdminBookingAction: vi.fn(), rescheduleAdminBookingAction: vi.fn(), loadAdminReservationEditDayAction: adminAvailability }));
+  cancelAdminCustomerBookingAction: cancelBookingAction, editAdminReservationAction: editAction, loadAdminReservationEditDayAction: adminAvailability }));
 beforeAll(() => {
   installDialogMock();
 });
@@ -44,7 +45,8 @@ it("confirms booking cancellation and refreshes the timetable in place", async (
   const courtId = "22222222-2222-4222-8222-222222222222";
   const location = { id: "11111111-1111-4111-8111-111111111111", name: "RIVUS", timezone: "UTC",
     courts: [{ id: courtId, name: "Court 2" }] };
-  const booking = { kind: "booking" as const, id: "33333333-3333-4333-8333-333333333333", court_id: courtId,
+  const booking = { account_user_id: null, payments: [], stripe_refund_available: false, kind: "booking" as const, id: "33333333-3333-4333-8333-333333333333", court_id: courtId,
+    payment_method: "pay_at_club" as const,
     booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660,
     customer_name: "Ana Pop", customer_email: "ana@example.test", customer_phone: "+40 123",
     cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON" as const };
@@ -59,7 +61,7 @@ it("confirms booking cancellation and refreshes the timetable in place", async (
     "This will cancel the booking and free the court."]) expect(confirmation.textContent).toContain(value);
   expect(within(confirmation).getByRole("button", { name: "Keep booking" })).toBeTruthy();
   fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel booking" }));
-  await waitFor(() => expect(cancelBookingAction).toHaveBeenCalledWith({ id: booking.id, refund: null }));
+  await waitFor(() => expect(cancelBookingAction).toHaveBeenCalledWith({ id: booking.id }));
   await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
   expect(cancelAction).not.toHaveBeenCalled();
   expect(screen.queryByRole("dialog")).toBeNull();
@@ -76,7 +78,7 @@ it("reuses the edit timetable for another user's reservation with fixed location
   const otherCourtId = "55555555-5555-4555-8555-555555555555";
   const location = { id: "11111111-1111-4111-8111-111111111111", name: "RIVUS", timezone: "UTC",
     courts: [{ id: courtId, name: "Court 1" }, { id: otherCourtId, name: "Court 2" }] };
-  const reservation = { id: "33333333-3333-4333-8333-333333333333", court_id: courtId,
+  const reservation = { creator_email: null, creator_phone: null, payment_method: null, id: "33333333-3333-4333-8333-333333333333", court_id: courtId,
     booking_date: "2099-10-15", starts_at_minute: 750, ends_at_minute: 840,
     reason: "Coach training", created_by_user_id: "44444444-4444-4444-8444-444444444444", creator_name: "Mihai Stan" };
   adminAvailability.mockImplementation(async (_id, date) => ({ date, location,
@@ -124,7 +126,7 @@ it("keeps an in-progress Admin edit to reason only", async () => {
   render(<ReservationCalendar canManage date={date} location={{ id: "11111111-1111-4111-8111-111111111111", name: "RIVUS",
     timezone: zone, courts: [{ id: courtId, name: "Court 1" }] }}
     day={{ times: [start, start + 30], courts: [{ court: { id: courtId, name: "Court 1" }, cells: ["booked", "booked"] }] }}
-    adminOccupancy={[{ kind: "reservation", id: "33333333-3333-4333-8333-333333333333", court_id: courtId,
+    adminOccupancy={[{ creator_email: null, creator_phone: null, payment_method: null, kind: "reservation", id: "33333333-3333-4333-8333-333333333333", court_id: courtId,
       booking_date: date, starts_at_minute: start, ends_at_minute: start + 90,
       reason: "Training", created_by_user_id: null, creator_name: null }]} />);
   fireEvent.click(screen.getAllByRole("button", { name: /Reservation · Unknown creator/ })[0]);
@@ -146,7 +148,7 @@ it("keeps an in-progress Admin edit to reason only", async () => {
 it("locks the Admin direct-reservation dialog during Save and preserves a failed draft for retry", async () => {
   const court = { id: "22222222-2222-4222-8222-222222222222", name: "Court 1" };
   const location = { id: "11111111-1111-4111-8111-111111111111", name: "Club", timezone: "UTC", courts: [court] };
-  const reservation = { kind: "reservation" as const, id: "33333333-3333-4333-8333-333333333333", court_id: court.id,
+  const reservation = { creator_email: null, creator_phone: null, payment_method: null, kind: "reservation" as const, id: "33333333-3333-4333-8333-333333333333", court_id: court.id,
     booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660,
     reason: "Practice", created_by_user_id: null, creator_name: null };
   adminAvailability.mockResolvedValue({ reservation: { ...reservation, updated_at: "2026-10-01T12:00:00Z" },
@@ -179,7 +181,7 @@ it("keeps the confirmation open with a clear error on stale cancellation", async
   render(<ReservationCalendar canManage date="2099-10-15" location={{ id: "11111111-1111-4111-8111-111111111111",
     name: "Club", timezone: "UTC", courts: [{ id: courtId, name: "Court 1" }] }}
     day={{ times: [600], courts: [{ court: { id: courtId, name: "Court 1" }, cells: ["booked"] }] }}
-    adminOccupancy={[{ kind: "reservation", id: "33333333-3333-4333-8333-333333333333", court_id: courtId,
+    adminOccupancy={[{ creator_email: null, creator_phone: null, payment_method: null, kind: "reservation", id: "33333333-3333-4333-8333-333333333333", court_id: courtId,
       booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660,
       reason: "Maintenance", created_by_user_id: null, creator_name: null }]} />);
   fireEvent.click(screen.getByRole("button", { name: /Reservation · Unknown creator/ }));
@@ -194,7 +196,7 @@ it("keeps the confirmation open with a clear error on stale cancellation", async
 
 it.each(["reservation"] as const)("keeps a past %s read-only in the Admin dialog", (kind) => {
   const courtId = "22222222-2222-4222-8222-222222222222";
-  const item = { kind, id: "33333333-3333-4333-8333-333333333333", court_id: courtId,
+  const item = { creator_email: null, creator_phone: null, payment_method: null, kind, id: "33333333-3333-4333-8333-333333333333", court_id: courtId,
     booking_date: "2000-10-15", starts_at_minute: 600, ends_at_minute: 660,
     reason: "Historical event", created_by_user_id: null, creator_name: "Coach",
     customer_name: "Ana Pop", customer_email: "ana@example.test", customer_phone: "+40 123",
@@ -214,12 +216,14 @@ it.each(["reservation"] as const)("keeps a past %s read-only in the Admin dialog
 it.each(["reservation", "booking"] as const)("opens shared %s details for a Coach after refresh without Admin actions", (kind) => {
   const court = { id: "22222222-2222-4222-8222-222222222222", name: "Court 1" };
   const location = { id: "11111111-1111-4111-8111-111111111111", name: "Club", timezone: "UTC", courts: [court] };
-  const item = { kind, id: "33333333-3333-4333-8333-333333333333", court_id: court.id,
-    booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660,
+  const common = { id: "33333333-3333-4333-8333-333333333333", court_id: court.id,
+    booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660 };
+  const item: AdminOperationalOccupancy = kind === "reservation" ? { ...common, kind,
     reason: "Training", created_by_user_id: null, creator_name: "Coach", creator_email: "coach@example.test", creator_phone: "123",
+    payment_method: null } : { ...common, kind,
     account_user_id: null, customer_name: "Ana Pop", customer_email: "ana@example.test", customer_phone: "+40 123",
-    cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON" as const,
-    payment_method: "online" as const, stripe_refund_available: true,
+    cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON",
+    payment_method: "online", stripe_refund_available: true,
     payments: [{ id: "payment", method: "online", provider: "stripe", status: "succeeded" }] };
   const view = <ReservationCalendar canManage={false} date={item.booking_date} location={location}
     day={{ times: [600, 630], courts: [{ court, cells: ["booked", "booked"] }] }} adminOccupancy={[item]} />;
@@ -229,6 +233,7 @@ it.each(["reservation", "booking"] as const)("opens shared %s details for a Coac
     const dialog = screen.getByRole("dialog", { name: kind === "booking" ? "Booking details" : "Reservation details" });
     for (const value of kind === "booking" ? ["Ana Pop", "ana@example.test", "+40 123", "Guest", "Online", "succeeded", "RON"] : ["Coach", "Training", "coach@example.test", "123"])
       expect(dialog.textContent).toContain(value);
+    expect(within(dialog).queryByText("Payment method") !== null).toBe(kind === "booking");
     expect(within(dialog).queryByRole("button", { name: /^(Edit|Cancel) / })).toBeNull();
     expect(within(dialog).queryByRole("checkbox")).toBeNull();
   }
@@ -242,11 +247,14 @@ it.each(["reservation", "booking"] as const)("opens shared %s details for a Coac
   expect(adminAvailability).not.toHaveBeenCalled();
 });
 
-it.each([true, false])("Admin explicitly cancels a paid Stripe booking with refund=%s", async (refund) => {
+it.each([false, true])("Admin cancellation reflects captured-funds refund availability=%s", async (refundable) => {
   const courtId = "22222222-2222-4222-8222-222222222222";
   const location = { id: "11111111-1111-4111-8111-111111111111", name: "RIVUS", timezone: "UTC",
     courts: [{ id: courtId, name: "Court 2" }] };
-  const booking = { kind: "booking" as const, stripe_refund_available: true, id: "33333333-3333-4333-8333-333333333333", court_id: courtId,
+  const booking = { account_user_id: null,
+    payments: refundable ? [{ id: "payment", method: "online", provider: "stripe", status: "succeeded" }] : [],
+    kind: "booking" as const, stripe_refund_available: refundable, id: "33333333-3333-4333-8333-333333333333", court_id: courtId,
+    payment_method: "online" as const,
     booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660,
     customer_name: "Ana Pop", customer_email: "ana@example.test", customer_phone: "+40 123",
     cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON" as const };
@@ -260,10 +268,10 @@ it.each([true, false])("Admin explicitly cancels a paid Stripe booking with refu
   for (const value of ["Ana Pop", "RIVUS · Court 2", "15 Oct 2099 · 10:00–11:00", "RON", "90.00",
     "This will cancel the booking and free the court."]) expect(confirmation.textContent).toContain(value);
   expect(within(confirmation).getByRole("button", { name: "Keep booking" })).toBeTruthy();
-  const checkbox = within(confirmation).getByRole("checkbox", { name: "Refund full payment" });
-  if (refund) fireEvent.click(checkbox);
+  expect(within(confirmation).queryByRole("checkbox")).toBeNull();
+  expect(confirmation.textContent?.includes("refunded automatically")).toBe(refundable);
   fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel booking" }));
-  await waitFor(() => expect(cancelBookingAction).toHaveBeenCalledWith({ id: booking.id, refund }));
+  await waitFor(() => expect(cancelBookingAction).toHaveBeenCalledWith({ id: booking.id }));
   await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
   expect(cancelAction).not.toHaveBeenCalled();
   expect(screen.queryByRole("dialog")).toBeNull();
@@ -278,10 +286,28 @@ it.each([true, false])("Admin explicitly cancels a paid Stripe booking with refu
 const coachId = "44444444-4444-4444-8444-444444444444";
 const coachCourt = { id: "22222222-2222-4222-8222-222222222222", name: "Court 1" };
 const coachLocation = { id: "11111111-1111-4111-8111-111111111111", name: "Club", timezone: "UTC", courts: [coachCourt] };
-const coachReservation = { kind: "reservation" as const, id: "33333333-3333-4333-8333-333333333333", court_id: coachCourt.id,
+const coachReservation = { creator_email: null, creator_phone: null, payment_method: null, kind: "reservation" as const, id: "33333333-3333-4333-8333-333333333333", court_id: coachCourt.id,
   booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660,
   reason: "Practice", created_by_user_id: coachId, creator_name: "Coach" };
 const coachDay = { times: [600, 630] };
+
+it.each([null, coachId])("uses explicit account identity for booking customer type: %s", accountUserId => {
+  const booking: AdminOperationalOccupancy = { kind: "booking", id: "booking", court_id: coachCourt.id,
+    booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660,
+    account_user_id: accountUserId, payment_method: "pay_at_club", stripe_refund_available: false,
+    payments: [{ id: "payment", method: "pay_at_club", provider: null, status: "due" }],
+    customer_name: "Customer", customer_email: "customer@example.test", customer_phone: "123",
+    cancellation_notice_minutes: 120, total_amount_minor: 5000, currency: "RON" };
+  render(<ReservationCalendar actorUserId={coachId} date={booking.booking_date} location={coachLocation}
+    day={{ ...coachDay, courts: [{ court: coachCourt, cells: ["booked", "booked"] }] }} adminOccupancy={[booking]} />);
+  fireEvent.click(screen.getByRole("button", { name: /Booking · Customer/ }));
+  const dialog = screen.getByRole("dialog", { name: "Booking details" });
+  expect(within(dialog).getByText(accountUserId === null ? "Guest" : "Authenticated customer")).toBeTruthy();
+  expect(within(dialog).getByText("Pay at club")).toBeTruthy();
+  expect(within(dialog).getByText("due")).toBeTruthy();
+  expect(within(dialog).queryByRole("button", { name: "Edit booking" }) !== null).toBe(accountUserId !== null);
+  expect(within(dialog).queryByRole("button", { name: "Cancel booking" }) !== null).toBe(accountUserId !== null);
+});
 
 it("Coach confirms own cancellation, prevents duplicate submits and refreshes freed occupancy", async () => {
   let finish!: (result: { ok: true }) => void;
@@ -327,8 +353,9 @@ it.each(["stale", "network"])("Coach cancellation reports %s failure through Son
 });
 
 it.each(["other Coach", "historical creator", "customer", "guest", "ended", "ended booking"])("Coach cannot cancel %s occupancy", (kind) => {
-  const item = kind === "customer" || kind === "guest" || kind === "ended booking" ? { ...coachReservation, kind: "booking" as const,
+  const item = kind === "customer" || kind === "guest" || kind === "ended booking" ? { payments: [], stripe_refund_available: false, ...coachReservation, kind: "booking" as const,
     account_user_id: kind === "ended booking" ? coachId : kind === "customer" ? "other-user" : null,
+    payment_method: "pay_at_club" as const,
     booking_date: kind === "ended booking" ? "2000-10-15" : coachReservation.booking_date, customer_name: "Customer", customer_email: "coach@example.test",
     customer_phone: "123", total_amount_minor: 9000, currency: "RON" as const, cancellation_notice_minutes: 120 }
     : { ...coachReservation, created_by_user_id: kind === "historical creator" ? null : kind === "other Coach" ? "other-user" : coachId,
@@ -393,7 +420,8 @@ it.each(["future", "in-progress", "stale"])("Coach edits own reservation through
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
-const ownBooking = { kind: "booking" as const, id: coachReservation.id, court_id: coachCourt.id,
+const ownBooking = { payments: [], kind: "booking" as const, id: coachReservation.id, court_id: coachCourt.id,
+  payment_method: "online" as const,
   booking_date: coachReservation.booking_date, starts_at_minute: 600, ends_at_minute: 660, account_user_id: coachId,
   customer_name: "Customer", customer_email: "coach@example.test", customer_phone: "123",
   total_amount_minor: 9000, currency: "RON" as const, cancellation_notice_minutes: 43200, stripe_refund_available: true };
@@ -424,8 +452,8 @@ it("Coach cancels own booking with automatic refund, preserves failed confirmati
 
 it("Coach reschedules own booking with price acknowledgement and owner stale tokens", async () => {
   ownerBookingLoad.mockResolvedValue({ day: { times: [600, 630, 660], courts: [{ court: coachCourt, cells: ["available", "available", "available"] }] },
-    booking: { ...ownBooking, location_id: coachLocation.id, location_timezone: "UTC", updated_at: "2026-10-01T12:00:00.123456Z",
-      booking_updated_at: "2026-10-01T12:00:00.123457Z", location: coachLocation, hours: [], occupancy: [] } });
+    booking: { refunds: [], ...ownBooking, location_id: coachLocation.id, location_timezone: "UTC", updated_at: "2026-10-01T12:00:00.123456Z",
+      current_revision_id: "2026-10-01T12:00:00.123457Z", location: coachLocation, hours: [], occupancy: [] } });
   ownerBookingQuote.mockResolvedValue({ ok: true, totalAmountMinor: 10000 });
   ownerBookingSave.mockResolvedValueOnce({ ok: false, message: "Try again." }).mockResolvedValueOnce({ ok: true, totalAmountMinor: 10000 });
   render(<ReservationCalendar actorUserId={coachId} date={ownBooking.booking_date} location={coachLocation}
@@ -445,7 +473,7 @@ it("Coach reschedules own booking with price acknowledgement and owner stale tok
   fireEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
   await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
   expect(ownerBookingSave).toHaveBeenLastCalledWith(expect.objectContaining({ id: ownBooking.id, startMinute: 600, endMinute: 690,
-    expectedUpdatedAt: "2026-10-01T12:00:00.123456Z", expectedBookingUpdatedAt: "2026-10-01T12:00:00.123457Z",
+    expectedUpdatedAt: "2026-10-01T12:00:00.123456Z", expectedRevisionId: "2026-10-01T12:00:00.123457Z",
     expectedTotal: 10000, priceAcknowledged: true, save: true }));
   expect(screen.queryByRole("dialog")).toBeNull();
 });

@@ -25,6 +25,8 @@ import { findSelectedPaymentProvider, insertCheckoutAttempt } from "@/lib/db/rep
 import { readCreatedBookingCancellationPolicy, type ConfirmedCancellationPolicy } from "./confirmation-policy";
 import { customerBookingInputSchema } from "./domain";
 import { bookingNotification, sendBookingNotification, type BookingEmailEvent } from "@/lib/notifications/booking-email";
+import { buildBookingRevision, capturePricingEvidence } from "./revision";
+import { getCourtStateForDate } from "@/lib/courts/state";
 import { customerMutationDeadline } from "./self-cancellation";
 
 class CheckoutParentChanged extends Error {}
@@ -91,6 +93,10 @@ export async function createCustomerBooking(input: unknown, reader?: Reader,
         if (paymentMethod === "pay_at_club" && !location.allowPayAtClub)
           return { ok: false, message: "Pay at club is not available at this location." };
         if (date < today) return { ok: false, message: "Choose a future time at this location." };
+        const pricingRules = pricing.map((row) => ({ id: row.id, rule_set_id: row.ruleSetId, location_id: row.locationId,
+            court_id: row.courtId, court_state: row.courtState, weekday: row.weekday, starts_at_minute: row.startsAtMinute,
+            ends_at_minute: row.endsAtMinute, starts_on: row.startsOn, ends_on: row.endsOn, price_per_hour_minor: row.pricePerHourMinor,
+            created_at: row.createdAt.toISOString(), updated_at: row.updatedAt.toISOString() }));
         const day = buildCourtDay({ date, today, currentMinute: localMinute(location.timezone, now),
           courts: publicCourts.filter((court) => court.id === courtId),
           hours: hours.map((row) => ({ id: row.id, location_id: row.locationId, weekday: row.weekday,
@@ -98,10 +104,7 @@ export async function createCustomerBooking(input: unknown, reader?: Reader,
             created_at: row.createdAt.toISOString(), updated_at: row.updatedAt.toISOString() })),
           coverage: coverage.map((row) => ({ id: row.id, court_id: row.courtId, starts_on: row.startsOn, ends_on: row.endsOn,
             created_at: row.createdAt.toISOString(), updated_at: row.updatedAt.toISOString() })),
-          pricing: pricing.map((row) => ({ id: row.id, rule_set_id: row.ruleSetId, location_id: row.locationId,
-            court_id: row.courtId, court_state: row.courtState, weekday: row.weekday, starts_at_minute: row.startsAtMinute,
-            ends_at_minute: row.endsAtMinute, starts_on: row.startsOn, ends_on: row.endsOn, price_per_hour_minor: row.pricePerHourMinor,
-            created_at: row.createdAt.toISOString(), updated_at: row.updatedAt.toISOString() })), reservations: occupancy });
+          pricing: pricingRules, reservations: occupancy });
         const court = day.courts[0];
         const selection = court && getCalendarSelection({ courtId, times: day.times, cells: court.cells,
           hourlyPrices: court.hourlyPrices }, day.times.indexOf(startMinute), day.times.indexOf(endMinute - 30) + 1);
@@ -121,18 +124,22 @@ export async function createCustomerBooking(input: unknown, reader?: Reader,
         failureMessage = "Unable to create this booking. Try again.";
         await insertCustomerReservation(manager, { id: reservationId, courtId, date, startMinute, endMinute,
           status: lifecycle.reservation_status, holdExpiresAt: clock.expiry });
+        const revision = buildBookingRevision({ locationId: location.id, courtId, locationName: location.name,
+            courtName: court.court.name, timezone: location.timezone, bookingDate: date, startMinute, endMinute,
+            customerName, customerEmail, customerPhone, totalAmountMinor: selection.priceMinor, currency: location.currency,
+            cancellationNoticeMinutes: location.customerCancellationNoticeMinutes, paymentMethod,
+            pricingEvidence: capturePricingEvidence(pricingRules, { courtId, date, startMinute, endMinute, total: selection.priceMinor,
+              courtState: getCourtStateForDate(authoritative.environment, coverage.map(c => ({ starts_on: c.startsOn, ends_on: c.endsOn })), date) }),
+          }, { id: randomUUID(), bookingId, kind: "created", operationKey: "created", intentHash: "created",
+            bookingState: lifecycle.booking_status, actorUserId: account.state === "active" ? account.userId : null,
+            actorScope: account.state === "active" ? "customer" : "guest", recordedAt: new Date(clock.now),
+            adjustmentId: null, cancellationCause: null }, null);
         await insertCheckoutBooking(manager, { id: bookingId, reservationId,
           accountUserId: account.state === "active" ? account.userId : null,
-          customerName, customerEmail, customerPhone, status: lifecycle.booking_status,
-          totalAmountMinor: selection.priceMinor, currency: location.currency,
-          cancellationNoticeMinutes: location.customerCancellationNoticeMinutes, paymentMethod });
+          status: lifecycle.booking_status, revision });
         await insertCheckoutAttempt(manager, { id: attemptId, bookingId, method: paymentMethod, provider,
           amountMinor: selection.priceMinor, currency: location.currency, status: lifecycle.attempt_status, expiresAt: clock.expiry });
-        if (paymentMethod === "pay_at_club") notification = bookingNotification("confirmed", {
-          booking_id: bookingId, customer_name: customerName, location_name: location.name, timezone: location.timezone,
-          court_name: court.court.name, booking_date: date, starts_at_minute: startMinute, ends_at_minute: endMinute,
-          total_amount_minor: selection.priceMinor, currency: location.currency, previous: null,
-        }, customerEmail);
+        if (paymentMethod === "pay_at_club") notification = bookingNotification("confirmed", revision);
         if (paymentMethod === "online" && clock.expiry === null) throw new Error("Missing payment hold deadline.");
         return { ok: true, bookingId, reservationId, paymentAttemptId: attemptId,
           ...(clock.expiry === null ? { status: "confirmed", holdExpiresAt: null } as const

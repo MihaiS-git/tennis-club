@@ -1,9 +1,10 @@
 import "server-only";
 
-import { Check, Column, Entity, ForeignKey, Index, PrimaryColumn } from "typeorm";
+import { Check, Column, Entity, ForeignKey, Index, PrimaryGeneratedColumn } from "typeorm";
 import type { LocationCurrency } from "@/lib/pricing/money";
 import type { PaymentMethod, PaymentProvider } from "@/lib/payments/domain";
 
+import { BookingAdjustmentEntity } from "./booking-adjustment.entity";
 import { BookingEntity } from "./booking.entity";
 
 @Entity({ schema: "public", name: "payment_attempts" })
@@ -20,12 +21,13 @@ import { BookingEntity } from "./booking.entity";
 @Check("payment_attempts_provider_check", "(provider = ANY (ARRAY['stripe'::text, 'netopia'::text]))")
 @Check("payment_attempts_provider_payment_id_check", "((char_length(provider_payment_id) >= 1) AND (char_length(provider_payment_id) <= 255))")
 @Check("payment_attempts_status_check", "(status = ANY (ARRAY['pending'::text, 'succeeded'::text, 'failed'::text, 'cancelled'::text, 'expired'::text, 'due'::text]))")
-@ForeignKey(() => BookingEntity, ["bookingId"], ["id"], { name: "payment_attempts_booking_id_fkey", onDelete: "CASCADE" })
+@ForeignKey(() => BookingEntity, ["bookingId"], ["id"], { name: "payment_attempts_booking_id_fkey", onDelete: "RESTRICT" })
+@ForeignKey(() => BookingAdjustmentEntity, ["adjustmentId"], ["id"], { name: "payment_attempts_adjustment_id_fkey", onDelete: "RESTRICT" })
 export class PaymentAttemptEntity {
   @Column({ name: "adjustment_id", type: "uuid", nullable: true })
   adjustmentId!: string | null;
 
-  @PrimaryColumn({ name: "id", type: "uuid", default: () => "gen_random_uuid()", primaryKeyConstraintName: "payment_attempts_pkey" })
+  @PrimaryGeneratedColumn("uuid", { name: "id", primaryKeyConstraintName: "payment_attempts_pkey" })
   id!: string;
 
   @Column({ name: "booking_id", type: "uuid" })

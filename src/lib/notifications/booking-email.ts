@@ -1,6 +1,7 @@
 import "server-only";
 
 import { sendMail, type MailMessage } from "../mail/brevo";
+import type { RevisionSnapshot } from "../bookings/revision";
 
 type BookingEmailSchedule = {
   booking_date: string;
@@ -10,7 +11,7 @@ type BookingEmailSchedule = {
 };
 export type BookingEmailEvent = {
   recipient: string;
-  event_kind: "confirmed" | "customer_cancelled" | "admin_cancelled" | "customer_rescheduled" | "admin_rescheduled";
+  event_kind: "confirmed" | "customer_cancelled" | "admin_cancelled" | "customer_rescheduled";
   payload: BookingEmailSchedule & {
     booking_id: string;
     customer_name: string;
@@ -23,8 +24,18 @@ export type BookingEmailEvent = {
   };
 };
 
-export function bookingNotification(kind: BookingEmailEvent["event_kind"], payload: BookingEmailEvent["payload"], recipient: string) {
-  return { event_kind: kind, recipient, payload };
+export function bookingNotification(kind: BookingEmailEvent["event_kind"], revision: RevisionSnapshot,
+  options: { previous?: RevisionSnapshot; refundRequested?: boolean } = {}): BookingEmailEvent {
+  const previous = options.previous;
+  return { event_kind: kind, recipient: revision.customerEmail, payload: {
+    booking_id: revision.bookingId, customer_name: revision.customerName, location_name: revision.locationName,
+    timezone: revision.timezone, court_name: revision.courtName, booking_date: revision.bookingDate,
+    starts_at_minute: revision.startMinute, ends_at_minute: revision.endMinute,
+    total_amount_minor: revision.totalAmountMinor, currency: revision.currency,
+    previous: previous ? { court_name: previous.courtName, booking_date: previous.bookingDate,
+      starts_at_minute: previous.startMinute, ends_at_minute: previous.endMinute } : null,
+    ...(options.refundRequested ? { refund_status: "requested" as const } : {}),
+  } };
 }
 const time = (minute: number) => `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
 function interval(value: BookingEmailSchedule) {

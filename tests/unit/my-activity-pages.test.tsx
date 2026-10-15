@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 
 const { context, redirect, upcoming, history } = vi.hoisted(() => ({
-  context: vi.fn(), redirect: vi.fn(() => { throw new Error("redirect"); }), upcoming: vi.fn(), history: vi.fn(),
+  context: vi.fn(), redirect: vi.fn(() => { throw new Error("redirect"); }), upcoming: vi.fn<typeof import("@/lib/bookings/activity-service").listOwnUpcomingActivity>(), history: vi.fn(),
 }));
 vi.mock("@/lib/profile/profile", () => ({ profileContext: context }));
 vi.mock("next/navigation", () => ({ redirect }));
@@ -12,7 +12,7 @@ import { BookingHistoryContent } from "@/app/my-activity/history/content";
 import { parseActivityQuery } from "@/lib/bookings/activity-query";
 
 const account = { state: "active", userId: "owner", roles: [] as string[] };
-const result = { rows: [], upcoming: [], bookings: [], ordered: [], hasNext: false, locations: [], courts: [] };
+const result: import("@/lib/bookings/activity-service").UpcomingActivity = { upcoming: [], bookings: [], ordered: [], hasNext: false, locations: [], courts: [] };
 
 it.each(["upcoming"] as const)("requires authentication for %s", async (scope) => {
   context.mockResolvedValue({ account: { state: "unauthenticated" } });
@@ -23,11 +23,12 @@ it.each(["upcoming"] as const)("requires authentication for %s", async (scope) =
 
 it("supplies fresh user-scoped activity on every server render", async () => {
   context.mockResolvedValue({ account, client: {} });
-  upcoming.mockResolvedValueOnce(result).mockResolvedValueOnce({ ...result, bookings: [{ id: "new" }] });
+  const nextResult = { ...result, hasNext: true };
+  upcoming.mockResolvedValueOnce(result).mockResolvedValueOnce(nextResult);
   const first = await MyBookingsContent();
   const second = await MyBookingsContent();
-  expect(first.props.children.props.initialActivity.bookings).toEqual([]);
-  expect(second.props.children.props.initialActivity.bookings).toEqual([{ id: "new" }]);
+  expect(first.props.children.props.initialActivity).toBe(result);
+  expect(second.props.children.props.initialActivity).toBe(nextResult);
 });
 
 it("normalizes invalid filters, sort and dates safely with scope defaults", () => {

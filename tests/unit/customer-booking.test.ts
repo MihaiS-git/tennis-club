@@ -16,3 +16,9 @@ test("booking intent accepts only contact and schedule fields, preserving trimme
     { expectedTotalAmountMinor: 0 }, { expectedCurrency: "NOK" }])
     expect(customerBookingInputSchema.safeParse({ ...valid, ...change }).success).toBe(false);
 });
+
+test.each(["call me", "++40 712", "---", "123<script>"])("rejects invalid phone format %j", (customerPhone) => {
+  const parsed = customerBookingInputSchema.safeParse({ ...valid, customerPhone });
+  expect(parsed.success).toBe(false);
+  if (!parsed.success) expect(parsed.error.issues[0]).toMatchObject({ path: ["customerPhone"], message: "Enter a valid phone number, for example +40 712 345 678." });
+});

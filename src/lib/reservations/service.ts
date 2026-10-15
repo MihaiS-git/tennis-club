@@ -1,4 +1,5 @@
 import "server-only";
+import type { BookingCancellationCommandResult } from "@/lib/bookings/domain";
 import { cancelBookingCommand } from "@/lib/bookings/cancellation-service";
 import { paymentFactSchema } from "@/lib/payments/facts";
 import { successfulRefundPayment } from "@/lib/payments/providers/stripe/refund-policy";
@@ -22,17 +23,21 @@ import { loadReservationEditDayForLocation } from "./edit-availability";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
 const occupancySchema = z.object({ court_id: z.uuid(), starts_at_minute: z.number().int(), ends_at_minute: z.number().int() });
-const adminOccupancyRowSchema = occupancySchema.extend({ kind: z.enum(["reservation", "booking"]), id: z.uuid(),
+const adminOccupancyFields = occupancySchema.extend({ id: z.uuid(),
   booking_date: z.iso.date(), reason: z.string().nullable(), created_by_user_id: z.uuid().nullable(),
   creator_name: z.string().nullable(), creator_email: z.string().nullable(), creator_phone: z.string().nullable(),
-  account_user_id: z.uuid().nullable(), payment_method: z.enum(["online", "pay_at_club"]).nullable(), customer_name: z.string().nullable(), customer_email: z.string().nullable(),
+  account_user_id: z.uuid().nullable(), customer_name: z.string().nullable(), customer_email: z.string().nullable(),
   customer_phone: z.string().nullable(), cancellation_notice_minutes: cancellationNoticeMinutesSchema.nullable(), total_amount_minor: z.number().int().nullable(), currency: z.enum(locationCurrencies).nullable(), payment_facts: z.array(paymentFactSchema) });
+const adminOccupancyRowSchema = z.discriminatedUnion("kind", [
+  adminOccupancyFields.extend({ kind: z.literal("reservation"), payment_method: z.null() }),
+  adminOccupancyFields.extend({ kind: z.literal("booking"), payment_method: z.enum(["online", "pay_at_club"]) }),
+]);
 export type AdminReservation = Pick<z.infer<typeof adminOccupancyRowSchema>,
-  "id" | "court_id" | "booking_date" | "starts_at_minute" | "ends_at_minute" | "reason" | "created_by_user_id" | "creator_name"> & { kind: "reservation"; creator_email?: string | null; creator_phone?: string | null };
+  "id" | "court_id" | "booking_date" | "starts_at_minute" | "ends_at_minute" | "reason" | "created_by_user_id" | "creator_name" | "creator_email" | "creator_phone"> & { kind: "reservation"; payment_method: null };
 export type AdminBooking = Pick<z.infer<typeof adminOccupancyRowSchema>,
   "id" | "court_id" | "booking_date" | "starts_at_minute" | "ends_at_minute"> & {
-    kind: "booking"; account_user_id?: string | null; payment_method?: "online" | "pay_at_club" | null;
-    payments?: Pick<z.infer<typeof paymentFactSchema>, "id" | "method" | "provider" | "status">[]; stripe_refund_available?: boolean; customer_name: string; customer_email: string; customer_phone: string;
+    kind: "booking"; account_user_id: string | null; payment_method: "online" | "pay_at_club";
+    payments: Pick<z.infer<typeof paymentFactSchema>, "id" | "method" | "provider" | "status">[]; stripe_refund_available: boolean; customer_name: string; customer_email: string; customer_phone: string;
     cancellation_notice_minutes: number; total_amount_minor: number; currency: LocationCurrency;
   };
 export type AdminOperationalOccupancy = AdminReservation | AdminBooking;
@@ -112,7 +117,7 @@ export async function getReservationDay(location: InternalLocation, date: string
   }
   for (const row of parsed.data) {
     if (row.kind === "reservation") {
-      adminOccupancy.push({ kind: "reservation", id: row.id, court_id: row.court_id, booking_date: row.booking_date,
+      adminOccupancy.push({ kind: "reservation", payment_method: row.payment_method, id: row.id, court_id: row.court_id, booking_date: row.booking_date,
         starts_at_minute: row.starts_at_minute, ends_at_minute: row.ends_at_minute,
         reason: row.reason, created_by_user_id: row.created_by_user_id, creator_name: row.creator_name, creator_email: row.creator_email, creator_phone: row.creator_phone });
     } else if (row.customer_name && row.customer_email && row.customer_phone && row.total_amount_minor && row.currency && row.cancellation_notice_minutes !== null) {
@@ -171,12 +176,11 @@ export async function cancelDirectReservationAsAdmin(input: unknown, supabase?: 
 export async function cancelCustomerBookingAsAdmin(input: unknown, supabase?: Client): Promise<BookingCancellationResult> {
   const client = supabase ?? await createClient();
   const actor = await requireAdminReservationRole(client);
-  const parsed = z.union([z.strictObject({ id: z.uuid(), refund: z.boolean().nullable() }),
-    z.uuid().transform((id) => ({ id, refund: null }))]).safeParse(input);
-  if (!parsed.success) return { ok: false, message: "Choose a valid booking and refund decision." };
-  let data: unknown;
+  const parsed = z.union([z.strictObject({ id: z.uuid() }), z.uuid().transform(id => ({ id }))]).safeParse(input);
+  if (!parsed.success) return { ok: false, message: "Choose a valid booking." };
+  let data: BookingCancellationCommandResult;
   try {
-    data = await cancelBookingCommand(parsed.data.id, actor.userId, true, parsed.data.refund);
+    data = await cancelBookingCommand(parsed.data.id, actor.userId, true);
   } catch {
     logger.error({ event: "bookings.admin_cancel_failed", actorId: actor.userId, bookingId: parsed.data.id }, "Failed to cancel customer booking as Admin");
     return { ok: false, message: "Unable to cancel this booking. Try again." };
@@ -201,17 +205,18 @@ export async function getAdminReservationEditDay(input: { reservationId: unknown
 
 // Authorization precedes every private edit-context read.
 async function readAdminEditContext(id: string, date: string, now: Date) {
+  let row;
   try {
-    const row = await reservations.findReservationEditContext((await getDataSource()).manager, id);
-    if (!row) throw new Error("Unavailable reservation");
-    const occupancy = await readInternalOccupancy({ locationId: row.location_id }, date, now, id);
-    return { location_id: row.location_id, location_timezone: row.location_timezone,
-      court_id: row.court_id, booking_date: row.booking_date, starts_at_minute: row.starts_at_minute,
-      ends_at_minute: row.ends_at_minute, reason: row.reason, updated_at: row.updated_at, occupancy };
+    row = await reservations.findReservationEditContext((await getDataSource()).manager, id);
   } catch (error: unknown) {
     logger.error({ event: "reservations.admin_edit_availability_failed", code: normalizeDatabaseError(error).sqlState }, "Failed to load Admin edit context");
-    throw new Error("This reservation is no longer available to edit.");
+    throw new Error("Unable to load reservation edit details.");
   }
+  if (!row) throw new Error("This reservation is no longer available to edit.");
+  const occupancy = await readInternalOccupancy({ locationId: row.location_id }, date, now, id);
+  return { location_id: row.location_id, location_timezone: row.location_timezone,
+    court_id: row.court_id, booking_date: row.booking_date, starts_at_minute: row.starts_at_minute,
+    ends_at_minute: row.ends_at_minute, reason: row.reason, updated_at: row.updated_at, occupancy };
 }
 
 export type AdminEditResult = { ok: true; reservation: {

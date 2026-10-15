@@ -1,5 +1,5 @@
 import "server-only";
-import { Check, Column, Entity, Exclusion, ForeignKey, PrimaryColumn, Unique } from "typeorm";
+import { Check, Column, Entity, Exclusion, ForeignKey, PrimaryGeneratedColumn, Unique } from "typeorm";
 
 import { LocationEntity } from "./location.entity";
 
@@ -9,7 +9,7 @@ import { LocationEntity } from "./location.entity";
 @Check("opening_hours_schedules_dates", "ends_on IS NULL OR starts_on <= ends_on")
 @Exclusion("opening_hours_schedules_no_overlap", "USING gist (location_id WITH =, daterange(starts_on, ends_on, '[]') WITH &&)")
 export class OpeningHoursScheduleEntity {
-  @PrimaryColumn({ primaryKeyConstraintName: "opening_hours_schedules_pkey", type: "uuid", default: () => "gen_random_uuid()" })
+  @PrimaryGeneratedColumn("uuid", { primaryKeyConstraintName: "opening_hours_schedules_pkey" })
   id!: string;
   @Column({ name: "location_id", type: "uuid" })
   locationId!: string;

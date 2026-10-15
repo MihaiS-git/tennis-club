@@ -1,3 +1,4 @@
+import { cleanupBookingFixtures } from "../checkout-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { afterAll, beforeAll, assert, expect, test, vi } from "vitest";
@@ -52,44 +53,44 @@ test("weekly opening hours create, conflict rollback, grouped replace/remove, an
     assert.strictEqual(location.error, null); assert.ok(location.data); locationIds.push(location.data.id);
     const location_id = location.data.id;
     const days = [0, 1, 2, 3, 4];
-    const created = await mutateAdminOpeningHours({ operation: "create", starts_on: "0001-01-01", location_id, weekdays: days, replace_ids: [], intervals: [{ opens_at: "07:00", closes_at: "24:00" }] }, admin);
+    const created = await mutateAdminOpeningHours({ operation: "create", starts_on: "0001-01-01", location_id, replace_ids: [], rows: [{ weekdays: days, opens_at: "07:00", closes_at: "24:00" }] }, admin);
     assert.ok(created.ok);
     expect(created.intervals.map((row) => row.weekday)).toEqual(days);
     expect(created.intervals.every((row) => row.opens_at_minute === 420 && row.closes_at_minute === 1440)).toBe(true);
 
-    const conflict = await mutateAdminOpeningHours({ ...scheduleUpdate(created), location_id, weekdays: [1, 5], replace_ids: [], intervals: [{ opens_at: "08:00", closes_at: "12:00" }] }, admin);
+    const conflict = await mutateAdminOpeningHours({ ...scheduleUpdate(created), location_id, replace_ids: [], rows: [{ weekdays: [1, 5], opens_at: "08:00", closes_at: "12:00" }] }, admin);
     expect(conflict).toEqual({ ok: false, reason: "overlap", weekdays: [1] });
     expect((await listAdminLocationOpeningHours(location_id, admin)).filter((row) => row.location_id === location_id && row.weekday === 5)).toEqual([]);
 
-    const edited = await mutateAdminOpeningHours({ ...scheduleUpdate(created), location_id, weekdays: days, replace_ids: created.intervals.map((row) => row.id),
-      intervals: [{ opens_at: "07:00", closes_at: "12:00" }, { opens_at: "12:00", closes_at: "20:00" }] }, admin);
+    const edited = await mutateAdminOpeningHours({ ...scheduleUpdate(created), location_id, replace_ids: created.intervals.map((row) => row.id),
+      rows: [{ weekdays: days, opens_at: "07:00", closes_at: "12:00" }, { weekdays: days, opens_at: "12:00", closes_at: "20:00" }] }, admin);
     assert.ok(edited.ok);
     expect(edited.intervals).toHaveLength(10);
     for (const day of days) expect(edited.intervals.filter((row) => row.weekday === day).map((row) => [row.opens_at_minute, row.closes_at_minute]))
       .toEqual([[420, 720], [720, 1200]]);
 
-    const blockedEdit = await mutateAdminOpeningHours({ ...scheduleUpdate(edited), location_id, weekdays: days,
+    const blockedEdit = await mutateAdminOpeningHours({ ...scheduleUpdate(edited), location_id,
       replace_ids: edited.intervals.filter((row) => row.opens_at_minute === 420).map((row) => row.id),
-      intervals: [{ opens_at: "07:00", closes_at: "13:00" }] }, admin);
+      rows: [{ weekdays: days, opens_at: "07:00", closes_at: "13:00" }] }, admin);
     expect(blockedEdit).toEqual({ ok: false, reason: "overlap", weekdays: days });
     expect((await listAdminLocationOpeningHours(location_id, admin)).filter((row) => row.location_id === location_id && row.opens_at_minute === 420)
       .every((row) => row.closes_at_minute === 720)).toBe(true);
 
-    const removed = await mutateAdminOpeningHours({ ...scheduleUpdate(edited), location_id, weekdays: days,
-      replace_ids: edited.intervals.filter((row) => row.opens_at_minute === 720).map((row) => row.id), intervals: [] }, admin);
+    const removed = await mutateAdminOpeningHours({ ...scheduleUpdate(edited), location_id,
+      replace_ids: edited.intervals.filter((row) => row.opens_at_minute === 720).map((row) => row.id), rows: [] }, admin);
     assert.ok(removed.ok);
     expect(removed.intervals).toHaveLength(5);
     expect(removed.intervals.every((row) => row.closes_at_minute === 720)).toBe(true);
 
     expect(await listAdminLocationOpeningHours(location_id, admin)).toEqual(removed.intervals);
-    const change = { ...scheduleUpdate(removed), location_id, weekdays: [6], replace_ids: [], intervals: [{ opens_at: "08:00", closes_at: "22:00" }] };
+    const change = { ...scheduleUpdate(removed), location_id, replace_ids: [], rows: [{ weekdays: [6], opens_at: "08:00", closes_at: "22:00" }] };
     expect(await mutateAdminOpeningHours({ ...change, replace_ids: [randomUUID()] }, admin)).toEqual({ ok: false, reason: "not-found" });
     expect(await mutateAdminOpeningHours({ ...change, location_id: randomUUID() }, admin)).toEqual({ ok: false, reason: "not-found" });
-    expect(await mutateAdminOpeningHours({ ...change, intervals: [] }, admin)).toMatchObject({ ok: false, reason: "invalid-input", fieldErrors: { intervals: "Add an interval." } });
+    expect(await mutateAdminOpeningHours({ ...change, rows: [{ weekdays: [], opens_at: "08:00", closes_at: "22:00" }] }, admin)).toMatchObject({ ok: false, reason: "invalid-input", fieldErrors: { weekdays: "Select at least one day." } });
     assert.strictEqual((await service.from("locations").update({ archived_at: new Date().toISOString(), is_active: false }).eq("id", location_id)).error, null);
     expect(await mutateAdminOpeningHours(change, admin)).toEqual({ ok: false, reason: "archived" });
 
-    await expect(mutateAdminOpeningHours({ ...scheduleUpdate(removed), location_id, weekdays: [6], replace_ids: [], intervals: [{ opens_at: "08:00", closes_at: "22:00" }] }, member)).rejects.toThrow();
+    await expect(mutateAdminOpeningHours({ ...scheduleUpdate(removed), location_id, replace_ids: [], rows: [{ weekdays: [6], opens_at: "08:00", closes_at: "22:00" }] }, member)).rejects.toThrow();
   } finally {
     if (locationIds.length) {
       assert.strictEqual((await service.from("location_opening_hours").delete().in("location_id", locationIds)).error, null);
@@ -117,7 +118,7 @@ async function hoursFixture() {
   const location_id = randomUUID(); const courtId = randomUUID();
   assert.strictEqual((await service.from("locations").insert({ id: location_id, name: "Hours transaction", slug: `hours-${location_id}`, timezone: "Pacific/Kiritimati" })).error, null);
   assert.strictEqual((await service.from("courts").insert({ id: courtId, location_id, name: "Hours court", slug: `hours-${courtId}`, surface: "clay", environment: "outdoor" })).error, null);
-  const hours = await mutateAdminOpeningHours({ operation: "create", starts_on: "0001-01-01", location_id, weekdays: [0, 1, 2, 3, 4, 5, 6], replace_ids: [], intervals: [{ opens_at: "07:00", closes_at: "24:00" }] }, admin);
+  const hours = await mutateAdminOpeningHours({ operation: "create", starts_on: "0001-01-01", location_id, replace_ids: [], rows: [{ weekdays: [0, 1, 2, 3, 4, 5, 6], opens_at: "07:00", closes_at: "24:00" }] }, admin);
   assert.ok(hours.ok); assert.ok(hours.scheduleId);
   const scheduleId = hours.scheduleId;
   const price = { location_id, court_ids: [courtId], court_state: "outdoor", weekdays: [0],
@@ -143,12 +144,12 @@ test("adding a second Daily interval retains all saved intervals and revisions a
   const { admin, database, location_id } = fixture;
   const weekdays = [0,1,2,3,4,5,6];
   try {
-    const morning = await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, weekdays,
-      replace_ids: fixture.hours.map((h) => h.id), intervals: [{ opens_at: "08:00", closes_at: "12:00" }] }, admin);
+    const morning = await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id,
+      replace_ids: fixture.hours.map((h) => h.id), rows: [{ weekdays, opens_at: "08:00", closes_at: "12:00" }] }, admin);
     assert.ok(morning.ok);
     const before = morning.schedules!.find((s) => s.id === morning.scheduleId)!;
-    const added = await mutateAdminOpeningHours({ ...scheduleUpdate(morning), location_id, weekdays,
-      starts_on: before.starts_on, ends_on: before.ends_on, replace_ids: [], intervals: [{ opens_at: "13:00", closes_at: "22:00" }] }, admin);
+    const added = await mutateAdminOpeningHours({ ...scheduleUpdate(morning), location_id,
+      starts_on: before.starts_on, ends_on: before.ends_on, replace_ids: [], rows: [{ weekdays, opens_at: "13:00", closes_at: "22:00" }] }, admin);
     assert.ok(added.ok);
     expect(added.intervals).toHaveLength(14);
     expect(added.intervals.filter((h) => h.opens_at_minute === 480)).toEqual(morning.intervals);
@@ -163,10 +164,10 @@ test("adding a second Daily interval retains all saved intervals and revisions a
         { weekday, opens_at_minute: 780, closes_at_minute: 1320 },
       ]));
     } finally { await runner.release(); }
-    expect(await mutateAdminOpeningHours({ ...scheduleUpdate(morning), location_id, weekdays, replace_ids: [],
-      intervals: [{ opens_at: "22:00", closes_at: "24:00" }] }, admin)).toEqual({ ok: false, reason: "stale" });
-    const removed = await mutateAdminOpeningHours({ ...scheduleUpdate(added), location_id, weekdays,
-      replace_ids: added.intervals.filter((h) => h.opens_at_minute === 780).map((h) => h.id), intervals: [] }, admin);
+    expect(await mutateAdminOpeningHours({ ...scheduleUpdate(morning), location_id, replace_ids: [],
+      rows: [{ weekdays, opens_at: "22:00", closes_at: "24:00" }] }, admin)).toEqual({ ok: false, reason: "stale" });
+    const removed = await mutateAdminOpeningHours({ ...scheduleUpdate(added), location_id,
+      replace_ids: added.intervals.filter((h) => h.opens_at_minute === 780).map((h) => h.id), rows: [] }, admin);
     assert.ok(removed.ok);
     expect(await listAdminLocationOpeningHours(location_id, admin)).toEqual(morning.intervals);
   } finally { await fixture.cleanup(); }
@@ -176,16 +177,16 @@ test("editing 07:00–22:00 persists new times, preserves unchecked days and unr
   const fixture = await hoursFixture();
   const { admin, database, location_id } = fixture;
   try {
-    const initial = await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, weekdays: [0, 1, 2, 3, 4],
-      replace_ids: fixture.hours.map((interval) => interval.id), intervals: [{ opens_at: "07:00", closes_at: "22:00" }] }, admin);
+    const initial = await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id,
+      replace_ids: fixture.hours.map((interval) => interval.id), rows: [{ weekdays: [0, 1, 2, 3, 4], opens_at: "07:00", closes_at: "22:00" }] }, admin);
     assert.ok(initial.ok);
-    const extra = await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, weekdays: [5], replace_ids: [],
-      intervals: [{ opens_at: "10:00", closes_at: "12:00" }] }, admin);
+    const extra = await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, replace_ids: [],
+      rows: [{ weekdays: [5], opens_at: "10:00", closes_at: "12:00" }] }, admin);
     assert.ok(extra.ok);
     const unchangedRows = extra.intervals.filter((interval) => interval.weekday >= 4);
-    const edited = await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, weekdays: [0, 1, 2, 3, 6],
+    const edited = await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id,
       replace_ids: initial.intervals.filter((interval) => interval.weekday < 4).map((interval) => interval.id),
-      intervals: [{ opens_at: "08:17", closes_at: "24:00" }] }, admin);
+      rows: [{ weekdays: [0, 1, 2, 3, 6], opens_at: "08:17", closes_at: "24:00" }] }, admin);
     assert.ok(edited.ok);
     // Read actual committed PostgreSQL rows on a separate connection, independent
     // of the mutation response and the application read model.
@@ -204,8 +205,8 @@ test("editing 07:00–22:00 persists new times, preserves unchecked days and unr
     expect(reloaded).toEqual(edited.intervals);
     expect(reloaded.filter((interval) => interval.weekday >= 4 && interval.weekday <= 5)).toEqual(unchangedRows);
     const selected = reloaded.filter((interval) => interval.weekday < 4 || interval.weekday === 6);
-    expect(await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, weekdays: [6, 3, 2, 1, 0],
-      replace_ids: selected.map((interval) => interval.id), intervals: [{ opens_at: "08:17", closes_at: "24:00" }] }, admin))
+    expect(await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id,
+      replace_ids: selected.map((interval) => interval.id), rows: [{ weekdays: [6, 3, 2, 1, 0], opens_at: "08:17", closes_at: "24:00" }] }, admin))
       .toEqual({ ok: false, reason: "unchanged" });
     expect(await listAdminLocationOpeningHours(location_id, admin)).toEqual(reloaded);
   } finally { await fixture.cleanup(); }
@@ -230,10 +231,10 @@ test.each(boundaries)("reconciles %s and preserves unaffected rows", async (_lab
   const fixture = await hoursFixture();
   const { admin, location_id, courtId } = fixture;
   try {
-    const initial = await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, weekdays: [0], replace_ids: fixture.hours.filter((h) => h.weekday === 0).map((h) => h.id), intervals: [{ opens_at: "07:00", closes_at: "22:00" }] }, admin); assert.ok(initial.ok);
+    const initial = await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, replace_ids: fixture.hours.filter((h) => h.weekday === 0).map((h) => h.id), rows: [{ weekdays: [0], opens_at: "07:00", closes_at: "22:00" }] }, admin); assert.ok(initial.ok);
     assert.ok((await saveAdminPricingRule({ ...fixture.price, weekdays: [0,1], starts_at: "07:00", ends_at: "22:00", price_per_hour: "50.17" }, admin)).ok);
     const before = await persistedPricing(fixture);
-    const result = await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, weekdays: [0], replace_ids: initial.intervals.filter((h) => h.weekday === 0).map((h) => h.id), intervals: opens_at ? [{ opens_at, closes_at }] : [] }, admin);
+    const result = await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, replace_ids: initial.intervals.filter((h) => h.weekday === 0).map((h) => h.id), rows: opens_at ? [{ weekdays: [0], opens_at, closes_at }] : [] }, admin);
     expect(result).toMatchObject({ ok: true, pricingAdjusted: true });
     const rows = await persistedPricing(fixture);
     const today = localToday("Pacific/Kiritimati", await clubs.readOpeningHoursConfigurationTime(fixture.database.manager));
@@ -255,7 +256,7 @@ test("interior gap uses maximum adjacent price across courts, states, weekdays a
   const secondCourt = randomUUID();
   try {
     expect((await service.from("courts").insert({ id: secondCourt, location_id, name: "Second", slug: `second-${secondCourt}`, environment: "outdoor", surface: "clay" })).error).toBeNull();
-    const initial = await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, weekdays: [0,1], replace_ids: fixture.hours.filter((h) => h.weekday < 2).map((h) => h.id), intervals: [{ opens_at: "07:00", closes_at: "10:00" }, { opens_at: "12:00", closes_at: "22:00" }] }, admin); assert.ok(initial.ok);
+    const initial = await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, replace_ids: fixture.hours.filter((h) => h.weekday < 2).map((h) => h.id), rows: [{ weekdays: [0,1], opens_at: "07:00", closes_at: "10:00" }, { weekdays: [0,1], opens_at: "12:00", closes_at: "22:00" }] }, admin); assert.ok(initial.ok);
     for (const court_state of ["outdoor", "covered"] as const) for (const [starts_on, ends_on, left, right] of [["", "2029-12-31", "40.17", "50.29"], ["2030-01-01", "2030-12-31", "80.11", "60.22"]]) {
       for (const court of [courtId, secondCourt]) {
         const offset = court === secondCourt ? 10 : 0;
@@ -266,7 +267,7 @@ test("interior gap uses maximum adjacent price across courts, states, weekdays a
       }
     }
     const before = await persistedPricing(fixture);
-    const filled = await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, weekdays: [0], replace_ids: initial.intervals.filter((h) => h.weekday === 0).map((h) => h.id), intervals: [{ opens_at: "07:00", closes_at: "22:00" }] }, admin);
+    const filled = await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, replace_ids: initial.intervals.filter((h) => h.weekday === 0).map((h) => h.id), rows: [{ weekdays: [0], opens_at: "07:00", closes_at: "22:00" }] }, admin);
     expect(filled).toMatchObject({ ok: true, pricingAdjusted: true });
     const after = await persistedPricing(fixture);
     expect(after.filter((r) => before.some((b) => b.id === r.id))).toEqual(before);
@@ -288,13 +289,13 @@ test("date-limited gap pricing uses only simultaneous adjacent prices and isolat
   const indoorCourt = randomUUID();
   try {
     expect((await service.from("courts").insert({ id: indoorCourt, location_id, name: "Indoor", slug: `indoor-${indoorCourt}`, environment: "indoor", surface: "hard" })).error).toBeNull();
-    const initial = await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, weekdays: [0], replace_ids: fixture.hours.filter((h) => h.weekday === 0).map((h) => h.id), intervals: [{ opens_at: "07:00", closes_at: "10:00" }, { opens_at: "12:00", closes_at: "22:00" }] }, admin); assert.ok(initial.ok);
+    const initial = await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, replace_ids: fixture.hours.filter((h) => h.weekday === 0).map((h) => h.id), rows: [{ weekdays: [0], opens_at: "07:00", closes_at: "10:00" }, { weekdays: [0], opens_at: "12:00", closes_at: "22:00" }] }, admin); assert.ok(initial.ok);
     assert.ok((await saveAdminPricingRule({ ...fixture.price, starts_at: "07:00", ends_at: "10:00", starts_on: "2028-01-01", ends_on: "2029-12-31", price_per_hour: "40.17" }, admin)).ok);
     assert.ok((await saveAdminPricingRule({ ...fixture.price, starts_at: "12:00", ends_at: "22:00", starts_on: "2029-01-01", ends_on: "2030-12-31", price_per_hour: "80.29" }, admin)).ok);
     assert.ok((await saveAdminPricingRule({ ...fixture.price, court_ids: [indoorCourt], court_state: "indoor", starts_at: "07:00", ends_at: "10:00", starts_on: "", ends_on: "", price_per_hour: "91.23" }, admin)).ok);
     assert.ok((await saveAdminPricingRule({ ...fixture.price, starts_at: "07:00", ends_at: "10:00", starts_on: "2000-01-01", ends_on: "2001-12-31", price_per_hour: "12.34" }, admin)).ok);
     const before = await persistedPricing(fixture);
-    expect(await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, weekdays: [0], replace_ids: initial.intervals.filter((h) => h.weekday === 0).map((h) => h.id), intervals: [{ opens_at: "07:00", closes_at: "22:00" }] }, admin)).toMatchObject({ ok: true });
+    expect(await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, replace_ids: initial.intervals.filter((h) => h.weekday === 0).map((h) => h.id), rows: [{ weekdays: [0], opens_at: "07:00", closes_at: "22:00" }] }, admin)).toMatchObject({ ok: true });
     const after = await persistedPricing(fixture);
     expect(after.filter((r) => before.some((b) => r.id === b.id))).toEqual(before);
     const added = after.filter((r) => !before.some((b) => r.id === b.id));
@@ -317,7 +318,7 @@ test("splits partial multi-court and weekday definitions without losing associat
     expect((await service.from("courts").insert({ id: secondCourt, location_id, name: "Second", slug: `second-${secondCourt}`, environment: "outdoor", surface: "clay" })).error).toBeNull();
     assert.ok((await saveAdminPricingRule({ ...fixture.price, court_ids: [courtId, secondCourt], weekdays: [0,1], starts_at: "07:00", ends_at: "22:00" }, admin)).ok);
     const before = await persistedPricing(fixture);
-    expect(await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, weekdays: [0], replace_ids: fixture.hours.filter((h) => h.weekday === 0).map((h) => h.id), intervals: [{ opens_at: "08:00", closes_at: "10:00" }, { opens_at: "12:00", closes_at: "20:00" }] }, admin)).toMatchObject({ ok: true });
+    expect(await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, replace_ids: fixture.hours.filter((h) => h.weekday === 0).map((h) => h.id), rows: [{ weekdays: [0], opens_at: "08:00", closes_at: "10:00" }, { weekdays: [0], opens_at: "12:00", closes_at: "20:00" }] }, admin)).toMatchObject({ ok: true });
     const after = await persistedPricing(fixture);
     expect(after.filter((r) => r.weekday === 1)).toEqual(before.filter((r) => r.weekday === 1));
     expect(after.filter((r) => r.weekday === 0 && r.court_id === courtId && r.ends_on === null).map((r) => [r.starts_at_minute,r.ends_at_minute])).toEqual([[480,600],[720,1200]]);
@@ -335,7 +336,7 @@ test("missing adjacent pricing remains missing and publication readiness reports
   try {
     assert.ok((await saveAdminPricingRule({ ...fixture.price, weekdays: [0,1,2,3,4,5,6], starts_at: "10:00", ends_at: "14:00" }, admin)).ok);
     const before = await persistedPricing(fixture);
-    const result = await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, weekdays: [0], replace_ids: fixture.hours.filter((h) => h.weekday === 0).map((h) => h.id), intervals: [{ opens_at: "06:00", closes_at: "24:00" }] }, admin);
+    const result = await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, replace_ids: fixture.hours.filter((h) => h.weekday === 0).map((h) => h.id), rows: [{ weekdays: [0], opens_at: "06:00", closes_at: "24:00" }] }, admin);
     expect(result).toMatchObject({ ok: true, missingPricing: true, pricingAdjusted: false });
     expect(await persistedPricing(fixture)).toEqual(before);
     expect((await listAdminLocationsWithReadiness("current", location_id, admin))[0].missing).toContain("pricing for every active court");
@@ -349,8 +350,8 @@ test("retained historical prices cannot block an extension", async () => {
     assert.ok((await saveAdminPricingRule({ ...fixture.price, starts_at: "07:00", ends_at: "08:00", starts_on: "2000-01-01", ends_on: "2001-12-31" }, admin)).ok);
     assert.ok((await saveAdminPricingRule({ ...fixture.price, starts_at: "08:00", ends_at: "24:00", price_per_hour: "50.17" }, admin)).ok);
     const original = await persistedPricing(fixture);
-    const trimmed = await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, weekdays: [0], replace_ids: fixture.hours.filter((h) => h.weekday === 0).map((h) => h.id), intervals: [{ opens_at: "08:00", closes_at: "24:00" }] }, admin); assert.ok(trimmed.ok);
-    expect(await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, weekdays: [0], replace_ids: trimmed.intervals.filter((h) => h.weekday === 0).map((h) => h.id), intervals: [{ opens_at: "07:00", closes_at: "24:00" }] }, admin)).toMatchObject({ ok: true, pricingAdjusted: true });
+    const trimmed = await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, replace_ids: fixture.hours.filter((h) => h.weekday === 0).map((h) => h.id), rows: [{ weekdays: [0], opens_at: "08:00", closes_at: "24:00" }] }, admin); assert.ok(trimmed.ok);
+    expect(await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, replace_ids: trimmed.intervals.filter((h) => h.weekday === 0).map((h) => h.id), rows: [{ weekdays: [0], opens_at: "07:00", closes_at: "24:00" }] }, admin)).toMatchObject({ ok: true, pricingAdjusted: true });
     const rows = await persistedPricing(fixture);
     expect(rows.filter((r) => original.some((b) => b.id === r.id))).toEqual(original);
     expect(rows.find((r) => !original.some((b) => b.id === r.id))).toMatchObject({ starts_on: localToday("Pacific/Kiritimati", await clubs.readOpeningHoursConfigurationTime(fixture.database.manager)), ends_on: null, starts_at_minute: 420, ends_at_minute: 480, price_per_hour_minor: 5017 });
@@ -363,9 +364,9 @@ test("fully covered opening hours remain ready after trimming and extending", as
   try {
     assert.ok((await saveAdminPricingRule({ ...fixture.price, weekdays: [0,1,2,3,4,5,6], starts_at: "07:00", ends_at: "24:00" }, admin)).ok);
     expect((await listAdminLocationsWithReadiness("current", location_id, admin))[0].missing).toEqual([]);
-    const trimmed = await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, weekdays: [0,1], replace_ids: fixture.hours.filter((h) => h.weekday < 2).map((h) => h.id), intervals: [{ opens_at: "08:00", closes_at: "20:00" }] }, admin); assert.ok(trimmed.ok);
+    const trimmed = await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, replace_ids: fixture.hours.filter((h) => h.weekday < 2).map((h) => h.id), rows: [{ weekdays: [0,1], opens_at: "08:00", closes_at: "20:00" }] }, admin); assert.ok(trimmed.ok);
     expect((await listAdminLocationsWithReadiness("current", location_id, admin))[0].missing).toEqual([]);
-    assert.ok((await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, weekdays: [0,1], replace_ids: trimmed.intervals.filter((h) => h.weekday < 2).map((h) => h.id), intervals: [{ opens_at: "06:00", closes_at: "23:00" }] }, admin)).ok);
+    assert.ok((await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, replace_ids: trimmed.intervals.filter((h) => h.weekday < 2).map((h) => h.id), rows: [{ weekdays: [0,1], opens_at: "06:00", closes_at: "23:00" }] }, admin)).ok);
     expect((await persistedPricing(fixture)).filter((r) => r.weekday === 0 && r.ends_on === null)).toHaveLength(3);
     expect((await listAdminLocationsWithReadiness("current", location_id, admin))[0].missing).toEqual([]);
   } finally { await fixture.cleanup(); }
@@ -379,7 +380,7 @@ test("pricing and opening hours both roll back on a failure after reconciliation
     const before = await persistedPricing(fixture);
     const reload = clubs.listLocationOpeningHours;
     const spy = vi.spyOn(clubs, "listLocationOpeningHours").mockImplementationOnce(reload).mockRejectedValueOnce(new Error("Injected refresh failure"));
-    try { await expect(mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, weekdays: [0], replace_ids: fixture.hours.filter((h) => h.weekday === 0).map((h) => h.id), intervals: [{ opens_at: "08:00", closes_at: "20:00" }] }, admin)).rejects.toThrow("Unable to refresh opening hours."); }
+    try { await expect(mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, replace_ids: fixture.hours.filter((h) => h.weekday === 0).map((h) => h.id), rows: [{ weekdays: [0], opens_at: "08:00", closes_at: "20:00" }] }, admin)).rejects.toThrow("Unable to refresh opening hours."); }
     finally { spy.mockRestore(); }
     expect(await persistedPricing(fixture)).toEqual(before);
     const observer = database.createQueryRunner(); await observer.connect();
@@ -398,9 +399,9 @@ test.each(["active", "held"] as const)("%s future reservations survive reduction
     const booking_date = date.toISOString().slice(0,10), weekday = mondayWeekday(booking_date);
     assert.ok((await saveAdminPricingRule({ ...fixture.price, weekdays: [weekday], starts_at: "07:00", ends_at: "24:00" }, admin)).ok);
     expect((await service.from("court_reservations").insert({ id: reservationId, court_id: courtId, booking_date, starts_at_minute: 420, ends_at_minute: 480, reason: "Keep me", status, hold_expires_at: status === "held" ? new Date(now.getTime()+3600000).toISOString() : null })).error).toBeNull();
-    const change = { ...await fixture.updateFields(), location_id, weekdays: [weekday], replace_ids: fixture.hours.filter((h) => h.weekday === weekday).map((h) => h.id), intervals: [{ opens_at: "08:00", closes_at: "24:00" }] };
+    const change = { ...await fixture.updateFields(), location_id, replace_ids: fixture.hours.filter((h) => h.weekday === weekday).map((h) => h.id), rows: [{ weekdays: [weekday], opens_at: "08:00", closes_at: "24:00" }] };
     const reduced = await mutateAdminOpeningHours(change, admin); assert.ok(reduced.ok);
-    expect(await mutateAdminOpeningHours({ ...change, ...scheduleUpdate(reduced), replace_ids: reduced.intervals.filter((h) => h.weekday === weekday).map((h) => h.id), intervals: [] }, admin)).toMatchObject({ ok: true });
+    expect(await mutateAdminOpeningHours({ ...change, ...scheduleUpdate(reduced), replace_ids: reduced.intervals.filter((h) => h.weekday === weekday).map((h) => h.id), rows: [] }, admin)).toMatchObject({ ok: true });
     const observer = database.createQueryRunner(); await observer.connect();
     try { expect(await observer.query("SELECT status::text, reason, starts_at_minute FROM public.court_reservations WHERE id=$1", [reservationId])).toEqual([{ status, reason: "Keep me", starts_at_minute: 420 }]); }
     finally { await observer.release(); }
@@ -434,9 +435,9 @@ test("hours-first pricing race rejects incompatible pricing after the hours comm
     await blocker.startTransaction();
     // Parent-only probe: the first writer acquires global, then blocks here.
     await clubs.lockLocations(blocker.manager, [location_id]);
-    const changeHours = async () => mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, weekdays: [0],
+    const changeHours = async () => mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id,
       replace_ids: hours.filter((row) => row.weekday === 0).map((row) => row.id),
-      intervals: [{ opens_at: "07:00", closes_at: "12:00" }] }, admin);
+      rows: [{ weekdays: [0], opens_at: "07:00", closes_at: "12:00" }] }, admin);
     const changePricing = () => saveAdminPricingRule(price, admin);
     const firstOperation = changeHours(); pending.push(firstOperation);
     const firstPid = await waitForWriter(observer, await backendPid(blocker), "locations");
@@ -468,7 +469,7 @@ test("transaction-time Admin recheck rejects suspension after initial authorizat
   try {
     await blocker.startTransaction();
     await clubs.lockConfigurationForWrite(blocker.manager);
-    operation = mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, weekdays: [0], replace_ids: [], intervals: [{ opens_at: "00:00", closes_at: "06:00" }] }, admin);
+    operation = mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, replace_ids: [], rows: [{ weekdays: [0], opens_at: "00:00", closes_at: "06:00" }] }, admin);
     // Attach a rejection observer before releasing the transaction fence.
     const rejected = expect(operation).rejects.toThrow("Unable to change opening hours.");
     await waitForWriter(observer, await backendPid(blocker), "pg_advisory_xact_lock");
@@ -490,12 +491,12 @@ test("effective schedules persist inclusive periods, reject overlaps and stale e
   try {
     const [baseline] = await clubs.listOpeningHoursSchedules(database.manager, location_id);
     expect(baseline.startsOn).toBe("0001-01-01"); expect(baseline.endsOn).toBeNull();
-    const period = { operation: "update", location_id, weekdays: [], replace_ids: [], intervals: [], schedule_id: baseline.id, revision: baseline.revision,
+    const period = { operation: "update", location_id, replace_ids: [], rows: [], schedule_id: baseline.id, revision: baseline.revision,
       starts_on: baseline.startsOn, ends_on: "2030-10-31" };
     expect(await mutateAdminOpeningHours(period, admin)).toMatchObject({ ok: true });
     expect(await mutateAdminOpeningHours({ ...period, ends_on: "2030-10-30" }, admin)).toMatchObject({ ok: false, reason: "stale" });
-    const create = { operation: "create", location_id, starts_on: "2030-11-01", ends_on: "2031-03-31", weekdays: [0,1,2,3,4], replace_ids: [],
-      intervals: [{ opens_at: "08:00", closes_at: "12:00" }, { opens_at: "13:00", closes_at: "24:00" }] };
+    const create = { operation: "create", location_id, starts_on: "2030-11-01", ends_on: "2031-03-31", replace_ids: [],
+      rows: [{ weekdays: [0,1,2,3,4], opens_at: "08:00", closes_at: "12:00" }, { weekdays: [0,1,2,3,4], opens_at: "13:00", closes_at: "24:00" }] };
     const future = await mutateAdminOpeningHours(create, admin); assert.ok(future.ok); assert.ok(future.scheduleId);
     const { insertOpeningHoursFixture } = await import("../opening-hours-fixtures");
     await expect(insertOpeningHoursFixture(fixture.service, { location_id, weekday: 6, opens_at_minute: 480, closes_at_minute: 720 }))
@@ -509,17 +510,15 @@ test("effective schedules persist inclusive periods, reject overlaps and stale e
     expect(await listReservationOpeningHours(database.manager,location_id,"2031-03-31")).toHaveLength(2);
     expect(await listReservationOpeningHours(database.manager,location_id,"2031-04-01")).toEqual([]);
     const saved = future.schedules!.find((s) => s.id === future.scheduleId)!;
-    expect(await mutateAdminOpeningHours({ location_id, operation: "delete", schedule_id: baseline.id, revision: baseline.revision,
-      weekdays: [], intervals: [], replace_ids: [] }, admin)).toMatchObject({ ok: false, reason: "stale" });
+    expect(await mutateAdminOpeningHours({ location_id, operation: "delete", schedule_id: baseline.id, revision: baseline.revision }, admin)).toMatchObject({ ok: false, reason: "stale" });
     const edit = await mutateAdminOpeningHours({ ...create, operation: "update", schedule_id: saved.id, revision: saved.revision,
-      replace_ids: future.intervals.filter((h) => h.schedule_id === saved.id).map((h) => h.id), intervals: [{ opens_at: "09:00", closes_at: "20:00" }] }, admin);
+      replace_ids: future.intervals.filter((h) => h.schedule_id === saved.id).map((h) => h.id), rows: [{ weekdays: [0,1,2,3,4], opens_at: "09:00", closes_at: "20:00" }] }, admin);
     assert.ok(edit.ok);
     expect((await listReservationOpeningHours(database.manager,location_id,"2030-11-01"))[0].opens_at_minute).toBe(540);
     const baselineAfter = await clubs.listLocationOpeningHours(database.manager, location_id, "2030-10-31");
     expect(baselineAfter.map((h) => h.id).sort()).toEqual(fixture.hours.map((h) => h.id).sort());
     const latest = edit.schedules!.find((s) => s.id === saved.id)!;
-    expect(await mutateAdminOpeningHours({ location_id, operation: "delete", schedule_id: latest.id, revision: latest.revision,
-      weekdays: [], intervals: [], replace_ids: [] }, admin)).toMatchObject({ ok: true });
+    expect(await mutateAdminOpeningHours({ location_id, operation: "delete", schedule_id: latest.id, revision: latest.revision }, admin)).toMatchObject({ ok: true });
     expect(await listReservationOpeningHours(database.manager,location_id,"2030-11-01")).toEqual([]);
   } finally { await fixture.cleanup(); }
 }, 30000);
@@ -547,8 +546,8 @@ test("future schedule reconciles only its dates and preserves confirmed guest co
     const before = await contracts();
     const [baseline] = await clubs.listOpeningHoursSchedules(database.manager,location_id);
     const originalHours = await clubs.listLocationOpeningHours(database.manager,location_id);
-    const future = await mutateAdminOpeningHours({ operation: "create", location_id, starts_on: "2030-11-01", ends_on: "2031-03-31", weekdays: [0,1,2,3,4,5,6],
-      replace_ids: [], intervals: [{ opens_at: "08:00", closes_at: "20:00" }] }, admin); assert.ok(future.ok);
+    const future = await mutateAdminOpeningHours({ operation: "create", location_id, starts_on: "2030-11-01", ends_on: "2031-03-31",
+      replace_ids: [], rows: [{ weekdays: [0,1,2,3,4,5,6], opens_at: "08:00", closes_at: "20:00" }] }, admin); assert.ok(future.ok);
     expect(future.schedules!.find((s) => s.id === baseline.id)).toMatchObject({ ends_on: "2030-10-31", revision: baseline.revision + 1 });
     expect(await clubs.listLocationOpeningHours(database.manager,location_id,"2030-10-31")).toEqual(originalHours);
     const prices = await persistedPricing(fixture);
@@ -558,7 +557,7 @@ test("future schedule reconciles only its dates and preserves confirmed guest co
     expect(await contracts()).toEqual(before);
     expect(await createCustomerBooking(intent,guest)).toMatchObject({ ok: false, availabilityChanged: true });
     const newBooking = await createCustomerBooking({ ...intent,startMinute: 480,endMinute: 540 },guest); assert.ok(newBooking.ok,JSON.stringify(newBooking));
-    const location = (await listPublicLocationsWithCourts(guest)).find((l) => l.id === location_id)!;
+    const location = (await listPublicLocationsWithCourts()).find((l) => l.id === location_id)!;
     const publicDay = await getPublicCourtDay(location,date,localToday(location.timezone,new Date()),new Date());
     expect(publicDay.times[0]).toBe(420); expect(publicDay.courts[0].cells.slice(0,4)).toEqual(["booked","booked","booked","booked"]);
     const internalLocation = (await listInternalLocations(admin)).find((l) => l.id === location_id)!;
@@ -576,14 +575,14 @@ test("future schedule reconciles only its dates and preserves confirmed guest co
     const reload = clubs.listLocationOpeningHours;
     const failed = vi.spyOn(clubs,"listLocationOpeningHours").mockImplementationOnce(reload).mockRejectedValueOnce(new Error("Injected refresh failure"));
     try { await expect(mutateAdminOpeningHours({ operation: "update", location_id,schedule_id: latest.id,revision: latest.revision,starts_on: latest.starts_on,ends_on: latest.ends_on,
-      weekdays: [2],replace_ids: future.intervals.filter((h) => h.schedule_id === latest.id && h.weekday === 2).map((h) => h.id),intervals: [{ opens_at: "09:00",closes_at: "18:00" }] },admin)).rejects.toThrow("Unable to refresh opening hours."); }
+      replace_ids: future.intervals.filter((h) => h.schedule_id === latest.id && h.weekday === 2).map((h) => h.id),rows: [{ weekdays: [2], opens_at: "09:00", closes_at: "18:00" }] },admin)).rejects.toThrow("Unable to refresh opening hours."); }
     finally { failed.mockRestore(); }
     expect((await clubs.listOpeningHoursSchedules(database.manager,location_id)).find((s) => s.id === latest.id)?.revision).toBe(latest.revision);
     expect(await contracts()).toEqual(before);
     expect((await service.from("locations").update({ allow_pay_at_club: false,customer_cancellation_notice_minutes: 300,is_public: false }).eq("id",location_id)).error).toBeNull();
     expect(await contracts()).toEqual(before);
   } finally {
-    await database.query("DELETE FROM public.bookings WHERE reservation_id IN (SELECT id FROM public.court_reservations WHERE court_id=$1)",[courtId]);
+    await cleanupBookingFixtures({ courtIds: [courtId] });
     await database.query("DELETE FROM public.court_reservations WHERE court_id=$1",[courtId]);
     await fixture.cleanup();
   }
@@ -594,7 +593,7 @@ test("concurrent schedule creation has one winner and PostgreSQL independently e
   const { admin, location_id, database } = fixture;
   try {
     const [baseline] = await clubs.listOpeningHoursSchedules(database.manager,location_id);
-    const input = { operation: "create",location_id,starts_on: "2030-11-01",ends_on: "2030-11-30",weekdays: [0],replace_ids: [],intervals: [{ opens_at: "08:00",closes_at: "24:00" }] };
+    const input = { operation: "create",location_id,starts_on: "2030-11-01",ends_on: "2030-11-30",replace_ids: [],rows: [{ weekdays: [0], opens_at: "08:00", closes_at: "24:00" }] };
     const results = await Promise.all([mutateAdminOpeningHours(input,admin),mutateAdminOpeningHours(input,admin)]);
     expect(results.filter((result) => result.ok)).toHaveLength(1);
     expect(results.find((result) => !result.ok)).toMatchObject({ ok: false,reason: "period-overlap" });
@@ -604,64 +603,16 @@ test("concurrent schedule creation has one winner and PostgreSQL independently e
     expect(schedules).toHaveLength(2);
     expect(schedules.find((s) => s.id === baseline.id)).toMatchObject({ endsOn: "2030-10-31", revision: baseline.revision + 1 });
     expect(await mutateAdminOpeningHours({ operation: "update", location_id, schedule_id: baseline.id, revision: baseline.revision,
-      starts_on: baseline.startsOn, ends_on: "2030-10-30", weekdays: [], replace_ids: [], intervals: [] },admin)).toEqual({ ok: false, reason: "stale" });
+      starts_on: baseline.startsOn, ends_on: "2030-10-30", replace_ids: [], rows: [] },admin)).toEqual({ ok: false, reason: "stale" });
     const winner = results.find((result) => result.ok);
     assert.ok(winner?.ok);
-    const edit = { ...scheduleUpdate(winner), location_id, weekdays: [0],
+    const edit = { ...scheduleUpdate(winner), location_id,
       replace_ids: winner.intervals.filter((hour) => hour.schedule_id === winner.scheduleId).map((hour) => hour.id),
-      intervals: [{ opens_at: "09:00", closes_at: "20:00" }] };
+      rows: [{ weekdays: [0], opens_at: "09:00", closes_at: "20:00" }] };
     const edits = await Promise.all([mutateAdminOpeningHours(edit,admin),mutateAdminOpeningHours(edit,admin)]);
     expect(edits.filter((result) => result.ok)).toHaveLength(1);
     expect(edits.find((result) => !result.ok)).toEqual({ ok: false,reason: "stale" });
   } finally { await fixture.cleanup(); }
-},30000);
-
-test("migration preserves legacy interval identities and open-ended operation in an isolated transactional schema", async () => {
-  const { EffectiveOpeningHours1791462257930 } = await import("@/lib/db/migrations/1791462257930-EffectiveOpeningHours");
-  const runner = (await getDataSource()).createQueryRunner(); await runner.connect(); await runner.startTransaction();
-  const schema = `hours_migration_${randomUUID().replaceAll("-","")}`;
-  try {
-    await runner.query(`CREATE SCHEMA ${schema}`);
-    await runner.query(`CREATE TABLE ${schema}.locations(id uuid PRIMARY KEY)`);
-    await runner.query(`CREATE TABLE ${schema}.location_opening_hours(id uuid PRIMARY KEY,location_id uuid NOT NULL,
-      weekday integer NOT NULL,opens_at_minute integer NOT NULL,closes_at_minute integer NOT NULL,
-      created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now())`);
-    await runner.query("SET LOCAL search_path = public,extensions");
-    await runner.query(`ALTER TABLE ${schema}.location_opening_hours ADD CONSTRAINT location_opening_hours_no_overlap
-      EXCLUDE USING gist(location_id WITH =,weekday WITH =,int4range(opens_at_minute,closes_at_minute,'[)') WITH &&)`);
-    const id = randomUUID();
-    await runner.query(`INSERT INTO ${schema}.locations VALUES($1)`,[id]);
-    await runner.query(`INSERT INTO ${schema}.location_opening_hours(id,location_id,weekday,opens_at_minute,closes_at_minute)
-      VALUES(gen_random_uuid(),$1,0,420,720),(gen_random_uuid(),$1,0,780,1440)`,[id]);
-    const before = await runner.query(`SELECT id,location_id,weekday,opens_at_minute,closes_at_minute,created_at,updated_at
-      FROM ${schema}.location_opening_hours ORDER BY opens_at_minute`);
-    const originalQuery = runner.query.bind(runner);
-    const scoped = vi.spyOn(runner,"query").mockImplementation((sql,parameters) => originalQuery(sql.replaceAll("public.",`${schema}.`),parameters));
-    try { await new EffectiveOpeningHours1791462257930().up(runner); }
-    finally { scoped.mockRestore(); }
-    expect(await runner.query(`SELECT id,location_id,weekday,opens_at_minute,closes_at_minute,created_at,updated_at
-      FROM ${schema}.location_opening_hours ORDER BY opens_at_minute`)).toEqual(before);
-    expect(await runner.query(`SELECT starts_on::text,ends_on::text FROM ${schema}.opening_hours_schedules`)).toEqual([{ starts_on: "0001-01-01",ends_on: null }]);
-    expect(await runner.query(`SELECT count(*)::integer AS count FROM ${schema}.location_opening_hours h
-      JOIN ${schema}.opening_hours_schedules s ON s.id=h.schedule_id WHERE s.starts_on<='2099-01-01' AND (s.ends_on IS NULL OR s.ends_on>='2099-01-01')`)).toEqual([{ count: 2 }]);
-    async function rollbackMigration() {
-      const scopedDown = vi.spyOn(runner, "query").mockImplementation((sql, parameters) => originalQuery(sql.replaceAll("public.", `${schema}.`), parameters));
-      try { await new EffectiveOpeningHours1791462257930().down(runner); }
-      finally { scopedDown.mockRestore(); }
-    }
-    for (const [startsOn, endsOn] of [["2030-01-01", null], ["0001-01-01", "2030-12-31"]]) {
-      await runner.query(`UPDATE ${schema}.opening_hours_schedules SET starts_on=$1,ends_on=$2`, [startsOn,endsOn]);
-      await expect(rollbackMigration()).rejects.toThrow("Cannot faithfully restore legacy opening hours");
-      expect(await runner.query(`SELECT count(*)::integer AS count FROM ${schema}.location_opening_hours`)).toEqual([{ count: 2 }]);
-    }
-    await runner.query(`INSERT INTO ${schema}.opening_hours_schedules(location_id,starts_on) VALUES($1,'2031-01-01')`, [id]);
-    await expect(rollbackMigration()).rejects.toThrow("Cannot faithfully restore legacy opening hours");
-    await runner.query(`DELETE FROM ${schema}.opening_hours_schedules WHERE starts_on='2031-01-01'`);
-    await runner.query(`UPDATE ${schema}.opening_hours_schedules SET starts_on='0001-01-01',ends_on=NULL`);
-    await rollbackMigration();
-    expect(await runner.query(`SELECT * FROM ${schema}.location_opening_hours ORDER BY opens_at_minute`)).toEqual(before);
-    expect(await runner.query("SELECT to_regclass($1) AS schedule_table", [`${schema}.opening_hours_schedules`])).toEqual([{ schedule_table: null }]);
-  } finally { await runner.rollbackTransaction(); await runner.release(); }
 },30000);
 
 test.each(["hours","price","cancellation","publication"] as const)("pending captured checkout revalidates %s before confirmation without changing its quoted amount",async policy => {
@@ -678,7 +629,7 @@ test.each(["hours","price","cancellation","publication"] as const)("pending capt
       p_total_amount_minor: 5017,p_currency: "RON",p_payment_method: "online",p_provider: "stripe",p_hold_seconds: 600 });
     assert.strictEqual(inserted.error,null); const held = inserted.data[0];
     expect((await service.from("payment_attempts").update({ provider_payment_id: "pi_policy_test" }).eq("id",held.payment_attempt_id)).error).toBeNull();
-    if (policy === "hours") assert.ok((await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id,weekdays: [weekday],replace_ids: fixture.hours.filter((h) => h.weekday === weekday).map((h) => h.id),intervals: [{ opens_at: "08:00",closes_at: "24:00" }] },admin)).ok);
+    if (policy === "hours") assert.ok((await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id,replace_ids: fixture.hours.filter((h) => h.weekday === weekday).map((h) => h.id),rows: [{ weekdays: [weekday], opens_at: "08:00", closes_at: "24:00" }] },admin)).ok);
     if (policy === "price") {
       const [rule] = await listAdminPricingRules(location_id,admin);
       assert.ok((await saveAdminPricingRule({ ...fixture.price,rule_set_id: rule.rule_set_id,revision: rule.revision,weekdays: rule.weekdays,starts_at: "07:00",ends_at: "24:00",price_per_hour: "70.29" },admin)).ok);
@@ -687,12 +638,12 @@ test.each(["hours","price","cancellation","publication"] as const)("pending capt
     if (policy === "publication") expect((await service.from("locations").update({ is_public: false }).eq("id",location_id)).error).toBeNull();
     expect(await processOnlinePaymentEvent({ attemptId: held.payment_attempt_id,provider: "stripe",providerPaymentId: "pi_policy_test",eventId: `evt_${held.payment_attempt_id}`,
       amountMinor: 5017,currency: "RON",outcome: "succeeded" })).toBe("expired");
-    expect(await database.query("SELECT status::text,total_amount_minor,cancellation_notice_minutes FROM public.bookings WHERE id=$1",[held.booking_id]))
+    expect(await database.query("SELECT b.status::text,v.total_amount_minor,v.cancellation_notice_minutes FROM public.bookings b JOIN public.booking_revisions v ON v.id=b.current_revision_id WHERE b.id=$1",[held.booking_id]))
       .toEqual([{ status: "expired",total_amount_minor: 5017,cancellation_notice_minutes: 1440 }]);
     expect(await database.query("SELECT status::text FROM public.court_reservations WHERE id=$1",[held.reservation_id])).toEqual([{ status: "released" }]);
     expect(await database.query("SELECT reconciliation_required FROM public.payment_provider_events WHERE attempt_id=$1",[held.payment_attempt_id])).toEqual([{ reconciliation_required: true }]);
   } finally {
-    await database.query("DELETE FROM public.bookings WHERE reservation_id IN (SELECT id FROM public.court_reservations WHERE court_id=$1)",[courtId]);
+    await cleanupBookingFixtures({ courtIds: [courtId] });
     await database.query("DELETE FROM public.court_reservations WHERE court_id=$1",[courtId]);
     await fixture.cleanup();
   }
@@ -706,17 +657,17 @@ test("automatic schedule cutoff rolls back with pricing failure and rejects a st
   try {
     const [initial] = await clubs.listOpeningHoursSchedules(database.manager,location_id);
     assert.ok((await mutateAdminOpeningHours({ operation: "update", location_id, schedule_id: initial.id, revision: initial.revision,
-      starts_on: "0002-01-01", ends_on: null, weekdays: [], replace_ids: [], intervals: [] },admin)).ok);
+      starts_on: "0002-01-01", ends_on: null, replace_ids: [], rows: [] },admin)).ok);
     assert.ok((await mutateAdminOpeningHours({ operation: "create", location_id, starts_on: "0001-01-01", ends_on: "0001-12-31",
-      weekdays: [0], replace_ids: [], intervals: [{ opens_at: "09:00", closes_at: "12:00" }] },admin)).ok);
+       replace_ids: [], rows: [{ weekdays: [0], opens_at: "09:00", closes_at: "12:00" }] },admin)).ok);
     const before = await clubs.listOpeningHoursSchedules(database.manager,location_id);
     const baseline = before.find((s) => s.id === initial.id)!;
     const hours = await clubs.listLocationOpeningHours(database.manager,location_id);
     assert.ok((await saveAdminPricingRule({ ...fixture.price, starts_on: "2026-01-01", starts_at: "07:00", ends_at: "24:00" },admin)).ok);
     const prices = await persistedPricing(fixture);
     const input = { operation: "create", location_id, starts_on: "2030-11-01", ends_on: null,
-      adjustment: { id: baseline.id, revision: baseline.revision }, weekdays: [0], replace_ids: [],
-      intervals: [{ opens_at: "08:00", closes_at: "20:00" }] };
+      adjustment: { id: baseline.id, revision: baseline.revision }, replace_ids: [],
+      rows: [{ weekdays: [0], opens_at: "08:00", closes_at: "20:00" }] };
     const applyPricing = pricingRepository.applyOpeningHoursPricing;
     const failure = vi.spyOn(pricingRepository,"applyOpeningHoursPricing").mockImplementationOnce(async (...args) => {
       await applyPricing(...args);
@@ -728,7 +679,7 @@ test("automatic schedule cutoff rolls back with pricing failure and rejects a st
     expect(await clubs.listLocationOpeningHours(database.manager,location_id)).toEqual(hours);
     expect(await persistedPricing(fixture)).toEqual(prices);
     assert.ok((await mutateAdminOpeningHours({ operation: "update", location_id, schedule_id: baseline.id, revision: baseline.revision,
-      starts_on: "0003-01-01", ends_on: null, weekdays: [], replace_ids: [], intervals: [] },admin)).ok);
+      starts_on: "0003-01-01", ends_on: null, replace_ids: [], rows: [] },admin)).ok);
     expect(await mutateAdminOpeningHours(input,admin)).toEqual({ ok: false, reason: "stale" });
     const latest = await clubs.listOpeningHoursSchedules(database.manager,location_id);
     expect(latest).toHaveLength(2);
@@ -757,14 +708,14 @@ test("pending holds use their playing-date policy after future schedule creation
       assert.strictEqual(created.error,null); held.push(created.data[0]);
     }
     assert.ok((await mutateAdminOpeningHours({ operation:"create",location_id,starts_on:"2030-11-01",ends_on:null,
-      weekdays:[0,1,2,3,4,5,6],replace_ids:[],intervals:[{ opens_at:"08:00",closes_at:"20:00" }] },admin)).ok);
+      replace_ids:[],rows: [{ weekdays: [0,1,2,3,4,5,6], opens_at:"08:00", closes_at:"20:00" }] },admin)).ok);
     for (const [index,hold] of held.entries()) {
       const providerPaymentId = `pi_effective_${hold.payment_attempt_id}`;
       expect((await service.from("payment_attempts").update({ provider_payment_id:providerPaymentId }).eq("id",hold.payment_attempt_id)).error).toBeNull();
       const event = { attemptId:hold.payment_attempt_id,provider:"stripe",providerPaymentId,eventId:`evt_effective_${hold.payment_attempt_id}`,amountMinor:5017,currency:"RON",outcome:"succeeded" } as const;
       expect(await processOnlinePaymentEvent(event)).toBe(index === 0 ? "succeeded" : "expired");
       expect(await processOnlinePaymentEvent(event)).toBe(index === 0 ? "succeeded" : "expired");
-      expect(await database.query("SELECT status::text,total_amount_minor FROM public.bookings WHERE id=$1",[hold.booking_id]))
+      expect(await database.query("SELECT b.status::text,v.total_amount_minor FROM public.bookings b JOIN public.booking_revisions v ON v.id=b.current_revision_id WHERE b.id=$1",[hold.booking_id]))
         .toEqual([{ status:index === 0 ? "confirmed" : "expired",total_amount_minor:5017 }]);
       expect(await database.query("SELECT status::text FROM public.court_reservations WHERE id=$1",[hold.reservation_id]))
         .toEqual([{ status:index === 0 ? "active" : "released" }]);
@@ -772,7 +723,7 @@ test("pending holds use their playing-date policy after future schedule creation
         .toEqual([{ reconciliation_required:index === 1 }]);
     }
   } finally {
-    await database.query("DELETE FROM public.bookings WHERE reservation_id IN (SELECT id FROM public.court_reservations WHERE court_id=$1)",[courtId]);
+    await cleanupBookingFixtures({ courtIds: [courtId] });
     await database.query("DELETE FROM public.court_reservations WHERE court_id=$1",[courtId]);
     await fixture.cleanup();
   }

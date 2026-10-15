@@ -17,11 +17,7 @@ import type { PersonalCustomerBooking } from "./personal";
 import type { PersonalReservation } from "@/lib/reservations/personal";
 
 export type UpcomingCourtActivity = { kind: "booking"; row: PersonalCustomerBooking } | { kind: "reservation"; row: PersonalReservation };
-export type UpcomingActivity = {
-  upcoming: PersonalReservation[]; bookings: PersonalCustomerBooking[];
-  ordered?: UpcomingCourtActivity[];
-  locations?: ActivityOptions["locations"]; courts?: ActivityOptions["courts"]; hasNext?: boolean;
-};
+export type UpcomingActivity = Awaited<ReturnType<typeof listOwnUpcomingActivity>>;
 export type ActivityOptions = {
   locations: { id: string; name: string }[];
   courts: { id: string; name: string; location_id: string }[];
@@ -39,7 +35,7 @@ const bookingSelectSchema = z.object({
   customer_name: z.string(), customer_email: z.string(), customer_phone: z.string(),
   cancellation_notice_minutes: cancellationNoticeMinutesSchema,
   total_amount_minor: minorAmountSchema, currency: z.enum(locationCurrencies),
-  payment_method: z.enum(["online", "pay_at_club"]).nullable(),
+  payment_method: z.enum(["online", "pay_at_club"]),
   payments: z.array(z.object({ status: z.literal("succeeded") })), reservation: intervalSchema,
 });
 const nameSchema = z.object({ first_name: z.string().nullable(), last_name: z.string().nullable() }).nullable();
@@ -162,6 +158,7 @@ export async function listOwnUpcomingActivity(input: ActivitySearchParams = {}, 
   const result = await listOwnCourtActivity("upcoming", query, client);
   const ordered: UpcomingCourtActivity[] = result.rows.map((row) => row.kind === "booking"
     ? { kind: "booking", row } : { kind: "reservation", row });
-  return { ...result, ordered, upcoming: ordered.flatMap((item) => item.kind === "reservation" ? [item.row] : []),
+  return { hasNext: result.hasNext, locations: result.locations, courts: result.courts,
+    ordered, upcoming: ordered.flatMap((item) => item.kind === "reservation" ? [item.row] : []),
     bookings: ordered.flatMap((item) => item.kind === "booking" ? [item.row] : []) };
 }

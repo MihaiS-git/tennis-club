@@ -14,7 +14,7 @@ import type { UpcomingActivity as Activity, UpcomingCourtActivity as CourtActivi
 import type { PersonalCustomerBooking } from "@/lib/bookings/personal";
 import { formatMoney } from "@/lib/pricing/money";
 import { isReservationInProgress, isReservationUpcoming, type PersonalReservation } from "@/lib/reservations/personal";
-import { BookingEditForm, type BookingEditActions } from "@/app/admin/reservations/booking-edit-form";
+import { BookingEditForm, type BookingEditActions } from "@/components/booking-edit-form";
 import { cancelOwnReservationAction, loadPersonalActivityAction, loadOwnBookingEditDayAction, quoteOwnBookingAction, rescheduleOwnBookingAction } from "./actions";
 import { ActivityControls } from "../activity-controls";
 import { ActivityTable } from "../activity-table";
@@ -161,16 +161,25 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
 
   const query = parseActivityQuery(listQuery ?? {}, "upcoming", staff);
   return <>
-    {activity.locations && activity.courts && <ActivityControls staff={staff} scope="upcoming" query={query}
-      options={{ locations: activity.locations, courts: activity.courts }} />}
-    {list(activity.ordered ?? [...activity.bookings.map((row): CourtActivity => ({ kind: "booking", row })), ...activity.upcoming.map((row): CourtActivity => ({ kind: "reservation", row }))])}
-    {activity.hasNext !== undefined && <ActivityPagination scope="upcoming" query={query}
-      hasNext={activity.hasNext} empty={!activity.bookings.length && !activity.upcoming.length} />}
+    <ActivityControls staff={staff} scope="upcoming" query={query}
+      options={{ locations: activity.locations, courts: activity.courts }} />
+    {list(activity.ordered)}
+    <ActivityPagination scope="upcoming" query={query}
+      hasNext={activity.hasNext} empty={!activity.ordered.length} />
     {selectedBooking && typeof document !== "undefined" && createPortal(
       <ModalDialog ref={bookingDialogRef} active aria-labelledby={`${titleId}-booking`}
         onCancel={(event) => { if (pending) event.preventDefault(); }}
-        onClose={() => { setSelectedBooking(null); returnFocusRef.current?.focus(); }}
-        className={`fixed inset-0 m-auto max-h-[90vh] w-[calc(100%-2rem)] overflow-y-auto rounded-card border border-border bg-surface p-5 text-foreground shadow-floating backdrop:bg-foreground/50 ${editing ? "max-w-6xl" : "max-w-md"}`}>
+        onClose={() => {
+          setSelectedBooking(null);
+          if (editing) {
+            setEditing(false);
+            void loadPersonalActivityAction(listQuery).then(setActivity).catch(() => {
+              setActivity(null); setError("Unable to load your court activity. Try again.");
+            });
+          }
+          returnFocusRef.current?.focus();
+        }}
+        className={`fixed inset-0 m-auto max-h-[90vh] w-[calc(100%-2rem)] overflow-y-auto rounded-card border border-border bg-surface p-5 text-foreground shadow-floating backdrop:bg-foreground/50 has-[[data-booking-modification]]:max-w-lg ${editing ? "max-w-6xl" : "max-w-md"}`}>
         <DialogHeader titleId={`${titleId}-booking`} title={editing ? "Edit booking" : "Booking"} status={editing ? undefined : "Confirmed"} disabled={pending} onClose={() => bookingDialogRef.current?.close()} />
         {editing ? <BookingEditForm booking={selectedBooking}
           actions={ownBookingActions} onCancel={() => setEditing(false)} onPendingChange={setPending}

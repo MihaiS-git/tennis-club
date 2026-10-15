@@ -12,14 +12,17 @@ export async function listOwnerActivityBatch(manager: EntityManager, input: {
   offset: number; limit: number;
 }): Promise<unknown> {
   const booking = input.kind === "booking";
-  const court = `jsonb_build_object('name',c.name,'location_id',c.location_id,
+  const court = booking ? `jsonb_build_object('name',v.court_name,'location_id',v.location_id,
+    'location',jsonb_build_object('name',v.location_name,'timezone',v.timezone))`
+    : `jsonb_build_object('name',c.name,'location_id',c.location_id,
     'location',jsonb_build_object('name',l.name,'timezone',l.timezone))`;
-  const interval = `jsonb_build_object('court_id',r.court_id,'booking_date',r.booking_date,
-    'starts_at_minute',r.starts_at_minute,'ends_at_minute',r.ends_at_minute,'status',r.status,'court',${court})`;
+  const schedule = booking ? 'v' : 'r';
+  const interval = `jsonb_build_object('court_id',${schedule}.court_id,'booking_date',${schedule}.booking_date,
+    'starts_at_minute',${schedule}.starts_at_minute,'ends_at_minute',${schedule}.ends_at_minute,'status',r.status,'court',${court})`;
   const projection = booking ? `jsonb_build_object('id',b.id,'account_user_id',b.account_user_id,
-    'status',b.status,'updated_at',b.updated_at,'customer_name',b.customer_name,'customer_email',b.customer_email,
-    'customer_phone',b.customer_phone,'cancellation_notice_minutes',b.cancellation_notice_minutes,
-    'total_amount_minor',b.total_amount_minor,'currency',b.currency,'payment_method',b.payment_method,
+    'status',b.status,'updated_at',b.updated_at,'customer_name',v.customer_name,'customer_email',v.customer_email,
+    'customer_phone',v.customer_phone,'cancellation_notice_minutes',v.cancellation_notice_minutes,
+    'total_amount_minor',v.total_amount_minor,'currency',v.currency,'payment_method',v.payment_method,
     'payments',coalesce((SELECT jsonb_agg(jsonb_build_object('status',p.status))
       FROM public.payment_attempts p WHERE p.booking_id=b.id AND p.status='succeeded'),'[]'::jsonb),
     'reservation',${interval})` : `${interval} || jsonb_build_object('id',r.id,'updated_at',r.updated_at,
@@ -27,7 +30,7 @@ export async function listOwnerActivityBatch(manager: EntityManager, input: {
     'creator',CASE WHEN creator.id IS NULL THEN NULL ELSE jsonb_build_object('first_name',creator.first_name,'last_name',creator.last_name) END,
     'canceller',CASE WHEN canceller.id IS NULL THEN NULL ELSE jsonb_build_object('first_name',canceller.first_name,'last_name',canceller.last_name) END)`;
   const rows: unknown = await manager.query(`SELECT ${projection} AS row
-    FROM ${booking ? "public.bookings b JOIN public.court_reservations r ON r.id=b.reservation_id" : "public.court_reservations r"}
+    FROM ${booking ? "public.bookings b JOIN public.booking_revisions v ON v.id=b.current_revision_id JOIN public.court_reservations r ON r.id=b.reservation_id" : "public.court_reservations r"}
     JOIN public.courts c ON c.id=r.court_id JOIN public.locations l ON l.id=c.location_id
     ${booking ? "" : "LEFT JOIN public.users creator ON creator.id=r.created_by_user_id LEFT JOIN public.users canceller ON canceller.id=r.cancelled_by_user_id"}
     WHERE ${booking ? "b.account_user_id" : "r.created_by_user_id"}=$1::uuid

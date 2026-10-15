@@ -15,6 +15,22 @@ const intent = { courtId: "c9000000-0000-4000-8000-000000000011", date: "2099-10
 
 beforeEach(() => { create.mockReset(); revalidate.mockReset(); start.mockReset(); abandon.mockReset(); });
 
+it.each(["", "   "])("returns friendly required errors for blank contact values (%j) before checkout", async (blank) => {
+  expect(await commitCustomerBookingAction({ ...intent, customerName: blank, customerEmail: blank, customerPhone: blank })).toEqual({
+    ok: false, message: "Check the customer details.", fieldErrors: {
+      customerName: "Name is required.", customerEmail: "Email address is required.", customerPhone: "Phone number is required.",
+    },
+  });
+  expect(create).not.toHaveBeenCalled();
+});
+
+it("returns field-specific email and phone errors without invoking checkout", async () => {
+  expect(await commitCustomerBookingAction({ ...intent, customerEmail: "invalid", customerPhone: "call me" })).toMatchObject({
+    ok: false, fieldErrors: { customerEmail: "Enter a valid email address.", customerPhone: "Enter a valid phone number, for example +40 712 345 678." },
+  });
+  expect(create).not.toHaveBeenCalled();
+});
+
 it("returns service authorization and availability failures without creating a guest fallback", async () => {
   create.mockResolvedValueOnce({ ok: false, message: "This account cannot create a booking." });
   expect(await commitCustomerBookingAction(intent)).toEqual({ ok: false,

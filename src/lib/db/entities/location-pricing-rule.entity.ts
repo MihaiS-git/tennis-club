@@ -1,6 +1,6 @@
 import "server-only";
 
-import { Check, Column, Entity, Exclusion, Index, JoinColumn, ManyToOne, PrimaryColumn, type Relation } from "typeorm";
+import { Check, Column, Entity, Exclusion, Index, JoinColumn, ManyToOne, PrimaryGeneratedColumn, type Relation } from "typeorm";
 import type { courtStates } from "@/lib/pricing/validation";
 
 import { CourtEntity } from "./court.entity";
@@ -18,7 +18,7 @@ import { PricingRuleSetEntity } from "./pricing-rule-set.entity";
 @Check("location_pricing_rules_weekday_check", "weekday >= 0 AND weekday <= 6")
 @Exclusion("location_pricing_no_overlap", "USING gist (court_id WITH =, court_state WITH =, weekday WITH =, daterange(starts_on, ends_on, '[]') WITH &&, int4range(starts_at_minute, ends_at_minute, '[)') WITH &&)")
 export class LocationPricingRuleEntity {
-  @PrimaryColumn({ name: "id", type: "uuid", default: () => "gen_random_uuid()", primaryKeyConstraintName: "location_pricing_rules_pkey" })
+  @PrimaryGeneratedColumn("uuid", { name: "id", primaryKeyConstraintName: "location_pricing_rules_pkey" })
   id!: string;
 
   @Column({ name: "location_id", type: "uuid" })

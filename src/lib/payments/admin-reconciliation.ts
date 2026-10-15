@@ -119,7 +119,8 @@ export async function recoverAdminBookingAdjustment(id: unknown, reader?: Reader
   await requireActiveAdmin(client);
   const adjustmentId = z.uuid().parse(id);
   const { getDataSource } = await import("@/lib/db/data-source");
-  const { findAdjustment, bookingFinancials } = await import("@/lib/db/repositories/booking-adjustments.repository");
+  const { findAdjustment } = await import("@/lib/db/repositories/booking-adjustments.repository");
+  const { bookingFinancials } = await import("./financials");
   const { adjustmentPresentation } = await import("./booking-adjustments");
   const adjustment = await findAdjustment((await getDataSource()).manager,adjustmentId);
   if (!adjustment) return {ok:false,message:"Modification payment unavailable."};

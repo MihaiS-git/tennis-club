@@ -127,9 +127,12 @@ production routes use TypeORM only.
 ## Database-native protection
 
 `tests/integration/db/migration-cutover.integration.test.ts` directly attempts invalid
-persistence to verify all four overlap exclusions (reservations, coverage, opening
-hours and pricing), valid adjacent intervals, partial payment uniqueness, positive
-payment/refund amounts, refund foreign keys and refund uniqueness. It also verifies
+persistence to verify all five overlap exclusions (reservations, coverage, opening
+hours, schedule validity and pricing), valid adjacent intervals, partial payment uniqueness, positive
+payment/capture/refund amounts, capture identity/deduplication, immutable payment-request/provider-event/capture
+facts, refund/adjustment foreign keys, operation/request uniqueness, adjustment hold-fragment
+duration/state and restrictive financial deletes. It also requires exactly the three
+consolidated migrations and an empty TypeORM schema-builder diff. Security coverage includes
 browser-role table/column and future-table privileges, real denied reads, Auth signup
 and email synchronization, and private active-account avatar Storage access.
 Reservation, configuration, payment and profile integration suites provide additional
@@ -150,7 +153,7 @@ back; never run them against development, remote, production or shared databases
 
 The existing db/booking-mutations integration suite now covers surcharge capture,
 retryable failure/unknown outcome, cancellation/expiry, target/pricing/actor invalidation,
-compensation, partial refund retry (including a verified failure generation), repeated
+compensation, partial refund retry (including a verified failed execution and distinct retry identity), repeated
 50 → 75 → 100 → 75 → cancellation, concurrent edits/recovery, role boundaries and
 expiry at the final SQL write. Existing Stripe/cancellation/Admin suites remain required.
 
@@ -163,3 +166,64 @@ unless the exact isolated test database, project marker, fake secret and URL mat
 Test environment setup clears inherited Stripe fixture/provider variables before
 Playwright opts into these explicit fake credentials. Application server/build remain
 isolated on port 3100 and .next-test; the development server is not reused.
+
+## Consolidated schema generation
+
+Regenerate the editable initial migration with the existing shared DataSource and
+loader, against a positively verified empty disposable local database (never an
+arbitrary inherited `DATABASE_URL`):
+
+```bash
+DATABASE_URL=<verified-isolated-empty-database-url> node --conditions=react-server --import=./scripts/ts-loader.mjs node_modules/typeorm/cli.js migration:generate src/lib/db/migrations/InitialApplicationSchema -d src/lib/db/migration-data-source.mjs -t 1791462257924
+```
+
+Review generated DDL, then put `CREATE EXTENSION IF NOT EXISTS btree_gist WITH SCHEMA
+extensions` and `SET LOCAL search_path = public, extensions` at the beginning of
+`up()` before the entity-generated exclusions. Retain the extension on rollback.
+Ordinary tables, checks, indexes, keys and all exclusions come from entity metadata.
+The Auth reference is non-synchronized, and the email expression index is declared
+with `synchronize: false`; a post-initialization schema comparison must propose zero
+changes, including no native-object drops. Do not preserve the removed effective-hours
+or booking-adjustment patch migrations. No legacy data backfills are required.
+
+Supabase integration rollback opts into the installed Storage SQL delete guard
+inside the migration transaction; the native bucket/object FK still refuses a
+nonempty bucket. Runtime Storage access and policies are unchanged.
+
+
+## Booking revision validation
+
+The migration-cutover suite checks the three-migration history, zero schema diff,
+non-synchronized Auth reference, composite current/predecessor relationships,
+strict linear numbering, atomic head advancement and revision UPDATE/DELETE/TRUNCATE
+rejection. Ownership checks reject guest/account reassignment in every direction,
+permit unchanged values and verify aggregate rollback and restrictive account deletion.
+Existing browser/Auth/Storage and overlap checks remain required.
+Checkout tests assert online pending/confirmed revision count, duplicate confirmation,
+Pay-at-club confirmed creation and unchanged original debt requests after edits.
+Booking-mutation tests assert exact RON 50 → 75 → 100 → 75 → cancellation snapshots,
+predecessors/current pointer, occupancy, captures and refund obligations. They also
+cover no-ops, intent-key replay/conflicts, concurrency, failed paid applications,
+owner/staff boundaries, cancellation without refunds and compensation.
+
+Fixture inserts create identity/revision records atomically through the test helpers;
+no fixture depends on obsolete mutable booking columns. Controlled contract changes
+append real fixture revisions. Teardown explicitly removes financial dependencies,
+adjustments, revisions and identities in one guarded isolated-test transaction.
+Only teardown temporarily disables the revision DELETE guard with privileged DDL,
+flushes deferred checks, then re-enables it before commit. Production has no bypass
+setting. Integration/E2E remain sequential against the verified test stack.
+
+
+## Refund execution cutover validation
+
+`db/refund-executions.integration.test.ts` checks real PostgreSQL uniqueness,
+immutability, lease fencing, stale provider facts, browser grants and transactional
+rollback, plus mocked Stripe dispatch/recovery through the live refund service.
+The affected Stripe refunds, Admin reconciliation, booking-mutations and financial
+history suites retain cancellation idempotency, atomic receipt resolution, failed
+adjustment compensation and RON 50 → 75 → 100 → 75 → cancellation coverage.
+Regenerate the existing initial migration only against verified empty isolated
+infrastructure; apply exactly three migrations and verify zero metadata drift.
+No provider calls occur inside transactions, and no real Stripe/Brevo calls or
+normal development reset are part of these checks.

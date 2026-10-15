@@ -1,6 +1,6 @@
 import "server-only";
 
-import { Check, Column, Entity, PrimaryColumn, Unique } from "typeorm";
+import { Check, Column, Entity, PrimaryGeneratedColumn, Unique } from "typeorm";
 import type { LocationCurrency } from "@/lib/pricing/money";
 
 @Entity({ schema: "public", name: "locations" })
@@ -9,7 +9,7 @@ import type { LocationCurrency } from "@/lib/pricing/money";
 @Check("locations_currency_check", "currency = ANY (ARRAY['EUR'::text, 'USD'::text, 'GBP'::text, 'RON'::text, 'CHF'::text])")
 @Check("locations_customer_cancellation_notice_check", "customer_cancellation_notice_minutes >= 0 AND customer_cancellation_notice_minutes <= 43200")
 export class LocationEntity {
-  @PrimaryColumn({ name: "id", type: "uuid", default: () => "gen_random_uuid()", primaryKeyConstraintName: "locations_pkey" })
+  @PrimaryGeneratedColumn("uuid", { name: "id", primaryKeyConstraintName: "locations_pkey" })
   id!: string;
 
   @Column({ name: "name", type: "text" })

@@ -6,7 +6,6 @@ import { getDataSource } from "@/lib/db/data-source";
 import { listPublicDayOpeningHours, listPublicDayCoverage } from "@/lib/db/repositories/clubs.repository";
 import { listPublicDayPricing } from "@/lib/db/repositories/pricing.repository";
 import { listPublicDayOccupancy } from "@/lib/db/repositories/reservations.repository";
-import { createClient } from "@/lib/supabase/server";
 import { logger } from "@/lib/logger";
 import { openingIntervalSchema } from "@/lib/admin/opening-hours-validation";
 import { coveragePeriodSchema } from "@/lib/courts/coverage-validation";
@@ -21,9 +20,7 @@ const calendarReservationSchema = z.object({
   ends_at_minute: z.number().int().min(1).max(1440),
 });
 
-export async function getPublicCourtDay(location: PublicLocation, date: string, today: string, now: Date,
-  _suppliedClient?: Awaited<ReturnType<typeof createClient>>) {
-  void _suppliedClient; // Retained only for fixture compatibility.
+export async function getPublicCourtDay(location: PublicLocation, date: string, today: string, now: Date) {
   try {
     const manager = (await getDataSource()).manager;
     const courtIds = location.courts.map((court) => court.id);

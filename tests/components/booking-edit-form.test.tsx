@@ -4,14 +4,15 @@ import { expectToast } from "../helpers/notifications";
 import type { ComponentProps } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { BookingEditForm } from "@/app/admin/reservations/booking-edit-form";
-const { load, quote, save } = vi.hoisted(() => ({ load: vi.fn(), quote: vi.fn(), save: vi.fn() }));
+import { BookingEditForm } from "@/components/booking-edit-form";
+const { load, quote, save, abandon } = vi.hoisted(() => ({ load: vi.fn(), quote: vi.fn(), save: vi.fn(), abandon: vi.fn() }));
+vi.mock("@/app/book/actions", () => ({ abandonCheckoutAction: abandon }));
 vi.mock("@/app/book/online-payment", () => ({ OnlinePayment: (props: ComponentProps<typeof import("@/app/book/online-payment").OnlinePayment>) =>
   <button type="button" onClick={() => props.onConfirmed(10000,"RON",null)}>Simulate verified modification payment</button> }));
-vi.mock("@/app/admin/reservations/actions", () => ({ loadAdminBookingEditDayAction: load,
-  quoteAdminBookingAction: quote, rescheduleAdminBookingAction: save }));
+vi.mock("@/app/my-activity/bookings/actions", () => ({ loadOwnBookingEditDayAction: load,
+  quoteOwnBookingAction: quote, rescheduleOwnBookingAction: save }));
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
-beforeEach(() => { load.mockReset(); quote.mockReset(); save.mockReset(); });
+beforeEach(() => { load.mockReset(); quote.mockReset(); save.mockReset(); abandon.mockReset(); });
 
 const court = { id: "22222222-2222-4222-8222-222222222222", name: "Court A", is_active: true };
 const booking = { id: "33333333-3333-4333-8333-333333333333", booking_date: "2099-10-15", currency: "RON" as const };
@@ -22,7 +23,7 @@ function renderBooking(scope: "admin" | "owner" = "admin", paymentMethod: "onlin
     cells: ["available", "available", "available", "available"] }] }, booking: {
     ...booking, payment_method: paymentMethod, court_id: court.id, starts_at_minute: 600, ends_at_minute: 660, total_amount_minor: 7500,
     location_id: location.id, location_timezone: "UTC", updated_at: "2026-10-01T12:00:00Z",
-    booking_updated_at: "2026-10-01T12:00:00Z", location, hours: [], occupancy: [],
+    current_revision_id: "2026-10-01T12:00:00Z", location, hours: [], occupancy: [], refunds: [],
   } });
   const onSaved = vi.fn(async () => {});
   render(<BookingEditForm booking={booking} onCancel={vi.fn()} onPendingChange={vi.fn()} onSaved={onSaved}
@@ -31,6 +32,13 @@ function renderBooking(scope: "admin" | "owner" = "admin", paymentMethod: "onlin
 }
 const saveButton = () => screen.getByRole("button", { name: "Save changes" });
 const extendInterval = () => fireEvent.click(screen.getByRole("button", { name: /Court A 2099-10-15 11:00–11:30/ }));
+
+it("renders an explicit empty refund collection without refund entries", async () => {
+  quote.mockResolvedValue({ ok: true, totalAmountMinor: 7500 });
+  renderBooking("owner");
+  await screen.findByText("Current reservation");
+  expect(screen.queryByText(/^Refund /)).toBeNull();
+});
 
 it.each(["admin", "owner"] as const)("requires a current quote for %s rescheduling and disables a reverted interval", async (scope) => {
   let finish: (value: { ok: true; totalAmountMinor: number }) => void = () => { throw new Error("Not quoting"); };
@@ -114,7 +122,7 @@ it("preselects the current interval and requires price acknowledgement and recon
   const location = { id: "11111111-1111-4111-8111-111111111111", name: "Club", timezone: "UTC", courts: [court] };
   load.mockResolvedValue({ day: { times: [600, 630, 660, 690], courts: [{ court, cells: ["available", "available", "available", "available"] }] },
     booking: { ...booking, location_id: location.id, location_timezone: "UTC", updated_at: "2026-10-01T12:00:00Z",
-      booking_updated_at: "2026-10-01T12:00:00Z", occupancy: [] } });
+      current_revision_id: "2026-10-01T12:00:00Z", occupancy: [], refunds: [] } });
   quote.mockResolvedValue({ ok: true, totalAmountMinor: 9000 });
   save.mockResolvedValueOnce({ ok: false, reason: "price_changed", totalAmountMinor: 10000, message: "The price has changed. Confirm the new total before saving." })
     .mockResolvedValueOnce({ ok: true, totalAmountMinor: 10000 });
@@ -179,12 +187,17 @@ it("shows the surcharge and waits for verified payment before completing a paid 
   quote.mockResolvedValue({ok:true,totalAmountMinor:10000});
   save.mockResolvedValue({ok:true,totalAmountMinor:10000,adjustmentId:booking.id,adjustmentStatus:"pending",
     checkout:{attemptId:booking.id,token:"a".repeat(64),presentation:{kind:"stripe",clientSecret:"pi_secret",publishableKey:"pk_test_Fixture"}},
-    holdExpiresAt:"2099-10-15T10:00:00Z"});
+    holdExpiresAt:"2099-10-15T10:00:00Z", paymentUrl:"/book/adjustments/private-link"});
   const onSaved=renderBooking("owner","online");
   await screen.findByText("Current reservation"); extendInterval();
   await screen.findByText(/Additional amount payable:.*25\.00/);
   fireEvent.click(screen.getByRole("checkbox")); fireEvent.click(saveButton());
   await screen.findByRole("region",{name:"Booking modification"});
+  expect(screen.getByText("Current total")).toBeTruthy();
+  expect(screen.getByText("Proposed total")).toBeTruthy();
+  expect(screen.getByText("Additional amount payable")).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "Customer payment link" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
   expect(onSaved).not.toHaveBeenCalled();
   expect(save.mock.calls[0][0]).toMatchObject({expectedTotal:10000,priceAcknowledged:true,requestId:expect.any(String)});
   fireEvent.click(screen.getByRole("button",{name:"Simulate verified modification payment"}));
@@ -198,9 +211,49 @@ it("shows the eligible difference and durable pending refund instead of claiming
   await screen.findByText("Current reservation"); extendInterval();
   await screen.findByText(/Eligible refund:.*25\.00/);
   fireEvent.click(screen.getByRole("checkbox")); fireEvent.click(saveButton());
-  await screen.findByText(/Refund status: Refund pending/);
-  expect(screen.queryByText("Refund status: Refund completed")).toBeNull();
+  await screen.findByText(/Refund pending;/);
+  expect(screen.getByText("Refund amount")).toBeTruthy();
+  expect(screen.getByText("Refund status")).toBeTruthy();
+  expect(screen.queryByText("Refund completed")).toBeNull();
   expect(onSaved).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button",{name:/^Close$/}));
-  await waitFor(()=>expect(onSaved).toHaveBeenCalledOnce());
+  expect(screen.queryByRole("button",{name:/^Close$/})).toBeNull();
+});
+
+it.each(["succeeded", "failed", "pending"])("separates refund amount and %s status without adding dismissal controls", async (refundStatus) => {
+  quote.mockResolvedValue({ ok: true, totalAmountMinor: 5000 });
+  save.mockResolvedValue({ ok: true, totalAmountMinor: 5000, adjustmentId: booking.id, adjustmentStatus: "applied", refundStatus });
+  renderBooking("owner", "online");
+  await screen.findByText("Current reservation"); extendInterval();
+  await screen.findByRole("checkbox"); fireEvent.click(screen.getByRole("checkbox")); fireEvent.click(saveButton());
+  await screen.findByText("Refund amount");
+  expect(screen.getByText("Updated total")).toBeTruthy();
+  expect(screen.getByRole("status").textContent).toContain(refundStatus === "succeeded" ? "Refund completed" : refundStatus === "failed" ? "Refund failed" : "Refund pending");
+  expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
+});
+
+it("keeps Cancel modification as the existing explicit checkout abandonment action", async () => {
+  quote.mockResolvedValue({ ok: true, totalAmountMinor: 10000 });
+  save.mockResolvedValue({ ok: true, totalAmountMinor: 10000, adjustmentId: booking.id, adjustmentStatus: "pending",
+    checkout: { attemptId: booking.id, token: "a".repeat(64), presentation: { kind: "stripe", clientSecret: "pi_secret", publishableKey: "pk_test_Fixture" } }, holdExpiresAt: "2099-10-15T10:00:00Z" });
+  abandon.mockResolvedValue({ ok: true, paymentStatus: "cancelled" });
+  renderBooking("owner", "online");
+  await screen.findByText("Current reservation"); extendInterval();
+  await screen.findByRole("checkbox"); fireEvent.click(screen.getByRole("checkbox")); fireEvent.click(saveButton());
+  const cancel = await screen.findByRole("button", { name: "Cancel modification" });
+  expect(cancel.className).toContain("border-border-strong");
+  fireEvent.click(cancel);
+  await waitFor(() => expect(abandon).toHaveBeenCalledWith({ attemptId: booking.id, token: "a".repeat(64) }));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Cancel modification" })).toBeNull());
+});
+
+it.each(["cancelled", "expired", "unsuccessful"])("presents the %s modification outcome without a bottom Close action", async (adjustmentStatus) => {
+  quote.mockResolvedValue({ ok: true, totalAmountMinor: 10000 });
+  save.mockResolvedValue({ ok: true, totalAmountMinor: 10000, adjustmentId: booking.id, adjustmentStatus });
+  renderBooking("owner", "online");
+  await screen.findByText("Current reservation"); extendInterval();
+  await screen.findByRole("checkbox"); fireEvent.click(screen.getByRole("checkbox")); fireEvent.click(saveButton());
+  await screen.findByText("Modification ended");
+  expect(screen.getByText("The original booking was preserved.")).toBeTruthy();
+  expect(screen.getByText("Proposed total")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
 });

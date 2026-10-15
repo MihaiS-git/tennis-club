@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { timeToMinute } from "@/lib/admin/opening-hours-validation";
 import { majorAmountSchema, minorAmountSchema } from "./money";
+import type { courtEnvironments } from "@/lib/admin/courts-validation";
 
 export const courtStates = ["outdoor", "covered", "indoor"] as const;
 export const courtStateLabels = {
@@ -8,6 +9,11 @@ export const courtStateLabels = {
   covered: "Covered",
   indoor: "Indoor",
 } as const;
+
+// Physical environment limits possible states, never the season being configured.
+export function supportsPricingState(environment: typeof courtEnvironments[number], state: typeof courtStates[number]): boolean {
+  return environment === "indoor" ? state === "indoor" : state === "outdoor" || state === "covered";
+}
 const timeSchema = z
   .string()
   .regex(

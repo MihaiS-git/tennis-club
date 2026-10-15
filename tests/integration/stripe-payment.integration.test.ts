@@ -10,7 +10,8 @@ import { parseActivityQuery, type ActivityScope } from "@/lib/bookings/activity-
 import { listOwnCourtHistory } from "../helpers/current-activity";
 import { listOwnUpcomingCustomerBookings } from "../helpers/current-activity";
 import { cancelOwnCustomerBooking } from "@/lib/bookings/self-cancellation-service";
-import { insertCheckoutFixture } from "./checkout-fixtures";
+import { cleanupBookingFixtures, insertCheckoutFixture } from "./checkout-fixtures";
+import { setPaymentAttemptExpiryFixture } from "../local/booking-fixtures";
 import { randomUUID } from "node:crypto";
 import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
@@ -22,6 +23,7 @@ import { POST } from "@/app/api/payments/stripe/webhook/route";
 import { POST as checkoutStatus } from "@/app/api/payments/checkout/status/route";
 import { abandonOnlineCheckout, startOnlineCheckout, readOnlineCheckout } from "@/lib/payments/checkout";
 import { paymentHoldDurationSeconds } from "@/lib/payments/domain";
+import { getDataSource } from "@/lib/db/data-source";
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/reservations/revalidation", () => ({ revalidateCourtActivity: vi.fn() }));
@@ -52,8 +54,8 @@ test("verified webhook settles original hold once, keeps retryable failure, rele
     p_ends_at_minute: start + 60, p_account_user_id: userIds[0], p_customer_name: "Stripe guest",
     p_customer_email: "stripe@example.test", p_customer_phone: "123", p_total_amount_minor: 5000,
     p_currency: "RON", p_payment_method: "online", p_provider: "stripe", p_hold_seconds: paymentHoldDurationSeconds });
-  async function hold(start: number) {
-    const held = await insertCheckoutFixture(db, params(start));
+  async function hold(start: number, owner: string | null = userIds[0]) {
+    const held = await insertCheckoutFixture(db, { ...params(start), p_account_user_id: owner });
     expect(held.error).toBeNull();
     return held.data[0];
   }
@@ -68,6 +70,34 @@ test("verified webhook settles original hold once, keeps retryable failure, rele
       headers: { "stripe-signature": stripe.webhooks.generateTestHeaderString({ payload, secret: "whsec_Fixture" }) } });
   }
   const email = async (id: string) => emails(id).map(({ event_kind }) => ({ event_kind }));
+  async function evidence(booking: Awaited<ReturnType<typeof hold>>, status: string, kinds: string[], attemptStatus: string, amount: number) {
+    const identity = await db.from("bookings").select("status,current_revision_id").eq("id", booking.booking_id).single();
+    const revisions = await db.from("booking_revisions").select("id,kind,booking_state").eq("booking_id", booking.booking_id).order("revision_number");
+    expect(identity.error).toBeNull(); expect(revisions.error).toBeNull();
+    expect(identity.data?.status).toBe(status);
+    expect(revisions.data?.map(r => r.kind)).toEqual(kinds);
+    expect(identity.data?.current_revision_id).toBe(revisions.data?.at(-1)?.id);
+    expect(revisions.data?.at(-1)?.booking_state).toBe(status === "expired" ? "pending_payment" : status);
+    const reservation = await db.from("court_reservations").select("status,hold_expires_at").eq("id", booking.reservation_id).single();
+    expect(reservation.error).toBeNull();
+    expect(reservation.data?.status).toBe(status === "pending_payment" ? "held" : "released");
+    if (status === "pending_payment") expect(Date.parse(reservation.data!.hold_expires_at)).toBe(Date.parse(booking.hold_expires_at!));
+    else expect(reservation.data?.hold_expires_at).toBeNull();
+    const attempt = await db.from("payment_attempts").select("id,status,provider_payment_id,amount_minor,currency").eq("id", booking.payment_attempt_id).single();
+    expect(attempt.error).toBeNull();
+    expect(attempt.data).toEqual({ id: booking.payment_attempt_id, status: attemptStatus,
+      provider_payment_id: `pi_${booking.payment_attempt_id}`, amount_minor: 5000, currency: "RON" });
+    const refunds = await db.from("payment_refunds").select("payment_attempt_id,amount_minor").eq("booking_id", booking.booking_id);
+    expect(refunds.error).toBeNull();
+    expect(refunds.data).toEqual(amount ? [{ payment_attempt_id: booking.payment_attempt_id, amount_minor: amount }] : []);
+    if (amount && attemptStatus !== "succeeded") {
+      const captures = await db.from("payment_provider_events").select("attempt_id,provider_payment_id,amount_minor,currency")
+        .eq("attempt_id", booking.payment_attempt_id).eq("outcome", "succeeded");
+      expect(captures.error).toBeNull();
+      expect(captures.data).toContainEqual({ attempt_id: booking.payment_attempt_id,
+        provider_payment_id: `pi_${booking.payment_attempt_id}`, amount_minor: amount, currency: "RON" });
+    }
+  }
   try {
     const emailAddress = `stripe-${randomUUID()}@example.test`;
     const account = await db.auth.admin.createUser({ email: emailAddress, password: "stripe-test-password-123", email_confirm: true });
@@ -76,8 +106,8 @@ test("verified webhook settles original hold once, keeps retryable failure, rele
     retrieve.mockImplementation(async (id: string) => ({ id, status: "requires_payment_method", amount: 5000, amount_received: 0,
       currency: "ron", metadata: { payment_attempt_id: id.slice(3) } }));
     refundList.mockReturnValue([]);
-    refundCreate.mockImplementation(async (input: { amount: number; payment_intent: string }, options: { idempotencyKey: string }) => ({
-      id: `re_${options.idempotencyKey}`, status: "succeeded", amount: input.amount, currency: "ron", payment_intent: input.payment_intent,
+    refundCreate.mockImplementation(async (input: { amount: number; payment_intent: string; metadata: { payment_refund_id: string; refund_execution_id: string } }, options: { idempotencyKey: string }) => ({
+      id: `re_${options.idempotencyKey}`, status: "succeeded", amount: input.amount, currency: "ron", payment_intent: input.payment_intent, metadata: input.metadata,
     }));
     refundRetrieve.mockImplementation(async (id: string) => ({ id, status: "succeeded", amount: 5000, currency: "ron" }));
     vi.stubEnv("STRIPE_SECRET_KEY", "sk_test_Fixture"); vi.stubEnv("STRIPE_PUBLISHABLE_KEY", "pk_test_Fixture"); vi.stubEnv("STRIPE_WEBHOOK_SECRET", "whsec_Fixture");
@@ -152,13 +182,20 @@ test("verified webhook settles original hold once, keeps retryable failure, rele
     expect((await db.from("payment_attempts").select("status").eq("id", cancelled.payment_attempt_id).single()).data?.status).toBe("cancelled");
     expect((await db.from("court_reservations").select("status,hold_expires_at").eq("id", cancelled.reservation_id).single()).data)
       .toEqual({ status: "released", hold_expires_at: null });
+    await evidence(cancelled, "cancelled", ["created", "cancelled"], "cancelled", 0);
+    // The owner boundary cannot replay a different capability operation.
+    expect(await cancelOwnCustomerBooking(cancelled.booking_id, member)).toMatchObject({ ok: false });
     await invisible(cancelled.booking_id);
     expect(await email(cancelled.booking_id)).toEqual([]);
     expect((await hold(780)).reservation_id).not.toBe(cancelled.reservation_id);
     expect((await POST(webhook(cancelledCheckout.attemptId, "payment_intent.succeeded"))).status).toBe(200);
+    await evidence(cancelled, "cancelled", ["created", "cancelled"], "cancelled", 5000);
+    expect((await POST(webhook(cancelledCheckout.attemptId, "payment_intent.succeeded"))).status).toBe(200);
+    expect((await POST(webhook(cancelledCheckout.attemptId, "payment_intent.canceled"))).status).toBe(200);
+    await evidence(cancelled, "cancelled", ["created", "cancelled"], "cancelled", 5000);
     expect(await email(cancelled.booking_id)).toEqual([]);
     expect((await db.from("payment_provider_events").select("reconciliation_required").eq("attempt_id", cancelledCheckout.attemptId)
-      .eq("outcome", "succeeded")).data).toEqual([{ reconciliation_required: true }]);
+      .eq("outcome", "succeeded")).data).toEqual([{ reconciliation_required: true }, { reconciliation_required: true }]);
     retrieve.mockImplementation(async (id: string) => ({ id, status: "requires_payment_method", amount: 5000, amount_received: 0,
       currency: "ron", metadata: { payment_attempt_id: id.slice(3) } }));
     const expired = await hold(840), expiredCheckout = await begin(expired.payment_attempt_id);
@@ -172,12 +209,12 @@ test("verified webhook settles original hold once, keeps retryable failure, rele
     expect(await readOnlineCheckout({ attemptId: expiredCheckout.attemptId, token: expiredCheckout.token })).toMatchObject({ status: "expired" });
     expect((await db.from("court_reservations").select("status").eq("id", replacement.reservation_id).single()).data?.status).toBe("held");
     expect(await email(expired.booking_id)).toEqual([]);
+    await evidence(expired, "expired", ["created"], "expired", 5000);
     expect((await db.from("payment_provider_events").select("settlement_result,reconciliation_required").eq("attempt_id", expiredCheckout.attemptId)).data)
       .toEqual([{ settlement_result: "expired", reconciliation_required: true }]);
     // Cancellation intent commits before a provider timeout. A capture racing
     // that request must release the original row and request exactly one refund.
-    const racing = await hold(900), racingCheckout = await begin(racing.payment_attempt_id);
-    expect((await db.from("bookings").update({ account_user_id: null }).eq("id", racing.booking_id)).error).toBeNull();
+    const racing = await hold(900, null), racingCheckout = await begin(racing.payment_attempt_id);
     const racingAccess = { attemptId: racingCheckout.attemptId, token: racingCheckout.token };
     let releaseCancel!: () => void;
     const providerBlocked = new Promise<void>(resolve => { releaseCancel = resolve; });
@@ -189,21 +226,32 @@ test("verified webhook settles original hold once, keeps retryable failure, rele
     const cancellation = abandonOnlineCheckout(racingAccess);
     await providerContacted;
     expect((await db.from("bookings").select("status").eq("id", racing.booking_id).single()).data?.status).toBe("cancelled");
-    expect((await db.from("court_reservations").select("status").eq("id", racing.reservation_id).single()).data?.status).toBe("held");
-    expect((await insertCheckoutFixture(db, params(900))).error?.code).toBe("23P01");
+    expect((await db.from("court_reservations").select("status").eq("id", racing.reservation_id).single()).data?.status).toBe("released");
+    const raceReplacement = await hold(900);
+    await evidence(racing, "cancelled", ["created", "cancelled"], "pending", 0);
     const racingEvent = `evt_${randomUUID()}`;
-    refundCreate.mockRejectedValueOnce(new Error("Refund response uncertain"));
+    refundCreate.mockImplementationOnce(async (input, options) => {
+      // Stripe accepted the operation but its HTTP response was lost. Recovery
+      // rediscovers this same execution; it must not issue another creation.
+      refundList.mockReturnValueOnce([{ id: `re_${options.idempotencyKey}`, status: "succeeded",
+        amount: input.amount, currency: "ron", payment_intent: input.payment_intent, metadata: input.metadata }]);
+      throw new Error("Refund response uncertain");
+    });
     expect((await POST(webhook(racingCheckout.attemptId, "payment_intent.succeeded", racingEvent))).status).toBe(200);
     expect((await db.from("payment_refunds").select("status").eq("booking_id", racing.booking_id)).data)
       .toEqual([{ status: "pending_retry" }]);
+    const creationCallsBeforeRecovery=refundCreate.mock.calls.length;
     releaseCancel();
     await cancellation;
+    expect(refundCreate.mock.calls.length).toBe(creationCallsBeforeRecovery);
     expect(await readOnlineCheckout(racingAccess)).toMatchObject({ status: "cancelled", paymentStatus: "refunded" });
     expect((await db.from("payment_refunds").select("id,status,amount_minor").eq("booking_id", racing.booking_id)).data)
       .toMatchObject([{ status: "succeeded", amount_minor: 5000 }]);
     expect((await db.from("payment_refunds").select("id").eq("booking_id", racing.booking_id)).data).toHaveLength(1);
     expect((await db.from("court_reservations").select("status").eq("id", racing.reservation_id).single()).data?.status).toBe("released");
     expect(await email(racing.booking_id)).toEqual([]);
+    await evidence(racing, "cancelled", ["created", "cancelled"], "succeeded", 5000);
+    expect((await db.from("court_reservations").select("status").eq("id", raceReplacement.reservation_id).single()).data?.status).toBe("held");
     expect((await Promise.all([POST(webhook(racingCheckout.attemptId, "payment_intent.succeeded", racingEvent)),
       POST(webhook(racingCheckout.attemptId, "payment_intent.payment_failed"))])).map(r => r.status)).toEqual([200, 200]);
     const refundCalls = refundCreate.mock.calls.length;
@@ -226,10 +274,19 @@ test("verified webhook settles original hold once, keeps retryable failure, rele
     }))).status).toBe(503);
     expect((await POST(webhook(noWebhookCheckout.attemptId, "payment_intent.succeeded"))).status).toBe(200);
     expect((await POST(webhook(noWebhookCheckout.attemptId, "payment_intent.payment_failed"))).status).toBe(200);
+    const noWebhookCaptures = await db.from("payment_capture_receipts")
+      .select("payment_attempt_id,provider_payment_id,provider_capture_id,amount_minor,currency,first_observed_at,last_observed_at")
+      .eq("payment_attempt_id",noWebhookCheckout.attemptId);
+    expect(noWebhookCaptures.error).toBeNull();
+    expect(noWebhookCaptures.data).toEqual([expect.objectContaining({ payment_attempt_id:noWebhookCheckout.attemptId,
+      provider_payment_id:`pi_${noWebhookCheckout.attemptId}`,provider_capture_id:`pi_${noWebhookCheckout.attemptId}`,
+      amount_minor:5000,currency:"RON" })]);
+    expect(Date.parse(noWebhookCaptures.data![0].last_observed_at)).toBeGreaterThanOrEqual(
+      Date.parse(noWebhookCaptures.data![0].first_observed_at));
     expect(await email(noWebhook.booking_id)).toEqual([{ event_kind: "confirmed" }]);
     expect((await db.from("bookings").select("id").eq("reservation_id", noWebhook.reservation_id)).data).toHaveLength(1);
     // An old confirmed capability cannot bypass normal booking cancellation policy.
-    expect((await db.from("payment_attempts").update({ expires_at: "2020-01-01T00:00:00Z" }).eq("id", noWebhookCheckout.attemptId)).error).toBeNull();
+    await (await getDataSource()).transaction(manager => setPaymentAttemptExpiryFixture(manager, noWebhookCheckout.attemptId, "2020-01-01T00:00:00Z"));
     await expect(abandonOnlineCheckout(noWebhookAccess)).rejects.toThrow("already confirmed");
     expect(await readOnlineCheckout(noWebhookAccess)).toMatchObject({ status: "confirmed" });
     retrieve.mockImplementation(async (id: string) => ({ id, status: "requires_payment_method", amount: 5000, amount_received: 0,
@@ -245,7 +302,8 @@ test("verified webhook settles original hold once, keeps retryable failure, rele
     await expect(startOnlineCheckout(uncertainCheckout.attemptId)).rejects.toThrow("Payment hold expired");
     const nextOccupant = await hold(1020);
     expect((await POST(webhook(uncertainCheckout.attemptId, "payment_intent.succeeded"))).status).toBe(200);
-    expect(await readOnlineCheckout(uncertainAccess)).toMatchObject({ status: "expired", paymentStatus: "refund_pending" });
+    expect(await readOnlineCheckout(uncertainAccess)).toMatchObject({ status: "expired", paymentStatus: "refunded" });
+    await evidence(uncertainExpiry, "expired", ["created"], "expired", 5000);
     expect((await db.from("court_reservations").select("status").eq("id", nextOccupant.reservation_id).single()).data?.status).toBe("held");
     expect(await email(uncertainExpiry.booking_id)).toEqual([]);
     // A capture with no webhook racing the cancellation request is refunded,
@@ -256,22 +314,39 @@ test("verified webhook settles original hold once, keeps retryable failure, rele
     expect(await abandonOnlineCheckout({ attemptId: capturedCheckout.attemptId, token: capturedCheckout.token }))
       .toMatchObject({ released: true, paymentStatus: "refunded" });
     expect(await email(capturedCancel.booking_id)).toEqual([]);
+    await evidence(capturedCancel, "cancelled", ["created", "cancelled"], "succeeded", 5000);
     expect((await db.from("payment_attempts").select("status,amount_minor").eq("id", capturedCheckout.attemptId).single()).data)
       .toEqual({ status: "succeeded", amount_minor: 5000 });
     retrieve.mockImplementation(async (id: string) => ({ id, status: "requires_payment_method", amount: 5000, amount_received: 0,
       currency: "ron", metadata: { payment_attempt_id: id.slice(3) } }));
+    const uncertainCancel = await hold(1140), uncertainCancelCheckout = await begin(uncertainCancel.payment_attempt_id);
+    const uncertainCancelAccess = { attemptId: uncertainCancelCheckout.attemptId, token: uncertainCancelCheckout.token };
+    retrieve.mockRejectedValue(new Error("Provider cancellation outcome unknown"));
+    await expect(abandonOnlineCheckout(uncertainCancelAccess)).rejects.toThrow();
+    await evidence(uncertainCancel, "cancelled", ["created", "cancelled"], "pending", 0);
+    expect((await db.from("payment_provider_events").select("event_id").eq("attempt_id", uncertainCancelCheckout.attemptId)).data).toEqual([]);
+    const uncertainReplacement = await hold(1140);
+    const lateEvent = `evt_${randomUUID()}`;
+    expect((await POST(webhook(uncertainCancelCheckout.attemptId, "payment_intent.succeeded", lateEvent))).status).toBe(200);
+    expect((await POST(webhook(uncertainCancelCheckout.attemptId, "payment_intent.succeeded", lateEvent))).status).toBe(200);
+    await evidence(uncertainCancel, "cancelled", ["created", "cancelled"], "succeeded", 5000);
+    expect((await db.from("court_reservations").select("status").eq("id", uncertainReplacement.reservation_id).single()).data?.status).toBe("held");
+    expect(await email(uncertainCancel.booking_id)).toEqual([]);
     const mismatch = await hold(720), mismatchCheckout = await begin(mismatch.payment_attempt_id);
     expect((await POST(webhook(mismatchCheckout.attemptId, "payment_intent.succeeded", undefined, 1))).status).toBe(200);
     expect(await email(mismatch.booking_id)).toEqual([]);
     expect((await db.from("payment_provider_events").select("settlement_result,reconciliation_required").eq("attempt_id", mismatchCheckout.attemptId)).data)
       .toEqual([{ settlement_result: "amount_mismatch", reconciliation_required: true }]);
+    await evidence(mismatch, "pending_payment", ["created"], "pending", 0);
+    expect((await db.from("payment_provider_events").select("amount_minor,currency").eq("attempt_id", mismatchCheckout.attemptId)).data)
+      .toEqual([{ amount_minor: 1, currency: "RON" }]);
     expect((await db.from("bookings").select("id").in("reservation_id", [held.reservation_id, failed.reservation_id, expired.reservation_id, replacement.reservation_id, mismatch.reservation_id])).data).toHaveLength(5);
   } finally {
     vi.unstubAllEnvs(); create.mockReset(); retrieve.mockReset(); cancel.mockReset(); refundCreate.mockReset(); refundList.mockReset(); refundRetrieve.mockReset();
     await db.from("payment_provider_settings").update({ active_provider: previous }).eq("id", true);
     const reservations = (await db.from("court_reservations").select("id").eq("court_id", courtId)).data?.map(r => r.id) ?? [];
     const bookings = (await db.from("bookings").select("id").in("reservation_id", reservations)).data?.map(b => b.id) ?? [];
-    await db.from("bookings").delete().in("id", bookings);
+    await cleanupBookingFixtures({ bookingIds: bookings });
     await db.from("court_reservations").delete().eq("court_id", courtId);
     await db.from("pricing_rule_sets").delete().eq("location_id",locationId);
     await db.from("location_opening_hours").delete().eq("location_id",locationId);

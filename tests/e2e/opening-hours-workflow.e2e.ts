@@ -1,3 +1,4 @@
+import { cleanupBookingEvidence } from "../local/booking-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { DataSource } from "typeorm";
@@ -307,7 +308,7 @@ test("Admin opening-hours, pricing and reservation lifecycle survives sequential
   } finally {
     await other?.close();
     await page.close();
-    await database.query("DELETE FROM public.bookings WHERE reservation_id IN (SELECT id FROM public.court_reservations WHERE court_id=ANY($1::uuid[]))",[[court1,court2]]);
+    await database.transaction(manager => cleanupBookingEvidence(manager, { courtIds: [court1,court2] }));
     await database.query("DELETE FROM public.court_reservations WHERE court_id=ANY($1::uuid[])",[[court1,court2]]);
     await database.query("DELETE FROM public.pricing_rule_sets WHERE location_id=$1",[locationId]);
     await database.query("DELETE FROM public.opening_hours_schedules WHERE location_id=$1",[locationId]);

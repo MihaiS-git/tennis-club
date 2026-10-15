@@ -1,4 +1,5 @@
 import "server-only";
+import type { BookingCancellationCommandResult } from "@/lib/bookings/domain";
 import { cancelBookingCommand } from "@/lib/bookings/cancellation-service";
 
 import { z } from "zod";
@@ -14,15 +15,15 @@ export async function cancelOwnCustomerBooking(id: unknown,
   const supabase = client ?? await createClient();
   const account = await readCurrentAccount(supabase);
   if (account.state !== "active") return { ok: false, message: "An active account is required to cancel a booking." };
-  let data: unknown;
+  let data: BookingCancellationCommandResult;
   try {
-    data = await cancelBookingCommand(parsed.data, account.userId, false, null);
+    data = await cancelBookingCommand(parsed.data, account.userId, false);
   } catch {
     logger.error({ event: "bookings.self_cancel_failed", bookingId: parsed.data,
       actorId: account.userId }, "Failed to cancel own customer booking");
     return { ok: false, message: "Unable to cancel this booking. Try again." };
   }
-  if (typeof data === "object" && data !== null && "outcome" in data && data.outcome === "inactive")
+  if (data.outcome === "inactive")
     return { ok: false, message: "An active account is required to cancel a booking." };
   const outcome = await finishBookingCancellation(data);
   if (outcome.ok) logger.info({ event: "bookings.self_cancelled", bookingId: parsed.data,

@@ -1,3 +1,5 @@
+import { insertBookingRecords } from "../../local/booking-fixtures";
+import { cleanupBookingFixtures } from "../checkout-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { DataSource, EntityManager, QueryRunner } from "typeorm";
@@ -52,7 +54,7 @@ beforeAll(async () => {
 });
 
 async function clearReservations() {
-  await database.query("DELETE FROM public.bookings WHERE reservation_id IN (SELECT id FROM public.court_reservations WHERE court_id = ANY($1::uuid[]))", [[courtId, secondCourtId]]);
+  await cleanupBookingFixtures({ courtIds: [courtId, secondCourtId] });
   await database.query("DELETE FROM public.court_reservations WHERE court_id = ANY($1::uuid[])", [[courtId, secondCourtId]]);
 }
 beforeEach(async () => {
@@ -269,8 +271,7 @@ test("owner reason-only edits retain inactive-resource exception while Admin and
 
 test("trusted direct paths reject linked booking even with a forged matching creator", async () => {
   const row = await seed();
-  await database.query(`INSERT INTO public.bookings(reservation_id,customer_name,customer_email,customer_phone,total_amount_minor,currency,cancellation_notice_minutes)
-    VALUES($1,'Customer','customer@example.test','123',5000,'RON',1440)`, [row.id]);
+  await database.transaction(manager => insertBookingRecords(manager, { reservation_id: row.id, customer_name: "Customer", customer_email: "customer@example.test", customer_phone: "123", total_amount_minor: 5000, currency: "RON", cancellation_notice_minutes: 1440 }));
   for (const actor of [admin, coach]) {
     expect(await editOwnDirectReservation({ kind: "reason", id: row.id, expectedUpdatedAt: row.updated_at, reason: "Wrong domain" }, actor, now)).toMatchObject({ ok: false });
     expect(await cancelOwnDirectReservation(row.id, actor)).toMatchObject({ ok: false });
@@ -294,8 +295,7 @@ async function hold(start: number) {
   const id = randomUUID(), bookingId = randomUUID();
   await database.query(`INSERT INTO public.court_reservations(id,court_id,booking_date,starts_at_minute,ends_at_minute,status,hold_expires_at)
     VALUES($1,$2,$3,$4,$5,'held',clock_timestamp()+interval '10 minutes')`, [id, courtId, date, start, start + 60]);
-  await database.query(`INSERT INTO public.bookings(id,reservation_id,customer_name,customer_email,customer_phone,total_amount_minor,currency,status,payment_method,cancellation_notice_minutes)
-    VALUES($1,$2,'Held customer','held@example.test','123',5000,'RON','pending_payment','online',1440)`, [bookingId, id]);
+  await database.transaction(manager => insertBookingRecords(manager, { id: bookingId, reservation_id: id, customer_name: "Held customer", customer_email: "held@example.test", customer_phone: "123", total_amount_minor: 5000, currency: "RON", status: "pending_payment", payment_method: "online", cancellation_notice_minutes: 1440 }));
   await database.query(`INSERT INTO public.payment_attempts(booking_id,method,provider,amount_minor,currency,status,expires_at)
     VALUES($1,'online','netopia',5000,'RON','pending',clock_timestamp()+interval '10 minutes')`, [bookingId]);
   return id;
@@ -359,8 +359,7 @@ test("Coach cancels own direct row, denies another Coach and safely releases occ
 
 test.each(["customer", "guest"])("Coach cannot cancel a %s booking through owner direct cancellation", async (kind) => {
   const row = await seed();
-  await database.query(`INSERT INTO public.bookings(reservation_id,account_user_id,customer_name,customer_email,customer_phone,total_amount_minor,currency,cancellation_notice_minutes)
-    VALUES($1,$2,'Customer','customer@example.test','123',5000,'RON',1440)`, [row.id, kind === "customer" ? coachId : null]);
+  await database.transaction(manager => insertBookingRecords(manager, { reservation_id: row.id, account_user_id: kind === "customer" ? coachId : null, customer_name: "Customer", customer_email: "customer@example.test", customer_phone: "123", total_amount_minor: 5000, currency: "RON", cancellation_notice_minutes: 1440 }));
   expect(await cancelOwnDirectReservation(row.id, coach)).toMatchObject({ ok: false });
   expect(await reservation()).toEqual(row);
   expect(await readInternalOccupancy({ courtIds: [courtId] }, date, now)).toHaveLength(1);

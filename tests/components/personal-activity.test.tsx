@@ -8,13 +8,28 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { PersonalActivity } from "@/app/my-activity/bookings/personal-activity";
 import { CustomerBookingCancellation } from "@/app/my-activity/bookings/customer-booking-cancellation";
 import { localMinute, localToday } from "@/lib/courts/local-time";
+import type { UpcomingActivity, UpcomingCourtActivity } from "@/lib/bookings/activity-service";
 import type { PersonalCustomerBooking } from "@/lib/bookings/personal";
 import type { PersonalReservation } from "@/lib/reservations/personal";
 
-const { load, cancel, cancelBooking, edit, availability } = vi.hoisted(() => ({ load: vi.fn(), cancel: vi.fn(), cancelBooking: vi.fn(), edit: vi.fn(), availability: vi.fn() }));
+const { load, cancel, cancelBooking, edit, availability } = vi.hoisted(() => ({ load: vi.fn<typeof import("@/app/my-activity/bookings/actions").loadPersonalActivityAction>(), cancel: vi.fn(), cancelBooking: vi.fn(), edit: vi.fn(), availability: vi.fn() }));
 vi.mock("@/app/my-activity/bookings/actions", () => ({ loadPersonalActivityAction: load, cancelOwnReservationAction: cancel, cancelOwnCustomerBookingAction: cancelBooking,
   editOwnReservationAction: edit, loadReservationEditDayAction: availability,
   loadOwnBookingEditDayAction: vi.fn(), quoteOwnBookingAction: vi.fn(), rescheduleOwnBookingAction: vi.fn() }));
+
+const navigation = vi.hoisted(() => ({ replace: vi.fn() }));
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/my-activity/bookings",
+  useRouter: () => ({ replace: navigation.replace }),
+}));
+
+function bookingItem(row: PersonalCustomerBooking): UpcomingCourtActivity { return { kind: "booking", row }; }
+function reservationItem(row: PersonalReservation): UpcomingCourtActivity { return { kind: "reservation", row }; }
+function activityFixture(ordered: UpcomingCourtActivity[]): UpcomingActivity {
+  return { ordered, bookings: ordered.flatMap(item => item.kind === "booking" ? [item.row] : []),
+    upcoming: ordered.flatMap(item => item.kind === "reservation" ? [item.row] : []),
+    locations: [], courts: [], hasNext: false };
+}
 
 async function renderWithServerActivity(props: Omit<ComponentProps<typeof PersonalActivity>, "initialActivity" | "initialError">) {
   return render(<PersonalActivity {...props} initialActivity={await load()} initialError="" />);
@@ -22,6 +37,7 @@ async function renderWithServerActivity(props: Omit<ComponentProps<typeof Person
 
 beforeEach(() => {
   load.mockReset();
+  navigation.replace.mockClear();
   cancel.mockReset();
   cancelBooking.mockReset();
   edit.mockReset();
@@ -50,7 +66,7 @@ it.each([true])("renders every owned row and opens each detail dialog (staff=%s)
   const upcoming = staff ? [reservation("reservation-last", 660), reservation("reservation-middle", 540)] : [];
   const ordered = staff ? [bookings[2], upcoming[1], bookings[1], bookings[0], upcoming[0]]
     : [bookings[2], bookings[1], bookings[0]];
-  load.mockResolvedValue({ bookings, upcoming, ordered: ordered.map((row) => ({ kind: "customer_name" in row ? "booking" : "reservation", row })) });
+  load.mockResolvedValue(activityFixture(ordered.map(row => "customer_name" in row ? bookingItem(row) : reservationItem(row))));
   await renderWithServerActivity({ staff, userId: "owner" });
   const region = await screen.findByRole("region", { name: "Upcoming" });
   const buttons = within(region).getAllByRole("row", { name: /Details for/ });
@@ -80,13 +96,10 @@ it.each([true])("renders every owned row and opens each detail dialog (staff=%s)
 });
 
 it("loads on the bookings page and offers cancellation only for the owner's Upcoming reservation", async () => {
-  const active = { id: "one", court_id: "court", location_id: "location", updated_at: "2026-10-01T12:00:00Z", booking_date: "2099-10-12", starts_at_minute: 840, ends_at_minute: 960,
+  const active: PersonalReservation = { id: "one", court_id: "court", location_id: "location", updated_at: "2026-10-01T12:00:00Z", booking_date: "2099-10-12", starts_at_minute: 840, ends_at_minute: 960,
     reason: "Course with Andrej", status: "active", created_by_user_id: "owner", creator_name: "Andrej",
     cancelled_at: null, cancelled_by_name: null, location_name: "RIVUS", location_timezone: "Europe/Bucharest", court_name: "Court 2" };
-  const cancelled = { ...active, id: "two", booking_date: "2026-10-08", status: "cancelled", reason: null,
-    cancelled_at: "2026-10-08T12:00:00Z", cancelled_by_name: null };
-  const elapsed = { ...active, id: "three", booking_date: "2026-10-01" };
-  load.mockResolvedValue({ bookings: [], upcoming: [active], history: [cancelled, elapsed] });
+  load.mockResolvedValue(activityFixture([reservationItem(active)]));
   await renderWithServerActivity({ staff: true, userId: "owner" });
   const upcoming = await screen.findByRole("region", { name: "Upcoming" });
   expect(within(upcoming).getByText("Court 2")).toBeDefined();
@@ -105,9 +118,9 @@ it("loads on the bookings page and offers cancellation only for the owner's Upco
 });
 
 it("does not offer cancellation when a reservation has a different creator", async () => {
-  load.mockResolvedValue({ bookings: [], upcoming: [{ id: "one", court_id: "court", location_id: "location", updated_at: "2026-10-01T12:00:00Z", booking_date: "2026-10-12", starts_at_minute: 840, ends_at_minute: 960,
+  load.mockResolvedValue(activityFixture([reservationItem({ id: "one", court_id: "court", location_id: "location", updated_at: "2026-10-01T12:00:00Z", booking_date: "2026-10-12", starts_at_minute: 840, ends_at_minute: 960,
     reason: "Practice", status: "active", created_by_user_id: "another", creator_name: "Another",
-    cancelled_at: null, cancelled_by_name: null, location_name: "RIVUS", location_timezone: "Europe/Bucharest", court_name: "Court 2" }], history: [] });
+    cancelled_at: null, cancelled_by_name: null, location_name: "RIVUS", location_timezone: "Europe/Bucharest", court_name: "Court 2" })]));
   await renderWithServerActivity({ staff: true, userId: "owner" });
   fireEvent.click(within(await screen.findByRole("region", { name: "Upcoming" })).getByRole("row", { name: /Details for/ }));
   expect(within(screen.getByRole("dialog", { name: "Reservation details" })).queryByRole("button", { name: "Cancel reservation" })).toBeNull();
@@ -119,12 +132,12 @@ it("edits a future reservation in the details dialog and shows refreshed details
   const locationId = "22222222-2222-4222-8222-222222222222";
   const courtA = "33333333-3333-4333-8333-333333333333";
   const courtB = "44444444-4444-4444-8444-444444444444";
-  const active = { id: reservationId, court_id: courtA, location_id: locationId, updated_at: "2026-10-01T12:00:00Z",
+  const active: PersonalReservation = { id: reservationId, court_id: courtA, location_id: locationId, updated_at: "2026-10-01T12:00:00Z",
     booking_date: "2099-10-15", starts_at_minute: 840, ends_at_minute: 960, reason: "Practice", status: "active",
     created_by_user_id: "owner", creator_name: "Alex", cancelled_at: null, cancelled_by_name: null,
     location_name: "RIVUS", location_timezone: "Europe/Bucharest", court_name: "Court 2" };
-  load.mockResolvedValueOnce({ bookings: [], upcoming: [active], history: [] }).mockResolvedValueOnce({ bookings: [], upcoming: [{ ...active,
-    court_id: courtB, court_name: "Court 3", reason: "Training", updated_at: "2026-10-01T12:01:00Z" }], history: [] });
+  load.mockResolvedValueOnce(activityFixture([reservationItem(active)])).mockResolvedValueOnce(activityFixture([reservationItem({ ...active,
+    court_id: courtB, court_name: "Court 3", reason: "Training", updated_at: "2026-10-01T12:01:00Z" })]));
   availability.mockResolvedValue({ date: active.booking_date, location: { id: locationId, name: "RIVUS", timezone: "Europe/Bucharest" },
     day: { times: [840, 870, 900, 930, 960, 990], courts: [
       { court: { id: courtA, name: "Court 2" }, cells: Array(6).fill("available") },
@@ -167,13 +180,13 @@ it("shows an in-progress reservation's schedule read-only and edits only its rea
   const zone = ["UTC", "America/Los_Angeles", "Pacific/Honolulu", "Asia/Tokyo", "Europe/Bucharest"]
     .find((item) => localMinute(item, now) >= 120 && localMinute(item, now) <= 1320)!;
   const start = Math.floor(localMinute(zone, now) / 30) * 30 - 30;
-  const active = { id: reservationId, court_id: "33333333-3333-4333-8333-333333333333",
+  const active: PersonalReservation = { id: reservationId, court_id: "33333333-3333-4333-8333-333333333333",
     location_id: "22222222-2222-4222-8222-222222222222", updated_at: "2026-10-01T12:00:00Z",
     booking_date: localToday(zone, now), starts_at_minute: start, ends_at_minute: start + 90,
     reason: "Practice", status: "active", created_by_user_id: "owner", creator_name: "Alex",
     cancelled_at: null, cancelled_by_name: null, location_name: "RIVUS", location_timezone: zone, court_name: "Court 2" };
-  load.mockResolvedValueOnce({ bookings: [], upcoming: [active], history: [] }).mockResolvedValueOnce({ bookings: [], upcoming: [{ ...active,
-    reason: "Training", updated_at: "2026-10-01T12:01:00Z" }], history: [] });
+  load.mockResolvedValueOnce(activityFixture([reservationItem(active)])).mockResolvedValueOnce(activityFixture([reservationItem({ ...active,
+    reason: "Training", updated_at: "2026-10-01T12:01:00Z" })]));
   edit.mockResolvedValue({ ok: true });
   await renderWithServerActivity({ staff: true, userId: "owner" });
   fireEvent.click(within(await screen.findByRole("region", { name: "Upcoming" })).getByRole("row", { name: /Details for/ }));
@@ -189,13 +202,13 @@ it("shows an in-progress reservation's schedule read-only and edits only its rea
 });
 
 it("refreshes changed details after a stale edit instead of overwriting them", async () => {
-  const active = { id: "11111111-1111-4111-8111-111111111111", court_id: "33333333-3333-4333-8333-333333333333",
+  const active: PersonalReservation = { id: "11111111-1111-4111-8111-111111111111", court_id: "33333333-3333-4333-8333-333333333333",
     location_id: "22222222-2222-4222-8222-222222222222", updated_at: "2026-10-01T12:00:00Z",
     booking_date: "2099-10-15", starts_at_minute: 840, ends_at_minute: 960, reason: "Practice", status: "active",
     created_by_user_id: "owner", creator_name: "Alex", cancelled_at: null, cancelled_by_name: null,
     location_name: "RIVUS", location_timezone: "Europe/Bucharest", court_name: "Court 2" };
-  load.mockResolvedValueOnce({ bookings: [], upcoming: [active], history: [] }).mockResolvedValueOnce({ bookings: [], upcoming: [{ ...active,
-    reason: "Newer update", updated_at: "2026-10-01T12:01:00Z" }], history: [] });
+  load.mockResolvedValueOnce(activityFixture([reservationItem(active)])).mockResolvedValueOnce(activityFixture([reservationItem({ ...active,
+    reason: "Newer update", updated_at: "2026-10-01T12:01:00Z" })]));
   availability.mockResolvedValue({ date: active.booking_date,
     location: { id: active.location_id, name: "RIVUS", timezone: "Europe/Bucharest" },
     day: { times: [840, 870, 900, 930], courts: [{ court: { id: active.court_id, name: "Court 2" },
@@ -225,18 +238,72 @@ const cancellableBooking: PersonalCustomerBooking = {
 
 it("adopts revalidated server snapshots while mounted and preserves an open dialog", () => {
   const { rerender } = render(<PersonalActivity staff={false} userId="owner"
-    initialActivity={{ bookings: [], upcoming: [] }} initialError="" />);
+    initialActivity={activityFixture([])} initialError="" />);
   expect(screen.getByText("No upcoming bookings or reservations match your filters.")).toBeDefined();
   rerender(<PersonalActivity staff={false} userId="owner"
-    initialActivity={{ bookings: [cancellableBooking], upcoming: [] }} initialError="" />);
+    initialActivity={activityFixture([bookingItem(cancellableBooking)])} initialError="" />);
   fireEvent.click(within(screen.getByRole("region", { name: "Upcoming" })).getByRole("row", { name: /Details for/ }));
   const dialog = screen.getByRole("dialog", { name: "Booking" });
   rerender(<PersonalActivity staff={false} userId="owner"
-    initialActivity={{ bookings: [cancellableBooking, { ...cancellableBooking, id: "new", court_name: "New court" }], upcoming: [] }}
+    initialActivity={activityFixture([bookingItem(cancellableBooking), bookingItem({ ...cancellableBooking, id: "new", court_name: "New court" })])}
     initialError="" />);
   expect(within(screen.getByRole("region", { name: "Upcoming" })).getAllByRole("row", { name: /Details for/ })).toHaveLength(2);
   expect(screen.getByRole("dialog", { name: "Booking" })).toBe(dialog);
   expect(load).not.toHaveBeenCalled();
+});
+
+it("renders filter options even for empty results and resets the page when selecting a filter", () => {
+  const location = "22222222-2222-4222-8222-222222222222";
+  const court = "33333333-3333-4333-8333-333333333333";
+  const activity: UpcomingActivity = { ...activityFixture([]),
+    locations: [{ id: location, name: "Central" }],
+    courts: [{ id: court, name: "Central court", location_id: location }] };
+  render(<PersonalActivity staff userId="owner" initialActivity={activity} initialError=""
+    listQuery={{ page: "3", type: "reservation" }} />);
+  expect(screen.getByRole("option", { name: "Central" })).toHaveProperty("value", location);
+  expect(screen.getByRole("option", { name: "Central court" })).toHaveProperty("value", court);
+  fireEvent.change(screen.getByRole("combobox", { name: "Location" }), { target: { value: location } });
+  const params = new URL(navigation.replace.mock.lastCall![0], "http://localhost").searchParams;
+  expect(params.get("location")).toBe(location);
+  expect(params.get("type")).toBe("reservation");
+  expect(params.has("page")).toBe(false);
+  expect(screen.getByText("No upcoming bookings or reservations match your filters.")).toBeDefined();
+});
+
+it("uses hasNext across page transitions and retains filters in pagination links", () => {
+  const location = "22222222-2222-4222-8222-222222222222";
+  const first: UpcomingActivity = { ...activityFixture([bookingItem(cancellableBooking)]), hasNext: true };
+  const query = { location, type: "booking", sort: "duration", direction: "desc" };
+  const { rerender } = render(<PersonalActivity staff userId="owner" initialActivity={first} initialError="" listQuery={query} />);
+  expect(screen.queryByRole("link", { name: "Previous" })).toBeNull();
+  const next = screen.getByRole("link", { name: "Next" });
+  expect(Object.fromEntries(new URL(next.getAttribute("href")!, "http://localhost").searchParams))
+    .toMatchObject({ ...query, page: "2" });
+  rerender(<PersonalActivity staff userId="owner" initialActivity={activityFixture([bookingItem(cancellableBooking)])}
+    initialError="" listQuery={{ ...query, page: "2" }} />);
+  expect(screen.queryByRole("link", { name: "Next" })).toBeNull();
+  expect(new URL(screen.getByRole("link", { name: "Previous" }).getAttribute("href")!, "http://localhost").searchParams.get("page"))
+    .toBe("1");
+  rerender(<PersonalActivity staff userId="owner" initialActivity={activityFixture([])} initialError="" listQuery={{ ...query, page: "3" }} />);
+  expect(screen.getByRole("link", { name: "Return to first page" })).toBeDefined();
+  rerender(<PersonalActivity staff userId="owner" initialActivity={activityFixture([])} initialError="" listQuery={query} />);
+  expect(screen.queryByRole("navigation", { name: "Activity pages" })).toBeNull();
+});
+
+it("preserves nullable reservation details", () => {
+  const row: PersonalReservation = {
+    id: "one", court_id: "court", location_id: "location", updated_at: "2026-10-01T12:00:00Z",
+    booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660,
+    location_name: "Club", location_timezone: "UTC", court_name: "Court",
+    reason: null, status: "active", created_by_user_id: "owner", creator_name: null,
+    cancelled_at: null, cancelled_by_name: null,
+  };
+  render(<PersonalActivity staff userId="owner" initialActivity={activityFixture([reservationItem(row)])} initialError="" />);
+  fireEvent.click(screen.getByRole("row", { name: /Details for/ }));
+  const dialog = screen.getByRole("dialog", { name: "Reservation details" });
+  expect(within(dialog).getByText("Not recorded")).toBeDefined();
+  expect(within(dialog).getByText("You")).toBeDefined();
+  expect(within(dialog).getByRole("button", { name: "Cancel reservation" })).toBeDefined();
 });
 
 it.each([
@@ -246,8 +313,8 @@ it.each([
   ["failed", "Booking cancelled. The full refund could not be completed; please contact the club."],
 ])("customer cancellation shows refund state %s and refreshes Upcoming", async (refundStatus, message) => {
   const notification = vi.spyOn(toast, "success");
-  load.mockResolvedValueOnce({ bookings: [cancellableBooking], upcoming: [] })
-    .mockResolvedValueOnce({ bookings: [], upcoming: [] });
+  load.mockResolvedValueOnce(activityFixture([bookingItem(cancellableBooking)]))
+    .mockResolvedValueOnce(activityFixture([]));
   cancelBooking.mockResolvedValue({ ok: true, refundStatus });
   await renderWithServerActivity({ staff: false, userId: "owner" });
   fireEvent.click(within(await screen.findByRole("region", { name: "Upcoming" })).getByRole("row", { name: /Details for/ }));
@@ -280,8 +347,8 @@ it("reports a committed cancellation accurately when the details refresh rejects
 });
 
 it.each([true])("applies snapshot notice only to ordinary owners (staff=%s)", async (staff) => {
-  load.mockResolvedValue({ bookings: [{ ...cancellableBooking,
-    starts_at_instant: new Date(Date.now() + 60 * 60_000).toISOString() }], upcoming: [] });
+  load.mockResolvedValue(activityFixture([bookingItem({ ...cancellableBooking,
+    starts_at_instant: new Date(Date.now() + 60 * 60_000).toISOString() })]));
   await renderWithServerActivity({ staff, userId: "owner" });
   fireEvent.click(within(await screen.findByRole("region", { name: "Upcoming" })).getByRole("row", { name: /Details for/ }));
   const dialog = screen.getByRole("dialog", { name: "Booking" });
@@ -294,7 +361,7 @@ it.each([true])("applies snapshot notice only to ordinary owners (staff=%s)", as
 });
 
 it("toasts a stale cancellation error while keeping confirmation open and prevents duplicate requests", async () => {
-  load.mockResolvedValue({ bookings: [cancellableBooking], upcoming: [] });
+  load.mockResolvedValue(activityFixture([bookingItem(cancellableBooking)]));
   let resolve!: (value: { ok: false; message: string }) => void;
   cancelBooking.mockImplementation(() => new Promise((done) => { resolve = done; }));
   await renderWithServerActivity({ staff: false, userId: "owner" });

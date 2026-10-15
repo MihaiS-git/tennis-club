@@ -1,5 +1,6 @@
+import { readBookingContracts } from "./checkout-fixtures";
 import { insertOpeningHoursFixture } from "./opening-hours-fixtures";
-import { insertCheckoutFixture } from "./checkout-fixtures";
+import { cleanupBookingFixtures, insertCheckoutFixture } from "./checkout-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { assert, expect, test } from "vitest";
@@ -25,13 +26,12 @@ test("customer booking persists both rows, snapshots contact and price, and roll
   const rows = async () => {
     const reservations = await service.from("court_reservations").select("*").eq("court_id", courtId);
     assert.strictEqual(reservations.error, null);
-    const bookings = await service.from("bookings").select("*").in("reservation_id", reservations.data!.map((row) => row.id));
+    const bookings = await Promise.resolve({ error:null, data:(await readBookingContracts(service, { reservationIds: reservations.data!.map((row) => row.id) })) });
     assert.strictEqual(bookings.error, null);
     return { bookings: bookings.data!, reservations: reservations.data! };
   };
   const allBookings = async () => {
-    const result = await service.from("bookings").select("*").in("reservation_id",
-      (await service.from("court_reservations").select("id").eq("court_id", courtId)).data?.map((row) => row.id) ?? []);
+    const result = await Promise.resolve({ error:null, data:(await readBookingContracts(service, { reservationIds: (await service.from("court_reservations").select("id").eq("court_id", courtId)).data?.map((row) => row.id) ?? [] })) });
     assert.strictEqual(result.error, null); return result.data!;
   };
   try {
@@ -73,8 +73,8 @@ test("customer booking persists both rows, snapshots contact and price, and roll
       customer_email: "guest@example.test", customer_phone: "+40 123", status: "confirmed",
       cancellation_notice_minutes: 120, total_amount_minor: 6000, currency: "EUR", reservation_id: first.reservations[0].id });
     expect(first.reservations[0]).toMatchObject({ status: "active", reason: null, created_by_user_id: null });
-    const publicLocation = (await listPublicLocationsWithCourts(guest)).find((item) => item.id === locationId)!;
-    const publicDay = await getPublicCourtDay(publicLocation, date, "2099-10-14", now, guest);
+    const publicLocation = (await listPublicLocationsWithCourts()).find((item) => item.id === locationId)!;
+    const publicDay = await getPublicCourtDay(publicLocation, date, "2099-10-14", now);
     expect(publicDay.courts.find((item) => item.court.id === courtId)?.cells.slice(0, 2)).toEqual(["booked", "booked"]);
     const overlap = await insertCheckoutFixture(service, {
       p_payment_method: "pay_at_club", p_provider: null, p_hold_seconds: 600,
@@ -154,7 +154,7 @@ test("customer booking persists both rows, snapshots contact and price, and roll
     expect((await allBookings()).map((row) => row.total_amount_minor).sort()).toEqual([6000, 7000]);
   } finally {
     const reservationIds = (await service.from("court_reservations").select("id").in("court_id", [courtId, inactiveCourtId])).data?.map((row) => row.id) ?? [];
-    if (reservationIds.length) assert.strictEqual((await service.from("bookings").delete().in("reservation_id", reservationIds)).error, null);
+    await cleanupBookingFixtures({ reservationIds });
     assert.strictEqual((await service.from("court_reservations").delete().in("court_id", [courtId, inactiveCourtId])).error, null);
     assert.strictEqual((await service.from("location_pricing_rules").delete().eq("location_id", locationId)).error, null);
     assert.strictEqual((await service.from("pricing_rule_sets").delete().eq("location_id", locationId)).error, null);

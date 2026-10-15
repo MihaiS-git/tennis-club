@@ -153,7 +153,7 @@ export async function findReservationEditContext(manager: EntityManager, id: str
      JOIN public.locations l ON l.id = c.location_id AND l.is_active AND l.archived_at IS NULL
      WHERE r.id = $1 AND r.status = 'active'
        AND ($2::uuid IS NULL OR r.created_by_user_id = $2)
-       AND NOT EXISTS(SELECT 1 FROM public.bookings b WHERE b.reservation_id = r.id)`, [id, ownerId ?? null],
+       AND NOT EXISTS(SELECT 1 FROM public.bookings b LEFT JOIN public.booking_revisions v ON v.id=b.current_revision_id WHERE b.reservation_id = r.id)`, [id, ownerId ?? null],
   );
   return z.array(reservationSchema.extend(resourceSchema.shape)).max(1).parse(rows)[0] ?? null;
 }
@@ -258,13 +258,6 @@ export async function updateSettlementReservationStatus(manager: EntityManager, 
   await manager.query("UPDATE public.court_reservations SET status=$2,hold_expires_at=NULL WHERE id=$1", [id,status]);
 }
 
-export async function findSettlementNotificationResource(manager: EntityManager, courtId: string) {
-  const rows: unknown = await manager.query(
-    `SELECT c.name AS court_name,l.name AS location_name,l.timezone
-     FROM public.courts c JOIN public.locations l ON l.id=c.location_id WHERE c.id=$1`, [courtId]);
-  return z.array(z.object({ court_name:z.string(),location_name:z.string(),timezone:z.string() })).length(1).parse(rows)[0];
-}
-
 export async function listPublicDayOccupancy(manager: EntityManager, locationId: string, courtIds: string[], date: string): Promise<unknown> {
   return manager.query(`SELECT r.court_id,r.booking_date::text,r.starts_at_minute,r.ends_at_minute
     FROM public.court_reservations r JOIN public.courts c ON c.id=r.court_id AND c.is_active
@@ -285,13 +278,13 @@ export async function listAdminOperationalProjection(manager: EntityManager, cou
         nullif(btrim(concat_ws(' ', nullif(btrim(u.first_name), ''), nullif(btrim(u.last_name), ''))), ''),
         nullif(btrim(p.display_name), ''), u.email) else null end AS creator_name,
       u.email AS creator_email, u.phone AS creator_phone,
-      b.account_user_id, b.payment_method, b.customer_name, b.customer_email, b.customer_phone,
-      b.total_amount_minor, b.currency, b.cancellation_notice_minutes,
+      b.account_user_id, v.payment_method, v.customer_name, v.customer_email, v.customer_phone,
+      v.total_amount_minor, v.currency, v.cancellation_notice_minutes,
       coalesce((select jsonb_agg(to_jsonb(p) order by p.created_at,p.id) from public.payment_attempts p where p.booking_id=b.id),'[]'::jsonb) AS payment_facts
     from public.court_reservations r
     join public.courts c on c.id = r.court_id and c.is_active
     join public.locations l on l.id = c.location_id and l.is_active and l.archived_at is null
-    left join public.bookings b on b.reservation_id = r.id
+    left join public.bookings b on b.reservation_id = r.id left join public.booking_revisions v on v.id=b.current_revision_id
     left join public.users u on u.id = r.created_by_user_id and b.id is null
     left join public.player_profiles p on p.user_id = u.id
     where r.court_id = any($1::uuid[]) and r.booking_date = $2::date

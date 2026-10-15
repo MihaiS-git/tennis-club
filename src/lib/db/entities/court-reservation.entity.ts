@@ -1,11 +1,14 @@
 import "server-only";
 
-import { Check, Column, Entity, Exclusion, ForeignKey, Index, PrimaryColumn } from "typeorm";
+import { Check, Column, Entity, Exclusion, ForeignKey, Index, PrimaryGeneratedColumn } from "typeorm";
 
+import { BookingAdjustmentEntity } from "./booking-adjustment.entity";
 import { UserEntity } from "./user.entity";
 import { CourtEntity } from "./court.entity";
 
 @Entity({ schema: "public", name: "court_reservations" })
+@Index("adjustment_reservations", ["adjustmentId"], { where: "adjustment_id IS NOT NULL" })
+@Check("adjustment_reservation_state", "adjustment_id IS NULL OR status IN ('held', 'released')")
 @Index("court_reservations_personal_owner_idx", ["createdByUserId"], { where: "(created_by_user_id IS NOT NULL)" })
 @Index("payment_holds_expiry_idx", ["courtId", "holdExpiresAt"], { where: "(status = 'held'::public.court_reservation_status)" })
 @Check("court_reservation_cancellation_check", "(((status = ANY (ARRAY['active'::public.court_reservation_status, 'held'::public.court_reservation_status, 'released'::public.court_reservation_status])) AND (cancelled_at IS NULL) AND (cancelled_by_user_id IS NULL)) OR ((status = 'cancelled'::public.court_reservation_status) AND (cancelled_at IS NOT NULL) AND (cancelled_by_user_id IS NOT NULL)))")
@@ -18,13 +21,14 @@ import { CourtEntity } from "./court.entity";
 @ForeignKey(() => UserEntity, ["cancelledByUserId"], ["id"], { name: "court_reservations_cancelled_by_user_id_fkey", onDelete: "RESTRICT" })
 @ForeignKey(() => CourtEntity, ["courtId"], ["id"], { name: "court_reservations_court_id_fkey", onDelete: "NO ACTION" })
 @ForeignKey(() => UserEntity, ["createdByUserId"], ["id"], { name: "court_reservations_created_by_user_id_fkey", onDelete: "RESTRICT" })
-// Explicit SQL and a final cutover decision are required; no entity overlap hooks.
+// Initial migration configures btree_gist before this entity-generated exclusion.
 @Exclusion("court_reservation_no_overlap", "USING gist (court_id WITH =, booking_date WITH =, int4range(starts_at_minute, ends_at_minute, '[)') WITH &&) WHERE (status IN ('active', 'held'))")
+@ForeignKey(() => BookingAdjustmentEntity, ["adjustmentId"], ["id"], { name: "court_reservations_adjustment_id_fkey", onDelete: "RESTRICT" })
 export class CourtReservationEntity {
   @Column({ name: "adjustment_id", type: "uuid", nullable: true })
   adjustmentId!: string | null;
 
-  @PrimaryColumn({ name: "id", type: "uuid", default: () => "gen_random_uuid()", primaryKeyConstraintName: "court_reservations_pkey" })
+  @PrimaryGeneratedColumn("uuid", { name: "id", primaryKeyConstraintName: "court_reservations_pkey" })
   id!: string;
 
   @Column({ name: "court_id", type: "uuid" })
