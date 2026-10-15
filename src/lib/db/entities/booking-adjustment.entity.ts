@@ -1,12 +1,20 @@
 import "server-only";
 import { Check, Column, Entity, ForeignKey, Index, PrimaryColumn, Unique } from "typeorm";
+import type { PricingEvidence } from "@/lib/bookings/revision";
 import { BookingRevisionEntity } from "./booking-revision.entity";
 import { BookingEntity } from "./booking.entity";
 import { UserEntity } from "./user.entity";
 
 export type AdjustmentState = "pending" | "applied" | "cancelled" | "expired" | "unsuccessful";
+// A reschedule moves/reprices the booking; a cancellation request ends it. Both
+// keep the original booking unchanged while their payment or refund is unresolved.
+export type AdjustmentKind = "reschedule" | "cancellation";
 export type AdjustmentTarget = { courtId: string; date: string; startMinute: number; endMinute: number;
-  expectedUpdatedAt: string; courtName: string; locationName: string; timezone: string };
+  expectedUpdatedAt: string; courtName: string; locationName: string; timezone: string;
+  // Refund-backed reductions apply the accepted quote, never a later repricing.
+  pricingEvidence?: PricingEvidence;
+  // Revision actor scope decided when the change was requested.
+  actorScope?: "customer" | "coach_owner" | "admin_owner" | "admin" };
 
 @Entity({ schema: "public", name: "booking_adjustments" })
 @Unique("booking_adjustments_identity", ["bookingId", "id"])
@@ -15,6 +23,7 @@ export type AdjustmentTarget = { courtId: string; date: string; startMinute: num
 @ForeignKey(() => BookingEntity, ["bookingId"], ["id"], { name: "booking_adjustments_booking_id_fkey", onDelete: "RESTRICT" })
 @ForeignKey(() => UserEntity, ["actorId"], ["id"], { name: "booking_adjustments_actor_id_fkey", onDelete: "RESTRICT" })
 @Check("booking_adjustments_scope_check", "scope IN ('owner', 'admin')")
+@Check("booking_adjustments_kind_check", "kind IN ('reschedule', 'cancellation')")
 @Check("booking_adjustments_target_check", "jsonb_typeof(target) = 'object'")
 @Check("booking_adjustments_target_display_check", "jsonb_typeof(target->'courtName')='string' AND jsonb_typeof(target->'locationName')='string' AND jsonb_typeof(target->'timezone')='string' AND char_length(btrim(target->>'courtName')) BETWEEN 1 AND 255 AND char_length(btrim(target->>'locationName')) BETWEEN 1 AND 255 AND char_length(btrim(target->>'timezone')) BETWEEN 1 AND 100 AND target ?& ARRAY['courtName','locationName','timezone']")
 @Check("booking_adjustments_original_total_check", "original_total > 0")
@@ -28,6 +37,7 @@ export class BookingAdjustmentEntity {
   @Column({ name: "booking_id", type: "uuid" }) bookingId!: string;
   @Column({ name: "actor_id", type: "uuid" }) actorId!: string;
   @Column({ type: "text" }) scope!: "owner" | "admin";
+  @Column({ type: "text", default: "reschedule" }) kind!: AdjustmentKind;
   @Column({ name: "request_key", type: "text" }) requestKey!: string;
   @Column({ type: "jsonb" }) target!: AdjustmentTarget;
   @Column({ name: "original_total", type: "integer" }) originalTotal!: number;

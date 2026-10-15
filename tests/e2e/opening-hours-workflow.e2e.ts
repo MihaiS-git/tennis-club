@@ -176,7 +176,7 @@ test("Admin opening-hours, pricing and reservation lifecycle survives sequential
       await page.getByRole("button",{ name:"Reserve court",exact:true }).click();
       await expect(page.getByText("Court reserved.",{ exact:true })).toBeVisible();
       await page.goto(`/book?location=${locationId}&date=${future}`);
-      await page.getByRole("button",{ name:`Audit Court Two ${future} 14:00–14:30, 80/h`,exact:true }).click();
+      await page.getByRole("button",{ name:`Audit Court Two ${future} 14:00–14:30, RON 80/h`,exact:true }).click();
       await page.getByRole("button",{ name:"Continue",exact:true }).click();
       const dialog = page.getByRole("dialog",{ name:"Confirm your booking",exact:true });
       await dialog.getByLabel("Name",{ exact:true }).fill("Audit Customer");

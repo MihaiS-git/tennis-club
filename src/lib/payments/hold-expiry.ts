@@ -9,6 +9,8 @@ import * as payments from "@/lib/db/repositories/payments.repository";
 import * as bookings from "@/lib/db/repositories/bookings.repository";
 import * as reservations from "@/lib/db/repositories/reservations.repository";
 import { timestampToEpochMicroseconds } from "@/lib/precise-time";
+import { lockLocations } from "@/lib/db/repositories/clubs.repository";
+import { localStartInstant } from "@/lib/courts/local-time";
 
 // Caller holds this location FOR UPDATE. Occupancy writers use blocking cleanup
 // before their own row locks; polling skips busy aggregates and retries next poll.
@@ -63,7 +65,26 @@ export async function expirePaymentHolds(scope: payments.HoldExpiryScope = {}, b
   return expired;
 }
 
+// Verified evidence that a submitted modification payment is processing keeps
+// its target blocked until the payment resolves, bounded by the target start.
+export async function extendLiveAdjustmentHold(attemptId: string, providerPaymentId: string) {
+  const parent = await payments.discoverSettlementParent((await getDataSource()).manager, attemptId);
+  if (!parent) return;
+  await inTransaction(async manager => {
+    await lockLocations(manager, [parent.location_id]);
+    await bookings.lockCheckoutBooking(manager, parent.booking_id);
+    const attempt = await payments.lockCheckoutAttempt(manager, attemptId);
+    if (!attempt?.adjustmentId || attempt.bookingId !== parent.booking_id || attempt.status !== "pending"
+      || attempt.providerPaymentId !== providerPaymentId) return;
+    const adjustment = await adjustments.findAdjustment(manager, attempt.adjustmentId);
+    if (adjustment?.status !== "pending") return;
+    const { timezone, date, startMinute } = adjustment.target;
+    await adjustments.extendAdjustmentLease(manager, adjustment.id, localStartInstant(timezone, date, startMinute));
+  });
+}
+
 // Caller holds the existing location mutex; expiry decisions stay in TypeScript.
+// Candidates are adjustments whose occupancy lease (attempt deadline) passed.
 export async function expireAdjustmentsAtLocation(manager: EntityManager, locationId: string) {
   const candidates = await adjustments.listExpiredAdjustmentCandidates(manager, locationId);
   for (const row of candidates) {

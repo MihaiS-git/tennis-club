@@ -1,8 +1,4 @@
 import { expirePaymentHolds } from "@/lib/payments/hold-expiry";
-import * as refundPersistence from "@/lib/db/repositories/payments.repository";
-import * as accounts from "@/lib/db/repositories/accounts.repository";
-import { getDataSource } from "@/lib/db/data-source";
-import { cancelBookingCommand } from "@/lib/bookings/cancellation-service";
 import { processOnlinePaymentEvent, settleOnlinePayment } from "@/lib/payments/service";
 import { cleanupBookingFixtures, insertCheckoutFixture } from "./checkout-fixtures";
 import { configureCheckoutPolicyFixture } from "./opening-hours-fixtures";
@@ -16,9 +12,12 @@ vi.mock("@/lib/payments/providers/stripe/client", async () => {
   const actual = await vi.importActual<typeof import("@/lib/payments/providers/stripe/client")>("@/lib/payments/providers/stripe/client");
   return { ...actual,stripeClient: () => ({ refunds: { create,list,retrieve } }) };
 });
-import { retryAdminPaymentRefund, resolveAdminPaymentReconciliation } from "@/lib/payments/admin-reconciliation";
+import { processBookingRefund } from "@/lib/payments/refunds";
+import { prepareAutomaticRefund, prepareLateCaptureCompensation } from "@/lib/payments/refund-commands";
+import { listAdminPaymentTransactions } from "@/lib/payments/admin";
+import { parseAdminPaymentQuery } from "@/lib/payments/admin-query";
 
-test("Admin retries and late captured-payment refunds are original-payment scoped, durable, idempotent and never reclaim occupancy", async () => {
+test("Automatic late-capture recovery preserves payment identity, idempotency and occupancy; Admin inspection is read-only", async () => {
   const db = localFixtureClient(), locationId = randomUUID(),courtId = randomUUID(),users: string[] = [];
   const admin = createClient(process.env.SUPABASE_URL!,process.env.SUPABASE_PUBLISHABLE_KEY!,{ auth: { persistSession:false,autoRefreshToken:false } });
   const second = createClient(process.env.SUPABASE_URL!,process.env.SUPABASE_PUBLISHABLE_KEY!,{ auth: { persistSession:false,autoRefreshToken:false } });
@@ -70,154 +69,76 @@ test("Admin retries and late captured-payment refunds are original-payment scope
     await configureCheckoutPolicyFixture(db, locationId, courtId);
     list.mockImplementation(() => (async function* () {})());
     create.mockImplementation(async (params) => ({ id:`refund-${params.metadata.refund_execution_id}`,amount:params.amount,currency:"ron",payment_intent:params.payment_intent,status:"succeeded",metadata:params.metadata }));
-    const own = await book(600);
-    expect((await processOnlinePaymentEvent({ attemptId:own.payment_attempt_id,provider:"stripe",
-      providerPaymentId:`original-${own.payment_attempt_id}`,providerCaptureId:`original-${own.payment_attempt_id}`,
-      eventId:`capture-${randomUUID()}`,outcome:"succeeded",amountMinor:5000,currency:"RON" }))).toBe("succeeded");
-    expect(await cancelBookingCommand(own.booking_id,users[0],true)).toMatchObject({ outcome: "cancelled" });
-    const originalRefund = await refund(own.booking_id);
-    expect((await db.from("payment_refunds").update({ status:"failed" }).eq("id",originalRefund.id)).error).toBeNull();
-    const before = await occupancy(own.reservation_id);
+    // An accepted request with a lost response is recovered from provider
+    // evidence using the original execution, never a new idempotency key.
     create.mockRejectedValueOnce(new Error("ambiguous response"));
-    const failed = await retryAdminPaymentRefund(originalRefund.id,admin);
-    expect(failed).toMatchObject({ ok:true,transaction:{ refund:{ id:originalRefund.id,status:"pending_retry" } } });
-    expect(await occupancy(own.reservation_id)).toEqual(before);
-    const acceptedParams=create.mock.calls[0][0];
-    list.mockImplementationOnce(()=> (async function*(){yield {id:`refund-${acceptedParams.metadata.refund_execution_id}`,amount:5000,currency:"ron",
-      payment_intent:acceptedParams.payment_intent,status:"succeeded",metadata:acceptedParams.metadata};})());
-    const retry = await retryAdminPaymentRefund(originalRefund.id,admin);
-    expect(retry).toMatchObject({ ok:true,transaction:{ refund:{ id:originalRefund.id,status:"succeeded" } } });
+    const lateRow = await late(660,false,true);
+    const uncertain = await refund(lateRow.booking_id);
+    expect(uncertain).toMatchObject({ status:"pending_retry", amount_minor:5000,
+      captured_amount_minor:5000, payment_attempt_id:lateRow.payment_attempt_id });
+    const before = await occupancy(lateRow.reservation_id);
+    const replacement = await book(660), replacementBefore = await occupancy(replacement.reservation_id);
+    const acceptedParams = create.mock.calls[0][0];
+    const accepted = { id:`refund-${acceptedParams.metadata.refund_execution_id}`,amount:5000,currency:"ron",
+      payment_intent:acceptedParams.payment_intent,status:"succeeded",metadata:acceptedParams.metadata };
+    list.mockImplementation(() => (async function* () { yield accepted; })());
+    retrieve.mockResolvedValue(accepted);
+    expect(await processBookingRefund(uncertain.id)).toBe("succeeded");
+    expect(await processBookingRefund(uncertain.id)).toBe("succeeded");
     expect(create).toHaveBeenCalledOnce();
-    const completed=await refund(own.booking_id);
-    expect(create).toHaveBeenLastCalledWith({ payment_intent:`original-${own.payment_attempt_id}`,amount:5000,
-      metadata:{ payment_refund_id:originalRefund.id,refund_execution_id:completed.execution.id } },
+    const completed = await refund(lateRow.booking_id);
+    expect(completed.execution.id).toBe(uncertain.execution.id);
+    expect(completed.execution.idempotency_key).toBe(uncertain.execution.idempotency_key);
+    expect(completed.execution.initiated_by_user_id).toBeNull();
+    expect(create).toHaveBeenLastCalledWith({ payment_intent:`original-${lateRow.payment_attempt_id}`,amount:5000,
+      metadata:{ payment_refund_id:uncertain.id,refund_execution_id:completed.execution.id } },
       { idempotencyKey:completed.execution.idempotency_key });
-    expect(await retryAdminPaymentRefund(originalRefund.id,admin)).toMatchObject({ ok:false });
-    expect(await occupancy(own.reservation_id)).toEqual(before);
+    expect(await occupancy(lateRow.reservation_id)).toEqual(before);
+    expect(await occupancy(replacement.reservation_id)).toEqual(replacementBefore);
+    expect(await event(lateRow.eventId)).toMatchObject({ reconciliation_required:false,
+      resolved_at:expect.any(String),resolved_by_user_id:null });
+    const resolution = await event(lateRow.eventId);
+    expect(await prepareLateCaptureCompensation(lateRow.eventId)).toBeNull();
+    expect(await event(lateRow.eventId)).toEqual(resolution);
+    expect((await db.from("payment_refunds").select("id").eq("booking_id",lateRow.booking_id)).data).toEqual([{ id:uncertain.id }]);
+    expect((await db.from("refund_executions").select("id").eq("refund_id",uncertain.id)).data).toEqual([{ id:completed.execution.id }]);
 
-    const lateRow = await late(660,false,true),lateBefore=await occupancy(lateRow.reservation_id);
-    const replacement = await book(660); const replacementBefore = await occupancy(replacement.reservation_id);
-    const results = await Promise.all([resolveAdminPaymentReconciliation(lateRow.eventId,admin),resolveAdminPaymentReconciliation(lateRow.eventId,second)]);
-    expect(results.some(r => r.ok)).toBe(true);
-    const lateRefund = await refund(lateRow.booking_id);
-    expect(lateRefund).toMatchObject({ amount_minor:5000,currency:"RON",payment_attempt_id:lateRow.payment_attempt_id,status:"succeeded" });
-    expect(await event(lateRow.eventId)).toMatchObject({ reconciliation_required:false,resolved_at:expect.any(String),resolved_by_user_id:expect.any(String) });
-    expect(await occupancy(lateRow.reservation_id)).toEqual(lateBefore); expect(await occupancy(replacement.reservation_id)).toEqual(replacementBefore);
-    const resolvedBefore = await event(lateRow.eventId);
-    expect(await resolveAdminPaymentReconciliation(lateRow.eventId,admin)).toMatchObject({ ok:true });
-    expect(await event(lateRow.eventId)).toEqual(resolvedBefore);
-    expect(create.mock.calls.filter(([params]) => params.metadata.payment_refund_id === lateRefund.id)).toHaveLength(1);
-    expect((await db.from("payment_refunds").select("id").eq("booking_id",lateRow.booking_id)).data).toHaveLength(1);
+    const query = parseAdminPaymentQuery({ q:uncertain.id });
+    const providerCalls = create.mock.calls.length;
+    const page = await listAdminPaymentTransactions(query,admin);
+    expect(page.rows).toHaveLength(1);
+    expect(page.rows[0]).toMatchObject({ needsAttention:false, refund:{ id:uncertain.id,status:"succeeded" } });
+    expect(page.rows[0].refund).not.toHaveProperty("executions");
+    expect(page.rows[0]).not.toHaveProperty("canRetryRefund");
+    expect(create.mock.calls.length).toBe(providerCalls);
+    expect(await event(lateRow.eventId)).toEqual(resolution);
 
-    create.mockRejectedValueOnce(new Error("network failure"));
-    const incomplete = await late(720);
-    const incompleteRefund = await refund(incomplete.booking_id);
-    expect(incompleteRefund).toMatchObject({ status:"pending_retry",amount_minor:5000,captured_amount_minor:5000 });
-    expect((await event(incomplete.eventId)).reconciliation_required).toBe(true);
-    list.mockImplementationOnce(()=> (async function*(){throw new Error("retry lookup failure");})());
-    expect(await resolveAdminPaymentReconciliation(incomplete.eventId,admin)).toMatchObject({ ok:true,transaction:{ needsAttention:true,refund:{ status:"pending_retry" } } });
-    expect((await event(incomplete.eventId)).reconciliation_required).toBe(true);
-    const incompleteParams=create.mock.calls.find(([params])=>params.metadata.payment_refund_id===incompleteRefund.id)![0];
-    list.mockImplementationOnce(()=> (async function*(){yield {id:`refund-${incompleteParams.metadata.refund_execution_id}`,amount:5000,currency:"ron",
-      payment_intent:incompleteParams.payment_intent,status:"succeeded",metadata:incompleteParams.metadata};})());
-    expect(await retryAdminPaymentRefund(incompleteRefund.id,admin)).toMatchObject({ ok:true,transaction:{ needsAttention:false,refund:{ status:"succeeded" },reconciliation:[{ reconciliation_required:false }] } });
-    expect((await event(incomplete.eventId)).reconciliation_required).toBe(false);
-    const resolvedEvidence = await event(incomplete.eventId);
-    expect(await processOnlinePaymentEvent({ provider:"stripe",eventId:incomplete.eventId,attemptId:incomplete.payment_attempt_id,
-      providerPaymentId:`original-${incomplete.payment_attempt_id}`,outcome:"succeeded",amountMinor:5000,currency:"ron" })).toBe("cancelled");
-    expect(await event(incomplete.eventId)).toEqual(resolvedEvidence);
-    expect((await db.from("payment_refunds").select("id,amount_minor,captured_amount_minor,status").eq("booking_id",incomplete.booking_id)).data)
-      .toEqual([{ id:incompleteRefund.id,amount_minor:5000,captured_amount_minor:5000,status:"succeeded" }]);
-    expect((await db.from("payment_attempts").select("id,amount_minor,status").eq("booking_id",incomplete.booking_id)).data)
-      .toEqual([{ id:incomplete.payment_attempt_id,amount_minor:5000,status:"cancelled" }]);
-    expect((await db.from("payment_provider_events").select("event_id,amount_minor,outcome").eq("attempt_id",incomplete.payment_attempt_id)).data)
-      .toEqual([{ event_id:incomplete.eventId,amount_minor:5000,outcome:"succeeded" }]);
-    expect((await db.from("booking_revisions").select("kind,booking_state").eq("booking_id",incomplete.booking_id)).data)
-      .toEqual([{ kind:"created",booking_state:"pending_payment" }]);
-
-    create.mockImplementationOnce(async (params) => ({ id:`refund-${params.metadata.payment_refund_id}`,amount:params.amount,currency:"ron",payment_intent:params.payment_intent,status:"failed",metadata:params.metadata }));
-    const terminal = await late(780);
-    expect(await refund(terminal.booking_id)).toMatchObject({ status:"failed" });
-    const terminalRefund = await refund(terminal.booking_id);
-    const failedExecution=terminalRefund.execution;
-    expect(await resolveAdminPaymentReconciliation(terminal.eventId,admin)).toMatchObject({ok:true,transaction:{refund:{status:"succeeded"},needsAttention:false}});
-    const replaced=await refund(terminal.booking_id);
-    expect(replaced.execution.id).not.toBe(failedExecution.id);
-    expect(replaced.execution.idempotency_key).not.toBe(failedExecution.idempotency_key);
-    expect((await db.from("refund_executions").select("terminal_result,provider_refund_id").eq("refund_id",terminalRefund.id).order("execution_number")).data)
-      .toEqual([{terminal_result:"failed",provider_refund_id:failedExecution.provider_refund_id},
-        {terminal_result:"succeeded",provider_refund_id:replaced.provider_refund_id}]);
-    const createCount=create.mock.calls.length;
-    expect(await retryAdminPaymentRefund(terminalRefund.id,admin)).toMatchObject({ok:false});
-    expect(create.mock.calls.length).toBe(createCount);
-    expect((await event(terminal.eventId)).reconciliation_required).toBe(false);
-
-    // Stripe success followed by a local transaction failure must recover the
-    // same provider refund from metadata, then retain resolution attribution.
-    let accepted: { id:string; amount:number; currency:string; payment_intent:string; status:string; metadata:{payment_refund_id:string;refund_execution_id:string} } | undefined;
-    create.mockImplementationOnce(async params=>{
-      accepted={id:`refund-${params.metadata.refund_execution_id}`,amount:params.amount,currency:"ron",payment_intent:params.payment_intent,
-        status:"succeeded",metadata:params.metadata};
-      throw new Error("accepted response lost");
-    });
-    const recovery=await late(900);
-    expect(await refund(recovery.booking_id)).toMatchObject({status:"pending_retry"});
-    list.mockImplementationOnce(()=> (async function*(){if(accepted) yield accepted;})());
-    const originalResolution=refundPersistence.writeRefundEventResolution;
-    const injected=vi.spyOn(refundPersistence,"writeRefundEventResolution").mockImplementationOnce(async (...args)=>{
-      await originalResolution(...args); throw new Error("Injected failure after refund/event mutations");
-    });
-    // The rolled-back result write preserves the prior automatic failure state.
-    expect(await resolveAdminPaymentReconciliation(recovery.eventId,admin)).toMatchObject({ok:true,transaction:{refund:{status:"pending_retry"},needsAttention:true}});
-    injected.mockRestore();
-    const durable=await refund(recovery.booking_id);
-    expect(durable).toMatchObject({provider_refund_id:null,execution:{lease_token:expect.any(String)}});
-    expect(await event(recovery.eventId)).toEqual({reconciliation_required:true,resolved_at:null,resolved_by_user_id:null});
-    const callsAfterAcceptance=create.mock.calls.length;
-    list.mockImplementationOnce(() => (async function* () { if (accepted) yield accepted; })());
-    expect((await db.from("refund_executions").update({lease_until:"2020-01-01T00:00:00.123456Z"}).eq("id",durable.execution.id)).error).toBeNull();
-    expect(await resolveAdminPaymentReconciliation(recovery.eventId,second)).toMatchObject({ok:true,transaction:{refund:{id:durable.id,status:"succeeded"},needsAttention:false}});
-    expect(create.mock.calls.length).toBe(callsAfterAcceptance);
-    const recoveryResolution=await event(recovery.eventId);
-    expect(recoveryResolution.resolved_by_user_id).toBe(users[1]);
-    expect(await resolveAdminPaymentReconciliation(recovery.eventId,admin)).toMatchObject({ok:true});
-    expect(await event(recovery.eventId)).toEqual(recoveryResolution);
-    expect(create.mock.calls.length).toBe(callsAfterAcceptance);
-
-    // Authorization verified before entry can change before the locked fence.
-    // Neither rejected preparation is allowed to reach Stripe.
-    create.mockRejectedValueOnce(new Error("automatic compensation unavailable"));
-    const fenceRow=await late(960);
-    expect(await refund(fenceRow.booking_id)).toMatchObject({status:"pending_retry"});
-    for (const change of ["role","status"]) {
-      const originalFence=accounts.lockReservationActorFacts;
-      const fence=vi.spyOn(accounts,"lockReservationActorFacts").mockImplementationOnce(async (...args)=>{
-        const source=await getDataSource();
-        if (change==="role") await source.query("DELETE FROM public.user_roles WHERE user_id=$1 AND role_code='admin'",[users[0]]);
-        else await source.query("UPDATE public.users SET status='suspended' WHERE id=$1",[users[0]]);
-        return originalFence(...args);
-      });
-      const providerCalls=create.mock.calls.length;
-      expect(await resolveAdminPaymentReconciliation(fenceRow.eventId,admin)).toEqual({ok:false,message:"Unable to prepare this refund. Refresh and try again."});
-      expect(create.mock.calls.length).toBe(providerCalls);
-      fence.mockRestore();
-      expect((await db.from("users").update({status:"active"}).eq("id",users[0])).error).toBeNull();
-      if (change==="role") expect((await db.from("user_roles").insert({user_id:users[0],role_code:"admin"})).error).toBeNull();
-    }
-
-    const beforeCorruptionCalls=create.mock.calls.length;
-    // Native immutability prevents stored request corruption before any Stripe API call.
-    expect((await db.from("payment_attempts").update({ amount_minor:6000 }).eq("id",terminal.payment_attempt_id)).error?.code).toBe("23514");
-    expect(create.mock.calls.length).toBe(beforeCorruptionCalls);
-    const mismatch = await late(840,true);
-    expect(await resolveAdminPaymentReconciliation(mismatch.eventId,admin)).toMatchObject({ ok:false });
+    // A mismatch is an investigation case, never an automatic full refund.
+    const mismatch = await late(840,true,true);
+    expect(await prepareLateCaptureCompensation(mismatch.eventId)).toBeNull();
     expect((await db.from("payment_refunds").select("id").eq("booking_id",mismatch.booking_id)).data).toEqual([]);
+    expect(create.mock.calls.length).toBe(providerCalls);
+
+    // A definitive failure without retryable evidence cannot create a new
+    // generation just because another recovery cycle asks to process it.
+    list.mockImplementation(() => (async function* () {})());
+    create.mockImplementationOnce(async params => ({ id:`refund-${params.metadata.refund_execution_id}`,
+      amount:params.amount,currency:"ron",payment_intent:params.payment_intent,status:"failed",
+      failure_reason:"declined",metadata:params.metadata }));
+    const terminal = await late(900,false,true), terminalRefund = await refund(terminal.booking_id);
+    expect(terminalRefund.status).toBe("failed");
+    expect(await prepareAutomaticRefund(terminalRefund.id)).toMatchObject({outcome:"terminal",status:"failed"});
+    expect(await processBookingRefund(terminalRefund.id)).toBe("failed");
+    expect(create).toHaveBeenCalledTimes(providerCalls+1);
+    expect((await refund(terminal.booking_id)).execution.id).toBe(terminalRefund.execution.id);
+    expect((await db.from("refund_executions").select("id").eq("refund_id",terminalRefund.id)).data).toEqual([{id:terminalRefund.execution.id}]);
+
+    // Automatic state transitions have no Admin actor; private inspection
+    // still requires an active Admin account.
     expect((await db.from("user_roles").delete().eq("user_id",users[1]).eq("role_code","admin")).error).toBeNull();
-    await expect(retryAdminPaymentRefund(terminalRefund.id,second)).rejects.toThrow();
-    await expect(resolveAdminPaymentReconciliation(terminal.eventId,second)).rejects.toThrow();
-    expect((await db.from("users").update({ status:"suspended" }).eq("id",users[0])).error).toBeNull();
-    await expect(retryAdminPaymentRefund(terminalRefund.id,admin)).rejects.toThrow();
-    await expect(resolveAdminPaymentReconciliation(terminal.eventId,admin)).rejects.toThrow();
+    await expect(listAdminPaymentTransactions(query,second)).rejects.toThrow();
+    expect((await db.from("users").update({status:"suspended"}).eq("id",users[0])).error).toBeNull();
+    await expect(listAdminPaymentTransactions(query,admin)).rejects.toThrow();
   } finally {
     vi.restoreAllMocks();
     create.mockReset();list.mockReset();retrieve.mockReset();

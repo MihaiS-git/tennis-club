@@ -1,11 +1,7 @@
+import { getDataSource } from "@/lib/db/data-source";
+import { bookingNotifications } from "./booking-notification-fixtures";
 import { readBookingContracts } from "./checkout-fixtures";
 import { insertOpeningHoursFixture } from "./opening-hours-fixtures";
-import type { BookingEmailEvent } from "@/lib/notifications/booking-email";
-const sent = vi.hoisted(() => vi.fn());
-vi.mock("@/lib/notifications/booking-email", async importOriginal => ({
-  ...await importOriginal<typeof import("@/lib/notifications/booking-email")>(), sendBookingNotification: sent,
-}));
-const notifications = (id: string): BookingEmailEvent[] => sent.mock.calls.map(([event]) => event).filter(event => event.payload.booking_id === id);
 import { expirePaymentHolds } from "@/lib/payments/hold-expiry";
 import { processOnlinePaymentEvent, settleOnlinePayment } from "@/lib/payments/service";
 import { cleanupBookingFixtures, insertCheckoutFixture } from "./checkout-fixtures";
@@ -35,7 +31,7 @@ test("payment lifecycle keeps one reservation, protects overlap, releases expiry
     p_total_amount_minor: 5000, p_currency: "RON", p_payment_method: method,
     p_provider: method === "online" ? "netopia" : null, p_hold_seconds: paymentHoldDurationSeconds });
   const emails = async (id: string) => {
-    return notifications(id).map(({ event_kind }) => ({ event_kind }));
+    return (await bookingNotifications((await getDataSource()).manager, id)).map(({ subject }) => ({ subject }));
   };
   const booking = async (id: string) => (await Promise.resolve({ error:null, data:(await readBookingContracts(db, { ids: [id] }))[0] })).data!;
   const reservation = async (id: string) => (await db.from("court_reservations").select("*").eq("id", id).single()).data!;
@@ -94,7 +90,7 @@ test("payment lifecycle keeps one reservation, protects overlap, releases expiry
     expect(settlements.every((r) => r === "succeeded")).toBe(true);
     expect(await booking(held.booking_id)).toMatchObject({ status: "confirmed", reservation_id: held.reservation_id });
     expect(await reservation(held.reservation_id)).toMatchObject({ status: "active", hold_expires_at: null });
-    expect(await emails(held.booking_id)).toEqual([{ event_kind: "confirmed" }]);
+    expect(await emails(held.booking_id)).toEqual([{ subject: "Booking confirmed" }]);
 
     const failed = (await insertCheckoutFixture(db, params(660))).data[0];
     expect((await settle(failed, "failed"))).toBe("failed");
@@ -122,7 +118,7 @@ test("payment lifecycle keeps one reservation, protects overlap, releases expiry
     const atClub = await createCustomerBooking({ ...intent, paymentMethod: "pay_at_club", startMinute: 720, endMinute: 780 }, guest);
     expect(atClub).toMatchObject({ ok: true, status: "confirmed", holdExpiresAt: null });
     if (!atClub.ok) throw new Error("Expected confirmed at-club booking");
-    expect(await emails(atClub.bookingId)).toEqual([{ event_kind: "confirmed" }]);
+    expect(await emails(atClub.bookingId)).toEqual([{ subject: "Booking confirmed" }]);
     expect((await db.from("payment_attempts").select("method,provider,status").eq("booking_id", atClub.bookingId)).data)
       .toEqual([{ method: "pay_at_club", provider: null, status: "due" }]);
     const online = await createCustomerBooking({ ...intent, startMinute: 780, endMinute: 840 }, guest);

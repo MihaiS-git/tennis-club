@@ -16,13 +16,15 @@ import * as payments from "@/lib/db/repositories/payments.repository";
 import * as captures from "@/lib/db/repositories/payment-capture-receipts.repository";
 import * as bookings from "@/lib/db/repositories/bookings.repository";
 import * as reservations from "@/lib/db/repositories/reservations.repository";
-import { bookingNotification, sendBookingNotification, type BookingEmailEvent } from "@/lib/notifications/booking-email";
+import { enqueueBookingNotification } from "@/lib/notifications/booking-delivery";
+import { bookingNotification, type BookingEmailEvent } from "@/lib/notifications/booking-email";
 import { logger } from "@/lib/logger";
 import { paymentProviderSchema, paymentTransition } from "./domain";
 import type { OnlinePaymentEvent } from "./providers/types";
 import { settleAdjustment } from "./settle-adjustment";
 import { allocateBookingRefund } from "./financials";
 import { processBookingRefund } from "./refunds";
+import { onlinePaymentAdapter } from "./providers";
 
 const settlementSchema = z.strictObject({ attemptId: z.uuid(), provider: paymentProviderSchema,
   providerPaymentId: z.string().trim().min(1).max(255),
@@ -49,6 +51,7 @@ async function commitSettlement(value: Settlement, event: OnlinePaymentEvent | n
   let notification: BookingEmailEvent | null = null;
   let refundId: string | null = null;
   let adjustmentRefundIds: string[] = [];
+  const abandon: { attempt: { id: string; provider: "stripe" | "netopia"; providerPaymentId: string } | null } = { attempt: null };
   try {
     const committed = await inTransaction(async manager => {
       await clubs.lockConfigurationForRead(manager);
@@ -85,7 +88,11 @@ async function commitSettlement(value: Settlement, event: OnlinePaymentEvent | n
         const adjusted = await settleAdjustment(manager, { attempt, event, outcome: value.outcome,
           providerPaymentId: value.providerPaymentId, mismatch: Boolean(mismatch) });
         notification = adjusted.notification;
+        if (notification && notification.event_kind !== "customer_rescheduled")
+          await enqueueBookingNotification(manager, `payment:${attempt.id}:${notification.event_kind}`, notification);
         adjustmentRefundIds = adjusted.refundIds;
+        if (adjusted.abandonProviderPayment && attempt.provider)
+          abandon.attempt = { id: attempt.id, provider: attempt.provider, providerPaymentId: value.providerPaymentId };
         const reconciliation = value.outcome === "succeeded" && adjusted.result !== "succeeded";
         if (event && !await payments.insertProviderEventReceipt(manager, {
           provider: event.provider, event_id: event.eventId, attempt_id: attempt.id,
@@ -159,6 +166,7 @@ async function commitSettlement(value: Settlement, event: OnlinePaymentEvent | n
               adjustmentId: null, cancellationCause: null }, b.revision);
             await advanceRevision(manager, { revision, previousId: b.current_revision_id, status: "confirmed" });
             notification = bookingNotification("confirmed", revision);
+            await enqueueBookingNotification(manager, `revision:${revision.id}`, notification);
           } else {
             await bookings.updateSettlementBookingStatus(manager, b.id,
               z.enum(["confirmed", "cancelled", "pending_payment", "failed", "expired"]).parse(decision.targets.booking));
@@ -203,7 +211,13 @@ async function commitSettlement(value: Settlement, event: OnlinePaymentEvent | n
     });
     if (refundId) await processBookingRefund(refundId);
     for (const id of adjustmentRefundIds) await processBookingRefund(id);
-    if (notification) await sendBookingNotification(notification);
+    if (abandon.attempt) {
+      // Best effort: a discarded modification's failed intent must not be
+      // confirmable later. A late success would still be refunded.
+      const abandoned = abandon.attempt;
+      try { await (await onlinePaymentAdapter(abandoned.provider)).dismissPayment(abandoned); }
+      catch { logger.error({ event: "payments.adjustment_intent_cancel_failed", attemptId: abandoned.id }, "Unable to cancel discarded modification payment"); }
+    }
     if (committed.reconciliation) logger.error({ event: "payments.reconciliation_required", attemptId: value.attemptId,
       eventId: event?.eventId, result: committed.result }, "Successful payment requires reconciliation");
     return committed.result;

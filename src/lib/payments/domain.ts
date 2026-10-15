@@ -9,18 +9,38 @@ export const paymentProviderSchema = z.enum(["stripe", "netopia"]);
 export type PaymentMethod = z.infer<typeof paymentMethodSchema>;
 export type PaymentProvider = z.infer<typeof paymentProviderSchema>;
 export const paymentHoldDurationSeconds = 10 * 60;
+// Test-only shortening for lifecycle verification. Production always uses the
+// constant: the override is ignored unless NODE_ENV is "test" or the explicit
+// E2E flag is set, and never when NODE_ENV is "production".
+export function paymentHoldSeconds(env: Record<string, string | undefined> = process.env) {
+  const override = env.BOOKING_HOLD_SECONDS_OVERRIDE;
+  if (!override || env.NODE_ENV === "production"
+    || (env.NODE_ENV !== "test" && env.E2E_ALLOW_HOLD_OVERRIDE !== "1")) return paymentHoldDurationSeconds;
+  const seconds = z.coerce.number().int().min(15).max(paymentHoldDurationSeconds).safeParse(override);
+  return seconds.success ? seconds.data : paymentHoldDurationSeconds;
+}
 export function checkoutPersistence(method: PaymentMethod) {
   const online = method === "online";
   return { booking_status: online ? "pending_payment" : "confirmed", reservation_status: online ? "held" : "active",
     attempt_status: online ? "pending" : "due", hold_seconds: online ? paymentHoldDurationSeconds : null } as const;
 }
-export const attentionRefundStatuses = ["pending_retry", "failed"];
-export function summarizeRefunds(statuses: RefundStatus[]): RefundStatus | undefined {
-  return statuses.includes("failed") ? "failed" : statuses.includes("pending_retry") ? "pending_retry"
-    : statuses.includes("pending") ? "pending" : statuses.length ? "succeeded" : undefined;
+// Routine uncertainty is retried automatically. Attention means money that the
+// automation cannot return (definitive failure), recovery stalled beyond the
+// provider idempotency window, or captured evidence needing investigation.
+export const attentionRefundStatuses = ["failed"];
+export const stalledRefundHours = 24;
+export function refundRecoveryStalled(status: string | null | undefined, recoveryStartedAt: string | null | undefined, now = Date.now()) {
+  return status === "pending_retry" && !!recoveryStartedAt && now - Date.parse(recoveryStartedAt) > stalledRefundHours * 3_600_000;
 }
-export function paymentNeedsAttention(refundStatus: string | null | undefined, events: readonly { reconciliation_required: boolean }[]) {
-  return attentionRefundStatuses.includes(refundStatus ?? "") || events.some((event) => event.reconciliation_required);
+export function summarizeRefunds(statuses: RefundStatus[]): RefundStatus | undefined {
+  const active = statuses.filter(status => status !== "voided");
+  return active.includes("failed") ? "failed" : active.includes("pending_retry") ? "pending_retry"
+    : active.includes("pending") ? "pending" : active.length ? "succeeded" : undefined;
+}
+export function paymentNeedsAttention(refund: { status: string; recovery_started_at?: string | null } | null | undefined,
+  events: readonly { reconciliation_required: boolean }[]) {
+  return attentionRefundStatuses.includes(refund?.status ?? "") || refundRecoveryStalled(refund?.status, refund?.recovery_started_at)
+    || events.some((event) => event.reconciliation_required);
 }
 export type CheckoutLifecycle =
   | { status: "pending_payment"; holdExpiresAt: string }

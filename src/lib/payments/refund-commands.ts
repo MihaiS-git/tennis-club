@@ -8,15 +8,16 @@ import * as payments from "@/lib/db/repositories/payments.repository";
 import * as executions from "@/lib/db/repositories/refund-executions.repository";
 import * as captures from "@/lib/db/repositories/payment-capture-receipts.repository";
 import type { RefundExecutionEntity } from "@/lib/db/entities/refund-execution.entity";
-import { findBookingForUpdate } from "@/lib/db/repositories/bookings.repository";
+import { findBookingCancellationNotice, findBookingForUpdate } from "@/lib/db/repositories/bookings.repository";
 import { findInitialRevision } from "@/lib/db/repositories/booking-revisions.repository";
 import { findAdjustment } from "@/lib/db/repositories/booking-adjustments.repository";
 import { findReservationForUpdate } from "@/lib/db/repositories/reservations.repository";
-import { lockReservationActorFacts } from "@/lib/db/repositories/accounts.repository";
-import { refundObligationTotal } from "./refund-allocation";
+import { enqueueBookingNotification } from "@/lib/notifications/booking-delivery";
+import { bookingNotification, type BookingEmailEvent } from "@/lib/notifications/booking-email";
+import { refundObligationTotal, reservingObligations } from "./refund-allocation";
 import { allocateBookingRefund } from "./financials";
 import { refundFinancialSnapshotMatches, paymentHasCapturedEvidence, sameRefundSnapshot } from "./refund-integrity";
-import { refundableLateCapture, refundRetryEligible, resolvableRefundEvents } from "./providers/stripe/refund-policy";
+import { refundableLateCapture, resolvableRefundEvents } from "./providers/stripe/refund-policy";
 import type { RefundProviderFailure } from "./providers/types";
 import type { RefundStatus } from "./refunds";
 
@@ -24,13 +25,28 @@ export type RefundExecutionClaim = {
   token: string; actorId: string | null; bookingId: string; refund: payments.ProcessingRefund; execution: RefundExecutionEntity;
 };
 type ClaimResult = { outcome: "ready"; claim: RefundExecutionClaim }
-  | { outcome: "busy"; status: RefundStatus } | { outcome: "terminal"; status: RefundStatus };
-type Preparation = { outcome: "unavailable" | "already_refunded" | "busy" }
-  | { outcome: "ready"; bookingId: string; claim: RefundExecutionClaim }
-  | { outcome: "resolved"; bookingId: string; refundId: string };
-export type RefundObservation = { kind: "verified"; status: "pending" | "succeeded" | "failed"; providerRefundId: string }
+  | { outcome: "busy"; status: RefundStatus } | { outcome: "terminal"; status: RefundStatus; notice: BookingEmailEvent | null };
+export type RefundObservation = { kind: "verified"; status: "pending" | "succeeded" | "failed"; providerRefundId: string; retryable?: boolean; failureReason?: string }
   | { kind: "error"; evidence: RefundProviderFailure };
+type RefundDispatchOperation = "create" | "recover" | "replay";
 const refundExecutionLeaseMilliseconds = 5 * 60 * 1000;
+// Stripe retains idempotency keys for at least 24 hours. Within this margin an
+// unconfirmed dispatched request may be re-sent with its exact stored key: Stripe
+// returns the original refund if the first request executed, so no duplicate.
+const refundReplayWindowMilliseconds = 23 * 60 * 60 * 1000;
+
+// Exceptional obligations notify once through the same durable financial transaction.
+async function refundFailureNotice(manager: EntityManager, refund: payments.ProcessingRefund,
+  _previous: RefundStatus, status: RefundStatus): Promise<BookingEmailEvent | null> {
+  if (status !== "failed") return null;
+  // A pending refund-backed change notifies when it is decided (abandoned or exception).
+  if (refund.adjustment_id && (refund.reason === "booking_cancellation" || refund.reason === "booking_price_reduction")) return null;
+  const revision = await findBookingCancellationNotice(manager, refund.booking_id);
+  const notice = revision ? bookingNotification("refund_incomplete", revision,
+    { refund: { amountMinor: refund.amount_minor, currency: refund.currency } }) : null;
+  if (notice) await enqueueBookingNotification(manager, `refund:${refund.id}:exception`, notice);
+  return notice;
+}
 
 // Refund-only commands do not change occupancy. All paths use the same order:
 // booking -> reservation -> selected attempt -> ordered receipts -> obligation -> execution.
@@ -50,7 +66,7 @@ async function lockAggregate(manager: EntityManager, bookingId: string, attemptI
 async function verifyRefund(manager: EntityManager, refund: payments.ProcessingRefund) {
   const { payment, captures } = await payments.findRefundCaptureEvidence(manager, refund.payment_attempt_id);
   const obligations = await payments.listRefundObligationsForAttempt(manager, refund.payment_attempt_id);
-  if (!payment || refundObligationTotal(obligations) > payment.amount_minor || !refundFinancialSnapshotMatches(refund, payment)
+  if (!payment || refundObligationTotal(reservingObligations(obligations)) > payment.amount_minor || !refundFinancialSnapshotMatches(refund, payment)
     || !paymentHasCapturedEvidence(payment, captures)) throw new Error("Refund financial evidence changed");
 }
 function verifyExecution(refund: payments.ProcessingRefund, execution: RefundExecutionEntity, expected?: RefundExecutionEntity) {
@@ -65,19 +81,24 @@ function verifyExecution(refund: payments.ProcessingRefund, execution: RefundExe
 }
 function summary(execution: RefundExecutionEntity): RefundStatus {
   if (execution.terminalResult === "succeeded") return "succeeded";
-  if (execution.terminalResult) return "failed";
+  if (execution.terminalResult) return execution.terminalEvidence?.startsWith("retryable:") ? "pending_retry" : "failed";
   return execution.status === "uncertain" || execution.lastError ? "pending_retry" : "pending";
 }
 
 async function claimExecution(manager: EntityManager, refund: payments.ProcessingRefund, actorId: string | null,
   allowReplacement: boolean): Promise<ClaimResult> {
+  // An abandoned change released this obligation; it is never processed again.
+  if (refund.status === "voided") return { outcome: "terminal", status: "voided", notice: null };
   const history = await executions.listRefundExecutions(manager, refund.id);
   let execution = await executions.findUnresolvedRefundExecution(manager, refund.id) ?? history.at(-1);
   if (execution) verifyExecution(refund, execution);
-  if (execution?.terminalResult === "succeeded" || execution?.terminalResult && !allowReplacement) {
+  const retryable = execution?.terminalEvidence?.startsWith("retryable:") ?? false;
+  if (retryable && execution?.completedAt && Date.now() - execution.completedAt.getTime() < 60 * 60 * 1000)
+    return { outcome: "busy", status: "pending_retry" };
+  if (execution?.terminalResult === "succeeded" || execution?.terminalResult && !allowReplacement && !retryable) {
     const status = summary(execution);
     await payments.writeRefundStatus(manager, refund.id, status);
-    return { outcome: "terminal", status };
+    return { outcome: "terminal", status, notice: await refundFailureNotice(manager, refund, refund.status, status) };
   }
   if (!execution || execution.terminalResult) {
     const id = randomUUID();
@@ -106,32 +127,26 @@ export async function prepareAutomaticRefund(id: string): Promise<ClaimResult> {
   });
 }
 
-export async function prepareAdminRefund(kind: "retry" | "reconcile", id: string, actorId: string): Promise<Preparation> {
+// An exact verified capture whose checkout or modification had already ended
+// is returned automatically. Amount mismatches and other evidence problems are
+// not refundable here and stay visible for investigation.
+export async function prepareLateCaptureCompensation(eventId: string): Promise<string | null> {
   return inTransaction(async manager => {
-    const source = kind === "retry" ? await payments.discoverRefundBooking(manager, id) : null;
-    const attemptId = source?.payment_attempt_id ?? (kind === "reconcile" ? await payments.discoverEventAttempt(manager, id) : null);
-    const bookingId = source?.booking_id ?? (attemptId ? await payments.findSettlementBookingId(manager, attemptId) : null);
-    if (!bookingId || !attemptId) return { outcome: "unavailable" };
-    const context = await lockAggregate(manager, bookingId, attemptId, kind === "retry" ? id : undefined);
-    if (!context) return { outcome: "unavailable" };
-    const actor = await lockReservationActorFacts(manager, actorId);
-    if (actor?.status !== "active" || !actor.roles.includes("admin")) throw new Error("Admin authorization changed");
+    const attemptId = await payments.discoverEventAttempt(manager, eventId);
+    const bookingId = attemptId ? await payments.findSettlementBookingId(manager, attemptId) : null;
+    if (!attemptId || !bookingId) return null;
+    const context = await lockAggregate(manager, bookingId, attemptId);
+    if (!context) return null;
     const { payment, booking, reservation, events } = context;
-    let refund = context.refund;
-    const event = kind === "reconcile" ? events.find(e => e.provider === "stripe" && e.event_id === id) : null;
-    const late = events.some(e => refundableLateCapture(e, payment, booking.status, reservation.status));
+    const event = events.find(e => e.provider === "stripe" && e.event_id === eventId);
     if (payment.provider !== "stripe" || payment.method !== "online" || !payment.provider_payment_id
-      || (!(payment.status === "succeeded" && (booking.status === "cancelled" || kind === "retry" && refund?.operation_key !== "cancellation")) && !late)
-      || (kind === "reconcile" && (!event || !refundableLateCapture(event, payment, booking.status, reservation.status)))
-      || (refund && !refundFinancialSnapshotMatches(refund, payment))) return { outcome: "unavailable" };
-    if (kind === "retry" && (!refund || refund.id !== id || !refundRetryEligible(refund.status, refund.provider) && refund.status !== "succeeded"))
-      return { outcome: "unavailable" };
-    if (kind === "reconcile" && (!event || (!event.reconciliation_required && refund?.status !== "succeeded")))
-      return { outcome: "unavailable" };
+      || !event?.reconciliation_required || !refundableLateCapture(event, payment, booking.status, reservation.status)) return null;
+    let refund = context.refund;
+    if (refund && !refundFinancialSnapshotMatches(refund, payment)) return null;
     if (!refund) {
       const adjustment = payment.adjustment_id ? await findAdjustment(manager, payment.adjustment_id) : null;
       if (payment.adjustment_id && (!adjustment || adjustment.bookingId !== bookingId)) throw new Error("Refund adjustment context changed");
-      const [refundId] = await allocateBookingRefund(manager, { bookingId, actorId,
+      const [refundId] = await allocateBookingRefund(manager, { bookingId, actorId: null,
         operationKey: adjustment?.id ?? "cancellation", amount: payment.amount_minor, onlyAttemptId: payment.id,
         adjustmentId: adjustment?.id, reason: adjustment ? "failed_adjustment_compensation" : "late_capture_compensation",
         contextRevisionId: adjustment?.baseRevisionId ?? (await findInitialRevision(manager, bookingId)).id });
@@ -140,14 +155,12 @@ export async function prepareAdminRefund(kind: "retry" | "reconcile", id: string
       if (!refund) throw new Error("Refund request missing");
     }
     await verifyRefund(manager, refund);
-    const prepared = await claimExecution(manager, refund, actorId, true);
-    if (prepared.outcome === "busy") return { outcome: "busy" };
-    if (prepared.outcome === "terminal") {
-      if (kind === "retry") return { outcome: "already_refunded" };
-      await payments.writeRefundEventResolution(manager, resolvableRefundEvents(context, payment.id), payment.id, actorId);
-      return { outcome: "resolved", bookingId, refundId: refund.id };
+    if (refund.status === "succeeded") {
+      // Verified completion already returned the money; close the review flag.
+      await payments.writeRefundEventResolution(manager, resolvableRefundEvents(context, payment.id), payment.id, null);
+      return null;
     }
-    return { outcome: "ready", bookingId, claim: prepared.claim };
+    return refund.status === "pending" || refund.status === "pending_retry" ? refund.id : null;
   });
 }
 
@@ -167,16 +180,21 @@ export async function initiateRefundExecution(claim: RefundExecutionClaim) {
     const { refund, identity, execution } = await lockedClaim(manager, claim);
     if (execution.terminalResult) return { outcome: "terminal" as const, status: summary(execution) };
     if (!await executions.ownsRefundExecutionLease(manager, identity)) throw new Error("Stale refund execution lease");
-    const operation = execution.status === "ready" ? "create" as const : "recover" as const;
+    // A dispatched execution first looks for the provider refund. Only inside the
+    // idempotency window may an unfound request be re-sent with its exact key.
+    const operation: RefundDispatchOperation = execution.status === "ready" ? "create"
+      : execution.dispatchInitiatedAt && Date.now() - execution.dispatchInitiatedAt.getTime() < refundReplayWindowMilliseconds
+        ? "replay" : "recover";
     if (operation === "create") {
       await executions.recordRefundDispatch(manager, { ...identity, initiatedAt: new Date() });
       await payments.writeRefundStatus(manager, refund.id, "pending");
     }
-    return { outcome: "dispatch" as const, operation, execution };
+    return { outcome: "dispatch" as const, operation, execution: await executions.lockRefundExecution(manager, identity) };
   });
 }
 
-export async function commitRefundExecution(claim: RefundExecutionClaim, observation: RefundObservation): Promise<RefundStatus> {
+export async function commitRefundExecution(claim: RefundExecutionClaim, observation: RefundObservation): Promise<{
+  status: RefundStatus; notice: BookingEmailEvent | null }> {
   return inTransaction(async manager => {
     const { context, refund, identity, execution } = await lockedClaim(manager, claim);
     const current = execution.leaseToken === claim.token;
@@ -186,34 +204,43 @@ export async function commitRefundExecution(claim: RefundExecutionClaim, observa
       if (observation.status === "pending")
         await executions.recordRefundProviderIdentity(manager, { ...identity, providerRefundId, checkedAt });
       else await executions.recordRefundTerminalResult(manager, { ...identity, providerRefundId, result: observation.status,
-        evidence: observation.status === "succeeded" ? "provider_refund_succeeded" : "provider_refund_failed", completedAt: checkedAt });
+        evidence: observation.status === "succeeded" ? "provider_refund_succeeded"
+          : `${observation.retryable ? "retryable:" : "external_resolution:"}${observation.failureReason ?? "provider_refund_failed"}`, completedAt: checkedAt });
     } else {
       const evidence = observation.evidence;
-      if (evidence.providerRefundId) await executions.recordRefundProviderIdentity(manager, { ...identity,
+      if (evidence.providerRefundId && evidence.kind !== "evidence_mismatch") await executions.recordRefundProviderIdentity(manager, { ...identity,
         providerRefundId: z.string().min(1).max(255).parse(evidence.providerRefundId), checkedAt });
       if (evidence.kind === "request_rejected") await executions.recordRefundTerminalResult(manager, { ...identity,
-        result: "rejected", providerRefundId: null, evidence: "provider_request_rejected", completedAt: checkedAt });
+        result: "rejected", providerRefundId: null, evidence: `${evidence.retryable ? "retryable:" : "external_resolution:"}${evidence.failureReason ?? "provider_request_rejected"}`, completedAt: checkedAt });
       else if (["uncertain", "not_found", "evidence_mismatch"].includes(evidence.kind))
         await executions.recordRefundUncertainty(manager, { ...identity, evidence: evidence.kind, observedAt: checkedAt });
     }
     let updated = await executions.lockRefundExecution(manager, identity);
     if (current && !updated.terminalResult) {
       await executions.recordRefundExecutionCheck(manager, { ...identity, checkedAt, releaseLease: true,
-        lastError: observation.kind === "verified" ? null : observation.evidence.kind });
+        lastError: observation.kind === "verified" ? null
+          : observation.evidence.kind === "not_found" ? "unresolved_after_idempotency_window"
+          : observation.evidence.kind === "evidence_mismatch" ? "unresolved_provider_evidence" : observation.evidence.kind });
       updated = await executions.lockRefundExecution(manager, identity);
     }
     // Historical terminal truth survives stale claims, but a stale nonterminal
     // check cannot change the obligation summary or the current worker's state.
-    if (current || updated.terminalResult === "succeeded") {
+    // A voided obligation (abandoned change) keeps that status permanently.
+    if (refund.status !== "voided" && (current || updated.terminalResult === "succeeded")) {
       const latest = (await executions.listRefundExecutions(manager, refund.id)).at(-1);
       if (!latest) throw new Error("Refund execution missing");
       const status = summary(latest);
       await payments.writeRefundStatus(manager, refund.id, status);
-      if (status === "succeeded" && (claim.actorId !== null || context.payment.adjustment_id && refund.amount_minor === context.payment.amount_minor))
+      // Full verified compensation of an ended request's capture closes its review flag.
+      if (status === "succeeded" && refund.amount_minor === context.payment.amount_minor)
         await payments.writeRefundEventResolution(manager,
         resolvableRefundEvents(context, context.payment.id), context.payment.id, claim.actorId);
-      return status;
+      // Missing evidence after the safe replay window is explicitly unresolved;
+      // preserve the obligation and execution and continue evidence-only checks.
+      const unresolved = observation.kind === "error" && ["not_found", "evidence_mismatch"].includes(observation.evidence.kind);
+      const notice = await refundFailureNotice(manager, refund, unresolved ? "pending" : refund.status, unresolved ? "failed" : status);
+      return { status, notice };
     }
-    return refund.status;
+    return { status: refund.status, notice: null };
   });
 }

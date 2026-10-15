@@ -1,7 +1,7 @@
 "use server";
 
 import { z } from "zod";
-import { getOwnBookingEditDay, rescheduleOwnCustomerBooking } from "@/lib/bookings/self-reschedule";
+import { dismissOwnBookingAdjustment, getOwnBookingEditDay, rescheduleOwnCustomerBooking } from "@/lib/bookings/self-reschedule";
 import { logger } from "@/lib/logger";
 import { revalidateCourtActivity } from "@/lib/reservations/revalidation";
 import { cancelOwnCustomerBooking } from "@/lib/bookings/self-cancellation-service";
@@ -61,6 +61,12 @@ export async function rescheduleOwnBookingAction(input: unknown) {
   if (!z.object({ save: z.literal(true) }).safeParse(input).success)
     return { ok: false as const, message: "Invalid save request." };
   const result = await rescheduleOwnCustomerBooking(input);
+  if (result.ok) revalidateCourtActivity("edit");
+  return result;
+}
+
+export async function dismissOwnBookingAdjustmentAction(id: unknown) {
+  const result = await dismissOwnBookingAdjustment(id);
   if (result.ok) revalidateCourtActivity("edit");
   return result;
 }

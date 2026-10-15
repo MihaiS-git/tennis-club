@@ -25,17 +25,17 @@ test.each(summaries)("cancellation uses shared obligation summary $statuses -> $
   expect(summarizeRefunds([...statuses].reverse())).toBe(expected);
   const refundIds = statuses.map((_, i) => `ce000000-0000-4000-8000-${String(i).padStart(12, "0")}`);
   for (const status of statuses) {
-    vi.mocked(prepareAutomaticRefund).mockResolvedValueOnce({ outcome: "terminal", status });
+    vi.mocked(prepareAutomaticRefund).mockResolvedValueOnce({ outcome: "terminal", status, notice: null });
   }
   expect(await finishBookingCancellation({ outcome: "cancelled", refundIds }))
-    .toEqual(expected ? { ok: true, refundStatus: expected } : { ok: true });
+    .toEqual(expected ? { ok: true, outcome: "cancelled", refundStatus: expected } : { ok: true, outcome: "cancelled" });
   expect(vi.mocked(prepareAutomaticRefund).mock.calls).toEqual(refundIds.map(id => [id]));
 });
 
 test("a refund persistence failure leaves cancellation successful and awaiting recovery", async () => {
   vi.mocked(prepareAutomaticRefund).mockRejectedValueOnce(new Error("Database unavailable"));
   expect(await finishBookingCancellation({ outcome: "cancelled", refundIds: ["ce000000-0000-4000-8000-000000000001"] }))
-    .toEqual({ ok: true, refundStatus: "pending_retry" });
+    .toEqual({ ok: true, outcome: "cancelled", refundStatus: "pending_retry" });
 });
 
 test.each(["inactive", "unavailable", "started", "notice_required"] as const)("%s outcome never executes refunds", async outcome => {

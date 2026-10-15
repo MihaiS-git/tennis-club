@@ -19,13 +19,15 @@ export async function bookingFinancials(manager: EntityManager, bookingId: strin
 }
 
 type CaptureDiscrepancy = "provider" | "provider_payment_id" | "amount" | "currency";
+// Timestamps and reasons are display-only; they never affect totals or verification.
 type ReportingPayment = Pick<PaymentAttemptEntity, "id" | "provider" | "providerPaymentId" | "amountMinor" |
-  "currency" | "status" | "adjustmentId">;
+  "currency" | "status" | "adjustmentId"> & Partial<Pick<PaymentAttemptEntity, "createdAt">>;
 type ReportingCapture = Pick<PaymentCaptureReceiptEntity, "id" | "paymentAttemptId" | "provider" | "providerPaymentId" |
   "providerCaptureId" | "amountMinor" | "currency" | "firstObservedAt">;
-type ReportingRefund = Pick<PaymentRefundEntity, "id" | "provider" | "providerPaymentId" | "amountMinor" | "currency" | "status">;
+type ReportingRefund = Pick<PaymentRefundEntity, "id" | "provider" | "providerPaymentId" | "amountMinor" | "currency" | "status">
+  & Partial<Pick<PaymentRefundEntity, "createdAt" | "reason">>;
 type ReportingExecution = Pick<RefundExecutionEntity, "refundId" | "provider" | "providerPaymentId" | "providerRefundId" |
-  "amountMinor" | "currency" | "status" | "terminalResult">;
+  "amountMinor" | "currency" | "status" | "terminalResult"> & Partial<Pick<RefundExecutionEntity, "completedAt">>;
 
 // This is an Admin reporting read model, not the operational balance used to
 // allocate refunds. Actual captures come only from provider-unique receipts;
@@ -74,20 +76,24 @@ export function summarizeReportedFinancials(input: {
         && execution.amountMinor === refund.amountMinor && execution.currency === refund.currency) ?? null
       : null;
     return { id: refund.id, amount: refund.amountMinor, currency: refund.currency, status: refund.status,
-      reference: verifiedExecution?.providerRefundId ?? null, verified: verifiedExecution !== null };
+      reference: verifiedExecution?.providerRefundId ?? null, verified: verifiedExecution !== null,
+      reason: refund.reason ?? null, createdAt: refund.createdAt?.toISOString() ?? null,
+      verifiedAt: verifiedExecution?.completedAt?.toISOString() ?? null };
   });
   const currencies = new Set([...captures.map(capture => capture.currency), ...refunds.map(refund => refund.currency)]);
   const totals = [...currencies].sort().map(currency => {
     const captured = captures.filter(capture => capture.currency === currency).reduce((sum, capture) => sum + capture.amount, 0);
     const currencyRefunds = refunds.filter(refund => refund.currency === currency);
     const refunded = currencyRefunds.filter(refund => refund.verified).reduce((sum, refund) => sum + refund.amount, 0);
-    const refundObligations = currencyRefunds.reduce((sum, refund) => sum + refund.amount, 0);
+    // A voided obligation (abandoned change, no money moved) is not owed.
+    const refundObligations = currencyRefunds.filter(refund => refund.status !== "voided").reduce((sum, refund) => sum + refund.amount, 0);
     return { currency, captured, refunded, netPaid: captured - refunded, refundObligations,
       uncompletedRefundObligations: refundObligations - refunded };
   });
   return { totals, captures, refunds,
     payments: input.payments.map(payment => ({ id: payment.id, amount: payment.amountMinor, currency: payment.currency,
-      status: payment.status, reference: payment.providerPaymentId, adjustmentId: payment.adjustmentId })) };
+      status: payment.status, reference: payment.providerPaymentId, adjustmentId: payment.adjustmentId,
+      createdAt: payment.createdAt?.toISOString() ?? null })) };
 }
 
 // Caller owns the booking lock (and the existing location lock for occupancy

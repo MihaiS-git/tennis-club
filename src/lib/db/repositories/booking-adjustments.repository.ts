@@ -2,7 +2,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import type { EntityManager } from "typeorm";
 import { z } from "zod";
-import { BookingAdjustmentEntity, type AdjustmentTarget } from "../entities/booking-adjustment.entity";
+import { BookingAdjustmentEntity, type AdjustmentKind, type AdjustmentTarget } from "../entities/booking-adjustment.entity";
 import { PaymentAttemptEntity } from "../entities/payment-attempt.entity";
 import { PaymentRefundEntity } from "../entities/payment-refund.entity";
 import { CourtReservationEntity } from "../entities/court-reservation.entity";
@@ -18,18 +18,41 @@ export async function findAdjustment(manager: EntityManager, id: string) {
 export async function findPendingAdjustment(manager: EntityManager, bookingId: string) {
   return manager.getRepository(BookingAdjustmentEntity).findOne({ where: { bookingId, status: "pending" } });
 }
-export async function findUnresolvedAdjustment(manager: EntityManager, bookingId: string) {
-  return manager.getRepository(BookingAdjustmentEntity).createQueryBuilder("a")
-    .where("a.bookingId=:bookingId", { bookingId })
-    .andWhere("(a.status='pending' OR EXISTS(SELECT 1 FROM public.payment_attempts p WHERE p.adjustment_id=a.id AND p.status IN ('pending','expired')))")
-    .orderBy("a.createdAt","DESC").getOne();
+// Payment attempt facts are immutable, so the occupancy lease lives on the
+// target holds. A hold lease later than the immutable lateness cutoff records
+// verified evidence of a live (processing) payment.
+const liveHold = `EXISTS(SELECT 1 FROM public.court_reservations r WHERE r.adjustment_id=a.id AND r.status='held'
+  AND r.hold_expires_at>a.expires_at AND r.hold_expires_at>clock_timestamp())`;
+const livePayment = `p.status='pending' AND ${liveHold}`;
+export async function listBookingsWithLivePayment(manager: EntityManager, bookingIds: readonly string[]) {
+  if (!bookingIds.length) return new Set<string>();
+  const rows: unknown = await manager.query(`SELECT DISTINCT a.booking_id FROM public.booking_adjustments a
+    JOIN public.payment_attempts p ON p.adjustment_id=a.id WHERE a.booking_id=ANY($1::uuid[]) AND ${livePayment}`, [bookingIds]);
+  return new Set(z.array(z.object({ booking_id: z.uuid() })).parse(rows).map(r => r.booking_id));
+}
+// Caller holds the location and booking locks, which every lease writer takes.
+export async function hasLivePayment(manager: EntityManager, adjustmentId: string) {
+  const rows: unknown = await manager.query(`SELECT 1 AS live FROM public.booking_adjustments a
+    JOIN public.payment_attempts p ON p.adjustment_id=a.id WHERE a.id=$1 AND ${livePayment}`, [adjustmentId]);
+  return z.array(z.object({ live: z.number() })).parse(rows).length > 0;
+}
+// Occupancy lease of a live payment, bounded by the target slot start. The
+// lateness cutoff (booking_adjustments.expires_at) never moves.
+export async function extendAdjustmentLease(manager: EntityManager, adjustmentId: string, until: string) {
+  await manager.query(`UPDATE public.court_reservations SET hold_expires_at=greatest(hold_expires_at,$2::timestamptz),updated_at=now()
+    WHERE adjustment_id=$1 AND status='held' AND $2::timestamptz>clock_timestamp()`, [adjustmentId, until]);
+}
+// The payment is no longer in flight; the lease returns to the lateness cutoff.
+export async function resetAdjustmentLease(manager: EntityManager, adjustmentId: string) {
+  await manager.query(`UPDATE public.court_reservations r SET hold_expires_at=a.expires_at,updated_at=now()
+    FROM public.booking_adjustments a WHERE a.id=$1 AND r.adjustment_id=a.id AND r.status='held' AND r.hold_expires_at>a.expires_at`, [adjustmentId]);
 }
 export async function findAdjustmentRequest(manager: EntityManager, bookingId: string, requestKey: string) {
   return manager.getRepository(BookingAdjustmentEntity).findOneBy({ bookingId, requestKey });
 }
 export async function insertAdjustment(manager: EntityManager, input: {
   bookingId: string; baseRevisionId: string; actorId: string; scope: "owner" | "admin"; requestKey: string; target: AdjustmentTarget;
-  originalTotal: number; newTotal: number; currency: string; expiresAt: Date;
+  originalTotal: number; newTotal: number; currency: string; expiresAt: Date; kind?: AdjustmentKind; createdAt?: Date;
 }) {
   const value = manager.getRepository(BookingAdjustmentEntity).create({ ...input, id: randomUUID(), status: "pending" });
   await manager.getRepository(BookingAdjustmentEntity).insert(value);
@@ -68,8 +91,33 @@ export async function listExpiredAdjustmentCandidates(manager: EntityManager, lo
     .andWhere(qb => "EXISTS " + qb.subQuery().select("1").from(PaymentAttemptEntity, "attempt")
       .where("attempt.adjustmentId=adjustment.id").andWhere("attempt.status=:attemptStatus").getQuery(),
       { attemptStatus: "pending" })
+    // A live payment keeps its target blocked until it resolves or its lease ends.
+    .andWhere(qb => "NOT EXISTS " + qb.subQuery().select("1").from(CourtReservationEntity, "lease")
+      .where("lease.adjustmentId=adjustment.id").andWhere("lease.status='held'")
+      .andWhere("lease.holdExpiresAt > clock_timestamp()").getQuery())
     .orderBy("adjustment.bookingId").getRawMany();
   return z.array(z.object({ id: z.uuid(), booking_id: z.uuid() })).parse(rows);
+}
+// Completed refunds apply the change; unreported failures enqueue an exception.
+// Already reported failures stay pending without starving later completed changes.
+export async function listDecidableRefundAdjustments(manager: EntityManager, limit: number) {
+  const rows: unknown = await manager.query(`SELECT a.id FROM public.booking_adjustments a
+    WHERE a.status='pending' AND EXISTS (SELECT 1 FROM public.payment_refunds f WHERE f.adjustment_id=a.id)
+      AND (NOT EXISTS (SELECT 1 FROM public.payment_refunds f WHERE f.adjustment_id=a.id AND f.status<>'succeeded')
+        OR EXISTS (SELECT 1 FROM public.payment_refunds f WHERE f.adjustment_id=a.id AND f.status='failed'
+          AND NOT EXISTS (SELECT 1 FROM public.booking_notification_deliveries d WHERE d.event_key='refund:' || f.id::text || ':exception')))
+    ORDER BY a.created_at,a.id LIMIT $1`, [limit]);
+  return z.array(z.object({ id: z.uuid() })).parse(rows).map(row => row.id);
+}
+export async function listBookingsWithPendingChange(manager: EntityManager, bookingIds: readonly string[]) {
+  if (!bookingIds.length) return new Map<string, AdjustmentKind>();
+  const rows = await manager.getRepository(BookingAdjustmentEntity).createQueryBuilder("adjustment")
+    .select("adjustment.bookingId", "booking_id").addSelect("adjustment.kind", "kind")
+    .where("adjustment.bookingId IN (:...bookingIds)", { bookingIds }).andWhere("adjustment.status = 'pending'")
+    .andWhere(qb => "NOT EXISTS " + qb.subQuery().select("1").from(PaymentAttemptEntity, "attempt")
+      .where("attempt.adjustmentId=adjustment.id").getQuery()).getRawMany();
+  return new Map(z.array(z.object({ booking_id: z.uuid(), kind: z.enum(["reschedule", "cancellation"]) })).parse(rows)
+    .map(row => [row.booking_id, row.kind]));
 }
 export async function listAdjustmentRefunds(manager: EntityManager, id: string) {
   return manager.getRepository(PaymentRefundEntity).find({ where: { adjustmentId: id }, order: { createdAt: "ASC", id: "ASC" } });

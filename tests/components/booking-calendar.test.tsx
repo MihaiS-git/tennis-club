@@ -24,7 +24,7 @@ afterEach(cleanup);
 const courts: CourtDay[] = [1, 2].map((index) => ({
   court: { id: `${index}1111111-1111-4111-8111-111111111111`, name: `Court ${index}`, slug: `court-${index}`,
     surface: "clay", environment: "outdoor", has_lighting: false },
-  cells: ["available", "available", "available", "available"], hourlyPrices: [1200, 1200, 2000, 2000], stateLabel: "outdoor",
+  cells: ["available", "available", "available", "available"], hourlyPrices: [1200, 1200, 2000, 2000], rates: [1200, 1200, 2000, 2000], stateLabel: "outdoor",
 }));
 
 it("renders natural court order and keeps the selected court when input order changes", () => {
@@ -103,7 +103,11 @@ it("shows one shared court matrix, hourly prices, and one active selection", () 
   expect(screen.queryByRole("button", { name: "Continue" })).toBeNull();
   expect(screen.getAllByRole("table")).toHaveLength(1);
   expect(screen.getAllByRole("columnheader").map((cell) => cell.textContent)).toEqual(["Court", "16", "17"]);
-  expect(screen.getAllByText("12/h")).toHaveLength(4);
+  // Cells stay uncluttered; prices are bands beneath each court.
+  expect(screen.getAllByRole("button", { name: /^Court \d 2026/ }).every((cell) => cell.textContent === "")).toBe(true);
+  expect(screen.getAllByRole("cell", { name: /^Court \d 16:00–17:00, RON 12\/h$/ })).toHaveLength(2);
+  expect(screen.getAllByRole("cell", { name: /^Court \d 17:00–18:00, RON 20\/h$/ })).toHaveLength(2);
+  expect(screen.getByRole("button", { name: /Court 1 2026-10-01 16:00–16:30, RON 12\/h/ })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: /Court 1 2026-10-01 16:00–16:30/ }));
   expect((screen.getByRole("button", { name: "Continue" }) as HTMLButtonElement).disabled).toBe(false);
   expect(screen.getByText("16:00–17:00 · 60 min")).toBeTruthy();
@@ -308,4 +312,17 @@ it("discards completed confirmation when Next.js hides and restores the route, w
   expect(screen.queryByRole("region", { name: "Booking confirmed" })).toBeNull();
   expect(screen.getByRole("table")).toBeTruthy();
   expect(confirm).toHaveBeenCalledOnce();
+});
+
+it("splits price bands at half-hour rate changes and keeps the rate visible on booked time", () => {
+  const court: CourtDay = { ...courts[0], cells: ["available", "available", "booked", "available"],
+    hourlyPrices: [1200, 1500, null, 2000], rates: [1200, 1500, 1500, 2000] };
+  render(<BookingCalendar onlinePaymentAvailable day={{ times: [960, 990, 1020, 1050], courts: [court] }} date="2026-10-01"
+    locationName="Club" currency="RON" cancellationNoticeMinutes={120} timezone="UTC" />);
+  const bands = within(screen.getByRole("row", { name: "Court 1 hourly prices" })).getAllByRole("cell").filter((cell) => cell.hasAttribute("aria-colspan"));
+  expect(bands.map((band) => [band.getAttribute("aria-label"), band.textContent])).toEqual([
+    ["Court 1 16:00–16:30, RON 12/h", "12"], ["Court 1 16:30–17:30, RON 15/h", "15"], ["Court 1 17:30–18:00, RON 20/h", "20"]]);
+  // The selected-interval quote stays authoritative.
+  fireEvent.click(screen.getByRole("button", { name: /Court 1 2026-10-01 16:00–16:30/ }));
+  expect(screen.getByText(/Total:/).textContent).toMatch(/RON\s*13\.50/);
 });

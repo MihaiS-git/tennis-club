@@ -1,13 +1,10 @@
 // @vitest-environment jsdom
-import { lastToast } from "../helpers/notifications";
-import { installDialogMock } from "../helpers/dialog";
 import { afterEach, expect, test, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { TransactionRow } from "@/app/admin/payments/transaction-row";
 import type { AdminPaymentTransaction } from "@/lib/payments/admin";
-const { retry, reconcile, refresh, push } = vi.hoisted(() => ({ retry: vi.fn(),reconcile: vi.fn(),refresh: vi.fn(), push: vi.fn() }));
-vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh, push }) }));
-vi.mock("@/app/admin/payments/reconciliation-actions", () => ({ retryPaymentRefundAction: retry,resolvePaymentReconciliationAction: reconcile }));
+const { push } = vi.hoisted(() => ({ push: vi.fn() }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
 const contract = {
   revisionId: "cd000000-0000-4000-8000-000000000005", bookingState: "cancelled" as const,
   courtId: "cd000000-0000-4000-8000-000000000006", locationId: "cd000000-0000-4000-8000-000000000007",
@@ -33,40 +30,41 @@ const transaction: AdminPaymentTransaction = {
   customer_name: "Ana Pop", customer_email: "snapshot@example.test", amount_minor: 5000, currency: "RON", method: "online", provider: "stripe",
   payment_status: "succeeded", provider_payment_id: "original-payment", created_at: "2026-10-06T10:00:00Z", updated_at: "2026-10-06T11:00:00Z",
   booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660, court_name: "Court 1", location_name: "Club", location_timezone: "UTC",
-  refund: { executions: [], id: "cd000000-0000-4000-8000-000000000003", amount_minor: 5000, currency: "RON", status: "pending_retry", provider_refund_id: null,
+  refund: { id: "cd000000-0000-4000-8000-000000000003", amount_minor: 5000, currency: "RON", status: "pending_retry", provider_refund_id: null,
     reason: "booking_cancellation", context_revision_id: contract.revisionId, captured_amount_minor: 5000,
-    requested_by_user_id: null, requested_by_name: "Administrator", created_at: "2026-10-06T11:00:00Z", updated_at: "2026-10-06T12:00:00Z", last_error: "provider_request_incomplete" },
-  reconciliation: [], needsAttention: true, canRetryRefund: true,
+    requested_by_user_id: null, requested_by_name: "Administrator", created_at: "2026-10-06T11:00:00Z", updated_at: "2026-10-06T12:00:00Z", recovery_started_at: "2026-10-06T11:00:00Z", last_error: "provider_request_incomplete" },
+  reconciliation: [], needsAttention: false, refundStalled: false,
 };
-installDialogMock();
-afterEach(() => { cleanup();retry.mockReset();reconcile.mockReset();refresh.mockReset(); });
+afterEach(() => { cleanup(); push.mockReset(); });
 
 const lateEvent: AdminPaymentTransaction["reconciliation"][number] = {
-  event_id: "late-capture-event",provider: "stripe",outcome: "succeeded",settlement_result: "expired",
-  reconciliation_required: true,can_refund: true,received_at: "2026-10-06T11:00:00Z",resolved_at: null,resolved_by_user_id: null,
+  event_id: "late-capture-event", provider: "stripe", outcome: "succeeded", settlement_result: "expired",
+  reconciliation_required: true, auto_refund: true, received_at: "2026-10-06T11:00:00Z", resolved_at: null, resolved_by_user_id: null,
 };
-test("retry submits only the refund ID, disables repeated clicks, refreshes and displays success", async () => {
-  if (!transaction.refund) throw new Error("Missing fixture refund");
-  const updated = { ...transaction,needsAttention: false,canRetryRefund: false,refund: { ...transaction.refund,status: "succeeded" as const } };
-  retry.mockResolvedValue({ ok: true,transaction: updated,message: "Full refund succeeded." });
+
+test("routine refund uncertainty explains automatic recovery without manual controls", () => {
   render(<TransactionRow detail transaction={transaction} />);
-  const button = screen.getByRole("button", { name: "Retry refund" });
-  fireEvent.click(button);fireEvent.click(button);
-  expect(button.hasAttribute("disabled")).toBe(true);
-  await waitFor(() => expect(lastToast("success")).toBe("Full refund succeeded."));
-  expect(retry).toHaveBeenCalledExactlyOnceWith(transaction.refund.id);expect(refresh).toHaveBeenCalledOnce();
-  expect(screen.queryByText("Needs attention")).toBeNull();expect(screen.queryByRole("button", { name: "Retry refund" })).toBeNull();
-});
-test("reconciliation submits only event ID and toasts errors without losing detail", async () => {
-  reconcile.mockResolvedValue({ ok: false,message: "Another refund request is in progress. Refresh shortly." });
-  render(<TransactionRow detail transaction={{ ...transaction,refund: null,reconciliation: [lateEvent] }} />);
-  fireEvent.click(screen.getByRole("button", { name: "Refund captured payment" }));
-  await waitFor(() => expect(lastToast()).toContain("in progress"));
-  expect(reconcile).toHaveBeenCalledExactlyOnceWith(lateEvent.event_id);expect(screen.getByRole("region", { name: "Transaction details" })).toBeDefined();
+  expect(screen.getByText("The refund is being confirmed with Stripe automatically. No action is needed.")).toBeDefined();
+  expect(screen.queryByRole("region", { name: "Needs attention" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Retry refund" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Refund captured payment" })).toBeNull();
 });
 
-test("NETOPIA transactions and events expose no Stripe recovery actions", () => {
-  render(<TransactionRow detail transaction={{ ...transaction,provider: "netopia",canRetryRefund: false,reconciliation: [{ ...lateEvent,provider: "netopia",can_refund: false }] }} />);
+test("late captured payment explains automatic compensation without reclaiming the court", () => {
+  render(<TransactionRow detail transaction={{ ...transaction, refund: null, reconciliation: [lateEvent], needsAttention: true }} />);
+  const attention = within(screen.getByRole("region", { name: "Needs attention" }));
+  expect(attention.getByText(/court was not reclaimed; the payment is being returned automatically/)).toBeDefined();
+  expect(screen.queryByRole("button", { name: "Refund captured payment" })).toBeNull();
+});
+
+test("mismatched captured evidence requires investigation rather than automatic compensation", () => {
+  render(<TransactionRow detail transaction={{ ...transaction, refund: null, reconciliation: [{ ...lateEvent,
+    settlement_result: "amount_mismatch", auto_refund: false }], needsAttention: true }} />);
+  expect(screen.getByText(/amount Stripe received does not match.*Review this payment in Stripe/)).toBeDefined();
+});
+
+test("NETOPIA transactions expose no manual Stripe recovery actions", () => {
+  render(<TransactionRow detail transaction={{ ...transaction, provider: "netopia" }} />);
   expect(screen.queryByRole("button", { name: "Retry refund" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Refund captured payment" })).toBeNull();
 });
@@ -86,117 +84,61 @@ test("a partial refund leaves its original payment partially refunded", () => {
   expect(screen.queryByText("Paid · Fully refunded")).toBeNull();
 });
 
-test.each(["success", "error"])("financial details ignore late %s responses after disposal", async outcome => {
-  let finish!: (value: unknown) => void;
-  retry.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
-  const view = render(<TransactionRow detail transaction={transaction} />);
-  fireEvent.click(screen.getByRole("button", { name: "Retry refund" }));
-  expect(screen.getByRole("status").textContent).toBe("Processing financial operation…");
-  view.unmount();
-  await act(async () => finish(outcome === "success" ? { ok: true, transaction, message: "Finished" } : { ok: false, message: "Failed" }));
-  expect(refresh).not.toHaveBeenCalled();
-});
-
-test.each(["pending", "unsuccessful"] as const)("%s proposal is separate from the accepted transaction context", status => {
-  const proposal = { adjustmentId: "cd000000-0000-4000-8000-000000000008", courtId: contract.courtId,
-    date: "2099-10-16", startMinute: 720, endMinute: 810, expectedUpdatedAt: transaction.updated_at,
+test.each(["pending", "unsuccessful"] as const)("%s proposal stays separate from the immutable transaction context", status => {
+  const proposal: NonNullable<AdminPaymentTransaction["proposal"]> = {
+    adjustmentId: "cd000000-0000-4000-8000-000000000008", kind: "reschedule", courtId: contract.courtId,
+    date: "2099-10-16", startMinute: 720, endMinute: 810,
     courtName: "Proposed Court", locationName: "Proposed Club", timezone: "Europe/Bucharest",
-    totalAmountMinor: 7500, currency: "RON" as const, status, acceptedRevisionId: null };
-  render(<TransactionRow detail transaction={{ ...transaction, transaction_kind: "payment", operation_label: "Additional adjustment payment",
-    refund: null, context: { ...contract, bookingState: "confirmed", source: "adjustment_base", confirmationRevisionId: null }, proposal,
+    totalAmountMinor: 7500, currency: "RON", status, acceptedRevisionId: null,
+  };
+  render(<TransactionRow detail transaction={{ ...transaction, transaction_kind: "payment", refund: null,
+    context: { ...contract, bookingState: "confirmed", source: "adjustment_base", confirmationRevisionId: null }, proposal,
     current_booking: { ...contract, courtName: "Current Court", totalAmountMinor: 10000, status: "confirmed" } }} />);
-  expect(screen.getByText(status === "pending" ? "Proposed — Pending" : "Proposed — Not applied (unsuccessful)")).toBeDefined();
-  expect(screen.getByText("Proposed Court")).toBeDefined();
-  expect(screen.getByText("Transaction context")).toBeDefined();
-  expect(screen.getByText("Current booking summary")).toBeDefined();
-  expect(screen.getByText(/Booking total:.*100\.00/)).toBeDefined();
-  expect(screen.getByText("Contract total").nextElementSibling?.textContent).toMatch(/50\.00/);
+  const modification = within(screen.getByRole("region", { name: "Modification" }));
+  expect(modification.getByText("Requested modification (not applied)")).toBeDefined();
+  expect(modification.getByText("Club · Court 1")).toBeDefined();
+  expect(modification.getByText("Proposed Club · Proposed Court")).toBeDefined();
+  expect(modification.queryByText(/Current Court/)).toBeNull();
+  expect(modification.getByText(/50\.00/)).toBeDefined();
+  expect(modification.getByText(/75\.00/)).toBeDefined();
 });
 
-test("compensation shows its immutable reason and never claims booking confirmation", () => {
+test("compensation retains immutable context and the provider-confirmed outcome", () => {
   if (!transaction.refund) throw new Error("Missing refund fixture");
   render(<TransactionRow detail transaction={{ ...transaction, operation_label: "Late capture compensation",
     context: { ...contract, bookingState: "pending_payment", source: "refund_context", confirmationRevisionId: null },
-    refund: { ...transaction.refund, reason: "late_capture_compensation" } }} />);
-  expect(screen.getAllByText("Late capture compensation")).toHaveLength(2);
-  expect(screen.getByText("Original pending checkout request")).toBeDefined();
-  expect(screen.getByText("Current booking status: Cancelled")).toBeDefined();
-  expect(screen.queryByText("Accepted booking")).toBeNull();
+    transaction_status: "succeeded", refund: { ...transaction.refund, status: "succeeded", reason: "late_capture_compensation",
+      provider_refund_id: "re_confirmed" } }} />);
+  expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("Late capture compensation");
+  expect(screen.getByText("The refund was confirmed by Stripe.")).toBeDefined();
+  expect(screen.getByText("Club · Court 1")).toBeDefined();
+  expect(screen.getByText("re_confirmed")).toBeDefined();
   expect(screen.queryByText("Confirmation revision")).toBeNull();
 });
 
-
 test.each([
-  ["provider_request_rejected", "The provider definitively rejected this refund request."],
-  ["uncertain", "The refund request may have been accepted. Its outcome is not yet confirmed."],
-  ["lookup_failed", "The provider refund could not be checked. Its outcome remains unconfirmed."],
-  ["not_found", "The previous refund request could not be recovered. Its outcome remains uncertain."],
-  ["evidence_mismatch", "The provider response did not match the stored refund request. Review is required."],
-])("execution recovery error %s retains safe Admin detail", (last_error, message) => {
+  ["provider_refund_failed", "Stripe reported that the refund failed."],
+  ["provider_request_rejected", "Stripe declined this refund."],
+])("definitive %s explains external repayment", (last_error, message) => {
   if (!transaction.refund) throw new Error("Missing refund fixture");
-  render(<TransactionRow detail transaction={{ ...transaction, refund: { ...transaction.refund, last_error } }} />);
-  expect(screen.getByText(message)).toBeDefined();
+  render(<TransactionRow detail transaction={{ ...transaction, transaction_status: "failed", needsAttention: true,
+    refund: { ...transaction.refund, status: "failed", last_error } }} />);
+  expect(screen.getByText(new RegExp(message.replaceAll(".", "\\.")))).toBeDefined();
+  expect(screen.getByText(/arrange the repayment with the customer directly/)).toBeDefined();
 });
 
+test("stalled recovery requests investigation without offering another refund", () => {
+  render(<TransactionRow detail transaction={{ ...transaction, needsAttention: true, refundStalled: true }} />);
+  expect(screen.getByText(/over a day.*Check it in the Stripe Dashboard/)).toBeDefined();
+  expect(screen.getByText(/Do not issue another refund/)).toBeDefined();
+  expect(screen.queryByRole("button")).toBeNull();
+});
 
-test.each([
-  ["succeeded"], ["failed", "succeeded"], ["rejected", "succeeded"], ["uncertain"], ["pending"], ["ready"],
-] as const)("execution history displays %j without changing obligation or context", (...statuses) => {
+test("Admin detail excludes execution internals and raw provider errors", () => {
   if (!transaction.refund) throw new Error("Missing refund fixture");
-  const executions: NonNullable<AdminPaymentTransaction["refund"]>["executions"] = statuses.map((status, index) => {
-    const terminalResult = status === "succeeded" || status === "failed" || status === "rejected" ? status : null;
-    return { id: `execution-${index + 1}`, executionNumber: index + 1, provider: "stripe", providerPaymentId: "original-payment",
-      amountMinor: 5000, currency: "RON", createdAt: "2026-10-06T10:00:00Z",
-      dispatchInitiatedAt: status === "ready" ? null : "2026-10-06T10:01:00Z",
-      providerRefundId: status === "rejected" || status === "uncertain" || status === "ready" ? null : `re_historical_${index + 1}`,
-      firstUncertainAt: status === "uncertain" ? "2026-10-06T10:02:00Z" : null,
-      terminalResult, completedAt: terminalResult ? "2026-10-06T10:03:00Z" : null,
-      status, lastCheckedAt: status === "ready" ? null : "2026-10-06T10:04:00Z",
-      lastError: index === 0 ? "raw secret exception" : null, unresolved: terminalResult === null };
-  });
-  render(<TransactionRow detail transaction={{ ...transaction, refund: { ...transaction.refund, last_error: null, executions } }} />);
-  const history = screen.getByText("Refund execution history").closest("section");
-  if (!history) throw new Error("Missing history section");
-  const view = within(history);
-  expect(view.getAllByRole("heading", { level: 3 }).slice(1).map(heading => heading.textContent))
-    .toEqual(statuses.map((_, index) => `Execution ${index + 1}`));
-  for (const execution of executions) {
-    const block = view.getByText(`Execution ${execution.executionNumber}`).parentElement;
-    if (!block) throw new Error("Missing execution block");
-    const fields = within(block);
-    expect(fields.getByText(execution.id)).toBeDefined();
-    expect(fields.getByText("Requested amount").nextElementSibling?.textContent).toMatch(/50\.00/);
-    expect(fields.getByText("Unresolved").nextElementSibling?.textContent).toBe(execution.unresolved ? "Yes" : "No");
-    if (execution.providerRefundId) expect(fields.getByText(execution.providerRefundId)).toBeDefined();
-    expect(fields.getByText("Verified completion").nextElementSibling?.textContent)
-      .toBe(execution.completedAt ? "6 Oct 2026, 10:03 UTC" : "—");
-    if (!execution.terminalResult) expect(fields.getByText("No confirmed outcome")).toBeDefined();
-  }
-  expect(view.queryByText(/raw secret/)).toBeNull();
-  expect(view.getByText("A refund processing error was recorded.")).toBeDefined();
-  expect(screen.getByText("Reason").nextElementSibling?.textContent).toBe("Booking cancellation");
-  expect(screen.getByText("Contract total").nextElementSibling?.textContent).toMatch(/50\.00/);
-});
-
-test("an obligation without an execution shows an explicit empty history", () => {
-  render(<TransactionRow detail transaction={transaction} />);
-  expect(screen.getByText("No executions recorded.")).toBeDefined();
-});
-
-test("financial details separate currencies and identify mismatched captures", () => {
-  const mismatch: AdminPaymentTransaction["financials"]["captures"][number] = {
-    ...transaction.financials.captures[0], id: "capture-mismatch", providerCaptureId: "capture-usd",
-    amount: 7500, currency: "USD", discrepancies: ["amount", "currency"],
-  };
-  render(<TransactionRow detail transaction={{ ...transaction, financials: { ...transaction.financials,
-    totals: [
-      { currency: "RON", captured: 5000, refunded: 5000, netPaid: 0, refundObligations: 5000, uncompletedRefundObligations: 0 },
-      { currency: "USD", captured: 7500, refunded: 0, netPaid: 7500, refundObligations: 0, uncompletedRefundObligations: 0 },
-    ], captures: [...transaction.financials.captures, mismatch] } }} />);
-  expect(screen.getByText(/RON: Captured.*50\.00.*Refunded.*50\.00.*Net.*0\.00/)).toBeDefined();
-  expect(screen.getByText(/USD: Captured.*75\.00.*Refunded.*0\.00.*Net.*75\.00/)).toBeDefined();
-  expect(screen.getByText((_, element) => element?.tagName === "P"
-    && element.textContent?.includes("Capture capture-usd:") === true).textContent).toMatch(/75\.00/);
-  expect(screen.getByText((_, element) => element?.tagName === "P"
-    && element.textContent?.includes("Discrepancy: amount, currency") === true).textContent).toMatch(/Requested.*50\.00/);
+  render(<TransactionRow detail transaction={{ ...transaction, refund: { ...transaction.refund, last_error: "raw secret exception" } }} />);
+  expect(screen.queryByText(/raw secret/)).toBeNull();
+  expect(screen.queryByRole("region", { name: "Refund execution history" })).toBeNull();
+  expect(screen.queryByText("Technical details")).toBeNull();
+  expect(screen.queryByText("capture-original")).toBeNull();
 });

@@ -18,17 +18,17 @@ const safeRefundError = (value: string | null) => value === null ? null
 const timestamp = z.iso.datetime({ offset: true });
 const refundSchema = z.object({ id: z.uuid(), amount_minor: z.number().int().positive(), currency: z.enum(locationCurrencies),
   reason: z.enum(refundReasons), context_revision_id: z.uuid(),
-  status: z.enum(["pending", "pending_retry", "succeeded", "failed"]), provider_refund_id: z.string().nullable(),
+  status: z.enum(["pending", "pending_retry", "succeeded", "failed", "voided"]), provider_refund_id: z.string().nullable(),
   captured_amount_minor: z.number().int().positive(),
   requested_by_user_id: z.uuid().nullable(), requested_by_name: z.string().nullable(),
-  created_at: timestamp, updated_at: timestamp, last_error: z.string().nullable() });
+  created_at: timestamp, updated_at: timestamp, recovery_started_at: timestamp, last_error: z.string().nullable() });
 const transactionSchema = z.object({
   transaction_kind: z.enum(["payment", "refund", "booking"]), transaction_id: z.uuid(),
   payment_attempt_id: z.uuid().nullable(), adjustment_id: z.uuid().nullable(),
   context_revision_id: z.uuid(), current_revision_id: z.uuid(), base_revision_id: z.uuid().nullable(),
   applied_revision_id: z.uuid().nullable(), confirmation_revision_id: z.uuid().nullable(),
   adjustment_status: z.enum(["pending", "applied", "cancelled", "expired", "unsuccessful"]).nullable(),
-  transaction_status: z.enum(["pending", "pending_retry", "succeeded", "failed", "cancelled", "expired", "due"]).nullable(),
+  transaction_status: paymentStatusSchema.nullable(),
   refunded_minor: z.number().int().nonnegative(), booking_id: z.uuid(), reservation_id: z.uuid(),
   amount_minor: z.number().int().positive(), currency: z.enum(locationCurrencies), method: paymentMethodSchema.nullable(),
   provider: paymentProviderSchema.nullable(), payment_status: paymentStatusSchema.nullable(), provider_payment_id: z.string().nullable(),
@@ -47,12 +47,6 @@ export async function readFinancialHistory(manager: EntityManager, query: Parame
     row.base_revision_id, row.confirmation_revision_id]).filter((id): id is string => id !== null))];
   const adjustmentIds = [...new Set(page.rows.map(row => row.adjustment_id).filter((id): id is string => id !== null))];
   const facts = await loadAdminTransactionContext(manager, { bookingIds, revisionIds, adjustmentIds });
-  const executionHistory = new Map<string, typeof facts.executions>();
-  for (const execution of facts.executions) {
-    const history = executionHistory.get(execution.refundId) ?? [];
-    history.push(execution);
-    executionHistory.set(execution.refundId, history);
-  }
   const revisions = new Map(facts.revisions.map(revision => [revision.id, revision]));
   const adjustments = new Map(facts.adjustments.map(adjustment => [adjustment.id, adjustment]));
   const financials = new Map(bookingIds.map(id => [id, summarizeReportedFinancials({
@@ -78,17 +72,8 @@ export async function readFinancialHistory(manager: EntityManager, query: Parame
     const financial = financials.get(row.booking_id);
     if (!financial) throw new Error("Missing booking financial facts");
     return { ...operation,
-      refund: row.refund ? { ...row.refund, last_error: safeRefundError(row.refund.last_error),
-        executions: (executionHistory.get(row.refund.id) ?? []).map(execution => ({
-          id: execution.id, executionNumber: execution.executionNumber, provider: execution.provider,
-          providerPaymentId: execution.providerPaymentId, amountMinor: execution.amountMinor, currency: execution.currency,
-          createdAt: execution.createdAt.toISOString(), dispatchInitiatedAt: execution.dispatchInitiatedAt?.toISOString() ?? null,
-          providerRefundId: execution.providerRefundId, firstUncertainAt: execution.firstUncertainAt?.toISOString() ?? null,
-          terminalResult: execution.terminalResult, completedAt: execution.completedAt?.toISOString() ?? null,
-          status: execution.status, lastCheckedAt: execution.lastCheckedAt?.toISOString() ?? null,
-          lastError: safeRefundError(execution.lastError),
-          unresolved: ["ready", "pending", "uncertain"].includes(execution.status),
-        })) } : null,
+      // Provider execution internals stay server-side; only safe outcomes cross.
+      refund: row.refund ? { ...row.refund, last_error: safeRefundError(row.refund.last_error) } : null,
       ...describeFinancialContext({ kind: row.transaction_kind, revision, base,
         adjustment: adjustment ? { ...adjustment, currency: z.enum(locationCurrencies).parse(adjustment.currency) } : null,
         adjustmentStatus: adjustment_status, appliedRevisionId: applied_revision_id,

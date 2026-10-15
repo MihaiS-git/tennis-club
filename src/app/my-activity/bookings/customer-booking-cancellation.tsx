@@ -38,7 +38,7 @@ export function CustomerBookingCancellation({ booking, staff, onCancelled, onPen
     try {
       const result = await cancelOwnCustomerBookingAction(booking.id);
       if (!result.ok) { toast.error(result.message, { id: notification }); return; }
-      cancelledMessage = cancelledBookingMessage(result.refundStatus);
+      cancelledMessage = cancelledBookingMessage(result);
       setConfirming(false);
       await onCancelled();
       toast.success(cancelledMessage, { id: notification });
@@ -51,8 +51,14 @@ export function CustomerBookingCancellation({ booking, staff, onCancelled, onPen
     }
   }
 
+  // A requested change waits for its verified refund; the booking stays confirmed.
+  if (booking.pending_change) return <p role="status" className="text-sm text-muted-foreground">
+    {booking.pending_change === "cancellation"
+      ? "Cancellation in progress. Your booking stays confirmed until the refund is confirmed; you will be emailed if it cannot be completed."
+      : "Your booking change is waiting for its refund to be confirmed. The current booking stays unchanged until then."}
+  </p>;
   return <>
-    {eligibility === "eligible" && onEdit && <button type="button" disabled={pending}
+    {eligibility === "eligible" && onEdit && !booking.payment_pending && <button type="button" disabled={pending}
       onClick={onEdit} className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold text-primary">Edit booking</button>}
     {eligibility === "eligible" ? <button ref={triggerRef} type="button" disabled={pending}
       onClick={() => { setNow(new Date()); setConfirming(true); }}

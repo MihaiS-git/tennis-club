@@ -37,5 +37,5 @@ test("preserves the active-account message when the locked actor becomes inactiv
 });
 test("successful owner cancellation without refunds needs no provider", async () => {
   command.mockResolvedValue({ outcome: "cancelled", refundIds: [] });
-  expect(await cancelOwnCustomerBooking(id, client)).toEqual({ ok: true });
+  expect(await cancelOwnCustomerBooking(id, client)).toEqual({ ok: true, outcome: "cancelled" });
 });

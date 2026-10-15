@@ -4,7 +4,7 @@ import Stripe from "stripe";
 import { RefundProviderError } from "../types";
 import { stripeClient, StripeProviderError } from "./client";
 import { stripeConfig } from "./config";
-import type { OnlinePaymentAdapter, OnlinePaymentEvent } from "../types";
+import type { OnlinePaymentAdapter, OnlinePaymentEvent, OnlinePaymentProcessing } from "../types";
 
 export const stripeAdapter: OnlinePaymentAdapter = {
   async resumePayment(attempt) {
@@ -27,58 +27,65 @@ export const stripeAdapter: OnlinePaymentAdapter = {
       // This integration creates automatic-capture PaymentIntents. The intent
       // is the stable provider identity for its one successful collection.
       providerCaptureId: intent.status === "succeeded" ? intent.id : null,
+      live: liveIntent(intent.status),
     };
   },
   async refundPayment(refund) {
     const client = stripeClient();
     let result: Stripe.Refund | undefined;
     let operation: "discover" | "retrieve" | "create" = "discover";
+    // Fully paginate the payment's refunds even when a local provider ID exists.
+    // Metadata binds evidence to this exact immutable obligation/execution; amount
+    // alone is never enough. Multiple matching records are an explicit exception.
+    try {
+      for await (const existing of client.refunds.list({
+        payment_intent: refund.providerPaymentId, limit: 100,
+      })) {
+        if (existing.metadata?.payment_refund_id === refund.id
+          && existing.metadata.refund_execution_id === refund.executionId) {
+          if (result) throw new RefundProviderError({ kind: "evidence_mismatch", operation,
+            providerRefundId: existing.id });
+          result = existing;
+        }
+      }
+    } catch (error) {
+      if (error instanceof RefundProviderError) throw error;
+      throw new RefundProviderError({ kind: "lookup_failed", operation, providerRefundId: refund.providerRefundId });
+    }
     if (refund.providerRefundId) {
       operation = "retrieve";
+      if (!result || result.id !== refund.providerRefundId)
+        throw new RefundProviderError({ kind: "evidence_mismatch", operation, providerRefundId: refund.providerRefundId });
+      try { result = await client.refunds.retrieve(refund.providerRefundId); }
+      catch { throw new RefundProviderError({ kind: "lookup_failed", operation, providerRefundId: refund.providerRefundId }); }
+    }
+    if (!result) {
+      // An empty lookup cannot prove that an earlier request was not accepted.
+      // Recovery must not rely on indefinite provider idempotency retention;
+      // a replay re-sends the identical request under its original key, which
+      // Stripe resolves to the first refund if that request had executed.
+      if (refund.operation === "recover" || refund.dispatchInitiatedAt !== undefined
+        && !(Date.now() - Date.parse(refund.dispatchInitiatedAt) < 23 * 60 * 60 * 1000))
+        throw new RefundProviderError({ kind: "not_found", operation: "discover", providerRefundId: null });
+      operation = "create";
       try {
-        result = await client.refunds.retrieve(refund.providerRefundId);
-      } catch {
-        throw new RefundProviderError({ kind: "lookup_failed", operation,
-          providerRefundId: refund.providerRefundId });
-      }
-    } else {
-      try {
-        for await (const existing of client.refunds.list({
-          payment_intent: refund.providerPaymentId, limit: 100,
-        })) {
-          if (existing.metadata?.payment_refund_id === refund.id
-            && existing.metadata.refund_execution_id === refund.executionId) {
-            result = existing;
-            break;
-          }
-        }
-      } catch {
-        throw new RefundProviderError({ kind: "lookup_failed", operation, providerRefundId: null });
-      }
-      if (!result) {
-        // An empty lookup cannot prove that an earlier request was not accepted.
-        // Recovery must not rely on indefinite provider idempotency retention.
-        if (refund.operation === "recover")
-          throw new RefundProviderError({ kind: "not_found", operation, providerRefundId: null });
-        operation = "create";
-        try {
-          result = await client.refunds.create(
-            {
-              payment_intent: refund.providerPaymentId,
-              amount: refund.amountMinor,
-              metadata: { payment_refund_id: refund.id, refund_execution_id: refund.executionId },
-            },
-            { idempotencyKey: refund.idempotencyKey },
-          );
-        } catch (error) {
-          // Require an actual rejection response, not merely an exception class.
-          // Conflict/idempotency errors may concern an already running operation.
-          const rejected = error instanceof Stripe.errors.StripeInvalidRequestError
-            && [400, 404, 422].includes(error.statusCode ?? 0)
-            && error.code !== "idempotency_key_in_use";
-          throw new RefundProviderError({ kind: rejected ? "request_rejected" : "uncertain",
-            operation, providerRefundId: null });
-        }
+        result = await client.refunds.create(
+          {
+            payment_intent: refund.providerPaymentId,
+            amount: refund.amountMinor,
+            metadata: { payment_refund_id: refund.id, refund_execution_id: refund.executionId },
+          },
+          { idempotencyKey: refund.idempotencyKey },
+        );
+      } catch (error) {
+        // Require an actual rejection response, not merely an exception class.
+        // Conflict/idempotency errors may concern an already running operation.
+        const rejected = error instanceof Stripe.errors.StripeInvalidRequestError
+          && [400, 404, 422].includes(error.statusCode ?? 0)
+          && error.code !== "idempotency_key_in_use";
+        throw new RefundProviderError({ kind: rejected ? "request_rejected" : "uncertain",
+          operation, providerRefundId: null,
+          ...(rejected ? { retryable: error.code === "balance_insufficient", failureReason: error.code ?? "invalid_request" } : {}) });
       }
     }
     if ((refund.providerRefundId && result.id !== refund.providerRefundId)
@@ -91,6 +98,10 @@ export const stripeAdapter: OnlinePaymentAdapter = {
         providerRefundId: refund.providerRefundId ?? result.id });
     return {
       providerRefundId: result.id,
+      // Retry only a known transient failure after authoritative terminal failure.
+      // Card/bank refusal, disputes and unknown reasons require external resolution.
+      retryable: result.status === "failed" && result.failure_reason === "insufficient_funds",
+      failureReason: result.failure_reason ?? undefined,
       status: result.status === "succeeded" ? "succeeded"
         : result.status === "failed" || result.status === "canceled" ? "failed" : "pending",
     };
@@ -126,6 +137,27 @@ export const stripeAdapter: OnlinePaymentAdapter = {
       throw new StripeProviderError("cancellation");
     }
   },
+  async dismissPayment(attempt) {
+    const client = stripeClient();
+    const read = async () => {
+      const intent = await client.paymentIntents.retrieve(attempt.providerPaymentId);
+      if (intent.id !== attempt.providerPaymentId || intent.metadata.payment_attempt_id !== attempt.id)
+        throw new StripeProviderError("cancellation");
+      return intent.status;
+    };
+    const settled = (status: Stripe.PaymentIntent.Status) => status === "canceled" ? "cancelled" as const
+      : status === "succeeded" ? "succeeded" as const : liveIntent(status) ? "live" as const : null;
+    const current = settled(await read());
+    if (current) return current;
+    try {
+      const cancelled = await client.paymentIntents.cancel(attempt.providerPaymentId,
+        { cancellation_reason: "abandoned" }, { idempotencyKey: `court-payment-abandon-${attempt.id}` });
+      if (cancelled.status === "canceled") return "cancelled";
+    } catch { /* The intent may have moved to processing or succeeded; re-read it. */ }
+    const latest = settled(await read());
+    if (latest) return latest;
+    throw new StripeProviderError("cancellation");
+  },
   async createPayment(attempt) {
     try {
       const intent = await stripeClient().paymentIntents.create(
@@ -152,10 +184,15 @@ export const stripeAdapter: OnlinePaymentAdapter = {
   },
 };
 
+// Automatic capture only: requires_capture is listed for completeness.
+function liveIntent(status: Stripe.PaymentIntent.Status) {
+  return status === "processing" || status === "requires_capture";
+}
+
 export function verifyStripeEvent(
   body: string,
   signature: string,
-): OnlinePaymentEvent | null {
+): OnlinePaymentEvent | OnlinePaymentProcessing | null {
   let event;
   try {
     event = stripeClient().webhooks.constructEvent(
@@ -165,6 +202,11 @@ export function verifyStripeEvent(
     );
   } catch {
     throw new StripeProviderError("signature");
+  }
+  if (event.type === "payment_intent.processing") {
+    const attemptId = z.uuid().safeParse(event.data.object.metadata.payment_attempt_id);
+    return attemptId.success ? { provider: "stripe", attemptId: attemptId.data,
+      providerPaymentId: event.data.object.id, outcome: "processing" } : null;
   }
   if (
     event.type !== "payment_intent.succeeded" &&

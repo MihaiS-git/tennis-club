@@ -3,11 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ReservationEditForm, type ReservationEditDraft } from "@/components/reservation-edit-form";
-import { Button } from "@/components/button";
 import type { AdminBooking, InternalLocation } from "@/lib/reservations/service";
 import type { BookingEditContext } from "@/lib/bookings/reschedule";
 import { OnlinePayment } from "@/app/book/online-payment";
-import { abandonCheckoutAction } from "@/app/book/actions";
 import type { BookingRescheduleResult } from "@/lib/bookings/reschedule";
 import { minuteToTime } from "@/lib/admin/opening-hours-validation";
 import { formatMoney } from "@/lib/pricing/money";
@@ -61,7 +59,7 @@ function BookingPrice({ id, context, draft, currency, quote, acknowledged, onQuo
       {formatMoney(Math.abs(currentQuote.total - context.total_amount_minor), currency)}
     </p>}
     {context.refunds.map(refund => <p key={refund.id} className="mt-2">
-      Refund {formatMoney(refund.amount, currency)}: {refund.status === "succeeded" ? "completed" : refund.status === "failed" ? "failed; the club can retry it" : "pending or awaiting retry"}
+      Refund {formatMoney(refund.amount, currency)}: {refund.status === "succeeded" ? "completed" : refund.status === "failed" ? "could not be completed; the club will contact you" : refund.status === "voided" ? "not made; the change was abandoned" : "being completed automatically"}
     </p>)}
     {currentQuote && (currentQuote.total !== context.total_amount_minor || currentQuote.requiresConfirmation) && <label className="mt-2 flex items-center gap-2">
       <input type="checkbox" checked={acknowledged} disabled={pending} onChange={(event) => onAcknowledge(event.target.checked)} />
@@ -70,9 +68,11 @@ function BookingPrice({ id, context, draft, currency, quote, acknowledged, onQuo
   </section>;
 }
 
-export function BookingEditForm({ booking, location, onCancel, onSaved, onPendingChange, actions = ownerActions }: {
+export function BookingEditForm({ booking, location, onCancel, onSaved, onPendingChange, onAdjustment, actions = ownerActions }: {
   booking: Pick<AdminBooking, "id" | "booking_date" | "currency">; location?: Pick<InternalLocation, "name" | "courts">; actions?: BookingEditActions; onCancel: () => void;
   onSaved: () => Promise<void>; onPendingChange: (value: boolean) => void;
+  // The unpaid modification created in this dialog, which X must dismiss.
+  onAdjustment?: (id: string | null) => void;
 }) {
   const active = useRef(true);
   const [context, setContext] = useState<BookingEditContext | null>(null);
@@ -81,8 +81,6 @@ export function BookingEditForm({ booking, location, onCancel, onSaved, onPendin
   const [acknowledged, setAcknowledged] = useState(false);
   const [adjustment, setAdjustment] = useState<Extract<BookingRescheduleResult, { ok: true }> | null>(null);
   const request = useRef<{ key: string; id: string } | null>(null);
-  const [cancelling, setCancelling] = useState(false);
-  const [paymentEnded, setPaymentEnded] = useState(false);
   // Stable setter identity avoids restarting a quote on every render.
   const receiveQuote = useCallback((value: Quote | null) => { setQuote(value); setAcknowledged(false); }, []);
   useEffect(() => {
@@ -93,12 +91,8 @@ export function BookingEditForm({ booking, location, onCancel, onSaved, onPendin
     // dismiss before publication and leave an infinite loading toast on screen.
     let notification: string | number | undefined;
     actions.load(booking.id, booking.booking_date).then((result) => {
-      if (!disposed) {
-        setContext(result.booking);
-        if (result.booking.pending_adjustment_id) setAdjustment({ ok: true,
-          totalAmountMinor: result.booking.adjustment_total_minor ?? result.booking.total_amount_minor, adjustmentId: result.booking.pending_adjustment_id,
-          adjustmentStatus: result.booking.adjustment_status ?? "pending", paymentRecoveryRequired: result.booking.payment_recovery_required, target: result.booking.adjustment_target, ...result.adjustment });
-      }
+      // Every Edit opens a fresh form; earlier modifications are never resumed.
+      if (!disposed) setContext(result.booking);
     }).catch(() => { if (!disposed) {
       setError("This booking is no longer available to edit. Close and reopen its details.");
       notification = toast.error("This booking is no longer available to edit. Close and reopen its details.");
@@ -129,47 +123,19 @@ export function BookingEditForm({ booking, location, onCancel, onSaved, onPendin
       {adjustment.refundStatus && <dl className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
         <dt className="text-muted-foreground">Refund status</dt>
         <dd role="status" className={`rounded-full px-3 py-1 text-xs font-semibold ${adjustment.refundStatus === "succeeded" ? "bg-success-background text-success" : adjustment.refundStatus === "failed" ? "bg-danger-background text-danger" : "bg-warning-background text-foreground"}`}>
-          {adjustment.refundStatus === "succeeded" ? "Refund completed" : adjustment.refundStatus === "failed" ? "Refund failed; the club can retry it" : "Refund pending; the club can reconcile or retry it"}
+          {adjustment.refundStatus === "succeeded" ? "Refund completed" : adjustment.refundStatus === "failed" ? "Refund could not be completed; the club will contact you" : "Refund being confirmed automatically"}
         </dd>
       </dl>}
     </div>
-    {adjustment.adjustmentStatus === "pending" ? <>
+    {adjustment.adjustmentStatus === "pending" && adjustment.refundStatus ? <p role="status" className="text-muted-foreground">
+      Your original booking remains confirmed. The change is applied automatically once the refund is confirmed; you will be emailed if it cannot be completed.</p>
+    : adjustment.adjustmentStatus === "pending" ? <>
       <p className="text-muted-foreground">Your original booking remains confirmed until payment and the change are verified.</p>
       {adjustment.checkout && adjustment.holdExpiresAt ? <OnlinePayment checkout={adjustment.checkout}
-        holdExpiresAt={adjustment.holdExpiresAt} disabled={cancelling} confirmationMessage="Booking modification completed."
-        onPaymentStatus={(status) => { if (["cancelled", "expired", "refunded", "refund_pending", "refund_failed"].includes(status)) setPaymentEnded(true); }}
-        onConfirmed={() => { if (!active.current) return; void onSaved().catch(() => toast.warning("Booking modification completed. Unable to refresh its details.")); }} />
-        : <Button type="button" variant="secondary" onClick={() => {
-          void actions.load(booking.id, booking.booking_date).then(result => {
-            if (!active.current) return;
-            if (result.adjustment) setAdjustment(current => current && ({ ...current, ...result.adjustment }));
-            else toast.info("The payment is no longer pending. Close and reopen booking details.");
-          }).catch(() => { if (active.current) toast.error("Unable to recover payment. Please try again."); });
-        }}>Recover additional payment</Button>}
-      {adjustment.checkout && !paymentEnded && <Button type="button" variant="secondary" fullWidth disabled={cancelling} aria-busy={cancelling} onClick={() => {
-        const checkout = adjustment.checkout;
-        if (cancelling || !checkout) return;
-        setCancelling(true);
-        void abandonCheckoutAction({ attemptId: checkout.attemptId, token: checkout.token }).then(result => {
-          if (!active.current) return;
-          if (result.ok) { setPaymentEnded(true); toast.info("Modification cancelled. The original booking is preserved."); }
-          else toast.warning(result.message);
-        }).catch(() => { if (active.current) toast.warning("Cancellation outcome is uncertain. Reopen details to recover it."); })
-          .finally(() => setCancelling(false));
-      }}>Cancel modification</Button>}
-    </> : <>
-      {adjustment.adjustmentStatus !== "applied" && <p className="text-muted-foreground">The original booking was preserved.</p>}
-      {adjustment.paymentRecoveryRequired && <>
-        <p>The additional payment cancellation is still being checked. Do not pay again yet.</p>
-        <Button type="button" variant="secondary" onClick={() => {
-          void actions.load(booking.id,booking.booking_date).then(result => {
-            if (!active.current) return;
-            if (!result.booking.pending_adjustment_id) void onSaved();
-            else toast.warning("Payment outcome is still uncertain. Retry recovery shortly.");
-          }).catch(() => { if (active.current) toast.warning("Unable to establish the payment outcome. Retry recovery shortly."); });
-        }}>Recover payment outcome</Button>
-      </>}
-    </>}
+        holdExpiresAt={adjustment.holdExpiresAt} confirmationMessage="Booking modification completed."
+        onConfirmed={() => { if (!active.current) return; onAdjustment?.(null); void onSaved().catch(() => toast.warning("Booking modification completed. Unable to refresh its details.")); }} />
+        : <p role="status">Payment could not be started. Close this window; your booking has not changed.</p>}
+    </> : adjustment.adjustmentStatus !== "applied" && <p className="text-muted-foreground">The original booking was preserved.</p>}
   </section>;
   const fixedLocation = location ?? context.location;
   return <ReservationEditForm reservation={{ ...context, id: booking.id, reason: null,
@@ -190,8 +156,13 @@ export function BookingEditForm({ booking, location, onCancel, onSaved, onPendin
         save: true, expectedTotal: quote.total, priceAcknowledged: acknowledged });
       if (result.ok && result.adjustmentId) {
         setAdjustment(result);
+        // Only a payment-backed proposal can be dismissed; a refund-backed one resolves automatically.
+        onAdjustment?.(result.adjustmentStatus === "pending" && !result.refundStatus ? result.adjustmentId : null);
         return { ok: true as const, pending: true, message: result.adjustmentStatus === "applied"
-          ? result.refundStatus === "succeeded" ? "Booking updated and refund completed." : "Booking updated. The refund obligation is recorded."
+          ? result.refundStatus === "succeeded" ? "Booking updated and refund completed."
+            : "Booking updated. Part of the refund could not be completed; the club will contact you."
+          : result.adjustmentStatus === "pending" && result.refundStatus ? "Change requested. It is applied once the refund is confirmed."
+          : result.adjustmentStatus === "unsuccessful" && result.refundStatus ? "The refund could not be processed, so your booking was not changed."
           : result.adjustmentStatus === "pending" ? "Complete the additional payment to update your booking."
           : "The previous modification has ended. Check its financial outcome." };
       }

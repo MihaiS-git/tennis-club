@@ -15,6 +15,7 @@ import type { BookingContact } from "@/lib/bookings/domain";
 import type { CourtDay } from "@/lib/courts/calendar";
 import { selectCalendarCell, type CalendarSelection } from "@/lib/courts/interval-selection";
 import { formatMoney, type LocationCurrency } from "@/lib/pricing/money";
+import { formatHourlyRate } from "@/lib/courts/price-bands";
 import { BookingConfirmation, BookingSummary, type BookingSummaryDetails } from "./booking-confirmation";
 
 const cellStyles = {
@@ -97,8 +98,8 @@ export function BookingCalendar({ day, date, locationName, currency, initialCont
     {day.times.length === 0 ? <p className="mt-5 rounded-card border border-border bg-surface p-5 text-muted-foreground">
       {locationName} is closed on {dateLabel}.
     </p> : <>
-      <p className="mt-3 text-xs text-muted-foreground">Prices in {currency}/hour. Select a half-hour cell to start a one-hour interval, then click adjacent cells to adjust. This does not reserve a court.</p>
-      <BookingTimetable day={day} date={date} timezone={timezone} selection={selection} onSelect={(courtDay, rowIndex) => {
+      <p className="mt-3 text-xs text-muted-foreground">Rates are shown in {currency}/hour beneath each court. Select a half-hour cell to start a one-hour interval, then click adjacent cells to adjust. This does not reserve a court.</p>
+      <BookingTimetable day={day} date={date} timezone={timezone} currency={currency} selection={selection} onSelect={(courtDay, rowIndex) => {
         setSelection((current) => selectCalendarCell({ courtId: courtDay.court.id,
           times: day.times, cells: courtDay.cells, hourlyPrices: courtDay.hourlyPrices }, current, rowIndex));
       }} />
@@ -126,27 +127,26 @@ export function BookingCalendar({ day, date, locationName, currency, initialCont
   </div>;
 }
 
-function BookingTimetable({ day, date, timezone, selection, onSelect }: {
-  day: { times: number[]; courts: CourtDay[] }; date: string; timezone: string; selection: CalendarSelection | null;
+function BookingTimetable({ day, date, timezone, currency, selection, onSelect }: {
+  day: { times: number[]; courts: CourtDay[] }; date: string; timezone: string; currency: LocationCurrency; selection: CalendarSelection | null;
   onSelect: (courtDay: CourtDay, rowIndex: number) => void;
 }) {
   const firstActionableMinute = day.times.find((_, index) => day.courts.some(({ cells }) => cells[index] === "available" && (cells[index - 1] === "available" || cells[index + 1] === "available")));
   return <CourtTimelineGrid times={day.times} rows={day.courts} date={date} timezone={timezone}
     selectedStartMinute={selection?.startMinute} selectedEndMinute={selection?.endMinute} firstActionableMinute={firstActionableMinute}
-    renderCourtContext={(row) => row.stateLabel}
+    renderCourtContext={(row) => row.stateLabel} priceRates={(row) => row.rates} currency={currency}
     renderCells={(courtDay) => day.times.map((minute, rowIndex) => {
       const state = courtDay.cells[rowIndex];
       const price = courtDay.hourlyPrices[rowIndex];
       const selected = selection?.courtId === courtDay.court.id && rowIndex >= selection.startRowIndex && rowIndex < selection.endRowIndex;
       const selectable = state === "available" && (courtDay.cells[rowIndex - 1] === "available" || courtDay.cells[rowIndex + 1] === "available");
-      const label = state === "available" ? `${price! / 100}/h` : cellLabels[state];
+      const label = state === "available" ? formatHourlyRate(price!, currency) : cellLabels[state];
       const accessibleLabel = `${courtDay.court.name} ${date} ${minuteToTime(minute)}–${minuteToTime(minute + 30)}, ${label}${selected ? ", selected" : ""}`;
       return <div key={minute} role="cell" className={`min-w-0 border-b ${selected ? "border-primary" : "border-border"}`}>
         {selectable ? <button type="button" aria-pressed={selected} aria-label={accessibleLabel}
           onClick={() => onSelect(courtDay, rowIndex)}
           className={`h-full w-full border-r px-0.5 text-center text-[length:var(--timeline-cell-font-size)] font-medium tabular-nums focus-visible:relative focus-visible:z-10 focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-accent ${selected ? "border-primary bg-primary text-primary-foreground" : `border-border ${cellStyles[state]}`}`}>
-          {label}
-        </button> : <div aria-label={accessibleLabel} className={`flex h-full items-center justify-center border-r border-border px-0.5 text-[length:var(--timeline-cell-font-size)] tabular-nums ${cellStyles[state]}`}>{state === "available" ? label : null}</div>}
+        </button> : <div aria-label={accessibleLabel} className={`flex h-full items-center justify-center border-r border-border px-0.5 text-[length:var(--timeline-cell-font-size)] tabular-nums ${cellStyles[state]}`} />}
       </div>;
     })} />;
 }

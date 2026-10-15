@@ -3,15 +3,18 @@
 import { useEffect, useRef, type CSSProperties, type ReactNode } from "react";
 import { localMinute, localToday } from "@/lib/courts/local-time";
 import { minuteToTime } from "@/lib/admin/opening-hours-validation";
+import { formatHourlyRate, priceBands } from "@/lib/courts/price-bands";
 
 // One geometry for public prices and operational intervals. The header lives
 // outside the horizontal scrollport so it sticks to the page, not a vertical scroller.
 export function CourtTimelineGrid<T extends { court: { id: string; name: string } }>({
-  times, rows, date, timezone, selectedStartMinute, selectedEndMinute, firstActionableMinute, renderCourtContext, renderCells,
+  times, rows, date, timezone, selectedStartMinute, selectedEndMinute, firstActionableMinute, renderCourtContext, renderCells, priceRates, currency,
 }: {
   times: number[]; rows: T[]; date: string; timezone?: string;
   selectedStartMinute?: number; selectedEndMinute?: number; firstActionableMinute?: number;
   renderCourtContext?: (row: T) => ReactNode; renderCells: (row: T) => ReactNode;
+  // Server-resolved hourly rates per slot. Only customer booking surfaces pass them.
+  priceRates?: (row: T) => readonly (number | null)[] | undefined; currency?: string;
 }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
@@ -86,7 +89,34 @@ export function CourtTimelineGrid<T extends { court: { id: string; name: string 
           {renderCourtContext && <span className="mt-1 truncate text-[10px] text-muted-foreground">{renderCourtContext(row)}</span>}
         </div>
         {renderCells(row)}
-      </div>)}
+      </div>).flatMap((element, index) => {
+        const row = orderedRows[index];
+        const rates = priceRates?.(row);
+        return rates && currency ? [element, <PriceBandRow key={`${row.court.id}:prices`} courtName={row.court.name}
+          times={times} rates={rates} currency={currency} columns={columns} />] : [element];
+      })}
     </div>
+  </div>;
+}
+
+// A thin row aligned to the same columns. Bands split wherever the rate changes
+// and repeat their label on long spans; cells themselves stay uncluttered.
+function PriceBandRow({ courtName, times, rates, currency, columns }: {
+  courtName: string; times: number[]; rates: readonly (number | null)[]; currency: string; columns: CSSProperties;
+}) {
+  return <div role="row" aria-label={`${courtName} hourly prices`} className="grid h-6" style={columns}>
+    <div role="cell" className="sticky left-0 z-10 flex items-center border-b border-r border-border bg-surface px-2 text-[10px] font-semibold text-muted-foreground shadow-[2px_0_4px_var(--shadow-neutral)]">{currency}/h</div>
+    {priceBands(rates).flatMap((band) => band.labels.map((start, chunk) => {
+      const end = band.labels[chunk + 1] ?? band.endIndex;
+      const first = start === band.startIndex, last = end === band.endIndex;
+      const amount = formatHourlyRate(band.rate, currency);
+      return <div key={`${band.startIndex}:${start}`} role="cell" aria-colspan={end - start}
+        aria-label={`${courtName} ${minuteToTime(times[start])}–${minuteToTime(times[end - 1] + 30)}, ${amount}`}
+        style={{ gridColumn: `${start + 2} / span ${end - start}` }} className="min-w-0 border-b border-border py-0.5">
+        <span title={amount} className={`flex h-full min-w-0 items-center bg-surface-muted px-1.5 text-[10px] font-semibold tabular-nums text-primary ${first ? "ml-0.5 rounded-l-control border-l-2 border-primary/50" : ""} ${last ? "mr-0.5 rounded-r-control" : ""}`}>
+          <span className="truncate">{amount.slice(currency.length + 1, -2)}</span>
+        </span>
+      </div>;
+    }))}
   </div>;
 }

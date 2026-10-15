@@ -187,7 +187,7 @@ it("shows the surcharge and waits for verified payment before completing a paid 
   quote.mockResolvedValue({ok:true,totalAmountMinor:10000});
   save.mockResolvedValue({ok:true,totalAmountMinor:10000,adjustmentId:booking.id,adjustmentStatus:"pending",
     checkout:{attemptId:booking.id,token:"a".repeat(64),presentation:{kind:"stripe",clientSecret:"pi_secret",publishableKey:"pk_test_Fixture"}},
-    holdExpiresAt:"2099-10-15T10:00:00Z", paymentUrl:"/book/adjustments/private-link"});
+    holdExpiresAt:"2099-10-15T10:00:00Z"});
   const onSaved=renderBooking("owner","online");
   await screen.findByText("Current reservation"); extendInterval();
   await screen.findByText(/Additional amount payable:.*25\.00/);
@@ -211,7 +211,7 @@ it("shows the eligible difference and durable pending refund instead of claiming
   await screen.findByText("Current reservation"); extendInterval();
   await screen.findByText(/Eligible refund:.*25\.00/);
   fireEvent.click(screen.getByRole("checkbox")); fireEvent.click(saveButton());
-  await screen.findByText(/Refund pending;/);
+  await screen.findByText("Refund being confirmed automatically");
   expect(screen.getByText("Refund amount")).toBeTruthy();
   expect(screen.getByText("Refund status")).toBeTruthy();
   expect(screen.queryByText("Refund completed")).toBeNull();
@@ -227,23 +227,42 @@ it.each(["succeeded", "failed", "pending"])("separates refund amount and %s stat
   await screen.findByRole("checkbox"); fireEvent.click(screen.getByRole("checkbox")); fireEvent.click(saveButton());
   await screen.findByText("Refund amount");
   expect(screen.getByText("Updated total")).toBeTruthy();
-  expect(screen.getByRole("status").textContent).toContain(refundStatus === "succeeded" ? "Refund completed" : refundStatus === "failed" ? "Refund failed" : "Refund pending");
+  expect(screen.getByRole("status").textContent).toContain(refundStatus === "succeeded" ? "Refund completed" : refundStatus === "failed" ? "Refund could not be completed; the club will contact you" : "Refund being confirmed automatically");
   expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
 });
 
-it("keeps Cancel modification as the existing explicit checkout abandonment action", async () => {
+it("reports the unpaid modification for X and offers no other dismissal or recovery control", async () => {
   quote.mockResolvedValue({ ok: true, totalAmountMinor: 10000 });
   save.mockResolvedValue({ ok: true, totalAmountMinor: 10000, adjustmentId: booking.id, adjustmentStatus: "pending",
     checkout: { attemptId: booking.id, token: "a".repeat(64), presentation: { kind: "stripe", clientSecret: "pi_secret", publishableKey: "pk_test_Fixture" } }, holdExpiresAt: "2099-10-15T10:00:00Z" });
-  abandon.mockResolvedValue({ ok: true, paymentStatus: "cancelled" });
-  renderBooking("owner", "online");
+  const onAdjustment = vi.fn();
+  load.mockResolvedValue({ day: { times: [600, 630, 660, 690], courts: [{ court, cells: ["available", "available", "available", "available"] }] },
+    booking: { ...booking, payment_method: "online", court_id: court.id, starts_at_minute: 600, ends_at_minute: 660, total_amount_minor: 7500,
+      location_id: location.id, location_timezone: "UTC", updated_at: "2026-10-01T12:00:00Z",
+      current_revision_id: "2026-10-01T12:00:00Z", location, hours: [], occupancy: [], refunds: [] } });
+  render(<BookingEditForm booking={booking} onCancel={vi.fn()} onPendingChange={vi.fn()} onSaved={vi.fn(async () => {})}
+    onAdjustment={onAdjustment} actions={{ load, quote, save }} />);
   await screen.findByText("Current reservation"); extendInterval();
   await screen.findByRole("checkbox"); fireEvent.click(screen.getByRole("checkbox")); fireEvent.click(saveButton());
-  const cancel = await screen.findByRole("button", { name: "Cancel modification" });
-  expect(cancel.className).toContain("border-border-strong");
-  fireEvent.click(cancel);
-  await waitFor(() => expect(abandon).toHaveBeenCalledWith({ attemptId: booking.id, token: "a".repeat(64) }));
-  await waitFor(() => expect(screen.queryByRole("button", { name: "Cancel modification" })).toBeNull());
+  await screen.findByRole("region", { name: "Booking modification" });
+  expect(onAdjustment).toHaveBeenLastCalledWith(booking.id);
+  expect(screen.queryByRole("button", { name: /Cancel modification|Recover/ })).toBeNull();
+  expect(abandon).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Simulate verified modification payment" }));
+  expect(onAdjustment).toHaveBeenLastCalledWith(null);
+});
+
+it("always opens a fresh form even if the server once knew of an earlier modification", async () => {
+  quote.mockResolvedValue({ ok: true, totalAmountMinor: 7500 });
+  load.mockResolvedValue({ day: { times: [600, 630, 660, 690], courts: [{ court, cells: ["available", "available", "available", "available"] }] },
+    booking: { ...booking, payment_method: "online", court_id: court.id, starts_at_minute: 600, ends_at_minute: 660, total_amount_minor: 7500,
+      location_id: location.id, location_timezone: "UTC", updated_at: "2026-10-01T12:00:00Z",
+      current_revision_id: "2026-10-01T12:00:00Z", location, hours: [], occupancy: [], refunds: [],
+      pending_adjustment_id: booking.id, adjustment_status: "pending" },
+    adjustment: { totalAmountMinor: 10000, holdExpiresAt: "2099-10-15T10:00:00Z" } });
+  render(<BookingEditForm booking={booking} onCancel={vi.fn()} onPendingChange={vi.fn()} onSaved={vi.fn()} actions={{ load, quote, save }} />);
+  await screen.findByText("Current reservation");
+  expect(screen.queryByRole("region", { name: "Booking modification" })).toBeNull();
 });
 
 it.each(["cancelled", "expired", "unsuccessful"])("presents the %s modification outcome without a bottom Close action", async (adjustmentStatus) => {

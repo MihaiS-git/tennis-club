@@ -15,7 +15,7 @@ import type { PersonalCustomerBooking } from "@/lib/bookings/personal";
 import { formatMoney } from "@/lib/pricing/money";
 import { isReservationInProgress, isReservationUpcoming, type PersonalReservation } from "@/lib/reservations/personal";
 import { BookingEditForm, type BookingEditActions } from "@/components/booking-edit-form";
-import { cancelOwnReservationAction, loadPersonalActivityAction, loadOwnBookingEditDayAction, quoteOwnBookingAction, rescheduleOwnBookingAction } from "./actions";
+import { cancelOwnReservationAction, dismissOwnBookingAdjustmentAction, loadPersonalActivityAction, loadOwnBookingEditDayAction, quoteOwnBookingAction, rescheduleOwnBookingAction } from "./actions";
 import { ActivityControls } from "../activity-controls";
 import { ActivityTable } from "../activity-table";
 import { ActivityPagination } from "../activity-pagination";
@@ -68,7 +68,23 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
   const bookingDialogRef = useRef<HTMLDialogElement>(null);
   const returnFocusRef = useRef<HTMLTableRowElement | null>(null);
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
+  const adjustmentRef = useRef<string | null>(null);
   const titleId = useId();
+  const paymentPending = activity?.bookings.some((row) => row.payment_pending || row.pending_change) ?? false;
+
+  // Edit reappears once a processing modification payment or refund-backed change resolves.
+  useEffect(() => {
+    if (!paymentPending) return;
+    let disposed = false;
+    const timer = window.setInterval(() => {
+      void loadPersonalActivityAction(listQuery).then((value) => {
+        if (disposed) return;
+        setActivity(value);
+        setSelectedBooking((current) => current && (value.bookings.find((row) => row.id === current.id) ?? current));
+      }).catch(() => { /* The next interval retries; the list stays usable. */ });
+    }, 5000);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, [paymentPending, listQuery]);
 
   useEffect(() => {
     if (error) toast.error(error, { action: { label: "Retry", onClick: () => setError("") } });
@@ -173,9 +189,14 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
           setSelectedBooking(null);
           if (editing) {
             setEditing(false);
-            void loadPersonalActivityAction(listQuery).then(setActivity).catch(() => {
-              setActivity(null); setError("Unable to load your court activity. Try again.");
-            });
+            // X discards an unpaid modification; a processing payment is left to the webhook.
+            const adjustmentId = adjustmentRef.current;
+            adjustmentRef.current = null;
+            void (adjustmentId ? dismissOwnBookingAdjustmentAction(adjustmentId) : Promise.resolve())
+              .catch(() => { /* The hold still ends at its deadline. */ })
+              .then(() => loadPersonalActivityAction(listQuery)).then(setActivity).catch(() => {
+                setActivity(null); setError("Unable to load your court activity. Try again.");
+              });
           }
           returnFocusRef.current?.focus();
         }}
@@ -183,7 +204,9 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
         <DialogHeader titleId={`${titleId}-booking`} title={editing ? "Edit booking" : "Booking"} status={editing ? undefined : "Confirmed"} disabled={pending} onClose={() => bookingDialogRef.current?.close()} />
         {editing ? <BookingEditForm booking={selectedBooking}
           actions={ownBookingActions} onCancel={() => setEditing(false)} onPendingChange={setPending}
+          onAdjustment={(id) => { adjustmentRef.current = id; }}
           onSaved={async () => {
+            adjustmentRef.current = null;
             setEditing(false);
             try {
               const refreshed = await loadPersonalActivityAction(listQuery);

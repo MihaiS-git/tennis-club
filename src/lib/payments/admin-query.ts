@@ -8,15 +8,17 @@ export const paymentStatusSchema = z.enum([
   "cancelled",
   "expired",
   "due",
+  "voided",
 ]);
 export const paymentStatusLabels = {
   pending: "Pending",
-  pending_retry: "Pending retry",
+  pending_retry: "Confirming with Stripe",
   succeeded: "Paid",
   failed: "Failed",
   cancelled: "Cancelled",
   expired: "Expired",
   due: "Due",
+  voided: "Not refunded · change abandoned",
 };
 export const paymentProviderLabels = { stripe: "Stripe", netopia: "NETOPIA" };
 export const paymentMethodLabels = {
@@ -51,6 +53,11 @@ export function adminPaymentHref(query: AdminPaymentQuery, page = query.page) {
 
 export function adminTransactionHref(kind: "payment" | "refund" | "booking", id: string, query?: string) {
   return `/admin/payments/transactions/${kind}/${id}${query ? `?${query}` : ""}`;
+}
+export function transactionTimestamp(value: string, timezone: string) {
+  return new Intl.DateTimeFormat("en-GB", {
+    dateStyle: "medium", timeStyle: "medium", timeZone: timezone,
+  }).format(new Date(value));
 }
 export function transactionStatusLabel(t: Pick<import("./admin").AdminPaymentTransaction,
   "transaction_kind" | "transaction_status" | "amount_minor" | "refunded_minor">) {

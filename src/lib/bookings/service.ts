@@ -24,7 +24,8 @@ import { insertCheckoutBooking } from "@/lib/db/repositories/bookings.repository
 import { findSelectedPaymentProvider, insertCheckoutAttempt } from "@/lib/db/repositories/payments.repository";
 import { readCreatedBookingCancellationPolicy, type ConfirmedCancellationPolicy } from "./confirmation-policy";
 import { customerBookingInputSchema } from "./domain";
-import { bookingNotification, sendBookingNotification, type BookingEmailEvent } from "@/lib/notifications/booking-email";
+import { enqueueBookingNotification } from "@/lib/notifications/booking-delivery";
+import { bookingNotification, type BookingEmailEvent } from "@/lib/notifications/booking-email";
 import { buildBookingRevision, capturePricingEvidence } from "./revision";
 import { getCourtStateForDate } from "@/lib/courts/state";
 import { customerMutationDeadline } from "./self-cancellation";
@@ -139,7 +140,10 @@ export async function createCustomerBooking(input: unknown, reader?: Reader,
           status: lifecycle.booking_status, revision });
         await insertCheckoutAttempt(manager, { id: attemptId, bookingId, method: paymentMethod, provider,
           amountMinor: selection.priceMinor, currency: location.currency, status: lifecycle.attempt_status, expiresAt: clock.expiry });
-        if (paymentMethod === "pay_at_club") notification = bookingNotification("confirmed", revision);
+        if (paymentMethod === "pay_at_club") {
+          notification = bookingNotification("confirmed", revision);
+          await enqueueBookingNotification(manager, `revision:${revision.id}`, notification);
+        }
         if (paymentMethod === "online" && clock.expiry === null) throw new Error("Missing payment hold deadline.");
         return { ok: true, bookingId, reservationId, paymentAttemptId: attemptId,
           ...(clock.expiry === null ? { status: "confirmed", holdExpiresAt: null } as const
@@ -158,7 +162,6 @@ export async function createCustomerBooking(input: unknown, reader?: Reader,
     }
   }
   if (!created.ok) return created;
-  if (notification) await sendBookingNotification(notification);
   const { startsAtInstant, ...result } = created;
   const cancellationPolicy = result.status === "confirmed" ? await readCreatedBookingCancellationPolicy(result.bookingId) : null;
   if (cancellationPolicy && account.state === "active" && startsAtInstant) {

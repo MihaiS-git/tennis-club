@@ -33,7 +33,7 @@ test("late compensation is identified by reason despite sharing the cancellation
 
 test("missing adjustment and refund associations fail instead of falling back", () => {
   expect(() => describeFinancialContext({ ...input, kind: "refund" })).toThrow("Missing refund reason");
-  expect(() => describeFinancialContext({ ...input, adjustment: { id: randomUUID(), newTotal: 7500, currency: "RON",
+  expect(() => describeFinancialContext({ ...input, adjustment: { id: randomUUID(), kind: "reschedule", newTotal: 7500, currency: "RON",
     target: { courtId: randomUUID(), date: "2099-10-15", startMinute: 720, endMinute: 810, expectedUpdatedAt: new Date().toISOString(),
       courtName: "Proposed Court", locationName: "Proposed Club", timezone: "UTC" } } })).toThrow("Missing adjustment contract context");
 });

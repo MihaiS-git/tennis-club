@@ -27,6 +27,6 @@ export async function cancelOwnCustomerBooking(id: unknown,
     return { ok: false, message: "An active account is required to cancel a booking." };
   const outcome = await finishBookingCancellation(data);
   if (outcome.ok) logger.info({ event: "bookings.self_cancelled", bookingId: parsed.data,
-    actorId: account.userId, refundStatus: outcome.refundStatus }, "Customer booking cancelled by owner");
+    actorId: account.userId, outcome: outcome.outcome }, "Customer booking cancellation accepted");
   return outcome;
 }

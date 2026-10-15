@@ -114,7 +114,7 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
       dialogRef.current?.close();
       setSelectedOccupancyId(null);
       setSelection(null);
-      toast.success(cancelledBookingMessage(result.refundStatus), { id: notification });
+      toast.success(cancelledBookingMessage(result), { id: notification });
       router.refresh();
     } catch {
       toast.error("Unable to cancel this booking. Try again.", { id: notification });

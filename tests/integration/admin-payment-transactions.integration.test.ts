@@ -72,10 +72,11 @@ test("Admin transaction projection lists every payment and refund, filters befor
     expect(all.find(r => r.booking_id === bookingIds[3] && r.transaction_kind === "refund")).toMatchObject({ needsAttention: false, refund: { status: "pending" } });
     expect(all.find(r => r.booking_id === bookingIds[4])).toMatchObject({ needsAttention: false, refund: null });
     expect(all.find(r => r.booking_id === bookingIds[22])).toMatchObject({ payment_status: "failed", needsAttention: false });
-    expect((await listAdminPaymentTransactions(query({ attention: "required" }),admin)).rows).toHaveLength(3);
+    expect((await listAdminPaymentTransactions(query({ attention: "required" }),admin)).rows.map(row => row.booking_id)).toEqual(expect.arrayContaining([bookingIds[1], bookingIds[2]]));
+    expect((await listAdminPaymentTransactions(query({ attention: "required" }),admin)).total).toBe(2);
     expect((await listAdminPaymentTransactions(query({ method: "pay_at_club" }),admin)).total).toBe(1);
     expect((await listAdminPaymentTransactions(query({ provider: "stripe", status: "succeeded" }),admin)).total).toBe(22);
-    expect((await listAdminPaymentTransactions(query({ sort: "amount", dir: "asc" }),admin)).rows[0].amount_minor).toBe(1000);
+    expect((await listAdminPaymentTransactions(query({ sort: "amount", dir: "asc" }),admin)).rows[0].amount_minor).toBe(1003);
     expect((await listAdminPaymentTransactions(query({ sort: "payment", dir: "asc" }),admin)).rows[0].payment_status).toBe("due");
     for (const search of [bookingIds[0], `original-${attemptIds[0]}`, `${marker}-0@example.test`]) {
       const rows = (await listAdminPaymentTransactions(query({ q: search }),admin)).rows;
@@ -173,14 +174,18 @@ test.each([
     const list = await readFinancialHistory(manager, filters);
     expect(list.total).toBe(2); // one capture and one obligation, regardless of executions
     const refund = list.rows.find(row => row.transaction_kind === "refund");
-    expect(refund?.refund?.executions.map(row => row.id)).toEqual(ids);
-    expect(refund?.refund?.executions.map(row => row.status)).toEqual(statuses);
-    expect(refund?.refund?.executions.map(row => row.createdAt)).toEqual(statuses.map((_, index) => `2026-10-0${2-index}T10:00:00.000Z`));
-    expect(refund?.refund?.executions.every(row => row.dispatchInitiatedAt === "2026-10-03T10:00:00.000Z")).toBe(true);
-    expect(refund?.refund?.executions.map(row => row.unresolved)).toEqual(statuses.map(status => ["pending", "uncertain"].includes(status)));
-    expect(refund?.refund?.executions.map(row => row.providerRefundId)).toEqual(statuses.map((status, index) =>
+    // Execution facts remain in server-side persistence, not the Admin payload.
+    const history = await manager.getRepository(RefundExecutionEntity).find({ where: { refundId }, order: { executionNumber: "ASC" } });
+    expect(history.map(row => row.id)).toEqual(ids);
+    expect(history.map(row => row.status)).toEqual(statuses);
+    expect(history.map(row => row.createdAt.toISOString())).toEqual(statuses.map((_, index) => `2026-10-0${2-index}T10:00:00.000Z`));
+    expect(history.every(row => row.dispatchInitiatedAt?.toISOString() === "2026-10-03T10:00:00.000Z")).toBe(true);
+    expect(history.map(row => row.terminalResult === null)).toEqual(statuses.map(status => ["pending", "uncertain"].includes(status)));
+    expect(history.map(row => row.providerRefundId)).toEqual(statuses.map((status, index) =>
       status === "rejected" || status === "uncertain" ? null : `re_${ids[index]}`));
-    expect(refund?.refund?.executions.every(row => row.lastError === "processing_error")).toBe(true);
+    expect(refund?.refund?.last_error).toBe("processing_error");
+    expect(refund?.refund).not.toHaveProperty("executions");
+    expect(JSON.stringify(refund)).not.toMatch(/private-key-|sensitive provider payload|sensitive uncertainty payload|raw exception with secret/);
     expect(refund?.context).toMatchObject({ courtName: "Historical Court", locationName: "Historical Club", customerName: "Historical Customer" });
     expect(refund?.refund?.reason).toBe("late_capture_compensation");
     expect(refund?.operation_label).toBe("Late capture compensation");

@@ -177,8 +177,10 @@ and online rows require a succeeded payment attempt. A cancellation that races c
 
 Late successful charges and amount mismatches are durably recorded with
 `reconciliation_required = true` and a structured server log. They do not reclaim
-occupancy or send confirmation. Inspect these private ledger rows through trusted
-operations and use the existing Admin reconciliation/refund actions. Exact captures after an explicit checkout cancellation also prepare and execute the existing full refund automatically. Amount mismatches remain an Admin investigation.
+occupancy or send confirmation. Exact late captures (after expiry, failure or explicit
+checkout cancellation) prepare and execute the existing full refund automatically; the
+recovery worker completes it and clears the review flag on verified success. Amount
+mismatches remain an Admin investigation shown under Needs attention.
 
 The UI polls `POST /api/payments/checkout/status` using a random 256-bit checkout capability whose SHA-256
 hash is stored on the attempt. The Route Handler delegates to the existing checkout service and returns only that checkout's lifecycle,
@@ -196,12 +198,12 @@ Checkout abandonment records a cancelled revision and releases occupancy before
 contacting Stripe; the attempt may remain pending while the provider outcome is
 uncertain. The adapter uses stable abandonment idempotency and retrieve-after-failure
 recovery. An exact capture racing cancellation preserves that cancelled contract,
-records capture evidence and creates its compensation obligation. Refund retry and
-Admin reconciliation remain available. Guest requests use the same capability and
+records capture evidence and creates its compensation obligation, which automatic
+recovery completes. Guest requests use the same capability and
 a nullable refund requester. This operation sends no confirmation or customer-
 cancellation email after cancellation intent commits.
 
-Expiry ends payment entry locally even when the status endpoint is unavailable. Server expiry retains the original release/late-capture reconciliation policy, including for held bookings with cancellation intent. Expired attempts cannot be reused; polling attempts provider cancellation when possible. Keep paying is available only for a usable checkout before cancellation starts. A definite card decline permits retry on the original unexpired intent; transport/unknown errors block further submissions. Payment loading feedback becomes a non-blocking uncertainty warning after 30 seconds; booking submission and cancellation loading are bounded at 15 seconds. Customers can always leave while webhooks and existing server/Admin reconciliation handle the financial outcome.
+Expiry ends payment entry locally even when the status endpoint is unavailable. Server expiry retains the original release/late-capture reconciliation policy, including for held bookings with cancellation intent. Expired attempts cannot be reused; polling attempts provider cancellation when possible. Keep paying is available only for a usable checkout before cancellation starts. A definite card decline permits retry on the original unexpired intent; transport/unknown errors block further submissions. Payment loading feedback becomes a non-blocking uncertainty warning after 30 seconds; booking submission and cancellation loading are bounded at 15 seconds. Customers can always leave while webhooks and the automatic recovery worker handle the financial outcome.
 
 Focused checks (external intent creation is mocked; signatures and local DB are real):
 
@@ -395,34 +397,53 @@ Original payment requests remain unchanged; refund processing status is separate
 Owner cancellation uses existing ownership/notice/start guards and always requests a
 refund of remaining captured funds after existing obligations. Admin cancellation
 requires before-start eligibility and automatically creates applicable online
-refund obligations. Pay-at-club cancellation creates no refund.
+refund obligations. Pay-at-club cancellation (or nothing refundable) cancels at once.
 
-Cancellation, occupancy release, refund request and existing cancellation email commit
-in one transaction. Mail snapshots say the full refund was requested, without promising
-provider completion. Post-commit processing uses the shared execution protocol described
-in [architecture](architecture.md#refund-execution-and-reconciliation-phase-8).
+A cancellation that must return money is a **request**, not a cancellation: one
+transaction records a pending `booking_adjustments` row of kind `cancellation` (its
+creation time preserves the eligibility decision) plus the refund obligations. The
+booking, its revision and its active reservation stay unchanged. Refunds start
+immediately after commit. When every obligation is terminal, one transaction under the
+existing location → booking locks decides: when every refund is verified as succeeded,
+it finalizes the cancellation (cancelled revision, occupancy released, cancellation email
+saying the payment was refunded); when every obligation definitively failed (no money
+returned), it voids the obligations, marks the request `unsuccessful`, keeps the booking
+unchanged and emails the customer, who may request the cancellation again. If some
+refunds succeeded and another definitively failed, partial repayment cannot be undone:
+the request stays pending, the booking stays unchanged, completed refunds remain recorded
+and each failed obligation is an explicit exception (`refund_incomplete` email, Admin
+attention) for external resolution.
+A submitted or pending provider refund never cancels a booking. Post-commit processing
+uses the shared execution protocol described in
+[architecture](architecture.md#refund-execution-and-reconciliation-phase-8).
 
 Lifecycle:
 
 - `pending`: durable request or provider refund awaiting completion.
-- `pending_retry`: provider/read/write response was incomplete or ambiguous; safe to retry.
+- `pending_retry`: provider/read/write response was incomplete or ambiguous; retried automatically.
 - `succeeded`: provider confirmed the full refund.
-- `failed`: provider returned a terminal failed/cancelled refund; contact the club.
+- `failed`: provider returned a terminal failed/cancelled refund or rejected the request.
+  For a committed operation the money is still owed: an explicit exception (Admin
+  attention, customer email). There is no automatic replacement execution.
+- `voided`: a failed obligation of an abandoned change; no money moved and it no longer
+  reserves captured funds.
 
-`processBookingRefund(refundId)` is the server-only retry/reconciliation operation; it
-has no customer/public retry endpoint or scheduled worker. Focused Admin recovery
-actions are described below. Repeating an authorized
-cancellation reuses the existing obligation and execution. Known provider refund IDs
-are retrieved; otherwise paginated metadata discovery uses both `payment_refund_id` and
-`refund_execution_id`. Empty recovery and lookup failure never authorize creation.
+`processBookingRefund(refundId)` is the server-only processing operation shared by
+request threads and the recovery worker; it has no customer/public/Admin endpoint.
+Repeating an authorized cancellation reuses the existing request and obligations.
+Known provider refund IDs are retrieved; otherwise paginated metadata discovery uses
+both `payment_refund_id` and `refund_execution_id`. Within 23 hours of dispatch (inside
+Stripe's 24-hour idempotency-key retention) an unfound request is re-sent with its exact
+stored key, so Stripe returns the original refund if the first request executed. After
+that window an empty lookup never authorizes creation; the refund stays `pending_retry`
+and is flagged for Admin attention after 24 hours.
 
 New READY executions store `court-refund-execution-<execution-id>` as their exact key.
 Dispatch initiation commits before the HTTP request. Pending acceptance is not money
-refunded. Verified failure/rejection remains immutable and permits an authorized Admin
-retry using a distinct execution/key for the same obligation. Automatic terminal results
-short-circuit. Network uncertainty, local result-write failure, lease takeover and crash
-recovery retain the same execution. The dispatch-to-HTTP crash gap can remain unresolved;
-no application creation replay relies on indefinite provider idempotency retention.
+refunded. Verified failure/rejection remains immutable; terminal results short-circuit.
+Network uncertainty, local result-write failure, lease takeover and crash recovery
+retain the same execution and key. The dispatch-to-HTTP crash gap is closed by the
+idempotent replay window above; no replay relies on indefinite key retention.
 
 No payment attempt/provider history is rewritten. No current pricing or client amount
 is accepted. Partial booking-reduction refunds are supported; NETOPIA refunds are not.
@@ -438,7 +459,7 @@ a mocked provider adapter, with no fake Stripe secret keys or configuration asse
 
 ## Admin transaction review
 
-`/admin/payments/transactions` shows persisted Transactions with focused Stripe recovery actions. `/admin/payments/settings`
+`/admin/payments/transactions` shows persisted Transactions read-only. `/admin/payments/settings`
 contains the existing provider configuration/selection UI. Both use the shared
 Payments submenu and require an active Admin account.
 
@@ -450,24 +471,35 @@ refunds are identified as partial booking refunds even when they exhaust one add
 capture. A payment is marked fully refunded only when successful refunds against that
 attempt cover its entire captured amount. Booking totals, captured/refunded/net amounts
 and outstanding/refund obligations remain visible in the shared financial details.
-Transaction context uses the operation's historical revision or immutable proposal,
+Transaction context uses the operation's historical revision or immutable proposal
+(for refund-backed changes, the contract in force when the refund was requested),
 while current totals and debt appear separately under Current booking summary.
 Pay-at-club rows are uncollected requests, not captured money. Any booking without
 an attempt uses its initial revision as request context; no attempt is fabricated.
+Provider execution internals are not sent to the browser.
 
 `/admin/payments/transactions/payment/<attempt-id>` and
 `/admin/payments/transactions/refund/<refund-id>` are Admin-authorized details using the
-same projection and recovery components. Direct links, refresh and Back/Forward use
-actual financial identity; list filters/sort/page are retained on the return link.
-Refund retries re-read the selected refund, never an arbitrary booking-level row.
-Money display accepts zero balances while payment/pricing input validation remains
-strictly positive.
+same projection. Direct links, refresh and Back/Forward use actual financial identity;
+list filters/sort/page are retained on the return link. Money display accepts zero
+balances while payment/pricing input validation remains strictly positive.
 
-Attention means refund `pending_retry` or `failed`, or at least one persisted
-`payment_provider_events.reconciliation_required = true` event. Normal paid, pending
-refund, failed-card, abandoned and expired checkout states do not independently
-require attention. The TypeScript read model derives this flag; the database applies
-the same predicate for the Attention filter before pagination.
+There are no Admin financial controls: no Retry refund, Refund captured payment or
+Check modification payment action, and no manual state editing. Details explain the
+outcome in plain language (refund being confirmed automatically, refunded, change
+abandoned with no money moved, cancellation request pending/finalized/not completed).
+Attention lists only genuine exceptions that need a human outside the application:
+
+- refund `failed` — Stripe definitively failed/declined money that is still owed; the
+  customer has been emailed; arrange repayment directly;
+- refund `pending_retry` for more than 24 hours — recovery could not confirm the
+  outcome beyond the idempotency window; check Stripe, never issue another refund;
+- an unresolved `payment_provider_events.reconciliation_required` event — exact late
+  captures say they are being returned automatically; amount mismatches need review.
+
+The TypeScript read model derives this flag; the database applies the same predicate
+for the Attention filter before pagination. Resolved events remain visible with their
+resolution timestamp.
 
 Date, amount and stored transaction status can be sorted with deterministic kind/ID
 tie-breaking. Search is a case-insensitive literal substring of customer name/email,
@@ -475,68 +507,42 @@ booking UUID, transaction UUID or provider payment/refund ID. Filters apply imme
 uses the existing debounced URL navigation pattern. Pagination/sort links preserve
 filters. Payment timestamps display UTC; booking schedules retain location timezone.
 
-Rows open URL-addressable details with payment/booking/refund fields and recorded
-attention reasons. Persisted refund error codes are translated to safe descriptions.
-The only recovery controls are the focused Stripe actions described below; there is
-no generic manual state editing.
+## Automatic financial recovery
 
-Focused verification:
-```bash
-npx vitest run tests/components/admin-payment-transactions.test.tsx
-npm run test:integration -- tests/integration/admin-payment-transactions.integration.test.ts
-npm run typecheck
-```
+`src/lib/payments/recovery.ts` (`runPaymentRecovery`) completes financial outcomes
+that no customer, Admin or webhook drives. It reuses the existing commands only; it
+has no financial logic of its own and starts no transaction around a network call.
+Each run, in order and with bounded batches and a four-minute budget:
 
-## Admin Stripe refund recovery
+1. **Payments** — online attempts with a provider reference and no recorded terminal
+   provider outcome: open checkouts/modification payments older than 60 seconds, and
+   locally expired/failed requests from the last 7 days. Stripe is read; a success or
+   cancellation goes through `processOnlinePaymentEvent` with the stable
+   `checkout-observation-*` receipt ID (deduplicated with webhooks). A processing
+   modification payment extends its target lease. An ended request still open at
+   Stripe is dismissed (live payments are never cancelled) and the answer recorded.
+   A late success keeps the existing late-capture rules: no occupancy is reclaimed.
+2. **Holds** — the existing `expirePaymentHolds` location-first sweep.
+3. **Late captures** — unresolved exact late-capture events get their compensation
+   obligation (`prepareLateCaptureCompensation`) and refund; verified completion
+   clears the review flag. Amount mismatches are skipped.
+4. **Refunds** — `pending`/`pending_retry` obligations through `processBookingRefund`
+   with bounded backoff (about a quarter of the time since the outcome became
+   uncertain, between one minute and one hour). Execution leases prevent concurrent
+   processing; definitive failure is never retried automatically.
+5. **Changes** — pending refund-backed changes whose obligations are all terminal are
+   decided by `resolveRefundBackedAdjustment` (crash catch-up; normally the refund
+   commit triggers it directly).
 
-The initial TypeORM migration adds `resolved_at` and
-`resolved_by_user_id` to provider events, and token/until/actor lease columns on
-refunds. It extends full-refund validation only for verified late Stripe captures:
-matching original attempt/payment ID/amount/currency, succeeded provider evidence,
-expired/cancelled/failed settlement, non-confirmed booking and released/cancelled
-original reservation. Amount mismatches and other reconciliation problems are
-ineligible. Historic attempts and occupancy never change.
-
-The detail dialog offers Retry refund only for Stripe pending_retry/failed records.
-The service reauthorizes an active Admin and applies the shared TypeScript Stripe
-refund policy. TypeORM preparation locks booking → reservation → selected attempt →
-events ordered by provider,event_id → refund FOR UPDATE, then roles ordered by role_code →
-account FOR SHARE. It rechecks active Admin authority and financial relationships and
-claims a five-minute token/actor lease using PostgreSQL clock_timestamp(). Refund captured payment is offered only for the verified
-late-capture condition and creates/reuses the unique full-refund record. Inputs are
-IDs only. A concurrent live claim returns an in-progress error; an interrupted claim
-can be reclaimed after expiry. No transaction spans a Stripe HTTP request.
-
-Automatic and Admin processing share immutable refund executions and five-minute
-execution leases. Preparation locks booking → reservation → selected attempt → ordered
-capture receipts → refund obligation → execution; Admin preparation also fences the
-active Admin's roles/account. A READY execution's dispatch timestamp commits in a
-separate transaction before Stripe is contacted. The adapter uses its stored request,
-exact idempotency key, obligation ID and execution ID metadata. Previously dispatched
-executions use retrieval or metadata discovery only; lookup failure, an empty search,
-lease expiry and a crash do not authorize another creation.
-
-Result transactions retain write-once identity, uncertainty and terminal evidence.
-Current lease tokens fence error/check updates and lease clearing; stale workers may
-record valid historical provider facts without clearing a newer lease. Verified success
-cannot regress. Eligible receipt resolution commits atomically with completion; existing
-automatic adjustment and Admin reconciliation attribution rules remain. Admin retry may
-allocate a distinct execution only after verified failure or definitive rejection.
-Automatic processing retains terminal short-circuits. PaymentRefund stores immutable
-obligation terms plus status/timestamps; provider references/errors come from executions.
-No refund notifications, scheduled worker, dual writes or provider history JSON remain.
-
-The dialog reloads its authoritative transaction after every handled action, shows
-inline feedback, disables actions while pending and refreshes the filtered table.
-Resolved events remain visible with their resolution timestamp; resolved flags no
-longer contribute to Attention. Filtering/sorting/pagination semantics are unchanged.
-
-Focused verification:
-```bash
-npx vitest run tests/unit/stripe-refund-adapter.test.ts tests/components/admin-payment-transactions.test.tsx
-npm run test:integration -- tests/integration/admin-stripe-reconciliation.integration.test.ts tests/integration/admin-payment-transactions.integration.test.ts tests/integration/stripe-refunds.integration.test.ts
-npm run typecheck
-```
+**Schedule.** `src/instrumentation.ts` starts `startPaymentRecoveryScheduler()` once per
+Node.js server process (`next start`, also `next dev`), first after 15 seconds and then
+every `PAYMENT_RECOVERY_INTERVAL_SECONDS` (default 60, 15–3600; `0` disables it, e.g.
+for tests). Overlap is prevented in-process by a running flag and across instances by
+a `job_leases` row (`payment_recovery`, 10-minute PostgreSQL-time lease longer than
+the run budget; a crashed holder's lease expires and another instance continues).
+The scheduler opens its own TypeORM pool (`DATABASE_POOL_MAX`, default 2) in addition
+to the request bundles' pools. Production must run a long-lived `next start` process;
+a purely serverless deployment would need an external trigger instead.
 
 ## TypeScript decision and persistence boundary
 
@@ -556,9 +562,10 @@ payment attempts and refund obligations in ID order before ordered actor roles/a
 TypeScript makes policy/pricing/refund decisions against those locked facts; snapshot notice
 uses the accepted revision's timezone and post-lock database wall time. See [architecture](architecture.md#booking-revisions-and-owneradmin-boundaries).
 
-Cancellation appends an accepted revision, releases occupancy and allocates applicable
-remaining captured-funds obligations atomically; email and refund execution follow commit.
-The accepted cancellation revision permits replay even without a refund. Admins may
+Cancellation without a refund appends an accepted revision and releases occupancy at
+once; a cancellation that returns money is a pending request decided by verified refunds
+(see Stripe cancellation refunds). Email and refund execution follow commit. The accepted
+cancellation revision or pending request permits replay without another refund. Admins may
 cancel other customers' bookings but cannot reschedule them or select refund/no-refund.
 Owners, including Admin/Coach owners, use the same owner rescheduling rules. Same-price
 and Pay-at-club saves append revisions directly; online price differences use the
@@ -602,13 +609,17 @@ availability. Successful verified settlement commits the original-row move and p
 atomically; expired/invalid changes keep the original and create durable surcharge
 refund obligations. No network call stays in a database transaction.
 
-A permitted decrease creates a partial-refund obligation for the full price difference
-and commits the lower booking price/schedule atomically. Allocation uses newest captures
-first, reserving every existing pending/failed/successful obligation. Cancellation then
-automatically allocates only the remainder for owner or Admin cancellation. Original
-captured amounts are never rewritten. Existing refund processing and Admin retry handle
-partial obligations; a definitively failed execution retains its immutable provider
-reference before an Admin retry allocates a new execution. Uncertain responses retain identity.
+A permitted decrease is a pending modification: it snapshots the accepted quote and
+pricing evidence, holds target fragments outside the original occupancy until the target
+start, and creates partial-refund obligations for the full price difference. The
+original booking is unchanged until the refunds are verified; then the snapshotted
+schedule/price is applied once (never repriced). Verified failure with no money
+returned abandons it (obligations voided, holds released, customer emailed). If some
+refunds succeeded and another definitively failed, the change is not applied: the
+original booking and holds remain, the modification stays pending, and each failed
+obligation stays an explicit exception for external resolution. Allocation uses newest captures first, reserving
+every non-voided obligation. Cancellation then allocates only the remainder. Original
+captured amounts are never rewritten. Uncertain responses retain identity.
 
 Refund allocation is defined once in `src/lib/payments/refund-allocation.ts`. It receives
 typed payment requests, obligations and verified capture observations, preserves
@@ -623,14 +634,41 @@ reads perform no provider reconciliation or persistence. Repositories only load/
 facts and insert supplied amounts/provider identities; adjustment expiry orchestration
 lives in the existing TypeScript hold-expiry service.
 
-Authenticated owners reopen My Activity → Edit to recover the same registered intent.
+### Modification payment lifecycle
+
+Edit always opens a fresh form; an earlier modification is never resumed and there is
+no customer payment link. Only an exact replay of the same request returns its
+modification. X on the dialog is the only dismissal: the owner Server Action revokes the
+checkout capability, then reads the PaymentIntent. `requires_payment_method`,
+`requires_confirmation` and `requires_action` are cancelled at Stripe and the
+modification is discarded with its hold released at once (a cancel race re-reads the
+intent and takes the live or succeeded branch). A `processing` intent is never cancelled:
+the target hold lease is extended to the target slot start and the webhook decides.
+Automatic capture is the only mode, so `requires_capture` never occurs.
+
+`booking_adjustments.expires_at` is the immutable lateness cutoff
+(`paymentHoldDurationSeconds`, 600 s). Payment attempt facts are immutable, so the
+occupancy lease lives on the held target fragments: a `hold_expires_at` later than the
+cutoff is verified evidence of a live payment (from X, status polling or a verified
+`payment_intent.processing` webhook). Expiry releases a modification at its cutoff
+unless such a lease is still running. Success before the cutoff applies exactly once;
+success at or after it is late, never applied, and refunded exactly once. A decline
+stays retryable only while the customer still holds the capability and the cutoff has
+not passed; after X or the cutoff, failure discards the modification, releases the
+hold and cancels the failed intent after commit. While a live payment is unresolved,
+My Activity hides Edit for that booking and refreshes until it resolves. A new request
+discards an unpaid earlier proposal (closing its attempt like the cutoff sweep) unless
+its payment is live. A modification whose target has no new fragment cannot record a
+lease; its late capture is still refunded. The Stripe webhook endpoint must subscribe
+to `payment_intent.processing` in addition to succeeded/payment_failed/canceled.
+
 Admins cannot create surcharges for other customers; guest rescheduling is not
-implemented. Refresh and repeated submissions do not create a replacement charge.
-Admin Financial history lists payment requests/refund obligations with historical
-transaction context and separate current-booking totals, supports
-refund retry and can check modification payments after the scheduling edit window closes.
-There is no background reconciliation worker; verified webhooks, polling, authenticated
-recovery and explicit Admin checks use the same settlement/refund services.
+implemented. Repeated submissions of one request do not create a replacement charge.
+A captured surcharge that cannot be applied (late or fenced) emails the customer once
+and is refunded automatically. Admin Financial history lists payment requests/refund
+obligations with historical transaction context and separate current-booking totals,
+read-only. Verified webhooks, checkout polling and the automatic recovery worker use the
+same settlement/refund services.
 
 See [full implementation report](booking-payment-workflow-audit.md).
 
@@ -656,7 +694,6 @@ reconciliation remain future Task 4 work.
 
 Current reporting summaries still count successfully settled attempts and successful
 refund statuses; reporting changes for receipt-only or mismatched captures are
-intentionally deferred. Independent scheduled
-provider reconciliation is not implemented; recovery uses webhooks, checkout
-polling, owner recovery and explicit Admin actions. See the
+intentionally deferred. Scheduled provider reconciliation runs automatically (see
+Automatic financial recovery). See the
 [historical design and deferred financial proposal](booking-financial-immutability-design.md).

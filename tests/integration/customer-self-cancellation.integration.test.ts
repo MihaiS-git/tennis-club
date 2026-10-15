@@ -65,7 +65,7 @@ test("self-cancellation enforces account ownership, snapshot notice, staff exemp
     }
     expect(await cancelOwnCustomerBooking(randomUUID(), owner.client)).toMatchObject({ ok: false });
     expect(await cancelOwnCustomerBooking("invalid", owner.client)).toMatchObject({ ok: false });
-    expect(await cancelOwnCustomerBooking(eligible.id, owner.client)).toEqual({ ok: true });
+    expect(await cancelOwnCustomerBooking(eligible.id, owner.client)).toEqual({ ok: true, outcome: "cancelled" });
     const after = await read(eligible);
     expect(after.booking.status).toBe("cancelled"); expect(after.reservation.status).toBe("cancelled");
     expect(after.reservation.cancelled_at).not.toBeNull(); expect(after.reservation.cancelled_by_user_id).toBe(owner.id);
@@ -84,7 +84,7 @@ test("self-cancellation enforces account ownership, snapshot notice, staff exemp
     expect(await cancelOwnCustomerBooking(expired.id, owner.client)).toMatchObject({ ok: false, message: expect.stringContaining("expired") });
     for (const [actor, role] of [[admin, "admin"], [coach, "coach"]] as const) {
       const own = await booking(actor.id, 180, 43200);
-      expect(await cancelOwnCustomerBooking(own.id, actor.client)).toEqual({ ok: true });
+      expect(await cancelOwnCustomerBooking(own.id, actor.client)).toEqual({ ok: true, outcome: "cancelled" });
       // Current roles, rather than booking-time roles, determine the exemption.
       const removedRole = await booking(actor.id, 180, 43200);
       assert.strictEqual((await service.from("user_roles").delete().eq("user_id", actor.id)).error, null);
@@ -119,7 +119,7 @@ test("self-cancellation enforces account ownership, snapshot notice, staff exemp
     expect(raceAfter.booking.current_revision_id).toBe(revisions.data![1].id);
     expect(raceAfter.reservation.status).toBe("cancelled");
     expect((await service.from("payment_refunds").select("id").eq("booking_id", race.id)).data).toEqual([]);
-    expect(await cancelOwnCustomerBooking(race.id, owner.client)).toEqual({ ok: true });
+    expect(await cancelOwnCustomerBooking(race.id, owner.client)).toEqual({ ok: true, outcome: "cancelled" });
     for (const actor of [other, admin, coach])
       expect(await cancelOwnCustomerBooking(race.id, actor.client)).toMatchObject({ ok: false });
     expect(await read(race)).toEqual(raceAfter);

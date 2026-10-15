@@ -49,6 +49,13 @@ export function refundObligationTotal(refunds: readonly Pick<RefundObligationFac
   return refunds.reduce((sum, refund) => sum + refund.amountMinor, 0);
 }
 
+// A voided obligation belonged to a booking change abandoned after a definitive
+// provider failure: no money moved, so it no longer reserves captured funds.
+// Every other obligation, including an unresolved or failed one, still does.
+export function reservingObligations<R extends Pick<RefundObligationFact, "status">>(refunds: readonly R[]): R[] {
+  return refunds.filter(refund => refund.status !== "voided");
+}
+
 export function summarizeBookingFinancials<P extends RefundPaymentFact, R extends RefundObligationFact>(
   payments: P[], refunds: R[],
 ) {
@@ -57,7 +64,7 @@ export function summarizeBookingFinancials<P extends RefundPaymentFact, R extend
   const captures = payments.filter(payment => payment.method === "online" && payment.status === "succeeded");
   const captured = captures.reduce((sum, payment) => sum + payment.amountMinor, 0);
   const refunded = refundObligationTotal(refunds.filter(refund => refund.status === "succeeded"));
-  const obligated = refundObligationTotal(refunds);
+  const obligated = refundObligationTotal(reservingObligations(refunds));
   return { payments, refunds, captures, captured, refunded, obligated,
     netPaid: captured - refunded, refundable: captured - obligated };
 }
@@ -95,7 +102,7 @@ export function allocateRefund(input: {
     .filter((balance): balance is { payment: RefundPaymentFact & { providerPaymentId: string }; captured: number } =>
       balance.captured !== null && balance.payment.providerPaymentId !== null)
     .sort((a, b) => b.payment.createdAt.getTime() - a.payment.createdAt.getTime() || a.payment.id.localeCompare(b.payment.id))
-    .map(({ payment, captured }) => ({ payment, captured, remaining: captured - refundObligationTotal(input.refunds
+    .map(({ payment, captured }) => ({ payment, captured, remaining: captured - refundObligationTotal(reservingObligations(input.refunds)
       .filter(refund => refund.paymentAttemptId === payment.id)) }));
   if (balances.some(balance => balance.remaining < 0)) throw new RefundAllocationError("inconsistent_obligations");
   const available = balances.reduce((sum, balance) => sum + balance.remaining, 0);

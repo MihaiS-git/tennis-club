@@ -34,7 +34,7 @@ test("late capture and successful compensation report both actual movements once
     refundObligations: 5000, uncompletedRefundObligations: 0 }]);
   expect(result.captures[0]).toMatchObject({ attemptStatus: "expired", discrepancies: [] });
   expect(result.refunds).toEqual([{ id: "refund", amount: 5000, currency: "RON", status: "succeeded",
-    reference: "re_1", verified: true }]);
+    reference: "re_1", verified: true, reason: null, createdAt: null, verifiedAt: null }]);
 });
 
 test("capture amount mismatch reports actual money and identifies the discrepancy", () => {

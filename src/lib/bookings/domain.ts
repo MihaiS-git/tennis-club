@@ -3,9 +3,12 @@ import { paymentMethodSchema } from "@/lib/payments/domain";
 import { locationCurrencies } from "@/lib/admin/locations-validation";
 import { minorAmountSchema } from "@/lib/pricing/money";
 
-// Internal application result: only successful cancellation has refund obligations.
+// Internal application result. A cancellation that must return captured funds is
+// a pending request: the booking stays confirmed until its refunds are verified.
 export type BookingCancellationCommandResult =
   | { outcome: "cancelled"; refundIds: string[] }
+  | { outcome: "cancellation_pending"; adjustmentId: string; refundIds: string[] }
+  | { outcome: "change_pending" }
   | { outcome: "unavailable" }
   | { outcome: "inactive" }
   | { outcome: "started" }
@@ -43,4 +46,18 @@ export function adjustmentHoldFragments(original: { courtId: string; date: strin
   return intervals.filter(([start, end]) => end > start).map(([startMinute, endMinute]) => ({
     courtId: target.courtId, date: target.date, startMinute, endMinute,
   }));
+}
+
+// Changes that return money keep the original booking until every refund is
+// verified. Increases are payment-backed and settle through the payment workflow.
+export function refundBackedAdjustment(adjustment: { kind: "reschedule" | "cancellation"; newTotal: number; originalTotal: number }) {
+  return adjustment.kind === "cancellation" || adjustment.newTotal < adjustment.originalTotal;
+}
+
+// Every required obligation must succeed; partial repayment cannot be undone.
+// Verified definitive failure of every obligation (no money moved) abandons the change.
+export function refundBackedOutcome(statuses: readonly string[]): "waiting" | "apply" | "abandon" {
+  if (statuses.length === 0) return "waiting";
+  if (statuses.every(status => status === "succeeded")) return "apply";
+  return statuses.every(status => status === "failed") ? "abandon" : "waiting";
 }

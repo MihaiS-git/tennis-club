@@ -10,6 +10,7 @@ import { locationCurrencies } from "@/lib/admin/locations-validation";
 import { localStartInstant } from "@/lib/courts/local-time";
 import { getDataSource } from "@/lib/db/data-source";
 import { listOwnerActivityBatch } from "@/lib/db/repositories/court-activity.repository";
+import { listBookingsWithLivePayment, listBookingsWithPendingChange } from "@/lib/db/repositories/booking-adjustments.repository";
 import type { CourtHistoryItem } from "./history";
 import { minorAmountSchema } from "@/lib/pricing/money";
 import { ACTIVITY_PAGE_SIZE, parseActivityQuery, type ActivityQuery, type ActivityScope, type ActivitySearchParams } from "./activity-query";
@@ -156,8 +157,13 @@ export async function listOwnCourtActivity(scope: ActivityScope, query: Activity
 export async function listOwnUpcomingActivity(input: ActivitySearchParams = {}, client?: Awaited<ReturnType<typeof createClient>>) {
   const query = parseActivityQuery(input, "upcoming");
   const result = await listOwnCourtActivity("upcoming", query, client);
+  const manager = (await getDataSource()).manager;
+  const bookingIds = result.rows.flatMap((row) => row.kind === "booking" ? [row.id] : []);
+  const live = await listBookingsWithLivePayment(manager, bookingIds);
+  const changes = await listBookingsWithPendingChange(manager, bookingIds);
   const ordered: UpcomingCourtActivity[] = result.rows.map((row) => row.kind === "booking"
-    ? { kind: "booking", row } : { kind: "reservation", row });
+    ? { kind: "booking", row: { ...row, payment_pending: live.has(row.id),
+      ...(changes.has(row.id) ? { pending_change: changes.get(row.id) } : {}) } } : { kind: "reservation", row });
   return { hasNext: result.hasNext, locations: result.locations, courts: result.courts,
     ordered, upcoming: ordered.flatMap((item) => item.kind === "reservation" ? [item.row] : []),
     bookings: ordered.flatMap((item) => item.kind === "booking" ? [item.row] : []) };

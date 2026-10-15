@@ -1,14 +1,18 @@
 import "server-only";
 
 import { z } from "zod";
-import { getDataSource } from "@/lib/db/data-source";
 import { createClient } from "@/lib/supabase/server";
 import { loadReservationEditDayForLocation, reservationEditLocationSchema } from "@/lib/reservations/edit-availability";
-import { openingIntervalSchema } from "@/lib/admin/opening-hours-validation";
+import { openingIntervalSchema, type OpeningInterval } from "@/lib/admin/opening-hours-validation";
+import { getDataSource } from "@/lib/db/data-source";
+import { listCheckoutCourtCoverage, listCheckoutLocationCourts } from "@/lib/db/repositories/clubs.repository";
+import { listCheckoutPricing } from "@/lib/db/repositories/pricing.repository";
+import { courtSlotRates } from "@/lib/courts/calendar";
+import { mondayWeekday } from "@/lib/pricing/resolution";
 import { readCurrentAccount } from "@/lib/auth/account";
 import { bookingRescheduleInputSchema, readCustomerBookingEditContext, rescheduleCustomerBookingCommand } from "./commands";
 import { normalizeDatabaseError } from "@/lib/db/errors";
-import { adjustmentPresentation, readAdjustmentStatus, finishBookingAdjustment } from "@/lib/payments/booking-adjustments";
+import { finishBookingAdjustment } from "@/lib/payments/booking-adjustments";
 import type { AdjustmentTarget } from "@/lib/db/entities/booking-adjustment.entity";
 import type { OnlineCheckout } from "@/lib/payments/domain";
 import type { RefundStatus } from "@/lib/payments/refunds";
@@ -17,12 +21,8 @@ import { logger } from "@/lib/logger";
 type Client = Awaited<ReturnType<typeof createClient>>;
 const bookingEditContextSchema = z.object({
   payment_method: z.enum(["online", "pay_at_club"]),
-  pending_adjustment_id: z.uuid().nullable().optional(),
-  adjustment_status: z.enum(["pending","applied","cancelled","expired","unsuccessful"]).optional(),
-  adjustment_target: z.object({ courtId: z.uuid(), date: z.iso.date(), startMinute: z.number().int(), endMinute: z.number().int() }).optional(),
-  adjustment_total_minor: z.number().int().positive().optional(), payment_recovery_required: z.boolean().optional(),
   financial: z.object({ captured: z.number(), refunded: z.number(), refundObligations: z.number(), netPaid: z.number(), outstanding: z.number() }).optional(),
-  refunds: z.array(z.object({ id: z.uuid(), amount: z.number(), status: z.enum(["pending", "pending_retry", "succeeded", "failed"]) })),
+  refunds: z.array(z.object({ id: z.uuid(), amount: z.number(), status: z.enum(["pending", "pending_retry", "succeeded", "failed", "voided"]) })),
   location_id: z.uuid(), location_timezone: z.string(), court_id: z.uuid(), booking_date: z.iso.date(),
   starts_at_minute: z.number().int(), ends_at_minute: z.number().int(),
   updated_at: z.iso.datetime({ offset: true }), current_revision_id: z.uuid(),
@@ -33,7 +33,7 @@ const bookingEditContextSchema = z.object({
 export type BookingEditContext = z.infer<typeof bookingEditContextSchema>;
 export type BookingRescheduleResult = { ok: true; totalAmountMinor: number;
   adjustmentId?: string; adjustmentStatus?: "pending" | "applied" | "cancelled" | "expired" | "unsuccessful";
-  target?: Pick<AdjustmentTarget,"courtId" | "date" | "startMinute" | "endMinute">; paymentRecoveryRequired?: boolean; refundIds?: string[]; refundStatus?: RefundStatus; checkout?: OnlineCheckout; holdExpiresAt?: string; paymentUrl?: string }
+  target?: Pick<AdjustmentTarget,"courtId" | "date" | "startMinute" | "endMinute">; refundIds?: string[]; refundStatus?: RefundStatus; checkout?: OnlineCheckout; holdExpiresAt?: string }
   | { ok: false; message: string; reason?: "stale" | "price_changed"; totalAmountMinor?: number };
 
 export async function loadBookingEditDay(id: unknown, date: unknown, client: Client, now = new Date()) {
@@ -47,23 +47,31 @@ export async function loadBookingEditDay(id: unknown, date: unknown, client: Cli
   const availability = await loadReservationEditDayForLocation({ client, locationId: context.location_id,
     timezone: context.location_timezone, date: input.date, occupancy: context.occupancy, now,
     configuration: { location: booking.location, hours: context.hours } });
-  let adjustment: Awaited<ReturnType<typeof adjustmentPresentation>> = null;
-  if (booking.pending_adjustment_id) {
-    try {
-      adjustment = await adjustmentPresentation(booking.pending_adjustment_id);
-      const status = await readAdjustmentStatus((await getDataSource()).manager, booking.pending_adjustment_id);
-      if (status.status !== "pending_payment") {
-        const refreshed = await readCustomerBookingEditContext(input.id,input.date,account.userId);
-        if (refreshed?.pending_adjustment_id === booking.pending_adjustment_id) return { ...availability, booking, adjustment };
-        booking.pending_adjustment_id = null;
-        // Settlement may have just applied an edit or compensation. Refresh the
-        // authoritative context after it, rather than returning pre-observation tokens.
-        return loadBookingEditDay(id, date, client, now);
-      }
-    }
-    catch { /* The durable operation remains visible and initialization can be retried. */ }
-  }
-  return { ...availability, booking, adjustment };
+  // Every Edit opens a fresh form; earlier modifications are never resumed here.
+  return { ...availability, day: await withCourtRates(availability.day, context.location_id, input.date,
+    context.hours, booking.currency), booking };
+}
+
+// Display rates for the owner's timetable from the same configuration reads as the
+// edit quote. The selected-interval quote remains the authoritative price.
+async function withCourtRates<Day extends { times: number[]; courts: { court: { id: string } }[] }>(
+  day: Day, locationId: string, date: string, hours: OpeningInterval[], currency: string) {
+  const manager = (await getDataSource()).manager;
+  const courts = await listCheckoutLocationCourts(manager, locationId);
+  const weekday = mondayWeekday(date);
+  return { ...day, currency, courts: await Promise.all(day.courts.map(async (row) => {
+    const court = courts.find((item) => item.id === row.court.id);
+    if (!court) return { ...row, rates: day.times.map(() => null) };
+    const [coverage, rules] = await Promise.all([listCheckoutCourtCoverage(manager, court.id, date),
+      listCheckoutPricing(manager, court.id, weekday, date)]);
+    return { ...row, rates: courtSlotRates({ court, date, times: day.times, hours,
+      coverage: coverage.map((c) => ({ id: c.id, court_id: c.courtId, starts_on: c.startsOn, ends_on: c.endsOn,
+        created_at: c.createdAt.toISOString(), updated_at: c.updatedAt.toISOString() })),
+      pricing: rules.map((p) => ({ id: p.id, rule_set_id: p.ruleSetId, location_id: p.locationId, court_id: p.courtId,
+        court_state: p.courtState, weekday: p.weekday, starts_at_minute: p.startsAtMinute, ends_at_minute: p.endsAtMinute,
+        starts_on: p.startsOn, ends_on: p.endsOn, price_per_hour_minor: p.pricePerHourMinor,
+        created_at: p.createdAt.toISOString(), updated_at: p.updatedAt.toISOString() })) }).rates };
+  })) };
 }
 export async function runBookingReschedule(input: unknown, actorId: string): Promise<BookingRescheduleResult> {
   const parsed = bookingRescheduleInputSchema.safeParse(input);

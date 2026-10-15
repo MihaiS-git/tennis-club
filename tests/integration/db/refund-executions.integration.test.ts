@@ -5,11 +5,9 @@ vi.mock("@/lib/payments/providers/stripe/client", async importOriginal => ({
   stripeClient: () => ({ refunds: { create, list, retrieve } }),
 }));
 import { processBookingRefund } from "@/lib/payments/refunds";
-import { prepareAutomaticRefund, prepareAdminRefund, initiateRefundExecution } from "@/lib/payments/refund-commands";
+import { prepareAutomaticRefund, initiateRefundExecution } from "@/lib/payments/refund-commands";
 import * as payments from "@/lib/db/repositories/payments.repository";
 import { bookingFinancials } from "@/lib/payments/financials";
-import { ensureIntegrationAdminAnchor } from "../admin-anchor";
-import { localFixtureClient } from "../auth-fixtures";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import type { DataSource, EntityManager, QueryRunner } from "typeorm";
@@ -24,7 +22,7 @@ let database: DataSource;
 beforeAll(async () => { assertTestEnvironment(); database = await getDataSource(); });
 afterAll(async () => { await database?.destroy(); });
 
-async function fixture(manager: EntityManager) {
+async function fixture(manager: EntityManager, reason: PaymentRefundEntity["reason"] = "booking_price_reduction") {
   const locationId = randomUUID(), courtId = randomUUID(), reservationId = randomUUID();
   const bookingId = randomUUID(), attemptId = randomUUID(), refundId = randomUUID();
   const providerPaymentId = `pi_${attemptId}`;
@@ -41,7 +39,7 @@ async function fixture(manager: EntityManager) {
     VALUES($1,'stripe',$2,$2,5000,'RON')`, [attemptId, providerPaymentId]);
   const context: { current_revision_id: string }[] = await manager.query("SELECT current_revision_id FROM public.bookings WHERE id=$1", [bookingId]);
   await manager.getRepository(PaymentRefundEntity).insert({ id: refundId, bookingId, paymentAttemptId: attemptId,
-    provider: "stripe", providerPaymentId, amountMinor: 2500, capturedAmountMinor: 5000, currency: "RON", reason: "booking_price_reduction",
+    provider: "stripe", providerPaymentId, amountMinor: 2500, capturedAmountMinor: 5000, currency: "RON", reason,
     contextRevisionId: context[0].current_revision_id, operationKey: randomUUID() });
   const request = { id: randomUUID(), refundId, provider: "stripe" as const, providerPaymentId, amountMinor: 2500,
     currency: "RON" as const, idempotencyKey: `refund-execution-${randomUUID()}`, initiatedByUserId: null, createdAt: new Date() };
@@ -49,10 +47,10 @@ async function fixture(manager: EntityManager) {
 }
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 
-async function isolated(work: (runner: QueryRunner, data: Fixture) => Promise<void>) {
+async function isolated(work: (runner: QueryRunner, data: Fixture) => Promise<void>, reason?: PaymentRefundEntity["reason"]) {
   const runner = database.createQueryRunner();
   await runner.startTransaction();
-  try { await work(runner, await fixture(runner.manager)); }
+  try { await work(runner, await fixture(runner.manager, reason)); }
   finally { await runner.rollbackTransaction(); await runner.release(); }
 }
 async function rejects(runner: QueryRunner, work: () => Promise<unknown>, code: string) {
@@ -338,8 +336,8 @@ beforeEach(() => {
   list.mockImplementation(() => (async function* () {})());
   create.mockImplementation(async (params: Stripe.RefundCreateParams) => providerRefund(params));
 });
-async function committed(work: (data: Fixture) => Promise<void>) {
-  const data = await database.transaction(fixture);
+async function committed(work: (data: Fixture) => Promise<void>, reason?: PaymentRefundEntity["reason"]) {
+  const data = await database.transaction(manager => fixture(manager, reason));
   try { await work(data); }
   finally {
     vi.restoreAllMocks();
@@ -372,7 +370,7 @@ test("runtime commits execution identity, lease and dispatch before Stripe recei
   });
 });
 
-test("timeout, failed discovery and empty recovery reuse one execution without another creation", async () => {
+test("timeout and failed discovery replay the exact execution and idempotency key", async () => {
   await committed(async data => {
     let accepted: ProviderRefund | undefined;
     create.mockImplementationOnce(async (params: Stripe.RefundCreateParams) => {
@@ -383,14 +381,16 @@ test("timeout, failed discovery and empty recovery reuse one execution without a
     expect(first).toMatchObject({status:"uncertain",firstUncertaintyEvidence:"uncertain",leaseToken:null});
     list.mockImplementationOnce(()=> (async function*(){throw new Stripe.errors.StripeInvalidRequestError({statusCode:400});})());
     expect(await processBookingRefund(data.refundId)).toBe("pending_retry");
-    expect(await processBookingRefund(data.refundId)).toBe("pending_retry");
-    expect(create).toHaveBeenCalledOnce();
+    create.mockImplementationOnce(async () => accepted);
+    expect(await processBookingRefund(data.refundId)).toBe("succeeded");
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls[1]).toEqual(create.mock.calls[0]);
     list.mockImplementationOnce(()=> (async function*(){if(accepted) yield accepted;})());
     expect(await processBookingRefund(data.refundId)).toBe("succeeded");
     const history=await executions.listRefundExecutions(database.manager,data.refundId);
     expect(history).toHaveLength(1);expect(history[0]).toMatchObject({id:first.id,idempotencyKey:first.idempotencyKey,
       terminalResult:"succeeded",firstUncertaintyEvidence:"uncertain"});
-    expect(create).toHaveBeenCalledOnce();
+    expect(create).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -401,6 +401,7 @@ test("accepted pending identity survives retrieval failure and is retrieved to v
     expect(await processBookingRefund(data.refundId)).toBe("pending");
     const [pending]=await executions.listRefundExecutions(database.manager,data.refundId);
     expect(pending).toMatchObject({status:"pending",terminalResult:null,providerRefundId:accepted?.id});
+    list.mockImplementation(() => (async function* () { if (accepted) yield accepted; })());
     retrieve.mockRejectedValueOnce(new Stripe.errors.StripeInvalidRequestError({statusCode:404}));
     expect(await processBookingRefund(data.refundId)).toBe("pending_retry");
     retrieve.mockResolvedValueOnce({...accepted,status:"succeeded"});
@@ -409,51 +410,45 @@ test("accepted pending identity survives retrieval failure and is retrieved to v
   });
 });
 
-test("identity mismatch retains the returned provider ID and cannot authorize another operation", async () => {
+test("identity mismatch does not bind unverified provider identity and recovers by exact metadata", async () => {
   await committed(async data => {
     let accepted: ProviderRefund | undefined;
     create.mockImplementationOnce(async (params: Stripe.RefundCreateParams)=> {accepted=providerRefund(params);return {...accepted,amount:1};});
     expect(await processBookingRefund(data.refundId)).toBe("pending_retry");
     const [execution]=await executions.listRefundExecutions(database.manager,data.refundId);
-    expect(execution).toMatchObject({providerRefundId:accepted?.id,status:"uncertain",firstUncertaintyEvidence:"evidence_mismatch"});
-    retrieve.mockResolvedValueOnce(accepted);
+    expect(execution).toMatchObject({providerRefundId:null,status:"uncertain",firstUncertaintyEvidence:"evidence_mismatch"});
+    list.mockImplementation(() => (async function* () { if (accepted) yield accepted; })());
     expect(await processBookingRefund(data.refundId)).toBe("succeeded");
-    expect(create).toHaveBeenCalledOnce();expect(retrieve).toHaveBeenCalledWith(execution.providerRefundId);
+    expect(create).toHaveBeenCalledOnce();expect(retrieve).not.toHaveBeenCalled();
+    expect((await executions.listRefundExecutions(database.manager,data.refundId))[0]).toMatchObject({ providerRefundId: accepted?.id, terminalResult: "succeeded" });
   });
 });
 
-test.each(["failed","rejected"] as const)("Admin retry after definitive %s creates a distinct execution/key and counts one obligation", async outcome => {
+test.each(["failed","rejected"] as const)("definitive %s is terminal and automatic recovery never replaces its execution", async outcome => {
   await committed(async data => {
-    const actorId=await ensureIntegrationAdminAnchor(localFixtureClient());
-    if(outcome==="failed") create.mockImplementationOnce(async (params:Stripe.RefundCreateParams)=>providerRefund(params,"failed"));
+    if(outcome === "failed") create.mockImplementationOnce(async (params: Stripe.RefundCreateParams) => providerRefund(params,"failed"));
     else create.mockRejectedValueOnce(new Stripe.errors.StripeInvalidRequestError({statusCode:400}));
     expect(await processBookingRefund(data.refundId)).toBe("failed");
-    const [first]=await executions.listRefundExecutions(database.manager,data.refundId);
+    const [first] = await executions.listRefundExecutions(database.manager,data.refundId);
     expect(first.terminalResult).toBe(outcome);
-    expect(await processBookingRefund(data.refundId)).toBe("failed"); // no automatic replacement policy
-    const prepared=await prepareAdminRefund("retry",data.refundId,actorId);
-    if(prepared.outcome!=="ready") throw new Error("Missing Admin execution claim");
-    expect(prepared.claim.execution.id).not.toBe(first.id);
-    expect(prepared.claim.execution.idempotencyKey).not.toBe(first.idempotencyKey);
-    expect(await processBookingRefund(data.refundId,prepared.claim)).toBe("succeeded");
-    const history=await executions.listRefundExecutions(database.manager,data.refundId);
-    expect(history).toHaveLength(2);expect(history[0]).toEqual(first);
-    expect(await bookingFinancials(database.manager,data.bookingId)).toMatchObject({obligated:2500,refunded:2500});
-    expect(await prepareAdminRefund("retry",data.refundId,actorId)).toEqual({outcome:"already_refunded"});
-    expect(create).toHaveBeenCalledTimes(2);
+    expect(await processBookingRefund(data.refundId)).toBe("failed");
+    expect(await executions.listRefundExecutions(database.manager,data.refundId)).toEqual([first]);
+    expect(await bookingFinancials(database.manager,data.bookingId)).toMatchObject({obligated:2500,refunded:0});
+    expect(create).toHaveBeenCalledOnce();
   });
 });
 
-test("a crash between committed dispatch and HTTP leaves one unresolved execution and no creation on takeover", async () => {
+test("a crash between committed dispatch and HTTP replays its durable key on takeover", async () => {
   await committed(async data => {
     const prepared=await prepareAutomaticRefund(data.refundId);
     if(prepared.outcome!=="ready") throw new Error("Missing execution claim");
     await initiateRefundExecution(prepared.claim);
     await expireExecutionLease(data.refundId);
-    expect(await processBookingRefund(data.refundId)).toBe("pending_retry");
-    expect(create).not.toHaveBeenCalled();
+    expect(await processBookingRefund(data.refundId)).toBe("succeeded");
+    expect(create).toHaveBeenCalledOnce();
+    expect(create.mock.calls[0][1]).toEqual({ idempotencyKey: prepared.claim.execution.idempotencyKey });
     const history=await executions.listRefundExecutions(database.manager,data.refundId);
-    expect(history).toHaveLength(1);expect(history[0]).toMatchObject({id:prepared.claim.execution.id,status:"uncertain",firstUncertaintyEvidence:"not_found"});
+    expect(history).toHaveLength(1);expect(history[0]).toMatchObject({id:prepared.claim.execution.id,status:"succeeded",terminalResult:"succeeded"});
   });
 });
 
@@ -474,4 +469,151 @@ test("provider acceptance followed by result-transaction failure recovers the sa
     expect(create).toHaveBeenCalledOnce();
     expect(await executions.listRefundExecutions(database.manager,data.refundId)).toHaveLength(1);
   });
+});
+
+test("independent recovery: dispatch crash followed by 24-hour outage preserves the unresolved obligation without unsafe replay", async () => {
+  await committed(async data => {
+    const prepared=await prepareAutomaticRefund(data.refundId);
+    if(prepared.outcome!=="ready") throw new Error("Missing claim");
+    await initiateRefundExecution(prepared.claim);
+    await expireExecutionLease(data.refundId);
+    const clock=vi.spyOn(Date,"now").mockReturnValue(Date.now()+24*60*60*1000);
+    try {
+      expect(await processBookingRefund(data.refundId)).toBe("pending_retry");
+      expect(create).not.toHaveBeenCalled();
+      expect(await executions.listRefundExecutions(database.manager,data.refundId)).toMatchObject([
+        { id: prepared.claim.execution.id, status: "uncertain", terminalResult: null,
+          lastError: "unresolved_after_idempotency_window" },
+      ]);
+      expect(await bookingFinancials(database.manager,data.bookingId)).toMatchObject({ refunded: 0, obligated: 2500 });
+    } finally { clock.mockRestore(); }
+  });
+});
+
+test("verification: 25-hour recovery finds an accepted refund by exact provider metadata without recreating it", async () => {
+  await committed(async data => {
+    let accepted: ProviderRefund | undefined;
+    create.mockImplementationOnce(async (params: Stripe.RefundCreateParams) => {
+      accepted = providerRefund(params);
+      throw new Stripe.errors.StripeConnectionError({ message: "accepted response lost" });
+    });
+    expect(await processBookingRefund(data.refundId)).toBe("pending_retry");
+    list.mockImplementation(() => (async function* () { if (accepted) yield accepted; })());
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 25 * 3_600_000);
+    try {
+      const { runPaymentRecovery } = await import("@/lib/payments/recovery");
+      await runPaymentRecovery();
+      await runPaymentRecovery();
+      expect(await processBookingRefund(data.refundId)).toBe("succeeded");
+      expect(create).toHaveBeenCalledOnce();
+      expect(await executions.listRefundExecutions(database.manager, data.refundId)).toMatchObject([
+        { terminalResult: "succeeded", providerRefundId: accepted?.id },
+      ]);
+    } finally { clock.mockRestore(); }
+  });
+});
+
+test("verification: absent evidence after 25 hours is explicitly unresolved across recovery cycles and never dispatches twice", async () => {
+  await committed(async data => {
+    create.mockRejectedValueOnce(new Stripe.errors.StripeConnectionError({ message: "unknown acceptance" }));
+    expect(await processBookingRefund(data.refundId)).toBe("pending_retry");
+    const [original] = await executions.listRefundExecutions(database.manager, data.refundId);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 25 * 3_600_000);
+    try {
+      const { runPaymentRecovery } = await import("@/lib/payments/recovery");
+      await runPaymentRecovery();
+      await runPaymentRecovery();
+      const history = await executions.listRefundExecutions(database.manager, data.refundId);
+      expect(history).toHaveLength(1);
+      expect(history[0]).toMatchObject({ id: original.id, status: "uncertain", terminalResult: null,
+        lastError: "unresolved_after_idempotency_window", leaseToken: null });
+      expect(create).toHaveBeenCalledOnce();
+      expect(await bookingFinancials(database.manager, data.bookingId)).toMatchObject({ refunded: 0, obligated: 2500 });
+    } finally {
+      clock.mockRestore();
+      await database.query("DELETE FROM public.booking_notification_deliveries WHERE event_key=$1", [`refund:${data.refundId}:exception`]);
+    }
+  });
+});
+
+test("verification: affirmative transient Stripe failure gets a new execution after backoff and finishes automatically", async () => {
+  await committed(async data => {
+    create.mockImplementationOnce(async (params: Stripe.RefundCreateParams) => ({ ...providerRefund(params, "failed"), failure_reason: "insufficient_funds" }));
+    expect(await processBookingRefund(data.refundId)).toBe("pending_retry");
+    expect(await processBookingRefund(data.refundId)).toBe("pending_retry");
+    expect(create).toHaveBeenCalledOnce();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 2 * 3_600_000);
+    try {
+      const { runPaymentRecovery } = await import("@/lib/payments/recovery");
+      await runPaymentRecovery();
+      await runPaymentRecovery();
+      expect(await executions.listRefundExecutions(database.manager, data.refundId)).toMatchObject([
+        { executionNumber: 1, terminalResult: "failed", terminalEvidence: "retryable:insufficient_funds" },
+        { executionNumber: 2, terminalResult: "succeeded" },
+      ]);
+      expect(create).toHaveBeenCalledTimes(2);
+      expect(create.mock.calls[1][1].idempotencyKey).not.toBe(create.mock.calls[0][1].idempotencyKey);
+    } finally { clock.mockRestore(); }
+  });
+});
+
+test("Admin attention uses the latest refund execution and excludes resolved refunds", async () => {
+  await isolated(async (runner, data) => {
+    const identity = await ready(runner.manager, data);
+    await executions.recordRefundDispatch(runner.manager, { ...identity, initiatedAt: new Date(Date.now() - 25 * 3_600_000) });
+    await executions.recordRefundTerminalResult(runner.manager, { ...identity, result: "failed", providerRefundId: `re_${randomUUID()}`,
+      evidence: "retryable:insufficient_funds", completedAt: new Date() });
+    const replacement = { refundId: data.refundId, executionId: randomUUID(), token: randomUUID() };
+    await executions.allocateRefundExecution(runner.manager, { ...data.request, id: replacement.executionId,
+      idempotencyKey: randomUUID(), createdAt: new Date() });
+    expect(await executions.claimRefundExecution(runner.manager, { ...replacement, leaseUntil: new Date(Date.now() + 300_000) })).toBe(true);
+    const dispatchedAt = new Date();
+    await executions.recordRefundDispatch(runner.manager, { ...replacement, initiatedAt: dispatchedAt });
+    await executions.recordRefundUncertainty(runner.manager, { ...replacement, evidence: "uncertain", observedAt: new Date() });
+    await payments.writeRefundStatus(runner.manager, data.refundId, "pending_retry");
+    const { readFinancialHistory } = await import("@/lib/payments/financial-history");
+    const query = { page: 1, status: "all", provider: "all", method: "all", attention: true, search: "",
+      sort: "date", direction: "asc", bookingId: data.bookingId, attentionRefundStatuses: ["failed"] } as const;
+    expect((await readFinancialHistory(runner.manager, query)).rows).toEqual([]);
+    const unfiltered = await readFinancialHistory(runner.manager, { ...query, attention: false });
+    expect(Date.parse(unfiltered.rows.find(row => row.refund?.id === data.refundId)!.refund!.recovery_started_at)).toBe(dispatchedAt.getTime());
+    await executions.recordRefundTerminalResult(runner.manager, { ...replacement, result: "succeeded", providerRefundId: `re_${randomUUID()}`,
+      evidence: "provider_refund_succeeded", completedAt: new Date() });
+    await payments.writeRefundStatus(runner.manager, data.refundId, "succeeded");
+    expect((await readFinancialHistory(runner.manager, query)).rows).toEqual([]);
+  }, "late_capture_compensation");
+});
+
+test("verification: evidence-only unresolved refund remains visible in Admin attention after each recovery check", async () => {
+  await committed(async data => {
+    // Crash after dispatch, then 25 hours offline before the first recovery check.
+    // Persist old evidence through the repository without weakening triggers.
+    await database.transaction(async manager => {
+      const identity = await ready(manager, data);
+      await executions.recordRefundDispatch(manager, { ...identity, initiatedAt: new Date(Date.now() - 25 * 3_600_000) });
+      await executions.recordRefundExecutionCheck(manager, { ...identity, checkedAt: new Date(Date.now() - 2 * 3_600_000), lastError: "uncertain", releaseLease: true });
+      await payments.writeRefundStatus(manager, data.refundId, "pending");
+      await manager.query("UPDATE public.payment_refunds SET updated_at=clock_timestamp()-interval '25 hours' WHERE id=$1", [data.refundId]);
+    });
+    try {
+      const { runPaymentRecovery } = await import("@/lib/payments/recovery");
+      const { readFinancialHistory } = await import("@/lib/payments/financial-history");
+      const { paymentNeedsAttention, refundRecoveryStalled } = await import("@/lib/payments/domain");
+      for (const check of [runPaymentRecovery, () => processBookingRefund(data.refundId), runPaymentRecovery]) {
+        await check();
+        expect(create).not.toHaveBeenCalled();
+        const [execution] = await executions.listRefundExecutions(database.manager, data.refundId);
+        expect(execution).toMatchObject({ lastError: "unresolved_after_idempotency_window" });
+        const page = await readFinancialHistory(database.manager, { page: 1, status: "all", provider: "all", method: "all",
+          attention: true, search: "", sort: "date", direction: "asc", bookingId: data.bookingId, attentionRefundStatuses: ["failed"] });
+        expect(page.rows.map(row => row.refund?.id)).toContain(data.refundId);
+        const row = page.rows.find(row => row.refund?.id === data.refundId)!;
+        expect(Date.parse(row.refund!.recovery_started_at)).toBe(execution.dispatchInitiatedAt!.getTime());
+        expect(paymentNeedsAttention(row.refund, row.reconciliation)).toBe(true);
+        expect(refundRecoveryStalled(row.refund?.status, row.refund?.recovery_started_at)).toBe(true);
+      }
+    } finally {
+      await database.query("DELETE FROM public.booking_notification_deliveries WHERE event_key=$1", [`refund:${data.refundId}:exception`]);
+    }
+  }, "late_capture_compensation");
 });

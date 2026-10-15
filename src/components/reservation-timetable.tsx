@@ -6,7 +6,9 @@ import type { ReservationCell, ReservationSelection } from "@/lib/reservations/d
 
 export type ReservationTimetableDay = {
   times: number[];
-  courts: { court: { id: string; name: string }; cells: ReservationCell[] }[];
+  // Rates are present only for customer booking edits; Admin/staff reservations are free.
+  courts: { court: { id: string; name: string }; cells: ReservationCell[]; rates?: (number | null)[] }[];
+  currency?: string;
 };
 export type OccupiedInterval = { id: string; courtId: string; startsAtMinute: number; endsAtMinute: number; label: string; kind?: "booking" | "reservation" };
 
@@ -28,6 +30,7 @@ export function ReservationTimetable({ day, date, timezone, selection, onChoose,
     <p className="mt-3 text-xs text-muted-foreground">Select a half-hour cell to start a one-hour interval, then click adjacent cells to adjust.</p>
     <CourtTimelineGrid times={day.times} rows={day.courts} date={date} timezone={timezone}
       selectedStartMinute={selection?.startMinute} selectedEndMinute={selection?.endMinute} firstActionableMinute={firstActionableMinute}
+      priceRates={(row) => row.rates} currency={day.currency}
       renderCells={({ court, cells }) => {
         // Occupancy-only callers retain generic labels. Never derive identity or
         // manageability from an occupied cell; those come from the caller's read model.

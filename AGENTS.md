@@ -1359,4 +1359,32 @@ Refunds preserve original captured amounts. Individual provider operations use i
 refund executions; uncertainty retains execution identity and never authorizes replacement.
 The held-row minimum remains 30 minutes only for adjustment fragments; ordinary
 reservations retain 60 minutes and existing GiST protection. Private browser grants
-remain denied. Isolated Playwright uses only its verified fake loopback Stripe fixture.
+remain denied. Isolated Playwright uses only its verified fake loopback Stripe fixture;
+the separate `playwright.stripe-live.config.ts` uses real Stripe test mode against the
+isolated test project (see docs/testing.md).
+
+Modification lifecycle: Edit always opens a fresh form; only an exact request replay
+returns an existing modification and there is no customer payment link. X is the only
+dismissal: it revokes the capability and cancels any intent not `processing`; a
+processing intent keeps the target hold leased (bounded by the target start) until the
+webhook resolves it. `booking_adjustments.expires_at` is the immutable lateness cutoff;
+the lease lives on held target fragments because payment attempt facts are immutable.
+Late success is never applied and is refunded once. Edit is hidden while a live payment
+is unresolved. `BOOKING_HOLD_SECONDS_OVERRIDE` is test-only (NODE_ENV=test or
+E2E_ALLOW_HOLD_OVERRIDE=1, never production). See docs/payments-memberships.md.
+
+## Durable financial recovery notifications
+
+Refund-backed cancellation/reduction requires every obligation to succeed. Preserve the
+original booking and reservation and all verified partial refunds while any obligation is
+incomplete. Replacement executions require affirmative transient provider failure evidence;
+unknown/permanent refusal is exceptional and never voids the obligation. Past the safe
+idempotency replay window use fully paginated Stripe refund evidence only; missing evidence
+is explicitly unresolved and never authorizes blind resend.
+
+Booking lifecycle and refund-exception email work uses the focused
+`booking_notification_deliveries` table, inserted inside the financial transaction.
+The existing recovery scheduler delivers through Brevo outside transactions, using leases,
+unique event keys and stable provider idempotency keys. Delivery is at-least-once submission;
+ambiguous acceptance can duplicate email after provider key expiry. See
+`docs/booking-notifications.md` and additive migration `1791462257928`.

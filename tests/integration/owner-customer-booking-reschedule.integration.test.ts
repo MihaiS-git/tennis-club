@@ -152,7 +152,7 @@ test("Owner rescheduling preserves rows, enforces notice/ownership and shares pr
       await expect(getOwnBookingEditDay(id, date, coach.client, now)).rejects.toThrow();
     }
     await appendBookingContractFixture(bookingId, { booking_date: date });
-    expect(await cancelOwnCustomerBooking(bookingId, owner.client)).toEqual({ ok: true });
+    expect(await cancelOwnCustomerBooking(bookingId, owner.client)).toEqual({ ok: true, outcome: "cancelled" });
     const cancelledDay = await getReservationDay(location, date, now, owner.client);
     expect(cancelledDay.occupancy).toEqual([{ court_id: courtId, starts_at_minute: 660, ends_at_minute: 720 }]);
     expect((await service.from("bookings").select("status,account_user_id").eq("id", bookingId).single()).data)

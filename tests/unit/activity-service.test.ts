@@ -6,6 +6,10 @@ import { parseActivityQuery } from "@/lib/bookings/activity-query";
 const { account, dataSource, queryRead } = vi.hoisted(() => ({ account: vi.fn(), dataSource: vi.fn(), queryRead: vi.fn() }));
 vi.mock("@/lib/auth/account", () => ({ readCurrentAccount: account }));
 vi.mock("@/lib/db/data-source", () => ({ getDataSource: dataSource }));
+vi.mock("@/lib/db/repositories/booking-adjustments.repository", () => ({
+  listBookingsWithLivePayment: vi.fn(async () => new Set<string>()),
+  listBookingsWithPendingChange: vi.fn(async () => new Set<string>()),
+}));
 import { listOwnCourtActivity, listOwnUpcomingActivity } from "@/lib/bookings/activity-service";
 
 const id = (n: number) => `ca000000-0000-4000-8000-${String(n).padStart(12, "0")}`;

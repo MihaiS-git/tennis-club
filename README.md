@@ -360,10 +360,15 @@ from their details dialog on `/my-activity/bookings`, after explicit confirmatio
 The server-only cancellation service verifies ownership and uses the shared TypeScript
 cutoff/staff-bypass policy. A TypeORM transaction locks location, booking, reservation,
 selected payment and existing refund, then fences actor roles/account. Post-lock database
-wall time controls eligibility; both lifecycle rows, any refund request and notification
-commit atomically. External refund execution remains post-commit.
-Repeated Stripe refund requests reuse the existing refund without changing cancellation
-metadata; other duplicate cancellations return a safe failure.
+wall time controls eligibility. Without a refund, both lifecycle rows and the notification
+commit atomically. With a refund, a pending cancellation request and its refund obligations
+commit instead: the booking stays confirmed until the refund is verified, is cancelled
+then. Any incomplete refund preserves the original booking and reservation, including
+when other refunds have succeeded. Known transient provider failures permit new executions;
+permanent or ambiguous failures preserve the outstanding obligation and notify the customer
+for external resolution. External refund execution is post-commit and completed by automatic recovery.
+Repeated requests reuse the existing request and refunds; other duplicate cancellations
+return a safe failure.
 Upcoming refreshes in place; cancelled bookings enter History and free occupancy.
 Guest identity matching grants no ownership. Admin operational cancellation and direct
 reservation cancellation remain distinct and unchanged.
@@ -1608,8 +1613,11 @@ send the preserved text template through Brevo's transactional HTTP API after co
 Use only the snapshotted the current revision’s `customer_email`, never the current account email.
 Quote, stale, failed and unchanged-schedule saves send no rescheduling email;
 pending/failed/expired checkout sends no confirmation. Transition and webhook receipt
-checks prevent replayed operations from sending again. Delivery is best-effort with
-a 10-second HTTP timeout, sanitized error logging, and no persistent queue or retries.
+checks and unique event keys prevent duplicate notification records. Booking email work
+commits atomically in `booking_notification_deliveries`; the existing recovery scheduler
+sends it through Brevo after commit, using leases, retry backoff and a stable provider
+idempotency key. Ambiguous delivery is retried: duplicates remain possible after Brevo's
+bounded key retention expires. Provider acceptance does not guarantee inbox delivery.
 Email failure cannot change committed booking/payment state. Server-only
 `BREVO_API_KEY` and a Brevo-verified `BOOKING_MAIL_FROM` are required.
 Supabase Auth confirmation/recovery emails remain independent.
@@ -1701,3 +1709,22 @@ Admin management permissions remain unchanged. The desktop/mobile Admin link is 
 link remains. `/admin` redirects Admins
 to Locations and Coaches to Reservations. Legacy `/reservations` and `/admin/payments`
 redirect to their canonical destinations while preserving query parameters.
+
+## Financial recovery corrections
+
+Refund-backed changes require all obligations to succeed before application. Successful
+partial refunds cannot be reversed or repeated; remaining obligations retain their financial
+reservation. Only verified transient failures (`insufficient_funds` refund failure or
+`balance_insufficient` request rejection) authorize a replacement execution, after one hour.
+Other definitive failures require external repayment resolution, preserving the booking.
+
+After the 23-hour conservative replay cutoff, recovery fully paginates Stripe refunds for
+the PaymentIntent and matches obligation/execution metadata plus payment, amount and currency.
+It never resends an uncertain request beyond that cutoff. Missing/conflicting evidence is
+persisted as an explicit unresolved exception, not proof that no money moved; evidence-only
+reconciliation continues. Stripe cannot resolve every crash-before-dispatch ambiguity.
+
+Apply additive migration `1791462257928-DurableBookingNotifications` after the automatic
+recovery migration, before deploying these callers. Keep the existing Node scheduler enabled
+and Brevo configured. See [durable booking email guarantees](docs/booking-notifications.md).
+No development database rebuild or migration was run for these changes.

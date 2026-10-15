@@ -1,3 +1,6 @@
+import { getDataSource } from "@/lib/db/data-source";
+import { deliverPendingBookingNotifications } from "@/lib/notifications/booking-delivery";
+import { bookingNotifications, isolateNotificationQueue } from "./booking-notification-fixtures";
 import { appendBookingContractFixture } from "./checkout-fixtures";
 import { configureCheckoutPolicyFixture } from "./opening-hours-fixtures";
 import { z } from "zod";
@@ -14,9 +17,12 @@ import { cancelOwnCustomerBooking } from "@/lib/bookings/self-cancellation-servi
 import { cancelCustomerBookingAsAdmin } from "@/lib/reservations/service";
 import { cancelBookingCommand } from "@/lib/bookings/cancellation-service";
 import { processBookingRefund } from "@/lib/payments/refunds";
+import { runPaymentRecovery } from "@/lib/payments/recovery";
 
-test("full customer/Admin refunds are atomic, replay-safe and leave failed refunds cancelled; pay at club needs no refund", async () => {
+test("customer/Admin refunds preserve occupancy until verified, recover automatically, and remain replay-safe", async () => {
   const db = localFixtureClient();
+  const database = await getDataSource();
+  const restoreQueue = await isolateNotificationQueue(database.manager);
   const messages: { bookingId: string; recipient: string; text: string; bookingStatus: string; reservationStatus: string }[] = [];
   const realFetch = globalThis.fetch;
   let failDelivery = false;
@@ -86,71 +92,92 @@ test("full customer/Admin refunds are atomic, replay-safe and leave failed refun
     // Changed booking pricing must not change the original captured refund amount.
     await appendBookingContractFixture(own.booking_id, { total_amount_minor: 7000 });
     const [first, duplicate] = await Promise.all([cancel(own.booking_id), cancel(own.booking_id)]);
-    expect(first).toEqual(duplicate); expect(first.outcome).toBe("cancelled");
-    if (first.outcome !== "cancelled" || !first.refundIds[0]) throw new Error("Expected refund ID");
-    await cancelled(own);
+    expect(first).toEqual(duplicate); expect(first.outcome).toBe("cancellation_pending");
+    if (first.outcome !== "cancellation_pending" || !first.refundIds[0]) throw new Error("Expected refund ID");
+    expect((await rows("bookings",own.booking_id))[0].status).toBe("confirmed");
     expect(await rows("payment_refunds", own.booking_id)).toMatchObject([{ id: first.refundIds[0], amount_minor: 5000, captured_amount_minor: 5000,
       currency: "RON", status: "pending", payment_attempt_id: own.payment_attempt_id, requested_by_user_id: users[0] }]);
     expect(await rows("payment_refunds", own.booking_id)).toHaveLength(1);
-    const replacement = await book(600, "pay_at_club"); // Occupancy really is free.
     refundPayment.mockRejectedValueOnce(new Error("network response lost"));
     expect(await processBookingRefund(first.refundIds[0])).toBe("pending_retry");
-    await cancelled(own);
+    expect((await rows("bookings",own.booking_id))[0].status).toBe("confirmed");
     expect((await rows("payment_refunds", own.booking_id))[0]).toMatchObject({ status: "pending_retry" });
     refundPayment.mockResolvedValue({ status: "succeeded", providerRefundId: `refund-${first.refundIds[0]}` });
     expect(await cancel(own.booking_id)).toEqual(first);
     expect(await processBookingRefund(first.refundIds[0])).toBe("succeeded");
-    expect(refundPayment).toHaveBeenLastCalledWith(expect.objectContaining({ id: first.refundIds[0], operation:"recover", executionId:expect.any(String),idempotencyKey:expect.any(String), providerPaymentId: `original-${own.payment_attempt_id}`,
+    await cancelled(own);
+    const replacement=await book(600,"pay_at_club"); // Occupancy is free only after verified completion.
+    expect(refundPayment).toHaveBeenLastCalledWith(expect.objectContaining({ id: first.refundIds[0], operation:"replay", executionId:expect.any(String),idempotencyKey:expect.any(String), providerPaymentId: `original-${own.payment_attempt_id}`,
       providerRefundId: null, amountMinor: 5000, currency: "RON" }));
     refundPayment.mockClear(); expect(await processBookingRefund(first.refundIds[0])).toBe("succeeded");
     expect(refundPayment).not.toHaveBeenCalled();
+    refundPayment.mockImplementation(async request => ({status:"succeeded",providerRefundId:`refund-${request.id}`}));
     expect((await db.from("payment_refunds").update({ amount_minor: 0 }).eq("id", first.refundIds[0])).error?.code).toBe("23514");
     const adminRefund = await book(660);
     const withRefund = await cancel(adminRefund.booking_id, true);
-    expect(withRefund).toMatchObject({ outcome: "cancelled", refundIds: [expect.any(String)] }); await cancelled(adminRefund);
+    expect(withRefund).toMatchObject({ outcome: "cancellation_pending", refundIds: [expect.any(String)] });
+    expect((await rows("bookings",adminRefund.booking_id))[0].status).toBe("confirmed");
     expect(await cancel(adminRefund.booking_id, true)).toEqual(withRefund);
+    if(withRefund.outcome!=="cancellation_pending") throw new Error("Missing refund");
+    expect(await processBookingRefund(withRefund.refundIds[0])).toBe("succeeded");
+    await cancelled(adminRefund);
     const nextAdminBooking = await book(720);
     const automaticRefund = await cancel(nextAdminBooking.booking_id, true);
-    expect(automaticRefund).toMatchObject({ outcome: "cancelled", refundIds: [expect.any(String)] });
+    expect(automaticRefund).toMatchObject({ outcome: "cancellation_pending", refundIds: [expect.any(String)] });
+    if(automaticRefund.outcome!=="cancellation_pending") throw new Error("Missing refund");
+    expect(await processBookingRefund(automaticRefund.refundIds[0])).toBe("succeeded");
     await cancelled(nextAdminBooking); expect(await rows("payment_refunds", nextAdminBooking.booking_id)).toHaveLength(1);
     expect(await cancel(replacement.booking_id)).toEqual({ outcome: "cancelled", refundIds: [] });
     expect(await rows("payment_refunds", replacement.booking_id)).toEqual([]);
     // Application services exercise verified identity, read eligibility and post-commit adapter dispatch.
     refundPayment.mockImplementation(async (request) => ({ status: "succeeded", providerRefundId: `refund-${request.id}` }));
     const adminFlow = await book(780);
-    expect(await cancelCustomerBookingAsAdmin({ id: adminFlow.booking_id }, admin)).toEqual({ ok: true, refundStatus: "succeeded" });
+    expect(await cancelCustomerBookingAsAdmin({ id: adminFlow.booking_id }, admin)).toEqual({ ok: true, outcome: "cancelled", refundStatus: "succeeded" });
     await cancelled(adminFlow);
     const secondAdminFlow = await book(840);
     refundPayment.mockClear();
-    expect(await cancelCustomerBookingAsAdmin({ id: secondAdminFlow.booking_id }, admin)).toEqual({ ok: true, refundStatus:"succeeded" });
+    expect(await cancelCustomerBookingAsAdmin({ id: secondAdminFlow.booking_id }, admin)).toEqual({ ok: true, outcome: "cancelled", refundStatus:"succeeded" });
     expect(refundPayment).toHaveBeenCalledOnce();
     // Staff-owned bookings use the owner cancellation/refund workflow unchanged.
     expect((await db.from("user_roles").insert({ user_id: users[0], role_code: "coach" })).error).toBeNull();
     const ownerFlow = await book(900);
     refundPayment.mockRejectedValueOnce(new Error("ambiguous network response"));
-    expect(await cancelOwnCustomerBooking(ownerFlow.booking_id, member)).toEqual({ ok: true, refundStatus: "pending_retry" });
-    await cancelled(ownerFlow);
+    expect(await cancelOwnCustomerBooking(ownerFlow.booking_id, member)).toEqual({ ok: true, outcome: "cancellation_pending" });
+    expect((await rows("bookings",ownerFlow.booking_id))[0].status).toBe("confirmed");
     const ownerRefund = (await rows("payment_refunds", ownerFlow.booking_id))[0];
-    expect(await cancelOwnCustomerBooking(ownerFlow.booking_id, member)).toEqual({ ok: true, refundStatus: "succeeded" });
+    const clock=vi.spyOn(Date,"now").mockReturnValue(Date.now()+120_000);
+    await runPaymentRecovery();clock.mockRestore();
+    await cancelled(ownerFlow);
+    expect(await cancelOwnCustomerBooking(ownerFlow.booking_id, member)).toEqual({ ok: true, outcome: "cancelled", refundStatus: "succeeded" });
     expect(await rows("payment_refunds", ownerFlow.booking_id)).toHaveLength(1);
     expect(refundPayment).toHaveBeenLastCalledWith(expect.objectContaining({ id: ownerRefund.id, amountMinor: 5000 }));
+    await deliverPendingBookingNotifications(Date.now()+5000);
     for (const booking of [own, adminFlow, secondAdminFlow, ownerFlow, replacement]) {
+      expect((await bookingNotifications(database.manager, booking.booking_id)).filter(row => row.subject === "Booking cancelled")).toHaveLength(1);
       expect(cancellations(booking.booking_id)).toHaveLength(1);
       expect(cancellations(booking.booking_id)[0]).toMatchObject({ recipient: "refund@example.test",
         bookingStatus: "cancelled", reservationStatus: "cancelled" });
     }
-    expect(cancellations(own.booking_id)[0].text).toContain("Your full payment refund has been requested.");
+    expect(cancellations(own.booking_id)[0].text).toContain("Your payment has been refunded.");
     expect(cancellations(adminFlow.booking_id)[0].text).toContain("The club administrator has cancelled");
     expect(cancellations(ownerFlow.booking_id)[0].text).toContain("You have cancelled");
-    expect(cancellations(secondAdminFlow.booking_id)[0].text).toContain("refund has been requested");
+    expect(cancellations(secondAdminFlow.booking_id)[0].text).toContain("payment has been refunded");
     expect((await db.from("user_roles").delete().eq("user_id", users[0]).eq("role_code", "coach")).error).toBeNull();
     const failedDelivery = await book(960);
     failDelivery = true;
-    expect(await cancelOwnCustomerBooking(failedDelivery.booking_id, member)).toEqual({ ok: true, refundStatus: "succeeded" });
+    expect(await cancelOwnCustomerBooking(failedDelivery.booking_id, member)).toEqual({ ok: true, outcome: "cancelled", refundStatus: "succeeded" });
     await cancelled(failedDelivery);
     expect((await rows("payment_refunds", failedDelivery.booking_id))[0].status).toBe("succeeded");
-    expect(await cancelOwnCustomerBooking(failedDelivery.booking_id, member)).toEqual({ ok: true, refundStatus: "succeeded" });
+    expect(await cancelOwnCustomerBooking(failedDelivery.booking_id, member)).toEqual({ ok: true, outcome: "cancelled", refundStatus: "succeeded" });
+    await deliverPendingBookingNotifications(Date.now()+5000);
     expect(cancellations(failedDelivery.booking_id)).toHaveLength(1);
+    expect(await database.query("SELECT attempts,delivered_at,last_error FROM public.booking_notification_deliveries WHERE message->>'text' LIKE $1 AND message->>'subject'='Booking cancelled'", [`%${failedDelivery.booking_id}%`]))
+      .toMatchObject([{ attempts: 1, delivered_at: null, last_error: "delivery_unconfirmed" }]);
+    failDelivery = false;
+    await database.query("UPDATE public.booking_notification_deliveries SET next_attempt_at=clock_timestamp() WHERE message->>'text' LIKE $1", [`%${failedDelivery.booking_id}%`]);
+    await deliverPendingBookingNotifications(Date.now()+5000);
+    expect(cancellations(failedDelivery.booking_id)).toHaveLength(2);
+    expect(await rows("payment_refunds", failedDelivery.booking_id)).toMatchObject([{ status: "succeeded", amount_minor: 5000 }]);
     expect((await member.from("payment_refunds").select("*")).error?.code).toBe("42501");
     expect((await rows("payment_attempts", own.booking_id))[0]).toMatchObject({ status: "succeeded", amount_minor: 5000, provider: "stripe" });
   } finally {
@@ -166,5 +193,6 @@ test("full customer/Admin refunds are atomic, replay-safe and leave failed refun
     await db.from("location_opening_hours").delete().eq("location_id",locationId);
     await db.from("courts").delete().eq("id", courtId); await db.from("locations").delete().eq("id", locationId);
     await cleanupAuthFixtures(db, users);
+    await restoreQueue();
   }
 }, 30000);

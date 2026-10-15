@@ -1,17 +1,11 @@
+import { bookingNotifications } from "../booking-notification-fixtures";
 import { appendBookingContractFixture } from "../checkout-fixtures";
 import * as revisions from "@/lib/db/repositories/booking-revisions.repository";
 import * as refundProcessing from "@/lib/payments/refunds";
 import * as refundExecutions from "@/lib/db/repositories/refund-executions.repository";
-import { BookingEntity } from "@/lib/db/entities/booking.entity";
 import { insertBookingRecords, setAdjustmentExpiryFixture, setPaymentAttemptExpiryFixture } from "../../local/booking-fixtures";
 import { cleanupBookingFixtures } from "../checkout-fixtures";
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
-import type { BookingEmailEvent } from "@/lib/notifications/booking-email";
-const sent = vi.hoisted(() => vi.fn());
-vi.mock("@/lib/notifications/booking-email", async importOriginal => ({
-  ...await importOriginal<typeof import("@/lib/notifications/booking-email")>(), sendBookingNotification: sent,
-}));
-const emails = (id: string): BookingEmailEvent[] => sent.mock.calls.map(([event]) => event).filter(event => event.payload.booking_id === id);
 import { randomUUID } from "node:crypto";
 import type { DataSource, EntityManager, QueryRunner } from "typeorm";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
@@ -24,19 +18,19 @@ import * as reservations from "@/lib/db/repositories/reservations.repository";
 import * as accounts from "@/lib/db/repositories/accounts.repository";
 import * as clubs from "@/lib/db/repositories/clubs.repository";
 import * as payments from "@/lib/db/repositories/payments.repository";
-import { cancelCustomerBookingCommand, readCustomerBookingEditContext } from "@/lib/bookings/commands";
+import { cancelCustomerBookingCommand, resolveRefundBackedAdjustment, readCustomerBookingEditContext } from "@/lib/bookings/commands";
 import { runBookingReschedule } from "@/lib/bookings/reschedule";
 import { localFixtureClient, cleanupAuthFixtures } from "../auth-fixtures";
 import { ensureIntegrationAdminAnchor } from "../admin-anchor";
 import { processOnlinePaymentEvent, settleOnlinePayment } from "@/lib/payments/service";
-import { readAdjustmentPaymentLink, readOnlineCheckout, abandonOnlineCheckout, startOnlineCheckout } from "@/lib/payments/checkout";
-import { adjustmentPresentation, readAdjustmentStatus, cancelAdjustmentIntent } from "@/lib/payments/booking-adjustments";
-import { adjustmentAttempt, findAdjustment } from "@/lib/db/repositories/booking-adjustments.repository";
+import { readOnlineCheckout, abandonOnlineCheckout, startOnlineCheckout } from "@/lib/payments/checkout";
+import { readAdjustmentStatus, dismissAdjustment } from "@/lib/payments/booking-adjustments";
+import { adjustmentAttempt, findAdjustment, listBookingsWithLivePayment } from "@/lib/db/repositories/booking-adjustments.repository";
 import { readFinancialHistory } from "@/lib/payments/financial-history";
 import { buildBookingRevision } from "@/lib/bookings/revision";
 import { bookingFinancials, allocateBookingRefund } from "@/lib/payments/financials";
 import { stripeAdapter } from "@/lib/payments/providers/stripe/adapter";
-import { prepareAdminRefund, prepareAutomaticRefund, initiateRefundExecution, commitRefundExecution, type RefundExecutionClaim } from "@/lib/payments/refund-commands";
+import { prepareAutomaticRefund, prepareLateCaptureCompensation, initiateRefundExecution, commitRefundExecution, type RefundExecutionClaim } from "@/lib/payments/refund-commands";
 
 let database: DataSource;
 let service: ReturnType<typeof localFixtureClient>;
@@ -61,7 +55,7 @@ async function clear() {
   await database.query("DELETE FROM public.court_reservations WHERE court_id=ANY($1::uuid[])", [[courtId, secondCourtId]]);
 }
 beforeEach(async () => {
-  await clear(); sent.mockReset();
+  await clear();
   await database.query("UPDATE public.users SET status='active' WHERE id=$1", [actorId]);
   await database.query("INSERT INTO public.user_roles(user_id,role_code) VALUES($1,'admin'),($1,'coach') ON CONFLICT DO NOTHING", [actorId]);
   await database.query("UPDATE public.courts SET location_id=$2,is_active=true WHERE id=ANY($1::uuid[])", [[courtId,secondCourtId],locationId]);
@@ -78,7 +72,7 @@ afterEach(() => vi.restoreAllMocks());
 afterAll(async () => {
   try {
     if (database?.isInitialized) {
-      await clear(); sent.mockReset();
+      await clear();
       await database.query("DELETE FROM public.pricing_rule_sets WHERE id=$1", [ruleSetId]);
       await database.query("DELETE FROM public.location_opening_hours WHERE location_id=$1", [locationId]);
       await database.query("DELETE FROM public.court_coverage_periods WHERE court_id=ANY($1::uuid[])", [[courtId,secondCourtId]]);
@@ -89,15 +83,15 @@ afterAll(async () => {
   } finally { if (database?.isInitialized) await database.destroy(); vi.unstubAllEnvs(); }
 });
 async function seed(start = 600, paid = false, pending = false, contract = { date, notice: 1440 }, owner: string | null = actorId,
-  providerAttached = true) {
+  providerAttached = true, ageSeconds = 0) {
   const id = randomUUID(), reservationId = randomUUID(), attemptId = randomUUID();
   await database.query(`INSERT INTO public.court_reservations(id,court_id,booking_date,starts_at_minute,ends_at_minute,status,hold_expires_at)
     VALUES($1,$2,$3,$4,$4+60,$5::public.court_reservation_status,CASE WHEN $5::text='held' THEN clock_timestamp()+interval '10 minutes' ELSE NULL END)`,
     [reservationId,courtId,contract.date,start,pending ? "held" : "active"]);
   await database.transaction(manager => insertBookingRecords(manager, { id: id, reservation_id: reservationId, account_user_id: owner, customer_name: "Customer", customer_email: "immutable@example.test", customer_phone: "123", total_amount_minor: 5000, currency: "RON", cancellation_notice_minutes: contract.notice, status: pending ? "pending_payment" : "confirmed", payment_method: paid || pending ? "online" : "pay_at_club" }));
-  if (paid || pending) await database.query(`INSERT INTO public.payment_attempts(id,booking_id,method,provider,provider_payment_id,amount_minor,currency,status,expires_at,completed_at)
-    VALUES($1,$2,'online','stripe',$3,5000,'RON',$4::text,clock_timestamp()+interval '10 minutes',CASE WHEN $4::text='succeeded' THEN clock_timestamp() ELSE NULL END)`,
-    [attemptId,id,providerAttached ? `pi-${attemptId}` : null,pending ? "pending" : "succeeded"]);
+  if (paid || pending) await database.query(`INSERT INTO public.payment_attempts(id,booking_id,method,provider,provider_payment_id,amount_minor,currency,status,expires_at,completed_at,created_at)
+    VALUES($1,$2,'online','stripe',$3,5000,'RON',$4::text,clock_timestamp()+interval '10 minutes',CASE WHEN $4::text='succeeded' THEN clock_timestamp() ELSE NULL END,clock_timestamp()-make_interval(secs=>$5))`,
+    [attemptId,id,providerAttached ? `pi-${attemptId}` : null,pending ? "pending" : "succeeded",ageSeconds]);
   if (paid) await database.query(`INSERT INTO public.payment_capture_receipts
     (payment_attempt_id,provider,provider_payment_id,provider_capture_id,amount_minor,currency)
     VALUES($1,'stripe',$2,$2,5000,'RON')`, [attemptId,`pi-${attemptId}`]);
@@ -110,13 +104,33 @@ async function edit(f: Fixture, extra = {}) {
   return { id: f.id, expectedRevisionId: context.current_revision_id, expectedUpdatedAt: context.updated_at,
     courtId: secondCourtId,date,startMinute:720,endMinute:780,save:true,expectedTotal:5000,priceAcknowledged:true,...extra };
 }
+const emails = (id: string) => bookingNotifications(database.manager, id);
 const save = (input: unknown) => runBookingReschedule(input,actorId);
 const cancel = (f: Fixture, scope: "owner" | "admin" = "owner") => cancelCustomerBookingCommand(f.id,actorId,scope);
+// Fixture provider observations are committed through the real execution commands;
+// refund-backed occupancy/revisions are applied only after all obligations settle.
+async function settleRefundRequest(request: { refundIds: string[]; adjustmentId?: string }) {
+  for (const id of request.refundIds) {
+    const prepared = await prepareAutomaticRefund(id);
+    if (prepared.outcome === "terminal") { expect(prepared.status).toBe("succeeded"); continue; }
+    if (prepared.outcome !== "ready") throw new Error("Missing refund claim");
+    await initiateRefundExecution(prepared.claim);
+    expect(await commitRefundExecution(prepared.claim, { kind: "verified", status: "succeeded", providerRefundId: `re_${id}` }))
+      .toMatchObject({ status: "succeeded" });
+  }
+  if (request.adjustmentId) expect(await resolveRefundBackedAdjustment(request.adjustmentId)).toBe("applied");
+}
+async function completeCancellation(f: Fixture, scope: "owner" | "admin" = "owner") {
+  const request = await cancel(f, scope);
+  if (request.outcome !== "cancellation_pending") return request;
+  await settleRefundRequest(request);
+  return cancel(f, scope);
+}
 async function state(f: Fixture) {
   const booking = await inTransaction(m => bookings.findBookingForUpdate(m,f.id));
   const reservation = await inTransaction(m => reservations.findReservationForUpdate(m,f.reservationId));
   const refunds: unknown = await database.query("SELECT * FROM public.payment_refunds WHERE booking_id=$1", [f.id]);
-  const events = emails(f.id);
+  const events = await emails(f.id);
   return { booking,reservation,refunds,events };
 }
 function deferred() {
@@ -155,39 +169,36 @@ async function serialize<T,U>(first: () => Promise<T>, second: () => Promise<U>)
 test.each([false,true])("cancel/cancel serializes lifecycle, replay and notifications (paid=%s)", async paid => {
   const f = await seed(600,paid);
   const [a,b] = await serialize(() => cancel(f),() => cancel(f));
-  expect(a.outcome).toBe("cancelled"); expect(b.outcome).toBe("cancelled");
+  expect(a.outcome).toBe(paid ? "cancellation_pending" : "cancelled"); expect(b.outcome).toBe(a.outcome);
   expect(b).toEqual(a);
   expect(a).toMatchObject({ refundIds: paid ? [expect.any(String)] : [] });
+  if (a.outcome === "cancellation_pending") {
+    expect(await state(f)).toMatchObject({ booking: { status: "confirmed" }, reservation: { status: "active" }, events: [] });
+    await settleRefundRequest(a);
+  }
   expect(await state(f)).toMatchObject({ booking:{status:"cancelled"},reservation:{status:"cancelled"},
-    refunds:paid ? [expect.objectContaining({amount_minor:5000})] : [],events:[expect.objectContaining({event_kind:"customer_cancelled"})] });
+    refunds:paid ? [expect.objectContaining({amount_minor:5000})] : [],events:[expect.objectContaining({subject:"Booking cancelled"})] });
   const history = await database.query("SELECT id,kind,operation_key,intent_hash FROM public.booking_revisions WHERE booking_id=$1 ORDER BY revision_number", [f.id]);
   expect(history).toEqual([expect.objectContaining({kind:"created"}),
     expect.objectContaining({kind:"cancelled",operation_key:"cancellation",intent_hash:"cancellation"})]);
   expect((await state(f)).booking?.current_revision_id).toBe(history[1].id);
   const before = await state(f);
-  expect(await cancel(f)).toEqual(a);
+  expect(await cancel(f)).toMatchObject({ outcome: "cancelled", refundIds: a.outcome === "cancellation_pending" ? a.refundIds : [] });
   expect(await state(f)).toEqual(before);
   expect(await database.query("SELECT id,kind,operation_key,intent_hash FROM public.booking_revisions WHERE booking_id=$1 ORDER BY revision_number", [f.id])).toEqual(history);
 });
 test.each(["owner", "admin"] as const)("%s notification snapshots preserve committed history across resource renames", async scope => {
   const f = await seed();
   const original = (await state(f)).booking!.revision;
-  sent.mockImplementation(async (event: BookingEmailEvent) => {
-    // An independent connection must see the revision before delivery starts.
-    const booking = await database.manager.getRepository(BookingEntity).findOneByOrFail({ id: f.id });
-    const committed = await revisions.findRevision(database.manager, booking.currentRevisionId);
-    expect(committed).toMatchObject({ bookingState: "cancelled", courtName: "Court", locationName: "Phase 6" });
-    expect(event.payload).toMatchObject({ location_name: original.locationName, court_name: original.courtName,
-      timezone: original.timezone, booking_date: original.bookingDate, starts_at_minute: original.startMinute,
-      ends_at_minute: original.endMinute });
-  });
   try {
     await database.query("UPDATE public.locations SET name='Renamed Club',timezone='Europe/Bucharest' WHERE id=$1", [locationId]);
     await database.query("UPDATE public.courts SET name='Renamed Court' WHERE id=$1", [courtId]);
     expect(await cancel(f, scope)).toMatchObject({ outcome: "cancelled" });
-    expect(emails(f.id)).toHaveLength(1);
+    expect(await emails(f.id)).toEqual([expect.objectContaining({ to: original.customerEmail,
+      subject: "Booking cancelled", text: expect.stringContaining(`Location: ${original.locationName}`) })]);
+    expect((await emails(f.id))[0].text).toContain(`Schedule: ${original.bookingDate}, 10:00–11:00, ${original.courtName}`);
     expect(await cancel(f, scope)).toMatchObject({ outcome: "cancelled" });
-    expect(emails(f.id)).toHaveLength(1);
+    expect(await emails(f.id)).toHaveLength(1);
   } finally {
     await database.query("UPDATE public.locations SET name='Phase 6',timezone='UTC' WHERE id=$1", [locationId]);
     await database.query("UPDATE public.courts SET name='Court' WHERE id=$1", [courtId]);
@@ -213,8 +224,8 @@ test.each(["cancel", "reschedule"])("cancel/reschedule sees authoritative state 
   expect(history.map((row: {kind:string}) => row.kind)).toEqual(first === "cancel"
     ? ["created","cancelled"] : ["created","rescheduled","cancelled"]);
   expect((await state(f)).booking?.current_revision_id).toBe(history.at(-1).id);
-  expect(emails(f.id).map(e => e.event_kind)).toEqual(first === "cancel"
-    ? ["customer_cancelled"] : ["customer_rescheduled","customer_cancelled"]);
+  expect((await emails(f.id)).map(e => e.subject)).toEqual(first === "cancel"
+    ? ["Booking cancelled"] : ["Booking rescheduled","Booking cancelled"]);
 });
 test("same target reschedules serialize and reject the loser before its SQL update", async () => {
   const a = await seed(), b = await seed(660), before = [await state(a),await state(b)];
@@ -238,7 +249,13 @@ test("identical saves leave booking, occupancy, revisions and mail unchanged", a
   expect(await database.query("SELECT revision_number FROM public.booking_revisions WHERE booking_id=$1",[f.id])).toEqual([{revision_number:1}]);
 });
 test.each(["booking", "reservation"])("cancellation rollback after %s write restores all rows and sends no mail", async step => {
-  const f = await seed(600,true), before = await state(f);
+  const f = await seed(600,true), request = await cancel(f);
+  if (request.outcome !== "cancellation_pending") throw new Error("Missing pending cancellation");
+  for (const id of request.refundIds) {
+    const claim = await claimRefund(id);
+    await commitRefundExecution(claim, { ...successResult, providerRefundId: `re_${id}` });
+  }
+  const before = await state(f);
   const target = step === "booking" ? bookings : reservations;
   if (target === bookings) {
     const write = revisions.advanceRevision;
@@ -247,7 +264,9 @@ test.each(["booking", "reservation"])("cancellation rollback after %s write rest
     const write = reservations.updateCustomerReservationCancellation;
     vi.spyOn(reservations,"updateCustomerReservationCancellation").mockImplementationOnce(async (...args) => { await write(...args); throw new Error("Injected failure"); });
   }
-  await expect(cancel(f)).rejects.toThrow("Injected failure"); expect(await state(f)).toEqual(before);
+  await expect(resolveRefundBackedAdjustment(request.adjustmentId)).rejects.toThrow("Injected failure");
+  expect(await state(f)).toEqual(before);
+  expect(await database.query("SELECT status FROM public.booking_adjustments WHERE id=$1",[request.adjustmentId])).toEqual([{status:"pending"}]);
 });
 test.each(["reservation", "total"])("reschedule rollback after %s write restores all rows and sends no mail", async step => {
   const f = await seed(), input = await edit(f), before = await state(f);
@@ -261,6 +280,7 @@ test.each(["reservation", "total"])("reschedule rollback after %s write restores
   expect(await save(input)).toEqual({ok:false,message:"Unable to reschedule this booking. Try again."}); expect(await state(f)).toEqual(before);
 });
 test.each([8000,3000])("paid reschedule total %s records adjustment funds; cancellation preserves original capture", async price => {
+  simulatedStripe();
   const f = await seed(600,true);
   const originalAttempt = await database.query("SELECT * FROM public.payment_attempts WHERE id=$1", [f.attemptId]);
   await database.query("UPDATE public.location_pricing_rules SET price_per_hour_minor=$2 WHERE location_id=$1 AND court_state='outdoor'",[locationId,price]);
@@ -455,7 +475,7 @@ test.each(["cancel","reschedule"])("pending/held rejects %s; settlement first th
     settlement=processOnlinePaymentEvent(paymentEvent(f));
     await waitForBlock(await pid(blocker.manager)); await blocker.commitTransaction(); expect(await settlement).toBe("succeeded");
     const result=kind === "cancel" ? await cancel(f) : await save(await edit(f));
-    expect(result).toMatchObject(kind === "cancel" ? {outcome:"cancelled"} : {ok:true});
+    expect(result).toMatchObject(kind === "cancel" ? {outcome:"cancellation_pending"} : {ok:true});
     // A retained duplicate must not reopen occupancy or overwrite the schedule/evidence.
     const before=await state(f), attempts: unknown=await database.query("SELECT * FROM public.payment_attempts WHERE id=$1",[f.attemptId]);
     await processOnlinePaymentEvent(paymentEvent(f));
@@ -469,8 +489,8 @@ test.each(["cancel","reschedule","admin cancellation"])("%s first safely seriali
   const [a,b]=await serialize<unknown,string>(() => kind === "admin cancellation" ? cancel(f,"admin")
     : cancellation ? cancel(f) : save(input),
     () => processOnlinePaymentEvent(paymentEvent(f)));
-  expect(a).toMatchObject(cancellation ? {outcome:"cancelled"} : {ok:true}); expect(typeof b).toBe("string");
-  expect((await state(f)).reservation).toMatchObject(cancellation ? {status:"cancelled"} : {court_id:secondCourtId,starts_at_minute:720});
+  expect(a).toMatchObject(cancellation ? {outcome:"cancellation_pending"} : {ok:true}); expect(typeof b).toBe("string");
+  expect((await state(f)).reservation).toMatchObject(cancellation ? {status:"active"} : {court_id:secondCourtId,starts_at_minute:720});
   if (kind === "admin cancellation") expect((await state(f)).refunds).toEqual([expect.objectContaining({ amount_minor:5000 })]);
   expect(await database.query("SELECT amount_minor,currency,status FROM public.payment_attempts WHERE id=$1",[f.attemptId]))
     .toEqual([{amount_minor:5000,currency:"RON",status:"succeeded"}]);
@@ -478,19 +498,19 @@ test.each(["cancel","reschedule","admin cancellation"])("%s first safely seriali
 
 test("Phase 6 refund replay serializes with TypeORM claim and result without changing financial evidence", async () => {
   const f=await seed(600,true), cancelled=await cancel(f);
-  if (cancelled.outcome !== "cancelled" || !cancelled.refundIds[0]) throw new Error("Missing refund");
+  if (cancelled.outcome !== "cancellation_pending" || !cancelled.refundIds[0]) throw new Error("Missing refund");
   await database.query("UPDATE public.payment_refunds SET status='pending_retry' WHERE id=$1",[cancelled.refundIds[0]]);
-  const blocker=await runner(); let preparation: ReturnType<typeof prepareAdminRefund> | undefined;
+  const blocker=await runner(); let preparation: ReturnType<typeof prepareAutomaticRefund> | undefined;
   try {
     await bookings.findBookingForUpdate(blocker.manager,f.id);
-    preparation=prepareAdminRefund("retry",cancelled.refundIds[0],actorId);
+    preparation=prepareAutomaticRefund(cancelled.refundIds[0]);
     const replay=cancel(f); await waitForBlock(await pid(blocker.manager)); await blocker.commitTransaction();
     const prepared=await preparation;
     expect(prepared.outcome).toBe("ready"); expect(await replay).toEqual(cancelled);
     if (prepared.outcome!=="ready") throw new Error("Missing claim");
     await initiateRefundExecution(prepared.claim);
     const results=await Promise.all([cancel(f),commitRefundExecution(prepared.claim,{kind:"verified",status:"succeeded",providerRefundId:"re-phase8"})]);
-    expect(results).toEqual([cancelled,"succeeded"]);
+    expect(results).toEqual([cancelled,{status:"succeeded",notice:null}]);
     expect((await state(f)).refunds).toEqual([expect.objectContaining({id:cancelled.refundIds[0],amount_minor:5000,currency:"RON",status:"succeeded"})]);
   } finally { if (blocker.isTransactionActive) await blocker.rollbackTransaction(); if (preparation) await Promise.allSettled([preparation]); await blocker.release(); }
 });
@@ -509,7 +529,7 @@ test("changed cancellation parent retries in a fresh transaction without locking
     }
     return parent;
   });
-  expect((await cancel(f)).outcome).toBe("cancelled"); expect(parents).toEqual([locationId,otherLocationId]);
+  expect((await completeCancellation(f)).outcome).toBe("cancelled"); expect(parents).toEqual([locationId,otherLocationId]);
   expect(new Set(transactions).size).toBe(2);
 });
 test.each(["cutoff", "at-start"])("cancellation exact %s boundary retains fractional precision", async boundary => {
@@ -665,7 +685,7 @@ test.each(["retryable_failed"] as const)("concurrent distinct success/%s events 
   try { await waitForBlock(blocker); } finally { release.resolve(); }
   expect(await Promise.all([a,b])).toEqual(["succeeded","succeeded"]);
   const result=await settlementState(f);
-  expect(result.aggregate).toMatchObject({booking:{status:"confirmed"},reservation:{status:"active"},events:[{event_kind:"confirmed"}]});
+  expect(result.aggregate).toMatchObject({booking:{status:"confirmed"},reservation:{status:"active"},events:[{subject:"Booking confirmed"}]});
   expect(result.receipts).toHaveLength(2);
 });
 
@@ -827,61 +847,63 @@ test("expiry holding aggregate locks wins against waiting settlement with durabl
 
 async function refundFixture() {
   const f=await seed(600,true), result=await cancel(f);
-  if (result.outcome !== "cancelled" || !result.refundIds[0]) throw new Error("Missing refund");
+  if (result.outcome !== "cancellation_pending" || !result.refundIds[0]) throw new Error("Missing refund");
   await database.query("UPDATE public.payment_refunds SET status='pending_retry' WHERE id=$1",[result.refundIds[0]]);
   return {...f, refundId:result.refundIds[0]};
 }
 async function claimRefund(id:string): Promise<RefundExecutionClaim> {
-  const prepared=await prepareAdminRefund("retry",id,actorId);
+  const prepared=await prepareAutomaticRefund(id);
   if (prepared.outcome!=="ready") throw new Error(`Unexpected ${prepared.outcome}`);
   await initiateRefundExecution(prepared.claim);
   return prepared.claim;
 }
 const successResult={kind:"verified" as const,status:"succeeded" as const,providerRefundId:"re-phase8"};
 
-test("concurrent automatic/Admin claims share one execution; takeover retains microsecond precision and stale facts", async () => {
+test("concurrent automatic recovery claims share one execution; takeover retains microsecond precision and stale facts", async () => {
   const f=await refundFixture();
-  const results=await Promise.all([prepareAdminRefund("retry",f.refundId,actorId),prepareAutomaticRefund(f.refundId)]);
+  const results=await Promise.all([prepareAutomaticRefund(f.refundId),prepareAutomaticRefund(f.refundId)]);
   expect(results.map(r=>r.outcome).sort()).toEqual(["busy","ready"]);
   const ready=results.find(r=>r.outcome==="ready"); if (ready?.outcome!=="ready") throw new Error("Missing lease");
   const claim=ready.claim;
   await initiateRefundExecution(claim);
   await database.query("UPDATE public.refund_executions SET lease_until='2099-01-01T00:00:00.123456Z' WHERE id=$1",[claim.execution.id]);
   expect(await database.query("SELECT lease_until AT TIME ZONE 'UTC' = timestamp '2099-01-01 00:00:00.123456' AS precise FROM public.refund_executions WHERE id=$1",[claim.execution.id])).toEqual([{precise:true}]);
-  expect(await prepareAdminRefund("retry",f.refundId,actorId)).toEqual({outcome:"busy"});
+  expect(await prepareAutomaticRefund(f.refundId)).toMatchObject({outcome:"busy"});
   await database.query("UPDATE public.refund_executions SET lease_until=clock_timestamp()-interval '1 microsecond' WHERE id=$1",[claim.execution.id]);
   const replacement=await claimRefund(f.refundId);
   expect(replacement.execution.id).toBe(claim.execution.id); expect(replacement.token).not.toBe(claim.token);
   await inTransaction(manager=>refundExecutions.recordRefundExecutionCheck(manager,{refundId:f.refundId,executionId:claim.execution.id,
     token:replacement.token,checkedAt:new Date(),lastError:"current_worker",releaseLease:false}));
-  expect(await commitRefundExecution(claim,successResult)).toBe("succeeded");
+  expect(await commitRefundExecution(claim,successResult)).toMatchObject({status:"succeeded",notice:null});
   expect((await refundExecutions.listRefundExecutions(database.manager,f.refundId))[0]).toMatchObject({
     leaseToken:replacement.token,lastError:"current_worker",terminalResult:"succeeded",providerRefundId:"re-phase8"});
-  expect(await commitRefundExecution(replacement,successResult)).toBe("succeeded");
+  expect(await commitRefundExecution(replacement,successResult)).toMatchObject({status:"succeeded",notice:null});
   expect((await refundExecutions.listRefundExecutions(database.manager,f.refundId))[0].leaseToken).toBeNull();
-  expect(await prepareAutomaticRefund(f.refundId)).toEqual({outcome:"terminal",status:"succeeded"});
+  expect(await prepareAutomaticRefund(f.refundId)).toMatchObject({outcome:"terminal",status:"succeeded",notice:null});
 });
 
-test("Admin authorization changes while preparation waits roll back execution allocation", async () => {
-  const f=await refundFixture(),blocker=await runner(); let preparing: ReturnType<typeof prepareAdminRefund> | undefined;
+test("automatic preparation is independent of Admin roles and attributes no manual initiator", async () => {
+  const f=await refundFixture(),blocker=await runner(); let preparing: ReturnType<typeof prepareAutomaticRefund> | undefined;
   try {
     await bookings.findBookingForUpdate(blocker.manager,f.id);
-    preparing=prepareAdminRefund("retry",f.refundId,actorId);
-    const rejected=expect(preparing).rejects.toThrow("Admin authorization changed");
+    preparing=prepareAutomaticRefund(f.refundId);
     await waitForBlock(await pid(blocker.manager));
     await database.query("DELETE FROM public.user_roles WHERE user_id=$1 AND role_code='admin'",[actorId]);
-    await blocker.commitTransaction(); await rejected;
-    expect(await refundExecutions.listRefundExecutions(database.manager,f.refundId)).toEqual([]);
-    expect((await state(f)).refunds).toMatchObject([{status:"pending_retry"}]);
+    await blocker.commitTransaction();
+    const result=await preparing;
+    if(result.outcome!=="ready") throw new Error("Missing automatic claim");
+    expect(result.claim.actorId).toBeNull();
+    expect(result.claim.execution.initiatedByUserId).toBeNull();
+    expect(await refundExecutions.listRefundExecutions(database.manager,f.refundId)).toHaveLength(1);
   } finally { if (blocker.isTransactionActive) await blocker.rollbackTransaction(); if (preparing) await Promise.allSettled([preparing]); await blocker.release(); }
 });
 
-test("an Admin claim blocks an automatic worker from issuing a competing operation", async () => {
+test("an automatic claim blocks another worker from issuing a competing operation", async () => {
   const f=await refundFixture(),claim=await claimRefund(f.refundId);
   expect(await prepareAutomaticRefund(f.refundId)).toMatchObject({outcome:"busy"});
-  expect(await commitRefundExecution(claim,successResult)).toBe("succeeded");
+  expect(await commitRefundExecution(claim,successResult)).toMatchObject({status:"succeeded",notice:null});
   const before=await state(f);
-  expect(await prepareAutomaticRefund(f.refundId)).toEqual({outcome:"terminal",status:"succeeded"});
+  expect(await prepareAutomaticRefund(f.refundId)).toMatchObject({outcome:"terminal",status:"succeeded",notice:null});
   expect((await state(f)).refunds).toEqual(before.refunds);
   expect(await refundExecutions.listRefundExecutions(database.manager,f.refundId)).toHaveLength(1);
 });
@@ -905,7 +927,9 @@ async function lateRefundFixture() {
 }
 
 test("receipt-resolution failure rolls back execution success, obligation status and lease clearing together", async () => {
-  const f=await lateRefundFixture(),prepared=await prepareAdminRefund("reconcile",f.eventId,actorId);
+  const f=await lateRefundFixture(),refundId=await prepareLateCaptureCompensation(f.eventId);
+  if (!refundId) throw new Error("Missing compensation refund");
+  const prepared=await prepareAutomaticRefund(refundId);
   if (prepared.outcome!=="ready") throw new Error("Missing claim");
   await initiateRefundExecution(prepared.claim);
   const before=await state(f),history=await refundExecutions.listRefundExecutions(database.manager,prepared.claim.refund.id);
@@ -919,19 +943,19 @@ test("receipt-resolution failure rolls back execution success, obligation status
   expect(await state(f)).toEqual(before);
   expect(await refundExecutions.listRefundExecutions(database.manager,prepared.claim.refund.id)).toEqual(history);
   expect(await database.query("SELECT * FROM public.payment_provider_events WHERE attempt_id=$1",[f.attemptId])).toEqual(events);
-  expect(await commitRefundExecution(prepared.claim,successResult)).toBe("succeeded");
+  expect(await commitRefundExecution(prepared.claim,successResult)).toMatchObject({status:"succeeded",notice:null});
   const resolved=await database.query("SELECT * FROM public.payment_provider_events WHERE attempt_id=$1",[f.attemptId]);
-  expect(await prepareAdminRefund("reconcile",f.eventId,actorId)).toMatchObject({outcome:"resolved",bookingId:f.id});
+  expect(await prepareLateCaptureCompensation(f.eventId)).toBeNull();
   expect(await database.query("SELECT * FROM public.payment_provider_events WHERE attempt_id=$1",[f.attemptId])).toEqual(resolved);
 });
 
-test("lease eligibility uses database wall time after actor-lock wait", async () => {
+test("lease eligibility uses database wall time after aggregate-lock wait", async () => {
   const f=await refundFixture(),old=await claimRefund(f.refundId);
   await database.query("UPDATE public.refund_executions SET lease_until=clock_timestamp()+interval '250 milliseconds' WHERE id=$1",[old.execution.id]);
-  const blocker=await runner(); let preparing: ReturnType<typeof prepareAdminRefund> | undefined;
+  const blocker=await runner(); let preparing: ReturnType<typeof prepareAutomaticRefund> | undefined;
   try {
-    await blocker.manager.query("SELECT role_code FROM public.user_roles WHERE user_id=$1 AND role_code='admin' FOR UPDATE",[actorId]);
-    preparing=prepareAdminRefund("retry",f.refundId,actorId);
+    await bookings.findBookingForUpdate(blocker.manager,f.id);
+    preparing=prepareAutomaticRefund(f.refundId);
     await waitForBlock(await pid(blocker.manager));
     const deadline=Date.now()+3000;
     while (!(await database.query("SELECT lease_until <= clock_timestamp() AS reclaimable FROM public.refund_executions WHERE id=$1",[old.execution.id]))[0].reclaimable) {
@@ -962,9 +986,9 @@ test("completion fences obligation and execution snapshots and cannot regress ve
     .rejects.toThrow("Refund financial evidence changed");
   await expect(commitRefundExecution({...claim,execution:{...claim.execution,idempotencyKey:"different"}},successResult))
     .rejects.toThrow("Refund execution request changed");
-  expect(await commitRefundExecution(claim,successResult)).toBe("succeeded");
+  expect(await commitRefundExecution(claim,successResult)).toMatchObject({status:"succeeded",notice:null});
   const history=await refundExecutions.listRefundExecutions(database.manager,f.refundId);
-  expect(await commitRefundExecution(claim,{kind:"error",evidence:{kind:"lookup_failed",operation:"retrieve",providerRefundId:"re-phase8"}})).toBe("succeeded");
+  expect(await commitRefundExecution(claim,{kind:"error",evidence:{kind:"lookup_failed",operation:"retrieve",providerRefundId:"re-phase8"}})).toMatchObject({status:"succeeded",notice:null});
   await expect(commitRefundExecution(claim,{...successResult,providerRefundId:"re_other"})).rejects.toThrow("Conflicting provider refund identity");
   const latest=await refundExecutions.listRefundExecutions(database.manager,f.refundId);
   expect(latest.map(e=>({result:e.terminalResult,id:e.providerRefundId,completed:e.completedAt})))
@@ -1032,7 +1056,7 @@ test("settlement rejects conflicting occupancy before its lifecycle writes and k
 
 // Simulated Stripe only; every adjustment, hold, allocation and receipt uses real PostgreSQL.
 function simulatedStripe() {
-  const outcomes = new Map<string, "pending" | "succeeded" | "cancelled">();
+  const outcomes = new Map<string, "pending" | "processing" | "succeeded" | "cancelled">();
   vi.spyOn(stripeAdapter,"createPayment").mockImplementation(async p => {
     outcomes.set(`pi_${p.id}`, "pending");
     return { providerPaymentId: `pi_${p.id}`, presentation: { kind:"stripe",clientSecret:`pi_${p.id}_secret`,publishableKey:"pk_test_Fixture" } };
@@ -1041,11 +1065,22 @@ function simulatedStripe() {
   vi.spyOn(stripeAdapter,"readPayment").mockImplementation(async p => {
     const rows: {amount_minor:number}[] = await database.query("SELECT amount_minor FROM public.payment_attempts WHERE id=$1",[p.id]);
     const status=outcomes.get(p.providerPaymentId) ?? "pending";
-    return {status,amountMinor:rows[0].amount_minor,currency:"RON",providerCaptureId:status==="succeeded" ? p.providerPaymentId:null};
+    return {status,amountMinor:rows[0].amount_minor,currency:"RON",providerCaptureId:status==="succeeded" ? p.providerPaymentId:null,live:status==="processing"};
   });
   vi.spyOn(stripeAdapter,"cancelPayment").mockImplementation(async p => { outcomes.set(p.providerPaymentId,"cancelled"); return "cancelled"; });
+  vi.spyOn(stripeAdapter,"dismissPayment").mockImplementation(async p => {
+    const status = outcomes.get(p.providerPaymentId) ?? "pending";
+    if (status === "processing") return "live";
+    if (status === "succeeded") return "succeeded";
+    outcomes.set(p.providerPaymentId,"cancelled"); return "cancelled";
+  });
   vi.spyOn(stripeAdapter,"refundPayment").mockImplementation(async p => ({ providerRefundId:`re_${p.id}`,status:"succeeded" }));
   return outcomes;
+}
+// Production holds start with the cutoff as their lease; keep the fixture consistent.
+async function expireAdjustmentFixture(id: string, at = "2020-01-01T00:00:00Z") {
+  await database.transaction(m => setAdjustmentExpiryFixture(m, id, at));
+  await database.query("UPDATE public.court_reservations SET hold_expires_at=$2 WHERE adjustment_id=$1 AND status='held'",[id,at]);
 }
 async function captureAdjustment(id: string, eventId = randomUUID()) {
   const attempt = await adjustmentAttempt(database.manager,id);
@@ -1056,19 +1091,11 @@ async function captureAdjustment(id: string, eventId = randomUUID()) {
 test("paid 50 → 75 → 100 → 75 → cancellation preserves all captures and refunds only remaining funds", async () => {
   simulatedStripe();
   const f = await seed(600,false,true);
-  sent.mockImplementation(async (event: BookingEmailEvent) => {
-    const booking = await database.manager.getRepository(BookingEntity).findOneByOrFail({ id: f.id });
-    const committed = await revisions.findRevision(database.manager, booking.currentRevisionId);
-    expect(committed).toMatchObject({ bookingDate: event.payload.booking_date,
-      startMinute: event.payload.starts_at_minute, endMinute: event.payload.ends_at_minute,
-      totalAmountMinor: event.payload.total_amount_minor, locationName: event.payload.location_name,
-      courtName: event.payload.court_name, timezone: event.payload.timezone, customerEmail: event.recipient });
-  });
   expect(await processOnlinePaymentEvent({attemptId:f.attemptId,provider:"stripe",providerPaymentId:`pi-${f.attemptId}`,
     eventId:randomUUID(),outcome:"succeeded",amountMinor:5000,currency:"RON"})).toBe("succeeded");
   const original = await database.query("SELECT * FROM public.payment_attempts WHERE id=$1",[f.attemptId]);
   for (const [end,total] of [[690,7500],[720,10000]]) {
-    const count = emails(f.id).length;
+    const count = (await emails(f.id)).length;
     const input = await edit(f,{courtId,startMinute:600,endMinute:end,expectedTotal:total,requestId:randomUUID()});
     const result = await save(input);
     expect(result).toMatchObject({ok:true,adjustmentStatus:"pending",totalAmountMinor:total});
@@ -1081,14 +1108,14 @@ test("paid 50 → 75 → 100 → 75 → cancellation preserves all captures and 
     await expect(database.query(`INSERT INTO public.court_reservations(court_id,booking_date,starts_at_minute,ends_at_minute)
       VALUES($1,$2,$3,$3+60)`,[courtId,date,end-30])).rejects.toMatchObject({code:"23P01"});
     expect(await save(input)).toMatchObject({ok:true,adjustmentId:result.adjustmentId});
-    expect(emails(f.id)).toHaveLength(count);
+    expect(await emails(f.id)).toHaveLength(count);
     const eventId=randomUUID();
     expect(await captureAdjustment(result.adjustmentId,eventId)).toBe("succeeded");
     expect(await captureAdjustment(result.adjustmentId,eventId)).toBe("succeeded");
     expect(await captureAdjustment(result.adjustmentId)).toBe("succeeded");
-    expect(emails(f.id)).toHaveLength(count + 1);
-    expect(emails(f.id).at(-1)?.payload).toMatchObject({ total_amount_minor: total, ends_at_minute: end,
-      previous: { ends_at_minute: end - 30 } });
+    expect(await emails(f.id)).toHaveLength(count + 1);
+    expect((await emails(f.id)).at(-1)?.text).toContain(`Booking total: ${(total / 100).toFixed(2)} RON`);
+    expect((await emails(f.id)).at(-1)?.text).toContain(`Previous: ${date}, 10:00–${end === 690 ? "11:00" : "11:30"}, Court`);
     expect((await state(f)).booking?.total_amount_minor).toBe(total);
     expect((await state(f)).reservation?.ends_at_minute).toBe(end);
   }
@@ -1097,7 +1124,7 @@ test("paid 50 → 75 → 100 → 75 → cancellation preserves all captures and 
   expect(await database.query("SELECT * FROM public.payment_attempts WHERE id=$1",[f.attemptId])).toEqual(original);
   let facts = await bookingFinancials(database.manager,f.id);
   expect(facts).toMatchObject({captured:10000,refunded:2500,netPaid:7500,refundable:7500});
-  const cancelled=await cancel(f);
+  const cancelled=await completeCancellation(f);
   expect(cancelled.outcome).toBe("cancelled");
   facts=await bookingFinancials(database.manager,f.id);
   expect(facts.obligated).toBe(10000);
@@ -1108,14 +1135,14 @@ test("paid 50 → 75 → 100 → 75 → cancellation preserves all captures and 
   for(let i=1;i<history.length;i++) expect(history[i].previous_revision_id).toBe(history[i-1].id);
   expect((await state(f)).booking?.current_revision_id).toBe(history[5].id);
   expect(facts.refunds.filter(r => r.reason === "booking_price_reduction")).toEqual([
-    expect.objectContaining({ contextRevisionId: history[4].id, adjustmentId: cheaper.ok ? cheaper.adjustmentId : null }),
+    expect.objectContaining({ contextRevisionId: history[3].id, adjustmentId: cheaper.ok ? cheaper.adjustmentId : null }),
   ]);
-  for (const refund of facts.refunds.filter(r => r.operationKey === "cancellation"))
-    expect(refund).toMatchObject({ reason: "booking_cancellation", contextRevisionId: history[5].id });
+  for (const refund of facts.refunds.filter(r => r.reason === "booking_cancellation"))
+    expect(refund).toMatchObject({ reason: "booking_cancellation", contextRevisionId: history[4].id });
   expect((await state(f)).reservation).toMatchObject({starts_at_minute:600,ends_at_minute:690,status:"cancelled"});
   expect(await cancel(f)).toMatchObject({outcome:"cancelled"});
-  expect(emails(f.id).map(e => e.event_kind)).toEqual(["confirmed", "customer_rescheduled", "customer_rescheduled",
-    "customer_rescheduled", "customer_cancelled"]);
+  expect((await emails(f.id)).map(e => e.subject)).toEqual(["Booking confirmed", "Booking rescheduled", "Booking rescheduled",
+    "Booking rescheduled", "Booking cancelled"]);
   expect(await database.query("SELECT count(*)::integer AS count FROM public.booking_revisions WHERE booking_id=$1",[f.id])).toEqual([{count:6}]);
 
   for(const p of facts.captures) expect(facts.refunds.filter(r=>r.paymentAttemptId===p.id).reduce((n,r)=>n+r.amountMinor,0)).toBeLessThanOrEqual(p.amountMinor);
@@ -1126,7 +1153,7 @@ test.each(["cancelled","expired","conflict","price","suspended"])("unapplied sur
   const f=await seed(600,true), before=await state(f);
   const result=await save(await edit(f,{courtId,startMinute:600,endMinute:690,expectedTotal:7500,requestId:randomUUID()}));
   if(!result.ok || !result.adjustmentId || !result.checkout) throw new Error("No pending adjustment");
-  if(mode==="cancelled") await abandonOnlineCheckout({attemptId:result.checkout.attemptId,token:result.checkout.token});
+  if(mode==="cancelled") await dismissAdjustment(result.adjustmentId);
   if(mode==="expired") await database.transaction(m => setAdjustmentExpiryFixture(m, result.adjustmentId!, "2020-01-01"));
   if(mode==="conflict") {
     await database.query("UPDATE public.court_reservations SET status='released',hold_expires_at=NULL WHERE adjustment_id=$1",[result.adjustmentId]);
@@ -1137,7 +1164,8 @@ test.each(["cancelled","expired","conflict","price","suspended"])("unapplied sur
   expect(await captureAdjustment(result.adjustmentId)).toBe("expired");
   const after=await state(f);
   expect(after.booking).toEqual(before.booking); expect(after.reservation).toEqual(before.reservation);
-  expect(emails(f.id)).toEqual([]);
+  expect(await emails(f.id)).toMatchObject([{ subject: "Booking change not completed",
+    text: expect.stringContaining("additional payment you made for this change is being refunded") }]);
   expect(await bookingFinancials(database.manager,f.id)).toMatchObject({captured:7500,refunded:2500,netPaid:5000});
   expect((await bookingFinancials(database.manager, f.id)).refunds).toEqual([
     expect.objectContaining({ reason: "failed_adjustment_compensation", contextRevisionId: before.booking!.current_revision_id,
@@ -1147,16 +1175,16 @@ test.each(["cancelled","expired","conflict","price","suspended"])("unapplied sur
   expect((await bookingFinancials(database.manager,f.id)).refunds).toHaveLength(1);
 });
 
-test("partial refund failure is durable and Admin retry succeeds without allocating duplicate money", async () => {
+test("partial refund uncertainty is durable and automatic recovery succeeds without allocating duplicate money", async () => {
   simulatedStripe();
   const f=await seed(600,true);
   await database.query("UPDATE public.location_pricing_rules SET price_per_hour_minor=3000 WHERE court_id=$1 AND court_state='outdoor'",[secondCourtId]);
   vi.mocked(stripeAdapter.refundPayment).mockRejectedValueOnce(new Error("Network uncertainty"));
   const result=await save(await edit(f,{expectedTotal:3000,requestId:randomUUID()}));
-  expect(result).toMatchObject({ok:true,adjustmentStatus:"applied",refundStatus:"pending_retry"});
+  expect(result).toMatchObject({ok:true,adjustmentStatus:"pending",refundStatus:"pending_retry"});
   if(!result.ok || !result.refundIds?.[0]) throw new Error("No refund obligation");
   expect(await bookingFinancials(database.manager,f.id)).toMatchObject({captured:5000,refunded:0,obligated:2000,refundable:3000});
-  const claim=await prepareAdminRefund("retry",result.refundIds[0],actorId);
+  const claim=await prepareAutomaticRefund(result.refundIds[0]);
   if(claim.outcome!=="ready") throw new Error("Not retryable");
   const {processBookingRefund}=await import("@/lib/payments/refunds");
   expect(await processBookingRefund(result.refundIds[0],claim.claim)).toBe("succeeded");
@@ -1164,41 +1192,37 @@ test("partial refund failure is durable and Admin retry succeeds without allocat
   await cancel(f); expect((await bookingFinancials(database.manager,f.id)).obligated).toBe(5000);
 });
 
-test("concurrent edits and browser recovery use one adjustment and one Stripe intent", async () => {
+test("an exact replay returns the same modification; a new request discards the unpaid one and its intent", async () => {
   const outcomes=simulatedStripe(); const f=await seed(600,true);
   const input=await edit(f,{courtId,startMinute:600,endMinute:690,expectedTotal:7500,requestId:randomUUID()});
-  const results=await Promise.all([save(input),save({...input,requestId:randomUUID()})]);
-  expect(results.every(r=>r.ok)).toBe(true);
-  const result=results[0]; if(!result.ok || !result.adjustmentId) throw new Error("No adjustment");
-  expect(results[1]).toMatchObject({adjustmentId:result.adjustmentId});
-  expect(await database.query("SELECT id FROM public.payment_attempts WHERE adjustment_id=$1",[result.adjustmentId])).toHaveLength(1);
-  const resumed=await adjustmentPresentation(result.adjustmentId); if(!resumed) throw new Error("No recovery");
-  outcomes.set(`pi_${resumed.checkout.attemptId}`,"succeeded");
-  expect(await readOnlineCheckout({attemptId:resumed.checkout.attemptId,token:resumed.checkout.token})).toMatchObject({status:"confirmed",totalAmountMinor:7500});
-  const applied = await rescheduleEvidence(f);
-  await expect(cancelAdjustmentIntent(resumed.checkout.attemptId)).rejects.toThrow("Modification already completed");
-  expect(await rescheduleEvidence(f)).toEqual(applied);
-  expect((await state(f)).reservation?.ends_at_minute).toBe(690);
+  const first=await save(input); if(!first.ok || !first.adjustmentId || !first.checkout) throw new Error("No adjustment");
+  expect(await save(input)).toMatchObject({ok:true,adjustmentId:first.adjustmentId,adjustmentStatus:"pending"});
+  const fresh=await save({...input,requestId:randomUUID()}); if(!fresh.ok || !fresh.adjustmentId) throw new Error("No fresh adjustment");
+  expect(fresh).toMatchObject({adjustmentStatus:"pending"}); expect(fresh.adjustmentId).not.toBe(first.adjustmentId);
+  expect((await findAdjustment(database.manager,first.adjustmentId))?.status).toBe("cancelled");
+  expect((await adjustmentAttempt(database.manager,first.adjustmentId))?.status).toBe("expired");
+  expect(outcomes.get(`pi_${first.checkout.attemptId}`)).toBe("cancelled");
+  expect(await database.query("SELECT status FROM public.court_reservations WHERE adjustment_id=$1",[first.adjustmentId])).toEqual([{status:"released"}]);
+  await expect(readOnlineCheckout({attemptId:first.checkout.attemptId,token:first.checkout.token})).rejects.toThrow();
+  // A capture of the discarded intent is compensated, never applied.
+  expect(await captureAdjustment(first.adjustmentId)).toBe("expired");
+  expect((await state(f)).reservation?.ends_at_minute).toBe(660);
+  expect((await bookingFinancials(database.manager,f.id)).refunds).toEqual([expect.objectContaining({adjustmentId:first.adjustmentId,amountMinor:2500})]);
 });
 
 
-test("definitively failed partial refund retries with an audited provider generation", async () => {
+test("definitively failed partial refund is not replaced without affirmative retryable evidence", async () => {
   simulatedStripe(); const f=await seed(600,true);
   await database.query("UPDATE public.location_pricing_rules SET price_per_hour_minor=3000 WHERE court_id=$1 AND court_state='outdoor'",[secondCourtId]);
   vi.mocked(stripeAdapter.refundPayment).mockResolvedValueOnce({providerRefundId:"re_definitively_failed",status:"failed"});
   const result=await save(await edit(f,{expectedTotal:3000,requestId:randomUUID()}));
   expect(result).toMatchObject({ok:true,refundStatus:"failed"});
   if(!result.ok || !result.refundIds?.[0]) throw new Error("Missing refund");
-  const prepared=await prepareAdminRefund("retry",result.refundIds[0],actorId);
-  if(prepared.outcome!=="ready") throw new Error("Not retryable");
-  const {processBookingRefund}=await import("@/lib/payments/refunds");
-  expect(await processBookingRefund(result.refundIds[0],prepared.claim)).toBe("succeeded");
-  const facts=await bookingFinancials(database.manager,f.id);
-  expect(facts).toMatchObject({refunded:2000,obligated:2000});
-  expect(await refundExecutions.listRefundExecutions(database.manager,result.refundIds[0])).toMatchObject([
-    {executionNumber:1,terminalResult:"failed",providerRefundId:"re_definitively_failed"},
-    {executionNumber:2,terminalResult:"succeeded"},
-  ]);
+  const before=await refundExecutions.listRefundExecutions(database.manager,result.refundIds[0]);
+  expect(await prepareAutomaticRefund(result.refundIds[0])).toMatchObject({outcome:"terminal",status:"voided"});
+  expect(await refundExecutions.listRefundExecutions(database.manager,result.refundIds[0])).toEqual(before);
+  expect(before).toMatchObject([{executionNumber:1,terminalResult:"failed",providerRefundId:"re_definitively_failed"}]);
+  expect(await bookingFinancials(database.manager,f.id)).toMatchObject({refunded:0});
 });
 
 
@@ -1215,19 +1239,20 @@ test("retryable payment failure and an unknown provider outcome preserve origina
   expect((await bookingFinancials(database.manager,f.id)).captured).toBe(5000);
 });
 
-test("uncertain cancellation remains recoverable, expires its attempt, and refunds a late capture without applying the old change", async () => {
+test("uncertain dismissal never resurrects the modification; expiry releases it and a late capture is refunded", async () => {
   simulatedStripe(); const f=await seed(600,true),original=await state(f);
   const result=await save(await edit(f,{courtId,startMinute:600,endMinute:690,expectedTotal:7500,requestId:randomUUID()}));
   if(!result.ok || !result.adjustmentId || !result.checkout) throw new Error("Missing surcharge");
-  vi.mocked(stripeAdapter.cancelPayment).mockRejectedValue(new Error("Unknown cancellation"));
-  await expect(abandonOnlineCheckout({attemptId:result.checkout.attemptId,token:result.checkout.token})).rejects.toThrow();
+  vi.mocked(stripeAdapter.dismissPayment).mockRejectedValue(new Error("Unknown dismissal"));
+  await dismissAdjustment(result.adjustmentId);
+  await expect(readOnlineCheckout({attemptId:result.checkout.attemptId,token:result.checkout.token})).rejects.toThrow();
   const context=await readCustomerBookingEditContext(f.id,date,actorId);
-  expect(context).toMatchObject({pending_adjustment_id:result.adjustmentId,payment_recovery_required:true,adjustment_status:"cancelled"});
-  expect(await save(await edit(f,{courtId,startMinute:600,endMinute:690,expectedTotal:7500,requestId:randomUUID()})))
-    .toMatchObject({ok:true,adjustmentId:result.adjustmentId,adjustmentStatus:"cancelled",paymentRecoveryRequired:true});
-  await database.transaction(m => setAdjustmentExpiryFixture(m, result.adjustmentId!, "2020-01-01"));
+  expect(context).not.toHaveProperty("pending_adjustment_id");
+  expect(await listBookingsWithLivePayment(database.manager,[f.id])).toEqual(new Set());
+  await expireAdjustmentFixture(result.adjustmentId);
   await readAdjustmentStatus(database.manager,result.adjustmentId);
   expect((await adjustmentAttempt(database.manager,result.adjustmentId))?.status).toBe("expired");
+  expect(await database.query("SELECT status FROM public.court_reservations WHERE adjustment_id=$1",[result.adjustmentId])).toEqual([{status:"released"}]);
   expect(await captureAdjustment(result.adjustmentId)).toBe("expired");
   expect((await state(f)).booking).toEqual(original.booking); expect((await state(f)).reservation).toEqual(original.reservation);
   expect(await bookingFinancials(database.manager,f.id)).toMatchObject({netPaid:5000,refunded:2500});
@@ -1266,8 +1291,9 @@ test("initial checkout capability cannot cancel a managed adjustment or override
   if(!result.ok || !result.checkout) throw new Error("Missing adjustment");
   await expect(abandonOnlineCheckout({attemptId:initial.attemptId,token:initial.token})).rejects.toThrow("booking management");
   expect((await state(f)).booking?.status).toBe("confirmed");
-  await abandonOnlineCheckout({attemptId:result.checkout.attemptId,token:result.checkout.token});
-  expect((await cancel(f,"admin")).outcome).toBe("cancelled");
+  await expect(abandonOnlineCheckout({attemptId:result.checkout.attemptId,token:result.checkout.token})).rejects.toThrow("booking management");
+  await dismissAdjustment(result.adjustmentId!);
+  expect((await completeCancellation(f,"admin")).outcome).toBe("cancelled");
   await expect(abandonOnlineCheckout({attemptId:initial.attemptId,token:initial.token})).rejects.toThrow("booking management");
   expect((await bookingFinancials(database.manager,f.id)).refunds).toEqual([expect.objectContaining({ amountMinor:5000 })]);
 });
@@ -1292,7 +1318,7 @@ test("Admin ledger projects 50 + 25 - 25 as three financial identities with 50 n
   const ledger = schema.parse(await readFinancialHistory(database.manager, query));
   expect(ledger.total).toBe(3);
   expect(ledger.rows.map(row => [row.operation_label, row.amount_minor])).toEqual([
-    ["Original payment", 5000], ["Additional adjustment payment", 2500], ["Partial refund", 2500],
+    ["Booking payment", 5000], ["Modification payment", 2500], ["Price reduction refund", 2500],
   ]);
   expect(new Set(ledger.rows.map(row => row.transaction_id)).size).toBe(3);
   expect(ledger.rows[0]).toMatchObject({ transaction_id: f.attemptId, refunded_minor: 0 });
@@ -1349,10 +1375,10 @@ test.each(["succeeded","pending","failed"])("previous %s partial obligation rese
   expect(await database.query("SELECT payment_attempt_id,amount_minor FROM public.payment_refunds WHERE id=$1",[nextId]))
     .toEqual([{ payment_attempt_id: additionalId, amount_minor: 1500 }]);
   const cancelled = await cancel(f);
-  expect(cancelled.outcome).toBe("cancelled");
+  expect(cancelled.outcome).toBe("cancellation_pending");
   const facts = await bookingFinancials(database.manager,f.id);
   expect(facts).toMatchObject({captured:7500,obligated:7500,refundable:0});
-  expect(facts.refunds.find(r=>r.operationKey === "cancellation")).toMatchObject({paymentAttemptId:f.attemptId,amountMinor:5000});
+  expect(facts.refunds.find(r=>r.reason === "booking_cancellation")).toMatchObject({paymentAttemptId:f.attemptId,amountMinor:5000});
 });
 
 test("concurrent refund allocations serialize capacity and roll back the insufficient command", async () => {
@@ -1550,7 +1576,7 @@ test("database rejects cross-booking refund context and immutable fact rewrites 
   const f = await seed(600, true), other = await seed(660, true);
   const result = await save(await edit(f, { endMinute: 810, expectedTotal: 7500, requestId: randomUUID() }));
   if (!result.ok || !result.adjustmentId) throw new Error("Missing proposal");
-  expect((await cancel(f)).outcome).toBe("cancelled");
+  expect((await completeCancellation(f)).outcome).toBe("cancelled");
   const [refund] = await database.query("SELECT * FROM public.payment_refunds WHERE booking_id=$1", [f.id]);
   const otherRevision = (await state(other)).booking!.current_revision_id;
   const runner = database.createQueryRunner();
@@ -1608,7 +1634,9 @@ test.each(["checkout", "adjustment"] as const)("Admin missing-obligation recover
   // A controlled isolated fixture models a missing obligation with durable capture evidence and no execution.
   await database.query("DELETE FROM public.payment_refunds WHERE booking_id=$1", [f.id]);
   await database.query("UPDATE public.payment_provider_events SET reconciliation_required=true WHERE event_id=$1", [eventId]);
-  const prepared = await prepareAdminRefund("reconcile", eventId, actorId);
+  const refundId = await prepareLateCaptureCompensation(eventId);
+  if (!refundId) throw new Error("Missing compensation obligation");
+  const prepared = await prepareAutomaticRefund(refundId);
   expect(prepared.outcome).toBe("ready");
   expect((await bookingFinancials(database.manager, f.id)).refunds).toEqual([
     expect.objectContaining({ contextRevisionId: base.id,
@@ -1661,9 +1689,11 @@ test("financial history preserves each 50 → 75 → 100 → 75 → cancellation
   const reduced = await save(await edit(f, { courtId: secondCourtId, startMinute: 720, endMinute: 810, expectedTotal: 7500, requestId: randomUUID() }));
   expect(reduced).toMatchObject({ ok: true, adjustmentStatus: "applied" });
   const reduction = (await state(f)).booking!.revision;
+  const reductionBase = await revisions.findRevision(database.manager, reduction.previousRevisionId!);
+  if (!reductionBase) throw new Error("Missing reduction base");
   expect((await historyFor(f)).find(r => r.refund?.reason === "booking_price_reduction"))
-    .toMatchObject({ context: { revisionId: reduction.id, totalAmountMinor: 7500, courtId: secondCourtId },
-      refund: { context_revision_id: reduction.id, captured_amount_minor: 2500 }, operation_label: "Partial refund", amount_minor: 2500 });
+    .toMatchObject({ context: { revisionId: reductionBase.id, totalAmountMinor: 10000, courtId },
+      refund: { context_revision_id: reductionBase.id, captured_amount_minor: 2500 }, operation_label: "Price reduction refund", amount_minor: 2500 });
   await record();
   await database.query("UPDATE public.courts SET name='Live renamed court' WHERE id=ANY($1::uuid[])", [[courtId,secondCourtId]]);
   await database.query("UPDATE public.locations SET name='Live renamed location' WHERE id=$1", [locationId]);
@@ -1680,7 +1710,7 @@ test("financial history preserves each 50 → 75 → 100 → 75 → cancellation
     await revisions.advanceRevision(manager, { revision: revised, previousId: booking.current_revision_id, status: "confirmed" });
   });
   await record();
-  expect((await cancel(f)).outcome).toBe("cancelled");
+  expect((await completeCancellation(f)).outcome).toBe("cancelled");
   const cancelled = (await state(f)).booking!.revision;
   const rows = await historyFor(f);
   const original = rows.find(r => r.transaction_id === f.attemptId);
@@ -1690,12 +1720,12 @@ test("financial history preserves each 50 → 75 → 100 → 75 → cancellation
     current_booking: { revisionId: cancelled.id, status: "cancelled", totalAmountMinor: 7500,
       customerName: "Changed Customer", customerEmail: "new-contact@example.test", customerPhone: "456", courtId: secondCourtId } });
   for (const row of rows.filter(r => r.refund?.reason === "booking_cancellation"))
-    expect(row).toMatchObject({ context: { revisionId: cancelled.id, bookingState: "cancelled", totalAmountMinor: 7500 },
-      refund: { context_revision_id: cancelled.id, captured_amount_minor: row.amount_minor } });
+    expect(row).toMatchObject({ context: { revisionId: cancelled.previousRevisionId, bookingState: "confirmed", totalAmountMinor: 7500 },
+      refund: { context_revision_id: cancelled.previousRevisionId, captured_amount_minor: row.amount_minor } });
   expect(rows).toHaveLength(6);
   expect(original?.financials).toMatchObject({ outstanding: 0 });
   expect(original?.financials.totals).toContainEqual(expect.objectContaining({
-    currency: "RON", captured: 10000, refunded: 2500, refundObligations: 10000,
+    currency: "RON", captured: 10000, refunded: 10000, refundObligations: 10000,
   }));
   await record();
   expect((await readFinancialHistory(database.manager, { ...historyQuery(f.id), search: "immutable@example.test" })).rows)
@@ -1742,7 +1772,7 @@ test("late compensation history remains an initial request after checkout abando
     context: { revisionId: initial.id, bookingState: "pending_payment", confirmationRevisionId: null },
     refund: { reason: "late_capture_compensation", captured_amount_minor: 5000 }, proposal: null });
   expect(before.find(r => r.transaction_id === f.attemptId)).toMatchObject({ transaction_status: "expired",
-    context: { revisionId: initial.id, confirmationRevisionId: null }, reconciliation: [{ outcome: "succeeded", reconciliation_required: true }] });
+    context: { revisionId: initial.id, confirmationRevisionId: null }, reconciliation: [{ outcome: "succeeded", reconciliation_required: false }] });
   await abandonOnlineCheckout({ attemptId: f.attemptId, token });
   const after = await historyFor(f);
   expect(after.map(historicalDescription)).toEqual(before.map(historicalDescription));
@@ -1764,66 +1794,458 @@ test("Pay-at-club original debt and a booking without attempts use initial terms
 });
 
 
-test("adjustment payment-link presentation repeatedly retrieves one intent without writes or capability rotation", async () => {
-  simulatedStripe();
-  const f = await seed(600, true);
-  const result = await save(await edit(f, { startMinute: 720, endMinute: 810, expectedTotal: 7500, requestId: randomUUID() }));
-  if (!result.ok || !result.adjustmentId || !result.checkout) throw new Error("Missing adjustment checkout");
-  const access = { adjustmentId: result.adjustmentId, token: result.checkout.token };
-  const before = await rescheduleEvidence(f);
-  const creates = vi.mocked(stripeAdapter.createPayment).mock.calls.length;
-  vi.mocked(stripeAdapter.resumePayment).mockClear();
-  const queries = vi.spyOn(database.logger, "logQuery");
-  try {
-    const first = await readAdjustmentPaymentLink(access), second = await readAdjustmentPaymentLink(access);
-    expect(first).toEqual(second);
-    expect(first).toMatchObject({ kind: "checkout", originalTotal: 5000, newTotal: 7500, currency: "RON",
-      checkout: { attemptId: result.checkout.attemptId, token: result.checkout.token } });
-    expect(queries.mock.calls.every(([sql]) => sql.trimStart().startsWith("SELECT"))).toBe(true);
-  } finally { queries.mockRestore(); }
-  expect(await rescheduleEvidence(f)).toEqual(before);
-  expect(stripeAdapter.resumePayment).toHaveBeenCalledTimes(2);
-  expect(stripeAdapter.createPayment).toHaveBeenCalledTimes(creates);
-  expect(stripeAdapter.readPayment).not.toHaveBeenCalled();
-  expect(stripeAdapter.cancelPayment).not.toHaveBeenCalled();
+
+// Booking modification lifecycle: dismissal (X), provider liveness and lateness.
+async function proposeSurcharge(f: Fixture) {
+  const result = await save(await edit(f, { courtId, startMinute: 600, endMinute: 690, expectedTotal: 7500, requestId: randomUUID() }));
+  if (!result.ok || !result.adjustmentId || !result.checkout) throw new Error("Missing surcharge");
+  const attempt = await adjustmentAttempt(database.manager, result.adjustmentId);
+  if (!attempt?.providerPaymentId) throw new Error("Missing payment");
+  return { id: result.adjustmentId, checkout: result.checkout, attempt: { ...attempt, providerPaymentId: attempt.providerPaymentId } };
+}
+const holds = (id: string) => database.query("SELECT status,hold_expires_at FROM public.court_reservations WHERE adjustment_id=$1", [id]);
+const appliedRevisions = async (f: Fixture) => (await database.query(
+  "SELECT count(*)::integer AS count FROM public.booking_revisions WHERE booking_id=$1 AND kind='rescheduled'", [f.id]))[0].count;
+async function failAdjustment(p: Awaited<ReturnType<typeof proposeSurcharge>>, eventId = randomUUID()) {
+  return processOnlinePaymentEvent({ attemptId: p.attempt.id, provider: "stripe", providerPaymentId: p.attempt.providerPaymentId,
+    outcome: "retryable_failed", eventId, amountMinor: 2500, currency: "RON" });
+}
+
+test("X before payment discards the modification, releases its hold, and the next Edit starts fresh", async () => {
+  const outcomes = simulatedStripe(); const f = await seed(600, true), original = await state(f);
+  const p = await proposeSurcharge(f);
+  expect(await holds(p.id)).toEqual([expect.objectContaining({ status: "held" })]);
+  await dismissAdjustment(p.id);
+  expect(outcomes.get(p.attempt.providerPaymentId)).toBe("cancelled");
+  expect((await findAdjustment(database.manager, p.id))?.status).toBe("cancelled");
+  expect((await adjustmentAttempt(database.manager, p.id))?.status).toBe("cancelled");
+  expect(await holds(p.id)).toEqual([{ status: "released", hold_expires_at: null }]);
+  expect((await state(f)).booking).toEqual(original.booking);
+  const context = await readCustomerBookingEditContext(f.id, date, actorId);
+  expect(context).not.toHaveProperty("pending_adjustment_id");
+  const next = await proposeSurcharge(f);
+  expect(next.id).not.toBe(p.id);
 });
 
-test("adjustment payment-link capability invalidation rejects the old token without disclosing financial facts", async () => {
-  simulatedStripe();
-  const f = await seed(600, true);
-  const result = await save(await edit(f, { endMinute: 810, expectedTotal: 7500, requestId: randomUUID() }));
-  if (!result.ok || !result.adjustmentId || !result.checkout) throw new Error("Missing adjustment checkout");
-  const replacement = await adjustmentPresentation(result.adjustmentId);
-  if (!replacement) throw new Error("Missing owner recovery");
-  expect(replacement.checkout.token).not.toBe(result.checkout.token);
-  vi.mocked(stripeAdapter.resumePayment).mockClear();
-  const before = await rescheduleEvidence(f);
-  expect(await readAdjustmentPaymentLink({ adjustmentId: result.adjustmentId, token: result.checkout.token }))
-    .toEqual({ kind: "unavailable" });
-  expect(await readAdjustmentPaymentLink({ adjustmentId: randomUUID(), token: replacement.checkout.token }))
-    .toEqual({ kind: "unavailable" });
-  expect(stripeAdapter.resumePayment).not.toHaveBeenCalled();
-  expect(await readAdjustmentPaymentLink({ adjustmentId: result.adjustmentId, token: replacement.checkout.token }))
-    .toMatchObject({ kind: "checkout", checkout: { token: replacement.checkout.token } });
-  expect(await rescheduleEvidence(f)).toEqual(before);
+test("decline keeps a retryable checkout; abandoning it discards the modification and later events never resurrect it", async () => {
+  simulatedStripe(); const f = await seed(600, true), original = await state(f);
+  const p = await proposeSurcharge(f);
+  expect(await failAdjustment(p)).toBe("pending");
+  expect((await findAdjustment(database.manager, p.id))?.status).toBe("pending");
+  await dismissAdjustment(p.id);
+  expect((await findAdjustment(database.manager, p.id))?.status).toBe("cancelled");
+  expect(await holds(p.id)).toEqual([{ status: "released", hold_expires_at: null }]);
+  expect(await failAdjustment(p)).toBe("cancelled");
+  expect(await captureAdjustment(p.id)).toBe("expired");
+  expect((await findAdjustment(database.manager, p.id))?.status).toBe("cancelled");
+  expect((await state(f)).booking).toEqual(original.booking); expect((await state(f)).reservation).toEqual(original.reservation);
+  expect((await bookingFinancials(database.manager, f.id)).refunds).toHaveLength(1);
 });
 
-test.each(["applied", "expired", "cancelled"] as const)("%s adjustment links retain presentation-only access and the existing expiry/polling flow", async state => {
+test("processing at X keeps the hold blocked, then success within the cutoff applies exactly once", async () => {
+  const outcomes = simulatedStripe(); const f = await seed(600, true);
+  const p = await proposeSurcharge(f);
+  outcomes.set(p.attempt.providerPaymentId, "processing");
+  await dismissAdjustment(p.id);
+  expect((await findAdjustment(database.manager, p.id))?.status).toBe("pending");
+  expect(outcomes.get(p.attempt.providerPaymentId)).toBe("processing");
+  await expect(readOnlineCheckout({ attemptId: p.checkout.attemptId, token: p.checkout.token })).rejects.toThrow();
+  // The lease is bounded by the target start (2099-10-15 10:00 UTC).
+  expect(await holds(p.id)).toEqual([{ status: "held", hold_expires_at: new Date("2099-10-15T10:00:00Z") }]);
+  expect(await listBookingsWithLivePayment(database.manager, [f.id])).toEqual(new Set([f.id]));
+  expect(await save(await edit(f, { courtId, startMinute: 600, endMinute: 720, expectedTotal: 10000, requestId: randomUUID() })))
+    .toMatchObject({ ok: false, message: expect.stringContaining("still processing") });
+  const eventId = randomUUID();
+  expect(await captureAdjustment(p.id, eventId)).toBe("succeeded");
+  expect(await captureAdjustment(p.id, eventId)).toBe("succeeded");
+  expect(await captureAdjustment(p.id)).toBe("succeeded");
+  expect(await appliedRevisions(f)).toBe(1);
+  expect((await state(f)).reservation?.ends_at_minute).toBe(690);
+  expect(await listBookingsWithLivePayment(database.manager, [f.id])).toEqual(new Set());
+  expect((await bookingFinancials(database.manager, f.id)).refunds).toEqual([]);
+});
+
+test("processing at X then failure discards the modification, releases the hold and preserves the original", async () => {
+  const outcomes = simulatedStripe(); const f = await seed(600, true), original = await state(f);
+  const p = await proposeSurcharge(f);
+  outcomes.set(p.attempt.providerPaymentId, "processing");
+  await dismissAdjustment(p.id);
+  outcomes.set(p.attempt.providerPaymentId, "pending");
+  expect(await failAdjustment(p)).toBe("cancelled");
+  expect((await findAdjustment(database.manager, p.id))?.status).toBe("cancelled");
+  expect((await adjustmentAttempt(database.manager, p.id))?.status).toBe("failed");
+  expect(await holds(p.id)).toEqual([{ status: "released", hold_expires_at: null }]);
+  // The failed intent is cancelled after commit so it cannot be confirmed later.
+  expect(outcomes.get(p.attempt.providerPaymentId)).toBe("cancelled");
+  expect(await listBookingsWithLivePayment(database.manager, [f.id])).toEqual(new Set());
+  expect((await state(f)).booking).toEqual(original.booking); expect((await state(f)).reservation).toEqual(original.reservation);
+});
+
+test("a live payment past the cutoff stays blocked; its late success is refunded exactly once and never applied", async () => {
+  const outcomes = simulatedStripe(); const f = await seed(600, true), original = await state(f);
+  const p = await proposeSurcharge(f);
+  outcomes.set(p.attempt.providerPaymentId, "processing");
+  await dismissAdjustment(p.id);
+  await database.transaction(m => setAdjustmentExpiryFixture(m, p.id, "2020-01-01T00:00:00Z"));
+  await expirePaymentHolds({ courtId });
+  await readAdjustmentStatus(database.manager, p.id);
+  expect(await holds(p.id)).toEqual([expect.objectContaining({ status: "held" })]);
+  await expect(database.query(`INSERT INTO public.court_reservations(court_id,booking_date,starts_at_minute,ends_at_minute)
+    VALUES($1,$2,660,720)`, [courtId, date])).rejects.toMatchObject({ code: "23P01" });
+  const eventId = randomUUID();
+  expect(await captureAdjustment(p.id, eventId)).toBe("expired");
+  expect(await captureAdjustment(p.id, eventId)).toBe("expired");
+  expect(await captureAdjustment(p.id)).toBe("expired");
+  expect((await state(f)).booking).toEqual(original.booking); expect((await state(f)).reservation).toEqual(original.reservation);
+  expect(await holds(p.id)).toEqual([{ status: "released", hold_expires_at: null }]);
+  expect((await bookingFinancials(database.manager, f.id)).refunds).toEqual([
+    expect.objectContaining({ adjustmentId: p.id, amountMinor: 2500, reason: "failed_adjustment_compensation" })]);
+  expect(await appliedRevisions(f)).toBe(0);
+});
+
+test("cancel race at X: a payment that already succeeded is observed and applied once", async () => {
+  simulatedStripe(); const f = await seed(600, true);
+  const p = await proposeSurcharge(f);
+  vi.mocked(stripeAdapter.dismissPayment).mockResolvedValueOnce("succeeded");
+  vi.mocked(stripeAdapter.readPayment).mockResolvedValueOnce({ status: "succeeded", amountMinor: 2500, currency: "RON",
+    providerCaptureId: p.attempt.providerPaymentId, live: false });
+  await dismissAdjustment(p.id);
+  expect((await findAdjustment(database.manager, p.id))?.status).toBe("applied");
+  expect(await captureAdjustment(p.id)).toBe("succeeded");
+  expect(await appliedRevisions(f)).toBe(1);
+});
+
+test("cancel race at X: a payment that moved to processing keeps the lease and is not cancelled", async () => {
+  const outcomes = simulatedStripe(); const f = await seed(600, true);
+  const p = await proposeSurcharge(f);
+  vi.mocked(stripeAdapter.dismissPayment).mockResolvedValueOnce("live");
+  await dismissAdjustment(p.id);
+  expect(outcomes.get(p.attempt.providerPaymentId)).toBe("pending");
+  expect((await findAdjustment(database.manager, p.id))?.status).toBe("pending");
+  expect(await listBookingsWithLivePayment(database.manager, [f.id])).toEqual(new Set([f.id]));
+});
+
+test("status polling that observes processing records the live lease", async () => {
+  const outcomes = simulatedStripe(); const f = await seed(600, true);
+  const p = await proposeSurcharge(f);
+  outcomes.set(p.attempt.providerPaymentId, "processing");
+  expect(await readOnlineCheckout({ attemptId: p.checkout.attemptId, token: p.checkout.token }))
+    .toMatchObject({ status: "pending_payment", paymentStatus: "processing" });
+  expect(await listBookingsWithLivePayment(database.manager, [f.id])).toEqual(new Set([f.id]));
+  // A later decline while the customer is present returns the lease to the cutoff.
+  expect(await failAdjustment(p)).toBe("pending");
+  expect(await listBookingsWithLivePayment(database.manager, [f.id])).toEqual(new Set());
+});
+
+test("initial-booking checkout expiry is unchanged by modification leases", async () => {
+  const outcomes = simulatedStripe();
+  const paid = await seed(840, true);
+  const p = await proposeSurcharge(paid);
+  outcomes.set(p.attempt.providerPaymentId, "processing");
+  await dismissAdjustment(p.id);
+  const initial = await seed(1080, false, true);
+  const deadline = (await database.query("SELECT expires_at FROM public.payment_attempts WHERE id=$1", [initial.attemptId]))[0].expires_at;
+  await database.query("UPDATE public.court_reservations SET hold_expires_at='2020-01-01' WHERE id=$1", [initial.reservationId]);
+  expect(await expirePaymentHolds({ courtId })).toBe(1);
+  expect((await state(initial)).booking?.status).toBe("expired");
+  expect((await state(initial)).reservation?.status).toBe("released");
+  expect(await database.query("SELECT status,expires_at FROM public.payment_attempts WHERE id=$1", [initial.attemptId]))
+    .toEqual([{ status: "expired", expires_at: deadline }]);
+  expect(await holds(p.id)).toEqual([expect.objectContaining({ status: "held" })]);
+});
+
+// Independent automatic-recovery verification: real transactions, mocked provider only.
+test("independent recovery: cancellation waits through temporary failure and completes without another customer command", async () => {
   simulatedStripe();
-  const f = await seed(600, true);
-  const result = await save(await edit(f, { endMinute: 810, expectedTotal: 7500, requestId: randomUUID() }));
-  if (!result.ok || !result.adjustmentId || !result.checkout) throw new Error("Missing adjustment checkout");
-  if (state === "applied") expect(await captureAdjustment(result.adjustmentId)).toBe("succeeded");
-  else if (state === "cancelled") await cancelAdjustmentIntent(result.checkout.attemptId);
-  else {
-    await setAdjustmentExpiryFixture(database.manager, result.adjustmentId, "2020-01-01T00:00:00Z");
-    await readAdjustmentStatus(database.manager, result.adjustmentId);
+  const { runPaymentRecovery } = await import("@/lib/payments/recovery");
+  const f = await seed(600,true);
+  const request = await cancel(f);
+  expect(request.outcome).toBe("cancellation_pending");
+  if (request.outcome !== "cancellation_pending") throw new Error("Missing pending request");
+  vi.mocked(stripeAdapter.refundPayment).mockRejectedValueOnce(new Error("temporary timeout"));
+  expect(await refundProcessing.processBookingRefund(request.refundIds[0])).toBe("pending_retry");
+  expect(await state(f)).toMatchObject({ booking:{status:"confirmed"}, reservation:{status:"active"}, events:[] });
+  // Advance only the application's due/backoff clock, leaving DB evidence intact.
+  const clock = vi.spyOn(Date,"now").mockReturnValue(Date.now()+120_000);
+  await runPaymentRecovery(); clock.mockRestore();
+  expect(await state(f)).toMatchObject({ booking:{status:"cancelled"}, reservation:{status:"cancelled"},
+    refunds:[expect.objectContaining({status:"succeeded",amount_minor:5000})], events:[expect.objectContaining({subject:"Booking cancelled"})] });
+  await runPaymentRecovery();
+  expect(await emails(f.id)).toHaveLength(1);
+  expect(await database.query("SELECT id FROM public.refund_executions WHERE refund_id=$1",[request.refundIds[0]])).toHaveLength(1);
+});
+
+test("independent recovery: definitive refund failure voids the obligation, preserves original booking and sends one failure notice", async () => {
+  simulatedStripe();
+  const { runPaymentRecovery } = await import("@/lib/payments/recovery");
+  const f=await seed(600,true), before=await state(f), request=await cancel(f);
+  if(request.outcome!=="cancellation_pending") throw new Error("Missing pending request");
+  vi.mocked(stripeAdapter.refundPayment).mockResolvedValueOnce({status:"failed",providerRefundId:"re_failed_independent"});
+  expect(await refundProcessing.processBookingRefund(request.refundIds[0])).toBe("failed");
+  await runPaymentRecovery();
+  const after=await state(f);
+  expect(after.booking).toEqual(before.booking); expect(after.reservation).toEqual(before.reservation);
+  expect(after.refunds).toMatchObject([{status:"voided"}]);
+  expect(await database.query("SELECT status FROM public.booking_adjustments WHERE id=$1",[request.adjustmentId])).toEqual([{status:"unsuccessful"}]);
+  expect(await emails(f.id)).toMatchObject([{subject:"Booking cancellation not completed"}]);
+  expect(stripeAdapter.refundPayment).toHaveBeenCalledOnce();
+});
+
+test("independent recovery: lost webhook confirms payment and a later duplicate sends no second email", async () => {
+  const outcomes=simulatedStripe();
+  const { runPaymentRecovery }=await import("@/lib/payments/recovery");
+  const f=await seed(600,false,true,{date,notice:1440},actorId,true,120);
+  outcomes.set(`pi-${f.attemptId}`,"succeeded");
+  await runPaymentRecovery();
+  expect(await state(f)).toMatchObject({booking:{status:"confirmed"},reservation:{status:"active"}});
+  expect(await processOnlinePaymentEvent(paymentEvent(f))).toBe("succeeded");
+  await runPaymentRecovery(); expect(await emails(f.id)).toHaveLength(1);
+  expect(await database.query("SELECT id FROM public.payment_capture_receipts WHERE payment_attempt_id=$1",[f.attemptId])).toHaveLength(1);
+});
+
+test("independent recovery: concurrent scheduled workers dispatch one refund", async () => {
+  simulatedStripe();
+  const { runScheduledPaymentRecovery }=await import("@/lib/payments/recovery-scheduler");
+  const f=await seed(600,true), request=await cancel(f);
+  expect(request.outcome).toBe("cancellation_pending");
+  const results=await Promise.all([runScheduledPaymentRecovery(),runScheduledPaymentRecovery()]);
+  expect(results.sort()).toEqual(["busy","completed"]);
+  expect(await state(f)).toMatchObject({booking:{status:"cancelled"},refunds:[expect.objectContaining({status:"succeeded"})]});
+  expect(stripeAdapter.refundPayment).toHaveBeenCalledOnce(); expect(await emails(f.id)).toHaveLength(1);
+});
+
+test("independent recovery: partial refund success then definitive failure must not strand a cancelled booking with money owed", async () => {
+  simulatedStripe();
+  const { runPaymentRecovery }=await import("@/lib/payments/recovery");
+  const f=await seed(600,true), additional=randomUUID();
+  await database.query(`INSERT INTO public.payment_attempts(id,booking_id,method,provider,provider_payment_id,amount_minor,currency,status,expires_at,completed_at)
+    VALUES($1,$2,'online','stripe',$3,2500,'RON','succeeded',clock_timestamp()+interval '10 minutes',clock_timestamp())`,[additional,f.id,`pi-${additional}`]);
+  await database.query(`INSERT INTO public.payment_capture_receipts(payment_attempt_id,provider,provider_payment_id,provider_capture_id,amount_minor,currency)
+    VALUES($1,'stripe',$2,$2,2500,'RON')`,[additional,`pi-${additional}`]);
+  await appendBookingContractFixture(f.id,{total_amount_minor:7500});
+  vi.mocked(stripeAdapter.refundPayment).mockImplementation(async p=>({providerRefundId:`re_${p.id}`,status:p.amountMinor===2500?"succeeded":"failed"}));
+  const request=await cancel(f); if(request.outcome!=="cancellation_pending") throw new Error("Missing request");
+  for(const id of request.refundIds) await refundProcessing.processBookingRefund(id);
+  await runPaymentRecovery();
+  const after=await state(f);
+  expect(after.refunds).toMatchObject(expect.arrayContaining([expect.objectContaining({status:"succeeded",amount_minor:2500}),expect.objectContaining({status:"failed",amount_minor:5000})]));
+  // A failed terminal remainder is excluded from all automatic recovery scans.
+  if (after.booking?.status === "cancelled")
+    expect(await bookingFinancials(database.manager,f.id)).toMatchObject({netPaid:0});
+});
+
+test("independent recovery: committed notification survives financial recovery without duplication", async () => {
+  simulatedStripe();
+  const { runPaymentRecovery }=await import("@/lib/payments/recovery");
+  const f=await seed(600,true), request=await cancel(f);
+  if(request.outcome!=="cancellation_pending") throw new Error("Missing request");
+  // No delivery worker runs before this financial commit.
+  await refundProcessing.processBookingRefund(request.refundIds[0]);
+  expect((await state(f)).booking?.status).toBe("cancelled");
+  const queued = await database.query("SELECT id,attempts,delivered_at FROM public.booking_notification_deliveries WHERE message->>'text' LIKE $1", [`%${f.id}%`]);
+  expect(queued).toMatchObject([{ attempts: 0, delivered_at: null }]);
+  await runPaymentRecovery();
+  expect(await database.query("SELECT id,attempts,delivered_at,last_error FROM public.booking_notification_deliveries WHERE message->>'text' LIKE $1", [`%${f.id}%`]))
+    .toMatchObject([{ id: queued[0].id, attempts: 1, delivered_at: null, last_error: "delivery_unconfirmed" }]);
+  expect(await emails(f.id)).toHaveLength(1);
+});
+
+test("independent recovery: failed surcharge payment preserves original booking and occupancy", async () => {
+  simulatedStripe(); const f=await seed(600,true),before=await state(f);
+  const result=await save(await edit(f,{endMinute:810,expectedTotal:7500,requestId:randomUUID()}));
+  if(!result.ok || !result.adjustmentId) throw new Error("Missing surcharge");
+  const attempt=await adjustmentAttempt(database.manager,result.adjustmentId);
+  if(!attempt?.providerPaymentId) throw new Error("Missing attempt");
+  await processOnlinePaymentEvent({attemptId:attempt.id,provider:"stripe",providerPaymentId:attempt.providerPaymentId,
+    eventId:randomUUID(),outcome:"failed",amountMinor:2500,currency:"RON"});
+  const after=await state(f);
+  expect(after.booking).toEqual(before.booking);expect(after.reservation).toEqual(before.reservation);
+  expect(await emails(f.id)).toEqual([]);
+});
+
+test.each(["succeeded","failed","temporary"] as const)("independent recovery: refund-backed reduction with %s result",async outcome=>{
+  simulatedStripe();const f=await seed(600,true),before=await state(f);
+  await database.query("UPDATE public.location_pricing_rules SET price_per_hour_minor=3000 WHERE court_id=$1 AND court_state='outdoor'",[secondCourtId]);
+  if(outcome==="temporary")vi.mocked(stripeAdapter.refundPayment).mockRejectedValueOnce(new Error("network timeout"));
+  else vi.mocked(stripeAdapter.refundPayment).mockResolvedValueOnce({status:outcome,providerRefundId:`re_reduction_${outcome}`});
+  const result=await save(await edit(f,{expectedTotal:3000,requestId:randomUUID()}));
+  expect(result.ok).toBe(true);
+  if(outcome==="temporary"){
+    expect(await state(f)).toMatchObject({booking:before.booking,reservation:before.reservation,events:[]});
+    const {runPaymentRecovery}=await import("@/lib/payments/recovery");
+    const clock=vi.spyOn(Date,"now").mockReturnValue(Date.now()+120_000);
+    await runPaymentRecovery();clock.mockRestore();
   }
-  const before = await rescheduleEvidence(f);
-  const creates = vi.mocked(stripeAdapter.createPayment).mock.calls.length;
-  const resumed = await readAdjustmentPaymentLink({ adjustmentId: result.adjustmentId, token: result.checkout.token });
-  expect(resumed).toMatchObject({ kind: "checkout", checkout: { token: result.checkout.token } });
-  if (state === "expired") expect(resumed).toMatchObject({ holdExpiresAt: "2020-01-01T00:00:00.000Z" });
-  expect(await rescheduleEvidence(f)).toEqual(before);
-  expect(stripeAdapter.createPayment).toHaveBeenCalledTimes(creates);
+  const after=await state(f);
+  if(outcome==="failed"){
+    expect(after.booking).toEqual(before.booking);expect(after.reservation).toEqual(before.reservation);
+    expect(after.refunds).toMatchObject([{status:"voided",amount_minor:2000}]);
+    expect(await emails(f.id)).toMatchObject([{subject:"Booking change not completed"}]);
+  }else{
+    expect(after.booking).toMatchObject({status:"confirmed",total_amount_minor:3000});
+    expect(after.reservation).toMatchObject({court_id:secondCourtId,starts_at_minute:720,ends_at_minute:780});
+    expect(after.refunds).toMatchObject([{status:"succeeded",amount_minor:2000}]);
+    expect(await emails(f.id)).toMatchObject([{subject:"Booking rescheduled"}]);
+  }
+});
+
+test("independent recovery: database job lease fences separate worker identities",async()=>{
+  const {claimJobLease,releaseJobLease}=await import("@/lib/db/repositories/job-leases.repository");
+  const name=`verify_${randomUUID().replaceAll('-','_')}`,tokens=[randomUUID(),randomUUID()];
+  try{
+    const claims=await Promise.all(tokens.map(token=>inTransaction(manager=>claimJobLease(manager,{name,token,seconds:600}))));
+    expect(claims.filter(Boolean)).toHaveLength(1);
+    const winner=tokens[claims.indexOf(true)];
+    await inTransaction(manager=>releaseJobLease(manager,{name,token:tokens[claims.indexOf(false)]}));
+    expect(await inTransaction(manager=>claimJobLease(manager,{name,token:randomUUID(),seconds:600}))).toBe(false);
+    await inTransaction(manager=>releaseJobLease(manager,{name,token:winner}));
+    expect(await inTransaction(manager=>claimJobLease(manager,{name,token:randomUUID(),seconds:600}))).toBe(true);
+  }finally{await database.query("DELETE FROM public.job_leases WHERE name=$1",[name]);}
+});
+
+test.each(["temporary", "retryable", "external"] as const)("verification: split cancellation with %s remainder preserves booking, money evidence and completed refunds", async failure => {
+  simulatedStripe();
+  const { runPaymentRecovery } = await import("@/lib/payments/recovery");
+  const f = await seed(600, true), additional = randomUUID();
+  await database.query(`INSERT INTO public.payment_attempts(id,booking_id,method,provider,provider_payment_id,amount_minor,currency,status,expires_at,completed_at)
+    VALUES($1,$2,'online','stripe',$3,2500,'RON','succeeded',clock_timestamp()+interval '10 minutes',clock_timestamp())`, [additional, f.id, `pi-${additional}`]);
+  await database.query(`INSERT INTO public.payment_capture_receipts(payment_attempt_id,provider,provider_payment_id,provider_capture_id,amount_minor,currency)
+    VALUES($1,'stripe',$2,$2,2500,'RON')`, [additional, `pi-${additional}`]);
+  await appendBookingContractFixture(f.id, { total_amount_minor: 7500 });
+  const before = await state(f);
+  const calls: string[] = [];
+  let recovered = false;
+  vi.mocked(stripeAdapter.refundPayment).mockImplementation(async request => {
+    calls.push(request.id);
+    if (request.amountMinor === 5000 && !recovered) {
+      if (failure === "temporary") throw new Error("simulated temporary transport loss");
+      return { status: "failed", providerRefundId: `re_${request.executionId}`,
+        retryable: failure === "retryable", failureReason: failure === "retryable" ? "insufficient_funds" : "lost_or_stolen_card" };
+    }
+    return { status: "succeeded", providerRefundId: `re_${request.executionId}` };
+  });
+  const request = await cancel(f);
+  if (request.outcome !== "cancellation_pending") throw new Error("Missing refund-backed cancellation");
+  try {
+    for (const id of request.refundIds) await refundProcessing.processBookingRefund(id);
+    const pending = await state(f);
+    expect(pending.booking).toEqual(before.booking);
+    expect(pending.reservation).toEqual(before.reservation);
+    expect(await bookingFinancials(database.manager, f.id)).toMatchObject({ captured: 7500, refunded: 2500, obligated: 7500, netPaid: 5000 });
+    const history = await historyFor(f);
+    expect(history[0].financials.totals).toContainEqual(expect.objectContaining({ captured: 7500, refunded: 2500, uncompletedRefundObligations: 5000 }));
+    const successful = z.array(z.object({ id: z.uuid() })).length(1).parse(await database.query(
+      "SELECT id FROM public.payment_refunds WHERE booking_id=$1 AND status='succeeded'", [f.id]))[0].id;
+    expect(calls.filter(id => id === successful)).toHaveLength(1);
+    recovered = true;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 2 * 3_600_000);
+    try { await runPaymentRecovery(); await runPaymentRecovery(); }
+    finally { clock.mockRestore(); }
+    expect(calls.filter(id => id === successful)).toHaveLength(1);
+    if (failure === "external") {
+      expect((await state(f)).booking).toEqual(before.booking);
+      expect(await bookingFinancials(database.manager, f.id)).toMatchObject({ refunded: 2500, obligated: 7500, netPaid: 5000 });
+      expect((await historyFor(f)).find(row => row.refund?.amount_minor === 5000)?.refund).toMatchObject({ status: "failed" });
+    } else {
+      expect(await state(f)).toMatchObject({ booking: { status: "cancelled" }, reservation: { status: "cancelled" } });
+      expect(await bookingFinancials(database.manager, f.id)).toMatchObject({ refunded: 7500, netPaid: 0 });
+    }
+  } finally {
+    await database.query("DELETE FROM public.booking_notification_deliveries WHERE message->>'text' LIKE $1", [`%${f.id}%`]);
+  }
+});
+
+test("verification: actual scheduler timer recovers a pending financial obligation without request activity", async () => {
+  simulatedStripe();
+  const { startPaymentRecoveryScheduler } = await import("@/lib/payments/recovery-scheduler");
+  const f = await seed(600, true);
+  const request = await cancel(f);
+  expect(request.outcome).toBe("cancellation_pending");
+  expect((await state(f)).booking?.status).toBe("confirmed");
+  vi.stubEnv("PAYMENT_RECOVERY_INTERVAL_SECONDS", "3600");
+  // Advance the real scheduler callback; database I/O and provider adapter remain live.
+  vi.useFakeTimers({ toFake: ["setTimeout", "setInterval", "clearTimeout", "clearInterval"] });
+  try {
+    startPaymentRecoveryScheduler();
+    await vi.advanceTimersByTimeAsync(15_000);
+    vi.useRealTimers();
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline && (await state(f)).booking?.status !== "cancelled")
+      await new Promise(resolve => setTimeout(resolve, 20));
+    expect((await state(f)).booking?.status).toBe("cancelled");
+    expect(stripeAdapter.refundPayment).toHaveBeenCalledOnce();
+  } finally {
+    vi.clearAllTimers(); vi.useRealTimers();
+    Reflect.deleteProperty(globalThis, "__paymentRecoveryTimer");
+    await database.query("DELETE FROM public.booking_notification_deliveries WHERE message->>'text' LIKE $1", [`%${f.id}%`]);
+  }
+});
+
+test("verification: concurrent duplicate webhooks and distinct replay events create one capture, revision and durable notification", async () => {
+  simulatedStripe();
+  const f = await seed(600, false, true);
+  try {
+    const event = paymentEvent(f);
+    const results = await Promise.all([processOnlinePaymentEvent(event), processOnlinePaymentEvent(event),
+      processOnlinePaymentEvent({ ...event, eventId: randomUUID() })]);
+    expect(results).toEqual(["succeeded", "succeeded", "succeeded"]);
+    expect(await database.query("SELECT id FROM public.payment_capture_receipts WHERE payment_attempt_id=$1", [f.attemptId])).toHaveLength(1);
+    expect(await database.query("SELECT id FROM public.booking_revisions WHERE booking_id=$1 AND kind='confirmed'", [f.id])).toHaveLength(1);
+    expect(await database.query("SELECT id FROM public.booking_notification_deliveries WHERE message->>'text' LIKE $1", [`%${f.id}%`])).toHaveLength(1);
+  } finally {
+    await database.query("DELETE FROM public.booking_notification_deliveries WHERE message->>'text' LIKE $1", [`%${f.id}%`]);
+  }
+});
+
+test("verification: interrupted booking application after refund commit is completed by recovery without another refund", async () => {
+  simulatedStripe();
+  const f = await seed(600, true), request = await cancel(f);
+  if (request.outcome !== "cancellation_pending") throw new Error("Missing pending cancellation");
+  try {
+    const failure = vi.spyOn(reservations, "updateCustomerReservationCancellation").mockRejectedValueOnce(new Error("simulated interruption"));
+    expect(await refundProcessing.processBookingRefund(request.refundIds[0])).toBe("succeeded");
+    failure.mockRestore();
+    expect(await state(f)).toMatchObject({ booking: { status: "confirmed" }, reservation: { status: "active" },
+      refunds: [expect.objectContaining({ status: "succeeded" })] });
+    const { runPaymentRecovery } = await import("@/lib/payments/recovery");
+    await runPaymentRecovery(); await runPaymentRecovery();
+    expect(await state(f)).toMatchObject({ booking: { status: "cancelled" }, reservation: { status: "cancelled" } });
+    expect(stripeAdapter.refundPayment).toHaveBeenCalledOnce();
+    expect(await database.query("SELECT id FROM public.booking_notification_deliveries WHERE message->>'text' LIKE $1", [`%${f.id}%`])).toHaveLength(1);
+  } finally {
+    await database.query("DELETE FROM public.booking_notification_deliveries WHERE message->>'text' LIKE $1", [`%${f.id}%`]);
+  }
+});
+
+test("verification: concurrent recovery runs share one refund execution and repeat cycles do not redispatch", async () => {
+  simulatedStripe();
+  const f = await seed(600, true), request = await cancel(f);
+  if (request.outcome !== "cancellation_pending") throw new Error("Missing pending cancellation");
+  vi.mocked(stripeAdapter.refundPayment).mockImplementation(async refund => {
+    await new Promise(resolve => setTimeout(resolve, 50));
+    return { status: "succeeded", providerRefundId: `re_${refund.executionId}` };
+  });
+  try {
+    const { runPaymentRecovery } = await import("@/lib/payments/recovery");
+    await Promise.all([runPaymentRecovery(), runPaymentRecovery()]);
+    await runPaymentRecovery();
+    expect((await state(f)).booking?.status).toBe("cancelled");
+    expect(stripeAdapter.refundPayment).toHaveBeenCalledOnce();
+    expect(await refundExecutions.listRefundExecutions(database.manager, request.refundIds[0])).toHaveLength(1);
+  } finally {
+    await database.query("DELETE FROM public.booking_notification_deliveries WHERE message->>'text' LIKE $1", [`%${f.id}%`]);
+  }
+});
+
+test("verification: expired scheduler lease permits takeover and a stale release cannot clear the new worker", async () => {
+  const { claimJobLease, releaseJobLease } = await import("@/lib/db/repositories/job-leases.repository");
+  const name = `crashed_${randomUUID().replaceAll("-", "_")}`, first = randomUUID(), second = randomUUID();
+  try {
+    expect(await inTransaction(manager => claimJobLease(manager, { name, token: first, seconds: 600 }))).toBe(true);
+    expect(await inTransaction(manager => claimJobLease(manager, { name, token: second, seconds: 600 }))).toBe(false);
+    await database.query("UPDATE public.job_leases SET lease_until=clock_timestamp()-interval '1 second' WHERE name=$1", [name]);
+    expect(await inTransaction(manager => claimJobLease(manager, { name, token: second, seconds: 600 }))).toBe(true);
+    await inTransaction(manager => releaseJobLease(manager, { name, token: first }));
+    expect(await inTransaction(manager => claimJobLease(manager, { name, token: randomUUID(), seconds: 600 }))).toBe(false);
+  } finally { await database.query("DELETE FROM public.job_leases WHERE name=$1", [name]); }
 });

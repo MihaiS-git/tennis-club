@@ -19,6 +19,7 @@ test.each([
 const payment = { id:randomUUID(),booking_id:randomUUID(),method:"online",provider:"stripe",
   provider_payment_id:"pi_original",amount_minor:5000,currency:"RON",status:"succeeded" };
 const refund: ProcessingRefund = { id:randomUUID(),booking_id:payment.booking_id,payment_attempt_id:payment.id,
+  adjustment_id:null,reason:"booking_cancellation",
   provider:"stripe",provider_payment_id:"pi_original",amount_minor:5000,currency:"RON",
   status:"pending",created_at:"2026-10-08T12:00:00.123456+00:00",operation_key:"cancellation",captured_amount_minor:5000 };
 const capture: PaymentCaptureReceiptEntity = { id:randomUUID(),paymentAttemptId:payment.id,provider:"stripe",

@@ -384,12 +384,22 @@ lease expiry and a crash do not authorize another creation.
 Result transactions retain write-once identity, uncertainty and terminal evidence.
 Current lease tokens fence error/check updates and lease clearing; stale workers may
 record valid historical provider facts without clearing a newer lease. Verified success
-cannot regress. Eligible receipt resolution commits atomically with completion; existing
-automatic adjustment and Admin reconciliation attribution rules remain. Admin retry may
-allocate a distinct execution only after verified failure or definitive rejection.
-Automatic processing retains terminal short-circuits. PaymentRefund stores immutable
-obligation terms plus status/timestamps; provider references/errors come from executions.
-No refund notifications, scheduled worker, dual writes or provider history JSON remain.
+cannot regress. Full verified compensation of an ended request's capture resolves its
+review events atomically with completion. Processing retains terminal short-circuits:
+no execution is replaced after verified failure or definitive rejection. Within 23 hours
+of dispatch an unfound execution is re-sent with its exact idempotency key (Stripe keeps
+keys 24 hours), closing the dispatch-to-HTTP crash gap without duplicates. PaymentRefund
+stores immutable obligation terms plus status/timestamps (`voided` releases a failed
+obligation of an abandoned change); provider references/errors come from executions.
+
+Refund-backed booking changes (cancellation with refund, price reduction) are pending
+`booking_adjustments` rows; the booking is unchanged until a single transaction under the
+existing configuration fence → location → booking → reservation → attempts → refunds order
+applies or abandons them after every obligation is terminal. The automatic recovery
+worker (`src/lib/payments/recovery.ts`, started from `src/instrumentation.ts`, fenced by a
+`job_leases` row) drives payments, holds, late captures, refunds and these decisions when no
+request or webhook does; see [payments](payments-memberships.md#automatic-financial-recovery).
+There are no Admin financial controls, dual writes or provider history JSON.
 
 ## Booking email delivery
 

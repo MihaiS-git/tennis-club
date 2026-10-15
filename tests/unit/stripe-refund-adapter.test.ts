@@ -12,7 +12,7 @@ vi.mock("@/lib/payments/refund-commands", () => ({
   prepareAutomaticRefund: prepare, initiateRefundExecution: initiate, commitRefundExecution: commit,
 }));
 vi.mock("@/lib/payments/providers", () => ({ onlinePaymentAdapter: async () => stripeAdapter }));
-vi.mock("@/lib/logger", () => ({ logger: { info: vi.fn(), error: vi.fn() } }));
+vi.mock("@/lib/logger", () => ({ logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn() } }));
 import { processBookingRefund } from "@/lib/payments/refunds";
 import type { RefundExecutionClaim } from "@/lib/payments/refund-commands";
 import { stripeAdapter } from "@/lib/payments/providers/stripe/adapter";
@@ -22,7 +22,7 @@ const refund = { executionId, idempotencyKey: "persisted-exact-key", id: "cf0000
 const result = { id: "original-refund", amount: 5000, currency: "ron", payment_intent: "original-payment", status: "succeeded", metadata: { payment_refund_id: refund.id, refund_execution_id: executionId } };
 beforeEach(() => { vi.resetAllMocks(); list.mockReturnValue((async function* () {})()); create.mockResolvedValue(result); });
 test("uses the original payment, full persisted amount and stable refund idempotency key", async () => {
-  expect(await stripeAdapter.refundPayment(refund)).toEqual({ status: "succeeded", providerRefundId: "original-refund" });
+  expect(await stripeAdapter.refundPayment(refund)).toEqual({ status: "succeeded", providerRefundId: "original-refund", retryable: false, failureReason: undefined });
   await stripeAdapter.refundPayment(refund);
   expect(create).toHaveBeenNthCalledWith(1, { payment_intent: "original-payment", amount: 5000,
     metadata: { payment_refund_id: refund.id, refund_execution_id: executionId } }, { idempotencyKey: refund.idempotencyKey });
@@ -34,8 +34,9 @@ test("recovers accepted refunds after a lost response without creating another",
   expect(create).not.toHaveBeenCalled();
 });
 test.each([['succeeded', 'succeeded'], ['pending', 'pending'], ['requires_action', 'pending'], ['failed', 'failed'], ['canceled', 'failed']])("retrieves existing provider refund with state %s", async (providerStatus, status) => {
+  list.mockReturnValue((async function* () { yield result; })());
   retrieve.mockResolvedValue({ ...result, status: providerStatus });
-  expect(await stripeAdapter.refundPayment({ ...refund, providerRefundId: result.id })).toEqual({ providerRefundId: result.id, status });
+  expect(await stripeAdapter.refundPayment({ ...refund, providerRefundId: result.id })).toEqual({ providerRefundId: result.id, status, retryable: false, failureReason: undefined });
   expect(create).not.toHaveBeenCalled();
 });
 test("network errors and mismatched evidence yield incomplete operation errors", async () => {
@@ -55,7 +56,7 @@ test("definite creation rejections and uncertain network failures remain distinc
 
 test.each(["pending", "requires_action"])("accepted creation with %s status has identity but no settled refund", async status => {
   create.mockResolvedValue({ ...result, status });
-  expect(await stripeAdapter.refundPayment(refund)).toEqual({ providerRefundId: result.id, status: "pending" });
+  expect(await stripeAdapter.refundPayment(refund)).toEqual({ providerRefundId: result.id, status: "pending", retryable: false, failureReason: undefined });
 });
 test("creation timeout is uncertain", async () => {
   create.mockRejectedValue(new Stripe.errors.StripeConnectionError({ message: "timeout" }));
@@ -85,11 +86,12 @@ test.each([
   new Stripe.errors.StripeInvalidRequestError({ statusCode: 404 }),
   new Stripe.errors.StripeConnectionError({ message: "timeout" }),
 ])("retrieval failure retains known identity and never creates", async error => {
+  list.mockReturnValue((async function* () { yield result; })());
   retrieve.mockRejectedValue(error);
   await expect(stripeAdapter.refundPayment({ ...refund, providerRefundId: result.id })).rejects.toMatchObject({ evidence: {
     kind: "lookup_failed", operation: "retrieve", providerRefundId: result.id,
   } });
-  expect(list).not.toHaveBeenCalled();
+  expect(list).toHaveBeenCalledWith({ payment_intent: refund.providerPaymentId, limit: 100 });
   expect(create).not.toHaveBeenCalled();
 });
 test("empty recovery lookup is not evidence permitting another creation", async () => {
@@ -101,7 +103,7 @@ test("empty recovery lookup is not evidence permitting another creation", async 
 test("recovery rediscovers and verifies the existing refund", async () => {
   list.mockReturnValue((async function* () { yield result; })());
   expect(await stripeAdapter.refundPayment({ ...refund, operation: "recover" })).toEqual({
-    providerRefundId: result.id, status: "succeeded",
+    providerRefundId: result.id, status: "succeeded", retryable: false, failureReason: undefined,
   });
   expect(create).not.toHaveBeenCalled();
 });
@@ -110,6 +112,7 @@ test.each([
   { metadata: { payment_refund_id: refund.id, refund_execution_id: "other-execution" } },
   { amount: 1 }, { currency: "eur" }, { payment_intent: "other" }, { id: "other" },
 ])("retrieved mismatched evidence retains known identity", async mismatch => {
+  list.mockReturnValue((async function* () { yield result; })());
   retrieve.mockResolvedValue({ ...result, ...mismatch });
   await expect(stripeAdapter.refundPayment({ ...refund, providerRefundId: result.id })).rejects.toMatchObject({ evidence: {
     kind: "evidence_mismatch", operation: "retrieve", providerRefundId: result.id,
@@ -139,6 +142,7 @@ test("forwards the exact stored key without constructing another key", async () 
 const claim: RefundExecutionClaim = {
   token: "token", actorId: null, bookingId: refund.id,
   refund: { id: refund.id, booking_id: refund.id, payment_attempt_id: refund.id, operation_key: "cancellation",
+    adjustment_id: null, reason: "booking_cancellation",
     provider: "stripe", provider_payment_id: refund.providerPaymentId, amount_minor: refund.amountMinor,
     captured_amount_minor: refund.amountMinor, currency: "RON", status: "pending", created_at: "2026-10-13T12:00:00Z" },
   execution: { id: executionId, refundId: refund.id, executionNumber: 1, provider: "stripe",
@@ -151,14 +155,14 @@ const claim: RefundExecutionClaim = {
 beforeEach(() => {
   prepare.mockResolvedValue({ outcome: "ready", claim });
   initiate.mockResolvedValue({ outcome: "dispatch", operation: "create", execution: claim.execution });
-  commit.mockImplementation(async (_claim, observation) => observation.kind === "verified" ? observation.status
-    : observation.evidence.kind === "request_rejected" ? "failed" : "pending_retry");
+  commit.mockImplementation(async (_claim, observation) => ({ status: observation.kind === "verified" ? observation.status
+    : observation.evidence.kind === "request_rejected" ? "failed" : "pending_retry", notice: null }));
 });
 test("service initiates dispatch before contacting Stripe with exact persisted parameters", async () => {
   expect(await processBookingRefund(refund.id)).toBe("succeeded");
   expect(initiate).toHaveBeenCalledWith(claim);
   expect(initiate.mock.invocationCallOrder[0]).toBeLessThan(create.mock.invocationCallOrder[0]);
-  expect(commit).toHaveBeenCalledWith(claim, { kind: "verified", status: "succeeded", providerRefundId: result.id });
+  expect(commit).toHaveBeenCalledWith(claim, { kind: "verified", status: "succeeded", providerRefundId: result.id, retryable: false, failureReason: undefined });
 });
 test("service persists a returned identity even when evidence mismatches", async () => {
   create.mockResolvedValue({ ...result, amount: 1 });
@@ -179,11 +183,12 @@ test.each([null, "admin"])("automatic/Admin claimant %s uses the same definitive
   prepare.mockResolvedValue({ outcome: "ready", claim: prepared });
   expect(await processBookingRefund(refund.id, actorId ? prepared : undefined)).toBe("failed");
   expect(commit).toHaveBeenCalledWith(prepared, { kind: "error", evidence: {
-    kind: "request_rejected", operation: "create", providerRefundId: null,
+    kind: "request_rejected", operation: "create", providerRefundId: null, retryable: false, failureReason: "invalid_request",
   } });
 });
 test("service retrieval failure retains known identity", async () => {
   initiate.mockResolvedValue({ outcome: "dispatch", operation: "recover", execution: { ...claim.execution, providerRefundId: result.id } });
+  list.mockReturnValue((async function* () { yield result; })());
   retrieve.mockRejectedValue(new Stripe.errors.StripeInvalidRequestError({ statusCode: 404 }));
   expect(await processBookingRefund(refund.id, { ...claim, actorId: "admin" })).toBe("pending_retry");
   expect(commit).toHaveBeenCalledWith(expect.anything(), { kind: "error", evidence: {
@@ -194,10 +199,10 @@ test("service retrieval failure retains known identity", async () => {
 test.each(["pending", "succeeded", "failed"])("service persists verified %s evidence", async status => {
   create.mockResolvedValue({ ...result, status });
   expect(await processBookingRefund(refund.id)).toBe(status);
-  expect(commit).toHaveBeenCalledWith(claim, { kind: "verified", status, providerRefundId: result.id });
+  expect(commit).toHaveBeenCalledWith(claim, { kind: "verified", status, providerRefundId: result.id, retryable: false, failureReason: undefined });
 });
 test.each(["succeeded", "failed"])("automatic terminal %s short circuit has no provider request", async status => {
-  prepare.mockResolvedValue({ outcome: "terminal", status });
+  prepare.mockResolvedValue({ outcome: "terminal", status, notice: null });
   expect(await processBookingRefund(refund.id)).toBe(status);
   expect(create).not.toHaveBeenCalled();
   expect(initiate).not.toHaveBeenCalled();

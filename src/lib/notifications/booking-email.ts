@@ -1,6 +1,6 @@
 import "server-only";
 
-import { sendMail, type MailMessage } from "../mail/brevo";
+import type { MailMessage } from "../mail/brevo";
 import type { RevisionSnapshot } from "../bookings/revision";
 
 type BookingEmailSchedule = {
@@ -11,7 +11,9 @@ type BookingEmailSchedule = {
 };
 export type BookingEmailEvent = {
   recipient: string;
-  event_kind: "confirmed" | "customer_cancelled" | "admin_cancelled" | "customer_rescheduled";
+  event_kind: "confirmed" | "customer_cancelled" | "admin_cancelled" | "customer_rescheduled"
+    // Definitive outcomes of requested changes; transient recovery sends nothing.
+    | "cancellation_failed" | "modification_failed" | "refund_incomplete";
   payload: BookingEmailSchedule & {
     booking_id: string;
     customer_name: string;
@@ -20,44 +22,61 @@ export type BookingEmailEvent = {
     total_amount_minor: number;
     currency: string;
     previous: BookingEmailSchedule | null;
-    refund_status?: "requested";
+    // requested: legacy/compensation wording that promises no completion.
+    refund_status?: "requested" | "completed" | "incomplete";
+    refund_amount_minor?: number;
   };
 };
 
 export function bookingNotification(kind: BookingEmailEvent["event_kind"], revision: RevisionSnapshot,
-  options: { previous?: RevisionSnapshot; refundRequested?: boolean } = {}): BookingEmailEvent {
+  options: { previous?: RevisionSnapshot; refundRequested?: boolean; refundStatus?: "completed" | "incomplete";
+    refund?: { amountMinor: number; currency: string } } = {}): BookingEmailEvent {
   const previous = options.previous;
+  const refundStatus = options.refundStatus ?? (options.refundRequested ? "requested" as const : undefined);
   return { event_kind: kind, recipient: revision.customerEmail, payload: {
     booking_id: revision.bookingId, customer_name: revision.customerName, location_name: revision.locationName,
     timezone: revision.timezone, court_name: revision.courtName, booking_date: revision.bookingDate,
     starts_at_minute: revision.startMinute, ends_at_minute: revision.endMinute,
-    total_amount_minor: revision.totalAmountMinor, currency: revision.currency,
+    total_amount_minor: revision.totalAmountMinor, currency: options.refund?.currency ?? revision.currency,
     previous: previous ? { court_name: previous.courtName, booking_date: previous.bookingDate,
       starts_at_minute: previous.startMinute, ends_at_minute: previous.endMinute } : null,
-    ...(options.refundRequested ? { refund_status: "requested" as const } : {}),
+    ...(refundStatus ? { refund_status: refundStatus } : {}),
+    ...(options.refund ? { refund_amount_minor: options.refund.amountMinor } : {}),
   } };
 }
 const time = (minute: number) => `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+const money = (minor: number, currency: string) => `${(minor / 100).toFixed(2)} ${currency}`;
 function interval(value: BookingEmailSchedule) {
   return `${value.booking_date}, ${time(value.starts_at_minute)}–${time(value.ends_at_minute)}, ${value.court_name}`;
 }
+const subjects: Record<BookingEmailEvent["event_kind"], string> = {
+  confirmed: "Booking confirmed", customer_cancelled: "Booking cancelled", admin_cancelled: "Booking cancelled",
+  customer_rescheduled: "Booking rescheduled", cancellation_failed: "Booking cancellation not completed",
+  modification_failed: "Booking change not completed", refund_incomplete: "Refund requires attention",
+};
 export function renderBookingEmail(event: BookingEmailEvent): MailMessage {
   const p = event.payload;
-  const cancelled = event.event_kind.endsWith("cancelled");
-  const rescheduled = event.event_kind.endsWith("rescheduled");
-  const subject = cancelled ? "Booking cancelled" : rescheduled ? "Booking rescheduled" : "Booking confirmed";
-  const explanation = event.event_kind.startsWith("admin_") ? "The club administrator has " : "You have ";
-  const lines = [`Hello ${p.customer_name},`, "", cancelled ? `${explanation}cancelled your booking.`
-    : rescheduled ? `${explanation}rescheduled your booking.` : "Your court booking is confirmed.", "",
+  const kind = event.event_kind;
+  const cancelled = kind === "customer_cancelled" || kind === "admin_cancelled";
+  const rescheduled = kind === "customer_rescheduled";
+  const explanation = kind.startsWith("admin_") ? "The club administrator has " : "You have ";
+  const intro = cancelled ? `${explanation}cancelled your booking.`
+    : rescheduled ? `${explanation}rescheduled your booking.`
+    : kind === "cancellation_failed" ? "Your cancellation request could not be completed because the refund could not be processed. No money was returned and your booking remains confirmed. You can request the cancellation again or contact the club."
+    : kind === "modification_failed" ? "Your requested booking change could not be completed. Your original booking is unchanged."
+    : kind === "refund_incomplete" ? `A refund${p.refund_amount_minor ? ` of ${money(p.refund_amount_minor, p.currency)}` : ""} for your booking could not be completed automatically. The club will contact you to resolve it.`
+    : "Your court booking is confirmed.";
+  const lines = [`Hello ${p.customer_name},`, "", intro, "",
     `Booking reference: ${p.booking_id}`, `Location: ${p.location_name}`, `Timezone: ${p.timezone}`];
   if (rescheduled && p.previous) lines.push(`Previous: ${interval(p.previous)}`);
   lines.push(`${rescheduled ? "New schedule" : "Schedule"}: ${interval(p)}`);
-  if (!cancelled) lines.push(`Booking total: ${(p.total_amount_minor / 100).toFixed(2)} ${p.currency}`);
+  if (!cancelled && kind !== "refund_incomplete") lines.push(`Booking total: ${money(p.total_amount_minor, p.currency)}`);
   if (cancelled && p.refund_status === "requested") lines.push("Your full payment refund has been requested.");
-  return { to: event.recipient, subject, text: lines.join("\n") };
-}
-
-// Call only after the booking/payment transaction commits. Delivery is best-effort.
-export async function sendBookingNotification(event: BookingEmailEvent): Promise<void> {
-  await sendMail(renderBookingEmail(event));
+  if (cancelled && p.refund_status === "completed") lines.push("Your payment has been refunded.");
+  if (rescheduled && p.refund_status === "completed") lines.push("The price difference has been refunded.");
+  if ((cancelled || rescheduled) && p.refund_status === "incomplete")
+    lines.push("Part of your refund could not be completed automatically. The club will contact you to resolve it.");
+  if (kind === "modification_failed" && p.refund_status === "requested")
+    lines.push("The additional payment you made for this change is being refunded.");
+  return { to: event.recipient, subject: subjects[kind], text: lines.join("\n") };
 }

@@ -158,7 +158,7 @@ compensation, partial refund retry (including a verified failed execution and di
 expiry at the final SQL write. Existing Stripe/cancellation/Admin suites remain required.
 
 `tests/e2e/booking-adjustments.e2e.ts` exercises My Activity Edit, original/new/difference
-prices, refresh recovery, an additional payment and a partial refund through the real
+prices, X discarding an unpaid modification, a fresh Edit, an additional payment and a partial refund through the real
 Next.js/TypeORM services. Playwright starts a loopback Stripe HTTP fixture on 3111,
 uses intentionally fake fixture credentials and intercepts Stripe.js in this test.
 It makes no real Stripe transaction. Production routing to the fixture is rejected
@@ -166,6 +166,28 @@ unless the exact isolated test database, project marker, fake secret and URL mat
 Test environment setup clears inherited Stripe fixture/provider variables before
 Playwright opts into these explicit fake credentials. Application server/build remain
 isolated on port 3100 and .next-test; the development server is not reused.
+
+### Real Stripe test-mode modification lifecycle
+
+`tests/e2e-live/booking-modification-lifecycle.e2e.ts` drives real Chromium against real
+Stripe test mode, real webhooks and the isolated test Supabase project (no production
+build). Requirements: test Supabase running, the Stripe CLI logged in to the same test
+account, and `.env.local` holding Stripe test keys whose `STRIPE_WEBHOOK_SECRET` equals
+`stripe listen --print-secret`. The spec starts and stops its own `stripe listen`
+forwarding to port 3100 and uses `stripe events resend` to deliver delayed/duplicate events.
+
+```bash
+node tests/e2e-live/dev-server.mjs            # next dev on :3100, .next-test
+npx playwright test -c playwright.stripe-live.config.ts
+# Late success: restart the server with the test-only hold override
+E2E_ALLOW_HOLD_OVERRIDE=1 BOOKING_HOLD_SECONDS_OVERRIDE=60 node tests/e2e-live/dev-server.mjs
+LIVE_LATE=1 npx playwright test -c playwright.stripe-live.config.ts
+```
+
+`BOOKING_HOLD_SECONDS_OVERRIDE` (15–600) is honored only when `NODE_ENV=test` or
+`E2E_ALLOW_HOLD_OVERRIDE=1`, and never when `NODE_ENV=production`. Card payments settle
+synchronously, so browser "pending" is a delayed webhook; processing branches are
+covered by `tests/integration/db/booking-mutations.integration.test.ts`.
 
 ## Consolidated schema generation
 
@@ -227,3 +249,14 @@ Regenerate the existing initial migration only against verified empty isolated
 infrastructure; apply exactly three migrations and verify zero metadata drift.
 No provider calls occur inside transactions, and no real Stripe/Brevo calls or
 normal development reset are part of these checks.
+
+## Automatic financial recovery
+
+The Next.js server starts the payment recovery scheduler from `src/instrumentation.ts`
+(first run after 15 seconds, then every 60 seconds). It reads and writes the configured
+database and contacts Stripe. Set `PAYMENT_RECOVERY_INTERVAL_SECONDS=0` for E2E/manual
+runs that must observe intermediate pending states; otherwise expect pending refunds,
+uncertain payments and refund-backed changes to resolve within about a minute without
+any Admin action. Apply migration `1791462257927-AutomaticFinancialRecovery` before
+running the server against an existing local database. `runPaymentRecovery()` can be
+invoked directly from integration tests to execute one deterministic run.

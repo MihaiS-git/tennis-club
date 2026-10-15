@@ -3,9 +3,6 @@ import type { paymentFactSchema, providerEventFactSchema } from "@/lib/payments/
 
 type Payment = Omit<z.infer<typeof paymentFactSchema>, "created_at" | "expires_at">;
 type Event = z.infer<typeof providerEventFactSchema>;
-export function refundRetryEligible(status: string | null | undefined, provider: string | null) {
-  return provider === "stripe" && (status === "pending" || status === "pending_retry" || status === "failed");
-}
 export function successfulRefundPayment(payments: readonly z.infer<typeof paymentFactSchema>[]) {
   return [...payments].filter((p) => p.status === "succeeded" && p.method === "online" && p.provider === "stripe")
     .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id))[0] ?? null;

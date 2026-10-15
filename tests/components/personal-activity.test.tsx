@@ -308,9 +308,9 @@ it("preserves nullable reservation details", () => {
 
 it.each([
   [undefined, "Booking cancelled."],
-  ["succeeded", "Booking cancelled. Your full payment has been refunded."],
-  ["pending_retry", "Booking cancelled. Your full refund has been requested and is awaiting completion."],
-  ["failed", "Booking cancelled. The full refund could not be completed; please contact the club."],
+  ["succeeded", "Booking cancelled. Your payment has been refunded."],
+  ["pending_retry", "Booking cancelled. Your refund is being completed automatically."],
+  ["failed", "Booking cancelled. Part of the refund could not be completed; the club will contact you."],
 ])("customer cancellation shows refund state %s and refreshes Upcoming", async (refundStatus, message) => {
   const notification = vi.spyOn(toast, "success");
   load.mockResolvedValueOnce(activityFixture([bookingItem(cancellableBooking)]))
@@ -339,7 +339,7 @@ it("reports a committed cancellation accurately when the details refresh rejects
   fireEvent.click(screen.getByRole("button", { name: "Cancel booking" }));
   fireEvent.click(within(screen.getByRole("dialog", { name: "Cancel booking?" })).getByRole("button", { name: "Cancel booking" }));
   await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(
-    "Booking cancelled. Your full payment has been refunded.",
+    "Booking cancelled. Your payment has been refunded.",
     expect.objectContaining({ description: expect.stringContaining("refresh") }),
   ));
   expect(toast.error).not.toHaveBeenCalled();

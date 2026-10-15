@@ -15,4 +15,9 @@ export type PersonalCustomerBooking = {
   cancellation_notice_minutes: number;
   total_amount_minor: number;
   currency: LocationCurrency;
+  // A modification payment is still processing; Edit stays hidden until it resolves.
+  payment_pending?: boolean;
+  // A requested cancellation or price reduction awaits its verified refund. The
+  // booking remains confirmed; Edit and Cancel stay hidden until it resolves.
+  pending_change?: "cancellation" | "reschedule";
 };

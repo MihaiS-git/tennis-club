@@ -55,6 +55,9 @@ export async function cleanupBookingEvidence(manager: EntityManager, selection: 
       : "b.reservation_id IN (SELECT id FROM public.court_reservations WHERE court_id = ANY($1::uuid[]))";
   const values = "bookingIds" in selection ? selection.bookingIds : "reservationIds" in selection ? selection.reservationIds : selection.courtIds;
   const ids = z.array(z.object({ id: z.uuid() })).parse(await manager.query(`SELECT b.id FROM public.bookings b WHERE ${predicate}`, [values])).map(row => row.id);
+  await manager.query(`DELETE FROM public.booking_notification_deliveries d
+    WHERE EXISTS (SELECT 1 FROM unnest($1::uuid[]) id
+      WHERE position('Booking reference: ' || id::text || chr(10) in d.message->>'text') > 0)`, [ids]);
   await manager.query("DELETE FROM public.payment_provider_events WHERE attempt_id IN (SELECT id FROM public.payment_attempts WHERE booking_id=ANY($1::uuid[]))", [ids]);
   await manager.query("DELETE FROM public.payment_capture_receipts WHERE payment_attempt_id IN (SELECT id FROM public.payment_attempts WHERE booking_id=ANY($1::uuid[]))", [ids]);
   await manager.query("DELETE FROM public.refund_executions WHERE refund_id IN (SELECT id FROM public.payment_refunds WHERE booking_id=ANY($1::uuid[]))", [ids]);

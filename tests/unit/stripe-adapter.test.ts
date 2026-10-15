@@ -66,3 +66,46 @@ test("attempts processing cancellation and recovers processing or concurrently c
   retrieve.mockRejectedValueOnce(new Error("Network timeout"));
   await expect(stripeAdapter.cancelPayment(attempt)).rejects.toThrow("Payment service unavailable.");
 });
+
+test("dismissal cancels intents awaiting the customer, including authentication, but never a processing payment", async () => {
+  configure();
+  const attempt = { id, providerPaymentId: "pi_fixture" };
+  const intent = (status: string) => ({ id: "pi_fixture", status, metadata: { payment_attempt_id: id } });
+  for (const status of ["requires_payment_method", "requires_confirmation", "requires_action"]) {
+    retrieve.mockResolvedValueOnce(intent(status)); cancel.mockResolvedValueOnce({ status: "canceled" });
+    expect(await stripeAdapter.dismissPayment(attempt)).toBe("cancelled");
+  }
+  expect(cancel).toHaveBeenCalledWith("pi_fixture", { cancellation_reason: "abandoned" }, { idempotencyKey: `court-payment-abandon-${id}` });
+  cancel.mockClear();
+  retrieve.mockResolvedValueOnce(intent("processing"));
+  expect(await stripeAdapter.dismissPayment(attempt)).toBe("live");
+  retrieve.mockResolvedValueOnce(intent("succeeded"));
+  expect(await stripeAdapter.dismissPayment(attempt)).toBe("succeeded");
+  retrieve.mockResolvedValueOnce(intent("canceled"));
+  expect(await stripeAdapter.dismissPayment(attempt)).toBe("cancelled");
+  expect(cancel).not.toHaveBeenCalled();
+});
+
+test("dismissal cancel race re-reads the intent and takes the live or succeeded branch", async () => {
+  configure();
+  const attempt = { id, providerPaymentId: "pi_fixture" };
+  const intent = (status: string) => ({ id: "pi_fixture", status, metadata: { payment_attempt_id: id } });
+  cancel.mockRejectedValue(new Error("payment_intent_unexpected_state"));
+  retrieve.mockResolvedValueOnce(intent("requires_payment_method")).mockResolvedValueOnce(intent("processing"));
+  expect(await stripeAdapter.dismissPayment(attempt)).toBe("live");
+  retrieve.mockResolvedValueOnce(intent("requires_payment_method")).mockResolvedValueOnce(intent("succeeded"));
+  expect(await stripeAdapter.dismissPayment(attempt)).toBe("succeeded");
+  retrieve.mockResolvedValueOnce(intent("requires_payment_method")).mockResolvedValueOnce(intent("requires_payment_method"));
+  await expect(stripeAdapter.dismissPayment(attempt)).rejects.toThrow("Payment service unavailable.");
+  retrieve.mockResolvedValueOnce({ ...intent("requires_payment_method"), metadata: { payment_attempt_id: "other" } });
+  await expect(stripeAdapter.dismissPayment(attempt)).rejects.toThrow("Payment service unavailable.");
+});
+
+test("a verified processing event is translated only as liveness evidence", () => {
+  configure(); const stripe = new Stripe("sk_test_Fixture");
+  const body = JSON.stringify({ id: "evt_processing", type: "payment_intent.processing",
+    data: { object: { id: "pi_fixture", amount: 5000, currency: "ron", status: "processing", metadata: { payment_attempt_id: id } } } });
+  expect(verifyStripeEvent(body, stripe.webhooks.generateTestHeaderString({ payload: body, secret: "whsec_Fixture" })))
+    .toEqual({ provider: "stripe", attemptId: id, providerPaymentId: "pi_fixture", outcome: "processing" });
+  expect(() => verifyStripeEvent(body, "invalid")).toThrow("Payment service unavailable.");
+});

@@ -1,5 +1,6 @@
 import { verifyStripeEvent } from "@/lib/payments/providers/stripe/adapter";
 import { processOnlinePaymentEvent } from "@/lib/payments/service";
+import { extendLiveAdjustmentHold } from "@/lib/payments/hold-expiry";
 import { revalidateCourtActivity } from "@/lib/reservations/revalidation";
 
 export async function POST(request: Request) {
@@ -13,6 +14,11 @@ export async function POST(request: Request) {
   }
   if (!event) return new Response(null, { status: 204 });
   try {
+    // Processing never settles; it only keeps a modification's target blocked.
+    if (event.outcome === "processing") {
+      await extendLiveAdjustmentHold(event.attemptId, event.providerPaymentId);
+      return Response.json({ received: true });
+    }
     await processOnlinePaymentEvent(event);
     revalidateCourtActivity("create");
     return Response.json({ received: true });

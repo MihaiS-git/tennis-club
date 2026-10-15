@@ -187,7 +187,7 @@ export async function cancelCustomerBookingAsAdmin(input: unknown, supabase?: Cl
   }
   const outcome = await finishBookingCancellation(data, "This booking is no longer available to cancel.");
   if (outcome.ok) logger.info({ event: "bookings.admin_cancelled", actorId: actor.userId,
-    bookingId: parsed.data.id, refundStatus: outcome.refundStatus }, "Admin cancelled customer booking");
+    bookingId: parsed.data.id, outcome: outcome.outcome }, "Admin customer booking cancellation accepted");
   return outcome;
 }
 

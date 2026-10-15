@@ -6,7 +6,7 @@ import { expect, test } from "@playwright/test";
 import { localServiceRoleKey } from "./helpers/supabase";
 
 // Stripe.js and the Stripe HTTP API are simulated; application services and PostgreSQL are real.
-test("My Activity paid edit collects only the difference, recovers after refresh, then partially refunds a reduction", async ({ page }, testInfo) => {
+test("My Activity paid edit collects only the difference, X discards an unpaid modification, then partially refunds a reduction", async ({ page }, testInfo) => {
   test.setTimeout(120000);
   page.setDefaultTimeout(10000);
   const browserErrors: string[] = [];
@@ -87,23 +87,30 @@ test("My Activity paid edit collects only the difference, recovers after refresh
     await expect(modification.locator('time')).toHaveAttribute('datetime', /T/);
     await expect(modification.getByRole('link')).toHaveCount(0);
     await expect(modification.getByRole('button',{name:'Close',exact:true})).toHaveCount(0);
-    await expect(modification.getByRole('button',{name:'Cancel modification',exact:true})).toBeVisible();
+    await expect(modification.getByRole('button',{name:/Cancel modification|Recover/})).toHaveCount(0);
     expect((await page.getByRole('dialog').boundingBox())!.width).toBeLessThanOrEqual(512);
     await page.screenshot({path:testInfo.outputPath('modification-payment.png'),fullPage:true});
-    // X dismisses only: the pending operation is recovered on reopening.
+    // X before paying discards the modification and releases its hold.
     await page.getByRole('button', {name:'Close dialog',exact:true}).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
-    expect((await db.query("SELECT status FROM public.booking_adjustments WHERE booking_id=$1",[bookingId]))[0].status).toBe('pending');
+    await expect.poll(async () => (await db.query("SELECT status FROM public.booking_adjustments WHERE booking_id=$1",[bookingId]))[0].status).toBe('cancelled');
+    expect(await db.query("SELECT r.status FROM public.court_reservations r JOIN public.booking_adjustments a ON a.id=r.adjustment_id WHERE a.booking_id=$1",[bookingId])).toEqual([{status:'released'}]);
     expect((await db.query("SELECT v.total_amount_minor FROM public.bookings b JOIN public.booking_revisions v ON v.id=b.current_revision_id WHERE b.id=$1",[bookingId]))[0].total_amount_minor).toBe(5000);
+    // The next Edit opens a fresh form, never the old modification or its payment.
     await page.reload(); await open();
+    await expect(page.getByRole('region',{name:'Booking modification'})).toHaveCount(0);
+    await page.getByRole('button',{name:`C2 ${date} 17:00–17:30, Available`,exact:true}).click();
+    await expect(page.getByText(/Additional amount payable:.*25\.00/)).toBeVisible();
+    await page.getByRole('checkbox').check(); await page.getByRole('button',{name:'Save changes',exact:true}).click();
+    await expect(page.getByRole('region',{name:'Booking modification'})).toBeVisible();
     await page.getByLabel('Simulated card number').fill('4242424242424242');
     await page.getByRole('button',{name:'Pay and confirm booking',exact:true}).click();
     await expect(page.getByRole('dialog', {name:'Booking',exact:true})).toBeVisible();
     await page.getByRole('dialog').getByRole('button',{name:'Close dialog',exact:true}).click();
     const row=page.getByRole('row',{name:/Details for/}).filter({hasText:'C2'});
     await expect(row).toContainText('16:00–17:30'); await expect(row).toContainText(/75\.00/);
-    const records=await db.query("SELECT amount_minor,status FROM public.payment_attempts WHERE booking_id=$1 ORDER BY amount_minor",[bookingId]);
-    expect(records).toEqual([{amount_minor:2500,status:'succeeded'},{amount_minor:5000,status:'succeeded'}]);
+    const records=await db.query("SELECT amount_minor,status FROM public.payment_attempts WHERE booking_id=$1 ORDER BY amount_minor,status",[bookingId]);
+    expect(records).toEqual([{amount_minor:2500,status:'cancelled'},{amount_minor:2500,status:'succeeded'},{amount_minor:5000,status:'succeeded'}]);
     await open();
     await page.getByRole('button',{name:`C2 ${date} 17:00–17:30, Available, selected`,exact:true}).click();
     await expect(page.getByText(/Eligible refund:.*25\.00/)).toBeVisible();
@@ -122,7 +129,7 @@ test("My Activity paid edit collects only the difference, recovers after refresh
     await page.getByRole('dialog').getByRole('button',{name:'Close dialog',exact:true}).click();
     await expect(row).toContainText('16:00–17:00'); await expect(row).toContainText(/50\.00/);
     await expect(row).toBeFocused();
-    const financial = await db.query("SELECT id,amount_minor FROM public.payment_attempts WHERE booking_id=$1 ORDER BY amount_minor DESC", [bookingId]);
+    const financial = await db.query("SELECT id,amount_minor FROM public.payment_attempts WHERE booking_id=$1 AND status='succeeded' ORDER BY amount_minor DESC", [bookingId]);
     const [refund] = await db.query("SELECT f.id,e.provider_refund_id FROM public.payment_refunds f LEFT JOIN LATERAL (SELECT provider_refund_id FROM public.refund_executions WHERE refund_id=f.id ORDER BY execution_number DESC LIMIT 1) e ON true WHERE f.booking_id=$1", [bookingId]);
     const originalUrl = `/admin/payments/transactions/payment/${attemptId}`;
     // Ordinary owners cannot use Admin transaction details, including direct links.
@@ -137,24 +144,32 @@ test("My Activity paid edit collects only the difference, recovers after refresh
     await page.goto(listUrl);
     const table = page.getByRole('table', {name:'Payment transactions'});
     await expect(table.getByRole('row')).toHaveCount(4);
-    await expect(table).toContainText(attemptId);
-    await expect(table).toContainText(financial[1].id);
-    await expect(table).toContainText(refund.id);
-    const originalRow = table.getByRole('row', {name:new RegExp(`Original payment ${attemptId}`)});
+    // Rows show short booking references; full transaction ids are in each row's accessible name.
+    const originalRow = table.getByRole('row', {name:new RegExp(`^Booking payment ${attemptId}, booking ${bookingId}$`)});
+    const adjustmentRow = table.getByRole('row', {name:new RegExp(`^Modification payment ${financial[1].id}, booking ${bookingId}$`)});
+    const refundRow = table.getByRole('row', {name:new RegExp(`^Price reduction refund ${refund.id}, booking ${bookingId}$`)});
     await expect(originalRow).toContainText(/50\.00/);
     await expect(originalRow).toContainText('Paid');
     await expect(originalRow).not.toContainText('refunded');
-    await expect(table.getByRole('row', {name:/Additional adjustment payment/})).toContainText('Fully refunded');
-    await expect(table.getByRole('row', {name:/Partial refund/})).toContainText('Completed');
+    await expect(adjustmentRow).toContainText(/25\.00/);
+    await expect(adjustmentRow).toContainText('Fully refunded');
+    await expect(refundRow).toContainText(/25\.00/);
+    await expect(refundRow).toContainText('Completed');
     await page.goto(originalUrl);
     await expect(page.getByRole('region', {name:'Transaction details'})).toBeVisible();
     await page.goto(listUrl);
-    await table.getByRole('link', {name:'Original payment',exact:true}).click();
+    await table.getByRole('link', {name:'Booking payment',exact:true}).click();
     await expect(page).toHaveURL(new RegExp(`/payment/${attemptId}\\?`));
     await expect(page.getByRole('region', {name:'Transaction details'})).toContainText(attemptId);
     await expect(page.getByRole('navigation', {name:'Management navigation'}).getByRole('link', {name:'Transactions',exact:true})).toHaveAttribute('aria-current','page');
     await page.reload();
-    await expect(page.getByRole('region', {name:'Transaction details'})).toContainText('Captured RON 75.00 · Refunded RON 25.00 · Net RON 50.00');
+    await expect(page.getByRole('region',{name:'Transaction details'})).toContainText('Paid');
+    // The redesigned details show operation amounts; keep aggregate financial checks against durable evidence.
+    const [totals]=await db.query(`SELECT
+      (SELECT sum(c.amount_minor)::integer FROM public.payment_capture_receipts c JOIN public.payment_attempts p ON p.id=c.payment_attempt_id WHERE p.booking_id=$1) AS captured,
+      (SELECT sum(amount_minor)::integer FROM public.payment_refunds WHERE booking_id=$1 AND status='succeeded') AS refunded`,[bookingId]);
+    expect(totals).toEqual({captured:7500,refunded:2500});
+    expect(totals.captured-totals.refunded).toBe(5000);
     // The server-rendered details arrive before hydration in Next dev. Verify an
     // interactive control before exercising history so hydration cannot race Back.
     await page.getByRole('button', {name:'Account menu',exact:true}).click();
@@ -164,12 +179,13 @@ test("My Activity paid edit collects only the difference, recovers after refresh
     await page.goForward(); await expect(page).toHaveURL(new RegExp(`/payment/${attemptId}`));
     await page.getByRole('link', {name:'Back to transactions',exact:true}).click();
     await expect(page).toHaveURL(new RegExp(`q=${bookingId}`));
-    await table.getByRole('link', {name:'Partial refund',exact:true}).click();
+    await table.getByRole('link', {name:'Price reduction refund',exact:true}).click();
     const refundUrl = `/admin/payments/transactions/refund/${refund.id}`;
     await expect(page).toHaveURL(new RegExp(refundUrl));
     await expect(page.getByRole('region', {name:'Transaction details'})).toContainText(refund.provider_refund_id);
     await page.goto(refundUrl); await page.reload();
-    await expect(page.getByRole('region', {name:'Transaction details'})).toContainText(refund.id);
+    await expect(page).toHaveURL(new RegExp(refundUrl));
+    await expect(page.getByRole('region', {name:'Transaction details'})).toContainText(refund.provider_refund_id);
     await expect(page.locator('[data-sonner-toast][data-type="loading"]')).toHaveCount(0);
     // Client navigation away while the booking load is in flight must dispose progress.
     await page.goto('/my-activity/bookings');

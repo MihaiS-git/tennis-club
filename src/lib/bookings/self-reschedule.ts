@@ -4,6 +4,9 @@ import { z } from "zod";
 import { readCurrentAccount } from "@/lib/auth/account";
 import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
+import { getDataSource } from "@/lib/db/data-source";
+import { findAdjustment } from "@/lib/db/repositories/booking-adjustments.repository";
+import { dismissAdjustment } from "@/lib/payments/booking-adjustments";
 import { loadBookingEditDay, runBookingReschedule, type BookingRescheduleResult } from "./reschedule";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
@@ -33,5 +36,23 @@ export async function rescheduleOwnCustomerBooking(input: unknown, supabase?: Cl
   } catch {
     logger.error({ event: "bookings.self_reschedule_failed", bookingId: parsed.data.id }, "Unable to reschedule own customer booking");
     return { ok: false, message: "This booking is no longer available to reschedule. Check your account and booking notice window." };
+  }
+}
+
+// X on the owner's modification dialog. Only the verified actor who proposed
+// the modification can dismiss it; the original booking is never changed here.
+export async function dismissOwnBookingAdjustment(id: unknown, supabase?: Client): Promise<{ ok: boolean }> {
+  const parsed = z.uuid().safeParse(id);
+  if (!parsed.success) return { ok: false };
+  try {
+    const account = await readCurrentAccount(supabase ?? await createClient());
+    if (account.state !== "active") return { ok: false };
+    const adjustment = await findAdjustment((await getDataSource()).manager, parsed.data);
+    if (!adjustment || adjustment.scope !== "owner" || adjustment.actorId !== account.userId) return { ok: false };
+    await dismissAdjustment(adjustment.id);
+    return { ok: true };
+  } catch {
+    logger.error({ event: "bookings.adjustment_dismiss_failed", adjustmentId: parsed.data }, "Unable to dismiss booking modification");
+    return { ok: false };
   }
 }
