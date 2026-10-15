@@ -35,3 +35,16 @@ it("uses an eligible location when the URL names an unpublished location", async
   expect(day.props.location).toBe(eligible);
   expect(content.props.children[0].props.locationId).toBe(eligible.id);
 });
+
+it("preselects the linked location and its local today rather than the first location", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-10-14T22:30:00Z"));
+  const linked = { ...eligible, id: "44444444-4444-4444-8444-444444444444", timezone: "America/Los_Angeles" };
+  loadLocations.mockResolvedValue([eligible, linked]);
+  const content = await BookingContent({ searchParams: Promise.resolve({ location: linked.id }) });
+  expect(content.props.children[0].props.locationId).toBe(linked.id);
+  const day = content.props.children.at(-1);
+  expect(day.props.location).toBe(linked);
+  expect(day.props.date).toBe("2026-10-14");
+  expect(day.props.today).toBe("2026-10-14");
+});

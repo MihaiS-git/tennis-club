@@ -9,11 +9,12 @@ export function SiteFooter() {
             <p className="font-heading text-xl font-semibold tracking-tight">
               Tennis Club
             </p>
-            <address className="mt-4 font-sans text-sm leading-6 text-ivory not-italic">
-              Parcul Central Simion Bărnuțiu
-              <br />
-              Cluj-Napoca
-            </address>
+            <Link
+              href="/#locations"
+              className="mt-2 inline-flex min-h-11 w-fit items-center font-sans text-sm font-medium text-ivory hover:text-clay-300"
+            >
+              Our locations
+            </Link>
           </div>
 
           <nav

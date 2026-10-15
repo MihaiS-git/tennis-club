@@ -2,8 +2,6 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
 
-import { temporaryCourtInformation } from "@/lib/courts/config";
-
 import { CourtsDiscovery } from "./courts-discovery";
 
 export const metadata: Metadata = {
@@ -19,15 +17,14 @@ export default function CourtsPage() {
           <div>
             <p className="mb-4 font-sans text-xs font-semibold uppercase tracking-[0.16em] text-accent">Courts</p>
             <h1 id="courts-hero-title" className="max-w-[12ch] font-heading text-[clamp(42px,5vw,72px)] font-semibold leading-[1.04] tracking-[-0.045em] text-foreground">
-              Clay courts, ready to play.
+              Courts ready to play.
             </h1>
-            <p className="mt-6 max-w-md font-sans text-base leading-7 text-muted-foreground md:text-lg md:leading-8">
+            <p className="mt-6 max-w-[34ch] text-pretty font-sans text-base leading-7 text-muted-foreground md:text-lg md:leading-8">
               Whether you’re a member or visiting for the first time, come enjoy a game at the club.
             </p>
-            <ul className="mt-6 flex flex-wrap gap-x-6 gap-y-2 border-t border-border pt-4 font-sans text-sm font-semibold text-primary">
-              <li>{temporaryCourtInformation.openingHours}</li>
-              <li>{temporaryCourtInformation.basePrice}</li>
-            </ul>
+            <a href="#courts-overview-title" className="mt-6 inline-flex min-h-11 items-center gap-2 font-sans text-sm font-medium text-accent underline-offset-4 transition hover:underline focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-focus">
+              Explore locations <span aria-hidden="true">↓</span>
+            </a>
           </div>
           <picture className="block overflow-hidden">
             <source type="image/avif" srcSet="/images/tennis-courts-public.avif" />
@@ -47,7 +44,7 @@ export default function CourtsPage() {
 
       <section aria-labelledby="courts-overview-title" className="bg-surface px-6 py-16 md:px-8 md:py-20 lg:py-24">
         <div className="mx-auto max-w-7xl">
-          <h2 id="courts-overview-title" className="font-heading text-[clamp(32px,4vw,52px)] font-semibold leading-tight tracking-[-0.035em] text-foreground">
+          <h2 id="courts-overview-title" className="scroll-mt-24 font-heading text-[clamp(32px,4vw,52px)] font-semibold leading-tight tracking-[-0.035em] text-foreground">
             Find your court.
           </h2>
           <div className="mt-8 min-h-96 md:mt-10">

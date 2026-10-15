@@ -1,28 +1,12 @@
 import Link from "next/link";
-import styles from "./page.module.css";
+import { connection } from "next/server";
+import { Suspense } from "react";
 
-const courts = [
-  {
-    name: "Court 1",
-    surface: "Clay",
-    times: ["19:00", "19:30", "20:00", "20:30"],
-  },
-  {
-    name: "Court 2",
-    surface: "Clay",
-    times: ["20:00", "20:30", "21:00"],
-  },
-  {
-    name: "Court 3",
-    surface: "Clay",
-    times: ["21:30", "22:00"],
-  },
-  {
-    name: "Court 4",
-    surface: "Clay",
-    times: [],
-  },
-];
+import { listPublicLocationsWithCourts } from "@/lib/courts/public";
+import { CourtAvailabilityCard, CourtAvailabilityCardShell } from "./home-court-availability";
+import { FacilitiesCourtsFallback, FacilitiesCourtsSummary, HeroCourtSummary, heroSummaryClassName } from "./home-court-summary";
+import { HomeLocations, HomeLocationsShell } from "./home-locations";
+import styles from "./page.module.css";
 
 const openMatches = [
   { format: "Singles", level: "Level 5", time: "19:00", playersNeeded: "1 player needed" },
@@ -38,13 +22,14 @@ const coachingSlots = [
   { name: "Victor Ionescu", time: "21:00" },
 ];
 
-export default function Home() {
-  const place = "Parcul Central Simion Bărnuțiu, Cluj-Napoca, Romania";
-  const mapsKey = process.env.GOOGLE_MAPS_EMBED_API_KEY;
-  const mapUrl = mapsKey
-    ? `https://www.google.com/maps/embed/v1/place?${new URLSearchParams({ key: mapsKey, q: place })}`
-    : null;
-  const directionsUrl = `https://www.google.com/maps/dir/?${new URLSearchParams({ api: "1", destination: place })}`;
+// One public locations read per request, shared by every court section.
+async function readPublicLocations() {
+  await connection();
+  return listPublicLocationsWithCourts();
+}
+
+export default function Home({ searchParams }: PageProps<"/">) {
+  const locations = readPublicLocations();
 
   return (
     <main className="flex-1">
@@ -109,22 +94,9 @@ export default function Home() {
             <h2 className="font-heading text-lg font-semibold text-primary lg:shrink-0 lg:leading-tight">
               Play today
             </h2>
-            <dl className="mt-2 font-sans text-sm text-foreground md:mt-0 md:border-l md:border-border md:pl-6 lg:flex lg:flex-1 lg:items-center lg:justify-between lg:gap-5">
-              <div className="inline lg:block">
-                <dt className="sr-only lg:not-sr-only lg:text-xs lg:text-muted-foreground">Location</dt>
-                <dd className="inline font-semibold lg:mt-1 lg:block lg:whitespace-nowrap">
-                  Club courts <span aria-hidden="true" className="lg:hidden">·</span>
-                </dd>
-              </div>{" "}
-              <div className="inline lg:block">
-                <dt className="sr-only lg:not-sr-only lg:text-xs lg:text-muted-foreground">Date</dt>
-                <dd className="inline font-semibold lg:mt-1 lg:block">Today</dd>
-              </div>
-              <div>
-                <dt className="sr-only lg:not-sr-only lg:text-xs lg:text-muted-foreground">Time</dt>
-                <dd className="mt-1 text-muted-foreground lg:whitespace-nowrap lg:text-foreground">18:00–20:00</dd>
-              </div>
-            </dl>
+            <Suspense fallback={<p className={`${heroSummaryClassName} text-muted-foreground`}>Loading court information…</p>}>
+              <HeroCourtSummary locations={locations} />
+            </Suspense>
             <Link
               href="/book"
               className="mt-4 inline-flex min-h-11 w-full items-center justify-center rounded-control bg-primary px-5 font-sans text-sm font-semibold text-primary-foreground transition hover:bg-primary-hover md:mt-0 md:w-auto md:shrink-0"
@@ -147,50 +119,13 @@ export default function Home() {
           </div>
 
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)] lg:items-start lg:gap-5">
-            <article aria-labelledby="courts-title" className="rounded-card border border-border bg-surface p-6 md:p-8 lg:p-9">
-              <div className="flex items-start justify-between gap-4 border-b border-border pb-6">
-                <div>
-                  <p className="mb-3 font-sans text-xs font-semibold uppercase tracking-[0.16em] text-accent">On court</p>
-                  <h3 id="courts-title" className="font-heading text-2xl font-semibold tracking-[-0.025em] text-primary md:text-[30px]">
-                    Court availability
-                  </h3>
-                </div>
-                <span className="hidden font-sans text-sm text-muted-foreground sm:block">Today</span>
-              </div>
-
-              {courts.length > 0 ? (
-                <div>
-                  {courts.map((court) => (
-                    <div key={court.name} className="grid gap-3 border-b border-border py-5 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center md:py-6">
-                      <div className="flex items-baseline gap-3">
-                        <Link href="/book" className="font-heading text-lg font-semibold text-primary transition-colors hover:text-accent hover:underline hover:decoration-accent focus-visible:rounded-control">{court.name}</Link>
-                        <span className="font-sans text-sm text-muted-foreground">{court.surface}</span>
-                      </div>
-                      {court.times.length > 0 ? (
-                        <div className="flex flex-wrap gap-2">
-                          {court.times.map((time) => (
-                            <Link key={time} href="/book" aria-label={`Book ${court.name} at ${time}`} className="inline-flex min-h-10 min-w-[72px] items-center justify-center rounded-control border border-border-strong bg-background px-3 font-sans text-sm font-semibold tabular-nums text-primary transition-colors hover:border-accent hover:bg-surface-muted hover:text-accent">
-                              {time}
-                            </Link>
-                          ))}
-                        </div>
-                      ) : (
-                        <span className="font-sans text-sm text-muted-foreground">No suitable availability today</span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="py-8 font-sans text-sm leading-6">
-                  <p className="font-semibold text-foreground">No court availability today.</p>
-                  <p className="mt-1 text-muted-foreground">Check another time or date.</p>
-                </div>
-              )}
-
-              <Link href="/book" className={`${styles.editorialLink} mt-4 inline-flex min-h-11 w-fit items-center font-sans text-sm font-semibold text-primary transition-colors hover:text-accent focus-visible:rounded-control`}>
-                <span className={`${styles.editorialLabel} underline decoration-accent underline-offset-8`}>View courts</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
-              </Link>
-            </article>
+            <Suspense fallback={
+              <CourtAvailabilityCardShell>
+                <p role="status" className="py-8 font-sans text-sm leading-6 text-muted-foreground">Loading court availability…</p>
+              </CourtAvailabilityCardShell>
+            }>
+              <CourtAvailabilityCard locations={locations} searchParams={searchParams} />
+            </Suspense>
 
             <div className="grid gap-4 md:grid-cols-2 md:items-start lg:grid-cols-1 lg:gap-5">
               <article aria-labelledby="match-title" className="rounded-card bg-primary p-6 text-primary-foreground md:p-7 lg:p-8">
@@ -253,7 +188,7 @@ export default function Home() {
               A tennis club built around playing.
             </h2>
             <p className="mt-6 font-sans text-base leading-7 text-ivory md:text-lg md:leading-8">
-              TennisClub brings together clay tennis courts, coaching, open matches and a community of players in Cluj-Napoca. Whether you play regularly or are looking for somewhere new to get on court, the club is designed to make tennis easy to join and part of your week.
+              TennisClub brings together tennis courts, coaching, open matches and a community of players across its club locations. Whether you play regularly or are looking for somewhere new to get on court, the club is designed to make tennis easy to join and part of your week.
             </p>
             <ul className="mt-8 grid grid-cols-2 gap-x-8 font-sans text-sm font-medium text-ivory md:max-w-lg md:text-base">
               <li className="border-t border-ivory/30 py-3">Courts</li>
@@ -289,18 +224,17 @@ export default function Home() {
           <div className="lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:gap-x-16">
             <div>
               <h2 id="facilities-title" className="max-w-[13ch] font-heading text-[clamp(36px,4vw,56px)] font-semibold leading-[1.08] tracking-[-0.035em] text-foreground">
-                Clay courts and everything you need to play.
+                Courts and everything you need to play.
               </h2>
               <p className="mt-6 max-w-xl font-sans text-base leading-7 text-muted-foreground md:text-lg md:leading-8">
-                TennisClub combines eight clay courts with practical player facilities for training, matches and time at the club. The courts and shared spaces are designed for everyday play, coaching and club activity in Cluj-Napoca.
+                TennisClub combines its courts with practical player facilities for training, matches and time at the club. The courts and shared spaces are designed for everyday play, coaching and club activity.
               </p>
             </div>
 
             <div className="mt-10 grid gap-x-8 gap-y-8 md:grid-cols-2 md:gap-y-10 lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:mt-0">
-              <div className="border-t border-border pt-4">
-                <h3 className="font-heading text-xl font-semibold leading-snug tracking-[-0.02em] text-primary">8 clay courts</h3>
-                <p className="mt-3 font-sans text-sm leading-6 text-muted-foreground md:text-base md:leading-7">Outdoor clay courts for training, casual play and competitive matches.</p>
-              </div>
+              <Suspense fallback={<FacilitiesCourtsFallback message="Loading court information…" />}>
+                <FacilitiesCourtsSummary locations={locations} />
+              </Suspense>
               <div className="border-t border-border pt-4">
                 <h3 className="font-heading text-xl font-semibold leading-snug tracking-[-0.02em] text-primary">Changing rooms &amp; showers</h3>
                 <p className="mt-3 font-sans text-sm leading-6 text-muted-foreground md:text-base md:leading-7">Comfortable facilities for players before and after time on court.</p>
@@ -407,49 +341,14 @@ export default function Home() {
         </div>
       </section>
 
-      <section aria-labelledby="visit-club-title" className="bg-forest-900 px-6 py-16 md:px-8 md:py-20 xl:py-28">
-        <div className="mx-auto max-w-7xl lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:items-stretch lg:gap-x-12 xl:gap-x-20">
-          <div>
-            <h2 id="visit-club-title" className="max-w-[14ch] font-heading text-[clamp(40px,4.4vw,64px)] font-semibold leading-[1.04] tracking-[-0.04em] text-chalk">
-              Play in the heart of Cluj-Napoca.
-            </h2>
-            <p className="mt-6 max-w-xl font-sans text-base leading-7 text-ivory md:text-lg md:leading-8">
-              Visit us in Parcul Central Simion Bărnuțiu for courts, coaching and club activity in one of Cluj-Napoca’s most accessible central locations.
-            </p>
-            <div className="mt-12 border-t border-ivory/30 pb-6 pt-5">
-              <h3 className="font-sans text-xs font-semibold uppercase tracking-[0.16em] text-ivory">Location</h3>
-              <address className="mt-3 font-heading text-xl font-medium leading-7 text-chalk not-italic">
-                Parcul Central Simion Bărnuțiu<br />
-                Cluj-Napoca
-              </address>
-            </div>
-            <div className="border-t border-ivory/30 pb-5 pt-5 font-heading text-lg font-medium leading-7 text-chalk">
-              <h3 className="mb-3 font-sans text-xs font-semibold uppercase tracking-[0.16em] text-ivory">Hours</h3>
-              <p>Mon–Fri · 07:00–24:00</p>
-              <p>Sat–Sun · 07:00–24:00</p>
-            </div>
-            <a href={directionsUrl} target="_blank" rel="noopener noreferrer" className={`${styles.editorialLink} mt-6 inline-flex min-h-11 w-fit items-center font-sans text-base font-semibold text-chalk transition-colors hover:text-chalk focus-visible:rounded-control`}>
-              <span className={`${styles.editorialLabel} underline decoration-accent-on-dark underline-offset-8`}>Get directions</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
-            </a>
-          </div>
-
-          <div className="-mx-3 mt-12 aspect-[4/3] w-[calc(100%+1.5rem)] md:mx-0 md:mt-16 md:aspect-[3/2] md:w-full lg:-mr-4 lg:ml-0 lg:mt-0 lg:aspect-auto lg:w-[calc(100%+1rem)] xl:-mr-12 xl:w-[calc(100%+3rem)]">
-            {mapUrl ? (
-              <iframe
-                src={mapUrl}
-                title="Map showing the club in Parcul Central Simion Bărnuțiu, Cluj-Napoca"
-                loading="lazy"
-                referrerPolicy="no-referrer-when-downgrade"
-                allowFullScreen
-                className="block h-full w-full border-0"
-              />
-            ) : (
-              <div className="flex h-full w-full items-center justify-center border border-ivory/30 font-sans text-base text-ivory">
-                Map unavailable.
-              </div>
-            )}
-          </div>
-        </div>
+      <section id="locations" aria-labelledby="visit-club-title" className="scroll-mt-20 bg-forest-900 px-6 py-16 md:px-8 md:py-20 xl:py-28">
+        <Suspense fallback={
+          <HomeLocationsShell map={<div className="h-full w-full border border-ivory/30" />}>
+            <p role="status" className="border-t border-ivory/30 pt-5 font-sans text-base text-ivory">Loading locations…</p>
+          </HomeLocationsShell>
+        }>
+          <HomeLocations locations={locations} searchParams={searchParams} />
+        </Suspense>
       </section>
     </main>
   );

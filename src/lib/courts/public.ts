@@ -9,6 +9,7 @@ import { getDataSource } from "@/lib/db/data-source";
 import { listPublicLocationFacts } from "@/lib/db/repositories/clubs.repository";
 import { locationCurrencies } from "@/lib/admin/locations-validation";
 import { isPubliclyEligible, publicationToday } from "@/lib/locations/publication";
+import { mondayWeekday } from "@/lib/pricing/resolution";
 
 const courtSchema = z.object({
   id: z.uuid(),
@@ -40,7 +41,19 @@ const locationSchema = z.object({
 });
 
 export type PublicCourt = Omit<z.infer<typeof courtSchema>, "location_pricing_rules" | "is_active">;
-export type PublicLocation = Omit<z.infer<typeof locationSchema>, "is_active" | "is_public" | "archived_at" | "location_opening_hours" | "courts"> & { courts: PublicCourt[] };
+export type PublicOpeningInterval = { opens_at_minute: number; closes_at_minute: number };
+export type PublicLocation = Omit<z.infer<typeof locationSchema>, "is_active" | "is_public" | "archived_at" | "location_opening_hours" | "courts"> & {
+  courts: PublicCourt[];
+  // Weekly intervals of the schedule effective on the location's local publication date.
+  todayOpeningHours: PublicOpeningInterval[];
+};
+
+function openingHoursOn(hours: readonly z.infer<typeof publicationHoursSchema>[], date: string): PublicOpeningInterval[] {
+  const weekday = mondayWeekday(date);
+  return hours.filter((h) => h.weekday === weekday && h.starts_on <= date && (!h.ends_on || date <= h.ends_on))
+    .map(({ opens_at_minute, closes_at_minute }) => ({ opens_at_minute, closes_at_minute }))
+    .sort((a, b) => a.opens_at_minute - b.opens_at_minute);
+}
 
 export async function listPublicLocationsWithCourts(): Promise<PublicLocation[]> {
   try {
@@ -50,8 +63,9 @@ export async function listPublicLocationsWithCourts(): Promise<PublicLocation[]>
       logger.error({ event: "courts.public_read_failed" }, "Failed to load public courts");
       throw new Error("Unable to load courts.");
     }
-    return parsed.data.filter((location) => isPubliclyEligible(location, publicationToday(location.timezone)))
-      .map((location) => ({
+    return parsed.data.map((location) => ({ location, today: publicationToday(location.timezone) }))
+      .filter(({ location, today }) => isPubliclyEligible(location, today))
+      .map(({ location, today }) => ({
         id: location.id, name: location.name, slug: location.slug,
         address_line1: location.address_line1, address_line2: location.address_line2,
         city: location.city, postal_code: location.postal_code, country_code: location.country_code,
@@ -60,6 +74,7 @@ export async function listPublicLocationsWithCourts(): Promise<PublicLocation[]>
           id: court.id, name: court.name, slug: court.slug, surface: court.surface,
           environment: court.environment, has_lighting: court.has_lighting,
         })),
+        todayOpeningHours: openingHoursOn(location.location_opening_hours, today),
       }));
   } catch (error: unknown) {
     logger.error({ event: "courts.public_read_failed", code: normalizeDatabaseError(error).sqlState }, "Database projection failed");
