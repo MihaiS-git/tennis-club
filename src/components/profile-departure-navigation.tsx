@@ -24,7 +24,8 @@ export function ProfileDepartureLink({ href, replace, scroll, transitionTypes, .
   const router = useRouter();
   return <Link {...props} href={href} replace={replace} scroll={scroll} transitionTypes={transitionTypes}
     onNavigate={(event) => {
-      if (new URL(href, window.location.href).pathname === "/profile") return;
+      // Re-selecting the current page is not a departure from its drafts.
+      if (new URL(href, window.location.href).pathname === window.location.pathname) return;
       const proceed = () => {
         const options = { scroll, transitionTypes };
         if (replace) router.replace(href, options);

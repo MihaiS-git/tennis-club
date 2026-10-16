@@ -12,7 +12,7 @@ const now = new Date("2026-10-15T09:00:00Z");
 const date = "2026-10-15";
 const location = { id: id(1), name: "Club", timezone: "UTC", courts: [{ id: id(2), name: "Court 1" }, { id: id(3), name: "Court 2" }] };
 const client = createClient("http://localhost:54321", "user-key", { auth: { persistSession: false } });
-const row = { court_id: id(2), starts_at_minute: 600, ends_at_minute: 660, status: "active", hold_expires_at: null };
+const row = { court_id: id(2), starts_at_minute: 600, ends_at_minute: 660, status: "active", hold_expires_at: null, capture_accepted: false };
 const hours = { id: id(4), location_id: id(1), weekday: 3, opens_at_minute: 600, closes_at_minute: 840,
   created_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-01T00:00:00Z" };
 let detailRows: unknown[] = [];

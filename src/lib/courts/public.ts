@@ -41,7 +41,7 @@ const locationSchema = z.object({
 });
 
 export type PublicCourt = Omit<z.infer<typeof courtSchema>, "location_pricing_rules" | "is_active">;
-export type PublicOpeningInterval = { opens_at_minute: number; closes_at_minute: number };
+type PublicOpeningInterval = { opens_at_minute: number; closes_at_minute: number };
 export type PublicLocation = Omit<z.infer<typeof locationSchema>, "is_active" | "is_public" | "archived_at" | "location_opening_hours" | "courts"> & {
   courts: PublicCourt[];
   // Weekly intervals of the schedule effective on the location's local publication date.

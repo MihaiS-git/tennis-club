@@ -85,7 +85,7 @@ test("signup requires email confirmation before the account is accessible", asyn
   await page.goto(link);
   await callbackRequest;
   await expect(page).toHaveURL(/\/profile$/);
-  await page.getByRole("navigation", { name: "Profile settings" }).getByRole("button", { name: "Account & security" }).click();
+  await page.getByRole("navigation", { name: "My account navigation" }).getByRole("link", { name: "Account & security" }).click();
   await expect(page.getByRole("heading", { name: "Account & security" })).toBeVisible();
   await expect(page.getByText(email, { exact: true })).toBeVisible();
   await expect(page.getByRole("list", { name: "Assigned roles" }).getByRole("listitem")).toHaveCount(0);
@@ -137,13 +137,12 @@ test("protected account route requires login and logout removes the session", as
   await page.goto("/account");
   await expect(page).toHaveURL(/\/profile$/);
   await expect(page.getByRole("heading", { name: "Profile", exact: true })).toBeVisible();
-  await page.getByRole("navigation", { name: "Profile settings" }).getByRole("button", { name: "Account & security" }).click();
+  await page.getByRole("navigation", { name: "My account navigation" }).getByRole("link", { name: "Account & security" }).click();
   await expect(page.getByRole("heading", { name: "Account & security" })).toBeVisible();
 
-  await page.getByRole("button", { name: "Account menu" }).click();
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
   await expect(page).toHaveURL(/\/login$/);
   await page.goto("/account");
   await expect(page).toHaveURL(/\/login$/);
-  await expect(page.getByRole("button", { name: "Account menu" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Profile", exact: true })).toHaveCount(0);
 });

@@ -1203,7 +1203,7 @@ test("an exact replay returns the same modification; a new request discards the 
   const fresh=await save({...input,requestId:randomUUID()}); if(!fresh.ok || !fresh.adjustmentId) throw new Error("No fresh adjustment");
   expect(fresh).toMatchObject({adjustmentStatus:"pending"}); expect(fresh.adjustmentId).not.toBe(first.adjustmentId);
   expect((await findAdjustment(database.manager,first.adjustmentId))?.status).toBe("cancelled");
-  expect((await adjustmentAttempt(database.manager,first.adjustmentId))?.status).toBe("expired");
+  expect((await adjustmentAttempt(database.manager,first.adjustmentId))?.status).toBe("cancelled");
   expect(outcomes.get(`pi_${first.checkout.attemptId}`)).toBe("cancelled");
   expect(await database.query("SELECT status FROM public.court_reservations WHERE adjustment_id=$1",[first.adjustmentId])).toEqual([{status:"released"}]);
   await expect(readOnlineCheckout({attemptId:first.checkout.attemptId,token:first.checkout.token})).rejects.toThrow();
@@ -1446,8 +1446,14 @@ test("expired checkout capture commits one compensation obligation and retains i
     .toEqual([{ outcome: "succeeded", amount_minor: 5000, currency: "RON" }]);
   expect(await processOnlinePaymentEvent(event)).toBe("expired");
   expect(await processOnlinePaymentEvent(paymentEvent(f))).toBe("expired");
-  expect(await processOnlinePaymentEvent(paymentEvent(f, "cancelled"))).toBe("expired");
-  expect(await cancellationEvidence(f)).toEqual(accepted);
+  // Verified provider cancellation resolves the attempt without rewriting the
+  // expired booking, its pending revision, or the late-capture compensation.
+  expect(await processOnlinePaymentEvent(paymentEvent(f, "cancelled"))).toBe("cancelled");
+  expect(await database.query("SELECT status FROM public.payment_attempts WHERE id=$1", [f.attemptId]))
+    .toEqual([{ status: "cancelled" }]);
+  const cancelled = await cancellationEvidence(f);
+  expect(Date.parse(cancelled.booking!.updated_at)).toBeGreaterThanOrEqual(Date.parse(accepted.booking!.updated_at));
+  expect(cancelled).toEqual({ ...accepted, booking: { ...accepted.booking, updated_at: cancelled.booking!.updated_at } });
   expect(await state(replacement)).toEqual(replacementBefore);
   expect(stripeAdapter.refundPayment).toHaveBeenCalledOnce();
 });
@@ -1530,7 +1536,10 @@ test("late compensation retains original request context after subsequent checko
   expect(before).toEqual([expect.objectContaining({ reason: "late_capture_compensation", context_revision_id: initial.id })]);
   await abandonOnlineCheckout({ attemptId: f.attemptId, token });
   expect((await state(f)).booking!.revision).toMatchObject({ kind: "cancelled", cancellationCause: "checkout_abandoned" });
-  expect(await processOnlinePaymentEvent({ ...event, eventId: randomUUID() })).toBe("expired");
+  expect((await payments.findCheckoutAttempt(database.manager, f.attemptId))?.status).toBe("cancelled");
+  // A distinct late event sees the provider cancellation; the refund still
+  // belongs to the original expired request, not the abandonment revision.
+  expect(await processOnlinePaymentEvent({ ...event, eventId: randomUUID() })).toBe("cancelled");
   expect(await database.query("SELECT * FROM public.payment_refunds WHERE booking_id=$1", [f.id])).toEqual(before);
 });
 

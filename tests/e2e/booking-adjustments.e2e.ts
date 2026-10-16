@@ -170,11 +170,15 @@ test("My Activity paid edit collects only the difference, X discards an unpaid m
       (SELECT sum(amount_minor)::integer FROM public.payment_refunds WHERE booking_id=$1 AND status='succeeded') AS refunded`,[bookingId]);
     expect(totals).toEqual({captured:7500,refunded:2500});
     expect(totals.captured-totals.refunded).toBe(5000);
-    // The server-rendered details arrive before hydration in Next dev. Verify an
-    // interactive control before exercising history so hydration cannot race Back.
-    await page.getByRole('button', {name:'Account menu',exact:true}).click();
-    await expect(page.getByRole('link', {name:'Profile & settings',exact:true}).filter({visible:true})).toBeVisible();
-    await page.getByRole('button', {name:'Account menu',exact:true}).click();
+    // Exercise the sidebar drawer before history so hydration cannot race Back.
+    const detailsViewport = page.viewportSize();
+    await page.setViewportSize({ width: 768, height: 900 });
+    await page.getByRole('button', {name:'Management menu',exact:true}).click();
+    const managementMenu = page.getByRole('dialog', {name:'Management menu',exact:true});
+    await expect(managementMenu).toBeVisible();
+    await managementMenu.getByRole('button', {name:'Close management menu',exact:true}).click();
+    await expect(managementMenu).toHaveCount(0);
+    if (detailsViewport) await page.setViewportSize(detailsViewport);
     await page.goBack(); await expect(table).toBeVisible();
     await page.goForward(); await expect(page).toHaveURL(new RegExp(`/payment/${attemptId}`));
     await page.getByRole('link', {name:'Back to transactions',exact:true}).click();
@@ -199,7 +203,7 @@ test("My Activity paid edit collects only the difference, X discards an unpaid m
     await expect(page.getByRole('status').filter({hasText:'Loading booking…'})).toBeVisible();
     await page.getByRole('button',{name:'Back to details',exact:true}).click();
     await page.getByRole('dialog').getByRole('button',{name:'Close dialog',exact:true}).click();
-    await page.getByRole('navigation',{name:'My activity navigation'}).getByRole('link',{name:'History',exact:true}).click();
+    await page.getByRole('navigation',{name:'My account navigation'}).getByRole('link',{name:'Booking history',exact:true}).click();
     await expect(page).toHaveURL(/\/my-activity\/history$/);
     await expect(page.locator('[data-sonner-toast][data-type="loading"]')).toHaveCount(0);
     await lateLoad;

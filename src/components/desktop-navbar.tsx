@@ -1,9 +1,11 @@
-import { ProfileDepartureLink as Link } from "./profile-departure-navigation";
+import { ProfileDepartureForm, ProfileDepartureLink as Link } from "./profile-departure-navigation";
 import { Suspense } from "react";
+
+import { signOutAction } from "@/app/account/actions";
 
 import { readNavigationProfile } from "@/lib/profile/navigation";
 import { PrimaryNavigationLink } from "./primary-navigation-link";
-import { AccountMenu } from "./account-menu";
+import { ProfileNavigationAvatar } from "./profile-navigation-avatar";
 
 async function AccountNavigationLink({ admin = false }: { admin?: boolean }) {
   const { account } = await readNavigationProfile();
@@ -26,7 +28,18 @@ async function AccountControls({ authenticated }: { authenticated: boolean }) {
 
   if (!authenticated) return <Link className="text-sm font-medium text-primary hover:text-accent" href="/login">Sign in</Link>;
 
-  return <AccountMenu avatarUrl={avatarUrl} />;
+  return <>
+    <Link href="/profile" aria-label="Profile"
+      className="inline-flex min-h-10 items-center rounded-control border border-border-strong px-1.5 text-primary hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-primary">
+      <ProfileNavigationAvatar src={avatarUrl} desktop />
+    </Link>
+    {/* The departure guard protects unsaved Profile drafts before the unchanged action runs. */}
+    <ProfileDepartureForm action={signOutAction}>
+      <button type="submit" className="inline-flex min-h-10 items-center whitespace-nowrap text-sm font-medium text-primary hover:text-accent">
+        Sign out
+      </button>
+    </ProfileDepartureForm>
+  </>;
 }
 
 export function DesktopNavbar() {

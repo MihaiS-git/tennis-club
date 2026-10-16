@@ -1,11 +1,11 @@
 "use client";
 
 import { Menu, X } from "lucide-react";
-import { ProfileDepartureLink as Link, ProfileDepartureForm } from "./profile-departure-navigation";
+import { signOutAction } from "@/app/account/actions";
+import { ProfileDepartureForm, ProfileDepartureLink as Link } from "./profile-departure-navigation";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 
-import { signOutAction } from "@/app/account/actions";
 import { PrimaryNavigationLink } from "./primary-navigation-link";
 import { ProfileNavigationAvatar } from "./profile-navigation-avatar";
 
@@ -165,11 +165,11 @@ export function MobileNavbarControls({ isAuthenticated, canReserve, avatarUrl = 
           <div className="mt-2 border-t border-border pt-2">
             {isAuthenticated ? (
               <>
-                <Link onClick={closeMenu} href="/my-activity/bookings" className="flex min-h-12 items-center gap-2 text-sm font-medium text-primary hover:text-accent">
+                <Link onClick={closeMenu} href="/profile" className="flex min-h-12 items-center gap-2 text-sm font-medium text-primary hover:text-accent">
                   <ProfileNavigationAvatar src={avatarUrl} />
-                  My activity
+                  Profile
                 </Link>
-                <Link onClick={closeMenu} href="/profile" className="flex min-h-12 items-center text-sm font-medium text-primary hover:text-accent">Profile & settings</Link>
+                {/* The departure guard protects unsaved Profile drafts before the unchanged action runs. */}
                 <ProfileDepartureForm action={signOutAction} onSubmit={closeMenu}>
                   <button type="submit" className="flex min-h-12 w-full items-center text-left text-sm font-medium text-primary hover:text-accent">
                     Sign out

@@ -1,9 +1,9 @@
 import { expect, test, vi } from "vitest";
 import { target, verifyTarget } from "../../scripts/configure-notification-cron";
 
-const local = { DATABASE_URL: "postgresql://postgres:placeholder@localhost:54322/postgres", SUPABASE_URL: "http://127.0.0.1:54321" };
-const hosted = { DATABASE_URL: "postgresql://postgres:placeholder@db.abcdefghijklmnopqrst.supabase.co:5432/postgres?sslmode=require",
-  SUPABASE_URL: "https://abcdefghijklmnopqrst.supabase.co" };
+const local = { NODE_ENV: "test", DATABASE_URL: "postgresql://postgres:placeholder@localhost:54322/postgres", SUPABASE_URL: "http://127.0.0.1:54321" } satisfies NodeJS.ProcessEnv;
+const hosted = { NODE_ENV: "test", DATABASE_URL: "postgresql://postgres:placeholder@db.abcdefghijklmnopqrst.supabase.co:5432/postgres?sslmode=require",
+  SUPABASE_URL: "https://abcdefghijklmnopqrst.supabase.co" } satisfies NodeJS.ProcessEnv;
 
 test.each([
   "postgresql://postgres@127.0.0.1:54322/postgres?port=55322",

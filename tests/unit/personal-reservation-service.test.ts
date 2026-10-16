@@ -20,7 +20,7 @@ const location = { id: locationId, name: "Club", timezone: "Europe/Bucharest", i
   courts: [{ id: row.court_id, name: "Court 1", is_active: true }] };
 const hours = { id: other, location_id: locationId, weekday: 4, opens_at_minute: 900, closes_at_minute: 1200,
   created_at: token, updated_at: token };
-const interval = { court_id: row.court_id, starts_at_minute: 960, ends_at_minute: 1020, status: "active", hold_expires_at: null };
+const interval = { court_id: row.court_id, starts_at_minute: 960, ends_at_minute: 1020, status: "active", hold_expires_at: null, capture_accepted: false };
 const network = vi.fn<typeof fetch>();
 const client = createClient("http://localhost:54321", "user-key", { auth: { persistSession: false }, global: { fetch: network } });
 

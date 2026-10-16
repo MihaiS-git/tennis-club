@@ -107,7 +107,7 @@ test("Customer cancellation releases occupancy and refunds the original payment 
   const refund = await assertCancellation(booking, "succeeded");
   await page.reload();
   await expect(page.getByRole("region", { name: "Upcoming", exact: true })).toContainText("No upcoming bookings");
-  await page.getByRole("navigation", { name: "My activity navigation" }).getByRole("link", { name: "History", exact: true }).click();
+  await page.getByRole("navigation", { name: "My account navigation" }).getByRole("link", { name: "Booking history", exact: true }).click();
   await expect(page.getByRole("row").filter({ hasText: booking.courtName })).toContainText("Cancelled");
   await assertCancellation(booking, "succeeded");
   const executions = await booking.db.query("SELECT id,idempotency_key,status,terminal_result,amount_minor FROM public.refund_executions WHERE refund_id=$1", [refund.id]);

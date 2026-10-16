@@ -3,26 +3,40 @@ import { createClient } from "@supabase/supabase-js";
 import { expect, test, type Page } from "@playwright/test";
 import { localServiceRoleKey } from "./helpers/supabase";
 
-const labels = ["Profile / player identity", "Personal information", "Tennis profile", "Account & security"] as const;
+const labels = ["Player identity", "Personal information", "Tennis profile", "Account & security"] as const;
+const routes = { "Player identity": "/profile", "Personal information": "/profile/personal", "Tennis profile": "/profile/tennis", "Account & security": "/profile/security" } as const;
+const sidebarLabels = ["Bookings", "Booking history", "Notifications", ...labels];
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAD0lEQVQImWP4z8Dwn4EBAAj+Af/KOtJRAAAAAElFTkSuQmCC", "base64");
 
-function sectionButton(page: Page, name: typeof labels[number]) {
-  return page.getByRole("navigation", { name: "Profile settings" }).getByRole("button", { name });
+// Below lg the shared user sidebar is a drawer behind the "My account menu" trigger.
+async function openSidebar(page: Page) {
+  const trigger = page.getByRole("button", { name: "My account menu", exact: true });
+  if (await trigger.isVisible()) await trigger.click();
+}
+
+async function closeSidebar(page: Page) {
+  const close = page.getByRole("button", { name: "Close my account menu", exact: true });
+  if (await close.isVisible()) await close.click();
+}
+
+function sectionLink(page: Page, name: typeof labels[number]) {
+  return page.getByRole("navigation", { name: "My account navigation" }).getByRole("link", { name, exact: true });
 }
 
 async function section(page: Page, name: typeof labels[number]) {
-  const button = sectionButton(page, name);
-  // Playwright scrolls off-screen controls into view before clicking them.
-  await button.click();
-  await expect(button).toHaveAttribute("aria-pressed", "true");
+  await openSidebar(page);
+  await sectionLink(page, name).click();
+  await expect(page).toHaveURL(new RegExp(`${routes[name]}$`));
+  await expect(page.locator(`nav[aria-label="My account navigation"] a[href="${routes[name]}"]`)).toHaveAttribute("aria-current", "page");
   const content = {
-    "Profile / player identity": page.getByText("Player profile", { exact: true }),
+    "Player identity": page.getByText("Player profile", { exact: true }),
     "Personal information": page.getByLabel("First name", { exact: true }),
     "Tennis profile": page.getByLabel("Bio", { exact: true }),
     "Account & security": page.getByLabel("Current password", { exact: true }),
   };
   for (const label of labels) {
     if (label === name) await expect(content[label]).toBeVisible();
+    // Next.js retains prior routes in hidden history subtrees.
     else await expect(content[label]).toBeHidden();
   }
 }
@@ -75,16 +89,21 @@ test("profile refinement: authenticated lifecycle, country, keyboard, navigation
     }
     await country.fill("Romania");
     await country.press("Enter");
-    await section(page, "Tennis profile");
-    await page.getByLabel("Bio").fill("Unsaved tennis edit");
-    await section(page, "Personal information");
+    // Leaving a Profile page with drafts asks first; Stay keeps them on the page.
+    await openSidebar(page);
+    await sectionLink(page, "Tennis profile").click();
+    await expect(page.getByText("You have unsaved changes in Personal information.", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Stay", exact: true }).click();
+    await closeSidebar(page);
+    await expect(page).toHaveURL(/\/profile\/personal$/);
     await expect(page.getByLabel("First name")).toHaveValue("  Mihai  ");
     await expect(country).toHaveValue("Romania");
     await page.getByRole("button", { name: "Save personal information" }).click();
     await expect(page.getByText("Personal information saved.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Save personal information", exact: true })).toBeDisabled();
     expect((await service.from("player_profiles").select("user_id").eq("user_id", id)).data).toEqual([]);
-    page.once("dialog", (dialog) => dialog.accept());
-    await page.reload();
+    // The identity page reflects the saved personal information.
+    await section(page, "Player identity");
     await expect(page.getByRole("heading", { name: "Mihai Suciu", exact: true })).toBeVisible();
     await section(page, "Tennis profile");
     await expect(page.getByLabel("Display name")).toHaveValue("Mihai Suciu");
@@ -92,12 +111,15 @@ test("profile refinement: authenticated lifecycle, country, keyboard, navigation
     await page.getByLabel("Sportya level").selectOption("6");
     await page.getByRole("button", { name: "Save tennis profile" }).click();
     await expect(page.getByText("Tennis profile saved.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Save tennis profile", exact: true })).toBeDisabled();
     expect((await service.from("player_profiles").select("display_name, sportya_level").eq("user_id", id).single()).data)
       .toEqual({ display_name: "Mihai Suciu", sportya_level: "6" });
     await section(page, "Personal information");
     await page.getByLabel("First name").fill("Changed");
     await page.getByRole("button", { name: "Save personal information" }).click();
     await expect(page.getByText("Personal information saved.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Save personal information", exact: true })).toBeDisabled();
+    await section(page, "Player identity");
     await page.reload();
     await expect(page.getByRole("heading", { name: "Mihai Suciu", exact: true })).toBeVisible();
     await page.getByText("Edit photo", { exact: true }).click();
@@ -108,38 +130,33 @@ test("profile refinement: authenticated lifecycle, country, keyboard, navigation
 
     for (const width of [375, 768, 1440]) {
       await page.setViewportSize({ width, height: 900 });
-      await section(page, "Profile / player identity");
-      const selector = page.getByRole("navigation", { name: "Profile settings" });
+      await section(page, "Player identity");
       await expect(page.getByRole("heading", { name: "Profile", exact: true })).toBeVisible();
-      await expect(selector).toBeVisible();
-      await expect(selector.getByRole("button")).toHaveText(labels);
+      await openSidebar(page);
+      await expect(page.getByRole("navigation", { name: "My account navigation" }).getByRole("link")).toHaveText(sidebarLabels);
+      await closeSidebar(page);
       for (const label of labels) {
         await section(page, label);
         await assertNoOverflow(page);
       }
-      await assertNoOverflow(page);
-      // Native button Enter and Space activation preserve the selector's semantics.
-      await sectionButton(page, "Personal information").focus();
+      // Keyboard activation of a sidebar destination.
+      await openSidebar(page);
+      await sectionLink(page, "Personal information").focus();
       await page.keyboard.press("Enter");
-      await expect(page.getByLabel("First name")).toBeVisible();
+      await expect(page).toHaveURL(/\/profile\/personal$/);
       await page.getByLabel("First name").fill("Unsaved name");
       await country.fill("france");
       await expect(page.getByRole("option", { name: "France", exact: true })).toBeVisible();
       await assertNoOverflow(page);
       await country.press("Escape");
       await expect(country).toHaveValue("Romania");
-      await section(page, "Tennis profile");
-      await page.getByLabel("Bio").fill("Unsaved bio");
-      await sectionButton(page, "Account & security").focus();
-      await page.keyboard.press("Space");
-      await expect(page.getByLabel("Current password")).toBeVisible();
-      await assertNoOverflow(page);
+      await openSidebar(page);
+      await sectionLink(page, "Tennis profile").click();
+      await page.getByRole("button", { name: "Leave without saving", exact: true }).click();
+      await expect(page).toHaveURL(/\/profile\/tennis$/);
       await section(page, "Personal information");
-      await expect(page.getByLabel("First name")).toHaveValue("Unsaved name");
-      await section(page, "Tennis profile");
-      await expect(page.getByLabel("Bio")).toHaveValue("Unsaved bio");
-      await assertNoOverflow(page);
-      await section(page, "Profile / player identity");
+      await expect(page.getByLabel("First name")).toHaveValue("Changed");
+      await section(page, "Player identity");
       await page.getByText("Edit photo", { exact: true }).click();
       if (!await page.getByLabel("Change avatar").isVisible()) await page.getByText("Edit photo", { exact: true }).click();
       await expect(page.getByLabel("Change avatar")).toBeVisible();
@@ -147,16 +164,14 @@ test("profile refinement: authenticated lifecycle, country, keyboard, navigation
       await assertNoOverflow(page);
       const mobile = width < 1024;
       if (mobile) await page.getByRole("button", { name: "Open menu" }).click();
-      else await page.getByRole("button", { name: "Account menu" }).click();
       const profileLink = mobile
-        ? page.getByRole("navigation", { name: "Mobile navigation" }).getByRole("link", { name: "Profile & settings" })
-        : page.getByRole("link", { name: "Profile & settings" });
+        ? page.getByRole("navigation", { name: "Mobile navigation" }).getByRole("link", { name: "Profile", exact: true })
+        : page.getByRole("link", { name: "Profile", exact: true });
       await expect(profileLink).toBeVisible();
       await expect(profileLink).toHaveAttribute("href", "/profile");
-      const avatarControl = mobile
-        ? page.getByRole("navigation", { name: "Mobile navigation" }).getByRole("link", { name: "My activity" })
-        : page.getByRole("button", { name: "Account menu" });
-      const navImage = avatarControl.locator("img");
+      await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Account menu", exact: true })).toHaveCount(0);
+      const navImage = profileLink.locator("img");
       await expect(navImage).toBeVisible();
       expect(await navImage.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
       await profileLink.focus();
@@ -165,18 +180,19 @@ test("profile refinement: authenticated lifecycle, country, keyboard, navigation
       await expect(profileLink).toBeFocused();
       await assertNoOverflow(page);
       if (mobile) await page.getByRole("dialog", { name: "Mobile navigation menu" }).getByRole("button", { name: "Close menu", exact: true }).click();
-      else await page.keyboard.press("Escape");
     }
     await page.getByLabel("Change avatar").setInputFiles({ name: "replacement.png", mimeType: "image/png", buffer: png });
     await page.getByRole("button", { name: "Save avatar" }).click();
-    await expect(page.getByRole("button", { name: "Account menu" }).locator("img")).toBeVisible();
+    await expect(page.getByRole("link", { name: "Profile", exact: true }).locator("img")).toBeVisible();
     await page.getByRole("button", { name: "Remove avatar" }).click();
     await expect(page.getByRole("img", { name: "Default player avatar" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Account menu" }).locator("img")).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Profile", exact: true }).locator("img")).toHaveCount(0);
     expect(forbiddenRequests).toEqual([]);
-    await page.getByRole("button", { name: "Account menu" }).click();
+    // Navbar sign out guards the current page's drafts.
+    await section(page, "Tennis profile");
+    await page.getByLabel("Bio").fill("Unsaved bio");
     await page.getByRole("button", { name: "Sign out", exact: true }).click();
-    await expect(page.getByText("You have unsaved changes in 2 sections.", { exact: true })).toBeVisible();
+    await expect(page.getByText("You have unsaved changes in Tennis profile.", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Leave without saving", exact: true }).click();
     await expect(page).toHaveURL(/\/login$/);
   } finally {

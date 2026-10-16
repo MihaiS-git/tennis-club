@@ -2,15 +2,15 @@
 
 import { renderToReadableStream } from "react-dom/server";
 import { afterEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 
 import type { CurrentAccount } from "../../src/lib/auth/account";
 
-const { readCurrentAccount, avatar, route } = vi.hoisted(() => ({ readCurrentAccount: vi.fn(), avatar: { url: null as string | null }, route: { pathname: "/courts" } }));
+const { readCurrentAccount, signOut, avatar, route } = vi.hoisted(() => ({ readCurrentAccount: vi.fn(), signOut: vi.fn(), avatar: { url: null as string | null }, route: { pathname: "/courts" } }));
 
 vi.mock("next/navigation", () => ({ usePathname: () => route.pathname, useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }));
 
-vi.mock("../../src/app/account/actions", () => ({ signOutAction: vi.fn() }));
+vi.mock("../../src/app/account/actions", () => ({ signOutAction: signOut }));
 vi.mock("../../src/lib/auth/account", () => ({ readCurrentAccount }));
 vi.mock("../../src/lib/profile/navigation", () => ({ readNavigationProfile: async () => ({
   account: await readCurrentAccount(), avatarUrl: avatar.url,
@@ -20,7 +20,7 @@ import { MobileNavbarMenu } from "../../src/components/mobile-navbar-menu";
 import { DesktopNavbar } from "../../src/components/desktop-navbar";
 import { MobileNavbar } from "../../src/components/mobile-navbar";
 
-afterEach(() => { cleanup(); avatar.url = null; });
+afterEach(() => { cleanup(); avatar.url = null; signOut.mockReset(); });
 
 it("shows signed-out links and closes on link selection or Escape", () => {
   render(<MobileNavbarMenu isAuthenticated={false} canReserve={false} />);
@@ -102,8 +102,10 @@ it.each([
   const adminLink = within(navigation).queryByRole("link", { name: "Admin" });
   if (showsAdmin) {
     expect(links.map((link) => link.textContent)).toEqual([
-      "Courts", "Coaching", "Matches", "Rankings", "Club", "Admin", "My activity", "Profile & settings",
+      "Courts", "Coaching", "Matches", "Rankings", "Club", "Admin", "Profile",
     ]);
+    expect(navigation.lastElementChild?.lastElementChild?.textContent).toBe("Sign out");
+    expect(within(navigation).getByRole("link", { name: "Profile" }).getAttribute("href")).toBe("/profile");
     expect(adminLink?.getAttribute("href")).toBe("/admin");
   } else {
     expect(adminLink).toBeNull();
@@ -140,4 +142,42 @@ it.each([
   await stream.allReady;
   const desktop = new DOMParser().parseFromString(await new Response(stream).text(), "text/html");
   expect([...desktop.querySelectorAll('nav[aria-label="Main navigation"] a[aria-current="page"]')].map((link) => link.textContent)).toEqual(active ? [active] : []);
+});
+
+it.each([
+  ["member", { state: "active", userId: "member-1", email: "member@example.com", roles: [] }],
+  ["coach", { state: "active", userId: "coach-1", email: "coach@example.com", roles: ["coach"] }],
+  ["admin", { state: "active", userId: "admin-1", email: "admin@example.com", roles: ["admin"] }],
+] satisfies ReadonlyArray<readonly [string, CurrentAccount]>)("links the %s avatar directly to Profile and places Sign out next to it", async (_description, account) => {
+  readCurrentAccount.mockResolvedValue(account);
+  avatar.url = "/profile/avatar?v=1";
+  const stream = await renderToReadableStream(<DesktopNavbar />);
+  await stream.allReady;
+  const desktop = new DOMParser().parseFromString(await new Response(stream).text(), "text/html");
+  const profile = desktop.querySelector('header a[aria-label="Profile"]');
+  expect(profile?.getAttribute("href")).toBe("/profile");
+  expect(profile?.querySelector("img")?.getAttribute("src")).toBe("/profile/avatar?v=1");
+  expect(desktop.querySelector('[aria-label="Account menu"]')).toBeNull();
+  // Sign out sits immediately to the right of the avatar, outside any dropdown.
+  const desktopSignOut = profile?.nextElementSibling?.querySelector("button");
+  expect(profile?.nextElementSibling?.tagName).toBe("FORM");
+  expect(desktopSignOut?.textContent?.trim()).toBe("Sign out");
+  expect(desktopSignOut?.getAttribute("type")).toBe("submit");
+
+  render(await MobileNavbar());
+  fireEvent.click(screen.getByRole("button", { name: "Open menu" }));
+  const drawer = screen.getByRole("dialog", { name: "Mobile navigation menu" });
+  const mobileProfile = within(drawer).getByRole("link", { name: "Profile" });
+  expect(mobileProfile.getAttribute("href")).toBe("/profile");
+  expect(mobileProfile.querySelector("img")?.getAttribute("src")).toBe("/profile/avatar?v=1");
+  expect(within(drawer).queryByRole("link", { name: "My activity" })).toBeNull();
+  // Sign out is the drawer's last item and uses the existing action.
+  const items = drawer.querySelectorAll<HTMLElement>("a[href], button:not([disabled])");
+  const mobileSignOut = within(drawer).getByRole("button", { name: "Sign out" });
+  expect(items[items.length - 1]).toBe(mobileSignOut);
+  expect(mobileSignOut.className).toContain("flex min-h-12");
+  expect(mobileSignOut.className).toContain("text-sm font-medium text-primary hover:text-accent");
+  await act(async () => { fireEvent.click(mobileSignOut); });
+  expect(signOut).toHaveBeenCalledOnce();
+  expect(screen.getByRole("button", { name: "Open menu" }).getAttribute("aria-expanded")).toBe("false");
 });

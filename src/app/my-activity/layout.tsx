@@ -1,18 +1,9 @@
-import { Suspense } from "react";
-import { RouteSubmenu } from "@/components/route-submenu";
-import { FinancialNotices } from "./financial-notices";
-
-const sections = [
-  { label: "Bookings", href: "/my-activity/bookings" },
-  { label: "History", href: "/my-activity/history" },
-];
+import { UserAreaShell } from "@/components/management-shell";
 
 export default function MyActivityLayout({ children }: { children: React.ReactNode }) {
-  return <main className="flex-1 bg-background"><div className="mx-auto max-w-6xl px-6 py-8 md:px-8">
+  return <UserAreaShell>
     <h1 className="font-heading text-3xl font-semibold text-primary">My activity</h1>
-    <p className="mt-2 mb-6 text-sm text-muted-foreground">Your upcoming activity and club history.</p>
-    <Suspense fallback={null}><FinancialNotices /></Suspense>
-    <RouteSubmenu sections={sections} label="My activity navigation" />
+    <p className="mt-2 mb-6 text-sm text-muted-foreground">Your upcoming activity, club history and notifications.</p>
     {children}
-  </div></main>;
+  </UserAreaShell>;
 }

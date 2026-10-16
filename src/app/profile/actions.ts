@@ -6,7 +6,8 @@ import { savePersonalInformation, saveTennisProfile } from "@/lib/profile/profil
 import { personalInformationSchema, tennisProfileSchema, profileFormInput, type ProfileActionState } from "@/lib/profile/validation";
 
 function refreshOnSuccess(result: ProfileActionState) {
-  if (result.success) revalidatePath("/profile");
+  // Profile pages share their data, e.g. the identity name comes from personal information.
+  if (result.success) revalidatePath("/profile", "layout");
   return result;
 }
 

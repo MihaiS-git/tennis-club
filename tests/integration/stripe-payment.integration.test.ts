@@ -208,9 +208,10 @@ test("verified webhook settles original hold once, keeps retryable failure, rele
     expect((await db.from("court_reservations").select("status").eq("id", replacement.reservation_id).single()).data?.status).toBe("held");
     // One notice that the late payment is being refunded, even across duplicate deliveries.
     expect(await email(expired.booking_id)).toEqual([{ subject: "Payment received after checkout ended" }]);
-    await evidence(expired, "expired", ["created"], "expired", 5000);
+    // Polling confirmed Stripe cancellation; the booking remains locally expired.
+    await evidence(expired, "expired", ["created"], "cancelled", 5000);
     expect((await db.from("payment_provider_events").select("settlement_result,reconciliation_required").eq("attempt_id", expiredCheckout.attemptId)).data)
-      .toEqual([{ settlement_result: "expired", reconciliation_required: false }]);
+      .toEqual([{ settlement_result: "cancelled", reconciliation_required: false }]);
     // Cancellation intent commits before a provider timeout. A capture racing
     // that request must release the original row and request exactly one refund.
     const racing = await hold(900, null), racingCheckout = await begin(racing.payment_attempt_id);

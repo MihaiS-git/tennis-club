@@ -123,11 +123,11 @@ immediately, ignoring its backoff and any stopped state, with the same Brevo ide
 key; a row another request is sending is left alone. The result shown is the recorded
 outcome.
 
-Signed-in booking owners see, at the top of My activity, every message whose email
-failed ("We could not deliver this message to your email address"), with its content,
-until it is delivered (up to 30 days). Unacknowledged important notices are listed before
-those failed ordinary emails, so the 20-notice limit cannot hide them. Guests have no
-account, so a failed guest email is visible only to Admins.
+`listOwnFinancialNotices` still returns a signed-in owner's failed ordinary emails (up to
+30 days) after their unacknowledged important notices, but the customer
+`/my-activity/notifications` page shows only the important financial notices; ordinary
+booking emails and delivery status are not shown to customers. Admins see every failed
+email, including guests', in Admin → Payments → Notifications.
 
 Each delivery UUID is passed as Brevo's `headers.idempotencyKey`. A matching provider
 idempotency rejection acknowledges the original submission. Brevo documents a
@@ -161,8 +161,8 @@ refund share the single `refund:<id>:exception` key.
 
 `refund_incomplete`, `cancellation_failed`, `modification_failed` and
 `late_payment_refund` rows are stored with `requires_acknowledgement` and the booking ID.
-For bookings owned by an account they are shown prominently at the top of My activity
-(Bookings and History) until the owner presses **OK**; the acknowledgement time is
+For bookings owned by an account they are shown on My activity → Notifications
+(`/my-activity/notifications`) until the owner presses **OK**; the acknowledgement time is
 persisted. A delivered email is not treated as acknowledgement. Ownership is checked on
 the server in the conditional update (booking `account_user_id` = current active account);
 another account's notice cannot be read or acknowledged. Guest bookings have no account,

@@ -23,7 +23,7 @@ const target = { id: id(5), court_id: id(2), booking_date: date, starts_at_minut
   cancelled_at: null, cancelled_by_user_id: null, hold_expires_at: null,
   court_name: "Court A", court_active: true, location_id: id(1), location_name: "Club",
   location_timezone: "UTC", location_active: true, archived_at: null };
-const row = { court_id: id(3), starts_at_minute: 600, ends_at_minute: 660, status: "active", hold_expires_at: null };
+const row = { court_id: id(3), starts_at_minute: 600, ends_at_minute: 660, status: "active", hold_expires_at: null, capture_accepted: false };
 const hours = { id: id(4), location_id: id(1), weekday: 3, opens_at_minute: 600, closes_at_minute: 840, created_at: token, updated_at: token };
 const client = createClient("http://localhost:54321", "user-key", { auth: { persistSession: false } });
 const load = (requestedDate = date) => getAdminReservationEditDay({ reservationId: target.id, date: requestedDate }, client, now);
