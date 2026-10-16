@@ -1368,23 +1368,36 @@ returns an existing modification and there is no customer payment link. X is the
 dismissal: it revokes the capability and cancels any intent not `processing`; a
 processing intent keeps the target hold leased (bounded by the target start) until the
 webhook resolves it. `booking_adjustments.expires_at` is the immutable lateness cutoff;
-the lease lives on held target fragments because payment attempt facts are immutable.
-Late success is never applied and is refunded once. Edit is hidden while a live payment
+processing leases live on target fragments. Manual surcharge capture acceptance is
+write-once `booking_adjustments.capture_accepted_at`, including zero-fragment modifications.
+Acceptance is verified before the immutable cutoff under the existing locks. Expiry,
+dismissal and supersession preserve accepted captures and their occupancy until a
+definitive provider outcome, including beyond the 120-second operational grace.
+Only the accepting request dispatches capture, with a stable idempotency key; later
+requests read provider evidence without blindly capturing again. After grace,
+checkout polling or the active-Admin payment check attempts cancellation of the exact
+intent; accepted occupancy is released only on verified provider cancellation.
+Capture winning that race settles normally. Overdue registered intents without a
+terminal provider outcome appear in Admin Needs attention, including locally expired
+checkouts. Stripe transport retries belong to that same operation. Late completion alone
+never causes a refund;
+genuinely invalid captures retain compensation. Edit is hidden while a live payment
 is unresolved. `BOOKING_HOLD_SECONDS_OVERRIDE` is test-only (NODE_ENV=test or
 E2E_ALLOW_HOLD_OVERRIDE=1, never production). See docs/payments-memberships.md.
 
-## Durable financial recovery notifications
+## Durable financial notifications
 
 Refund-backed cancellation/reduction requires every obligation to succeed. Preserve the
 original booking and reservation and all verified partial refunds while any obligation is
-incomplete. Replacement executions require affirmative transient provider failure evidence;
+incomplete. Replacement executions require affirmative transient provider failure evidence
+and an explicit Admin "Check with Stripe"; no scheduler or webhook retries them;
 unknown/permanent refusal is exceptional and never voids the obligation. Past the safe
 idempotency replay window use fully paginated Stripe refund evidence only; missing evidence
 is explicitly unresolved and never authorizes blind resend.
 
 Booking lifecycle and refund-exception email work uses the focused
 `booking_notification_deliveries` table, inserted inside the financial transaction.
-The existing recovery scheduler delivers through Brevo outside transactions, using leases,
-unique event keys and stable provider idempotency keys. Delivery is at-least-once submission;
+The committing request delivers through Brevo after commit, outside transactions, using
+leases, unique event keys and stable provider idempotency keys. Delivery is at-least-once submission;
 ambiguous acceptance can duplicate email after provider key expiry. See
-`docs/booking-notifications.md` and additive migration `1791462257928`.
+`docs/booking-notifications.md` and migrations `1791462257928`/`1791462257929`.

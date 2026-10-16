@@ -4,6 +4,7 @@ import { buildBookingRevision } from "@/lib/bookings/revision";
 import { advanceRevision, findInitialRevision } from "@/lib/db/repositories/booking-revisions.repository";
 import { z } from "zod";
 import { inTransaction } from "@/lib/db/transaction";
+import { getDataSource } from "@/lib/db/data-source";
 import * as clubs from "@/lib/db/repositories/clubs.repository";
 import { listCheckoutPricing } from "@/lib/db/repositories/pricing.repository";
 import { buildCourtDay } from "@/lib/courts/calendar";
@@ -16,7 +17,7 @@ import * as payments from "@/lib/db/repositories/payments.repository";
 import * as captures from "@/lib/db/repositories/payment-capture-receipts.repository";
 import * as bookings from "@/lib/db/repositories/bookings.repository";
 import * as reservations from "@/lib/db/repositories/reservations.repository";
-import { enqueueBookingNotification } from "@/lib/notifications/booking-delivery";
+import { deliverPendingBookingNotifications, enqueueBookingNotification } from "@/lib/notifications/booking-delivery";
 import { bookingNotification, type BookingEmailEvent } from "@/lib/notifications/booking-email";
 import { logger } from "@/lib/logger";
 import { paymentProviderSchema, paymentTransition } from "./domain";
@@ -191,10 +192,12 @@ async function commitSettlement(value: Settlement, event: OnlinePaymentEvent | n
           throw new ReceiptRaceReplay(replay(winner, event));
         }
       }
-      // Released checkout captures need the existing durable compensation
-      // obligation, including expiry during this settlement. Normal booking
+      // A capture whose checkout already ended (expiry, failure or explicit
+      // cancellation, including expiry during this settlement) never reclaims
+      // occupancy: its full refund obligation commits with the receipt, so a
+      // late success is compensated without any later sweep. Normal booking
       // cancellation already allocates its remaining funds atomically.
-      const checkoutEnded = b.status === "cancelled" || b.status === "expired"
+      const checkoutEnded = b.status === "cancelled" || b.status === "expired" || b.status === "failed"
         || decision.targets?.booking === "expired";
       if (checkoutEnded && (r.status === "held" || r.status === "released")
         && value.outcome === "succeeded" && !mismatch
@@ -203,9 +206,15 @@ async function commitSettlement(value: Settlement, event: OnlinePaymentEvent | n
         // A known capture may already have been refunded by checkout abandonment.
         // Re-observation processes that obligation without changing its origin.
         const existing = await payments.findAndLockRefundByBooking(manager, b.id, attempt.id);
-        refundId = existing?.id ?? (await allocateBookingRefund(manager, { bookingId: b.id, actorId: null,
-          operationKey: "cancellation", amount: event?.amountMinor ?? attempt.amount_minor, onlyAttemptId: attempt.id,
-          reason: "late_capture_compensation", contextRevisionId: (await findInitialRevision(manager, b.id)).id }))[0] ?? null;
+        refundId = existing?.id ?? null;
+        if (!existing) {
+          const amountMinor = event?.amountMinor ?? attempt.amount_minor;
+          refundId = (await allocateBookingRefund(manager, { bookingId: b.id, actorId: null,
+            operationKey: "cancellation", amount: amountMinor, onlyAttemptId: attempt.id,
+            reason: "late_capture_compensation", contextRevisionId: (await findInitialRevision(manager, b.id)).id }))[0] ?? null;
+          if (refundId) await enqueueBookingNotification(manager, `refund:${refundId}:late_payment`,
+            bookingNotification("late_payment_refund", b.revision, { refund: { amountMinor, currency: attempt.currency } }));
+        }
       }
       return { result: decision.result, reconciliation };
     });
@@ -220,6 +229,7 @@ async function commitSettlement(value: Settlement, event: OnlinePaymentEvent | n
     }
     if (committed.reconciliation) logger.error({ event: "payments.reconciliation_required", attemptId: value.attemptId,
       eventId: event?.eventId, result: committed.result }, "Successful payment requires reconciliation");
+    await deliverPendingBookingNotifications();
     return committed.result;
   } catch (error) {
     if (error instanceof SettlementParentChanged && parentAttempt < 2) return commitSettlement(value, event, parentAttempt + 1);
@@ -233,15 +243,23 @@ async function commitSettlement(value: Settlement, event: OnlinePaymentEvent | n
 export async function settleOnlinePayment(input: unknown) {
   return commitSettlement(settlementSchema.parse(input), null);
 }
-export async function processOnlinePaymentEvent(input: OnlinePaymentEvent) {
+// strict (signed webhook): a compensation refund this settlement owes must be
+// processed, or the error reaches Stripe so it redelivers the event. A replayed
+// receipt still re-drives that refund, so a redelivery is never a silent no-op.
+export async function processOnlinePaymentEvent(input: OnlinePaymentEvent, options: { strict?: boolean } = {}) {
   const value = settlementSchema.extend({ eventId: z.string().min(1).max(255),
     amountMinor: z.number().int().nonnegative(), currency: z.string().length(3),
     providerCaptureId: z.string().trim().min(1).max(255).optional() }).transform(event => ({
       ...event,
-      // Automatic-capture Stripe PaymentIntents have one successful collection;
+      // Each Stripe PaymentIntent has at most one (full) successful capture;
       // normalize both signed webhooks and verified API reads to that identity.
       providerCaptureId: event.outcome === "succeeded" ? event.providerCaptureId ?? event.providerPaymentId : undefined,
     })).parse(input);
-  return commitSettlement(settlementSchema.parse({ attemptId: value.attemptId, provider: value.provider,
+  const result = await commitSettlement(settlementSchema.parse({ attemptId: value.attemptId, provider: value.provider,
     providerPaymentId: value.providerPaymentId, outcome: value.outcome }), value);
+  if (options.strict) {
+    const outstanding = await payments.listOutstandingCompensationRefunds((await getDataSource()).manager, value.attemptId);
+    for (const id of outstanding) await processBookingRefund(id, { strict: true });
+  }
+  return result;
 }

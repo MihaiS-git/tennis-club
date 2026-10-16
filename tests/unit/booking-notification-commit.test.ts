@@ -63,6 +63,7 @@ let committed: boolean;
 const request = vi.fn();
 beforeEach(() => {
   vi.resetAllMocks(); committed = false; pendingMessages = [];
+  vi.mocked(adjustments.readAdjustmentHolds).mockResolvedValue({ total: 0, valid: 0 });
   Object.defineProperty(runner, "isTransactionActive", { value: true, configurable: true });
   vi.spyOn(manager, "query").mockImplementation(async (sql, parameters) => {
     if (sql.includes("INSERT INTO public.booking_notification_deliveries")) {
@@ -166,7 +167,8 @@ test.each(["rejection", "timeout"])("unavailable email transport (%s) does not a
   });
   expect(await processOnlinePaymentEvent(event)).toBe("succeeded");
   expect(revisions.advanceRevision).toHaveBeenCalledWith(manager, expect.objectContaining({ status:"confirmed",previousId:id }));
-  expect(inTransaction).toHaveBeenCalledTimes(1);
+  // The settlement commit, then only the separate post-commit delivery claim.
+  expect(inTransaction).toHaveBeenCalledTimes(2);
   expect(committedNotification).toHaveBeenCalledTimes(1);
 });
 
@@ -402,7 +404,7 @@ test.each(["commit", "occupancy"])("paid adjustment %s failure sends no successf
 
 // Exercise delivery separately from financial commits: failed delivery must leave
 // the committed outbox retryable, with no financial state-change replay.
-test.each(["accepted", "rejection", "timeout"])("durable worker handles %s delivery after commit", async outcome => {
+test.each(["accepted", "unavailable", "rejection", "timeout"])("durable worker handles %s delivery after commit", async outcome => {
   await processOnlinePaymentEvent(event);
   const message = committedNotification.mock.calls[0][0];
   expect(request).not.toHaveBeenCalled();
@@ -412,13 +414,15 @@ test.each(["accepted", "rejection", "timeout"])("durable worker handles %s deliv
   request.mockImplementation(async () => {
     expect(committed).toBe(true);
     if (outcome === "timeout") throw new DOMException("Timed out", "TimeoutError");
-    return new Response(null, { status: outcome === "accepted" ? 201 : 503 });
+    return new Response(null, { status: outcome === "accepted" ? 201 : outcome === "rejection" ? 400 : 503 });
   });
-  expect(await deliverPendingBookingNotifications(Date.now() + 5000))
-    .toEqual({ checked: 1, failed: outcome === "accepted" ? 0 : 1 });
+  expect(await deliverPendingBookingNotifications({ deadline: Date.now() + 5000 }))
+    .toEqual({ checked: 1, failed: outcome === "accepted" ? 0 : 1, interrupted: false });
   expect(request).toHaveBeenCalledOnce();
   const [, parameters] = vi.mocked(manager.query).mock.calls[1];
-  expect(parameters).toEqual([id, expect.any(String), outcome === "accepted", 120]);
+  // A permanent rejection stops automatic retries (null); temporary failures back off.
+  expect(parameters).toEqual([id, expect.any(String), outcome === "accepted" ? null : outcome === "timeout" ? "unconfirmed"
+    : outcome === "rejection" ? "rejected" : "unavailable", outcome === "accepted" ? 0 : outcome === "rejection" ? null : 120]);
   expect(revisions.advanceRevision).toHaveBeenCalledOnce();
   request.mockClear(); // Worker tests explicitly authorize provider submission.
 });

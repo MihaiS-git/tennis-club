@@ -4,20 +4,18 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { EntityManager } from "typeorm";
 import { inTransaction } from "@/lib/db/transaction";
+import { getDataSource } from "@/lib/db/data-source";
 import * as payments from "@/lib/db/repositories/payments.repository";
 import * as executions from "@/lib/db/repositories/refund-executions.repository";
 import * as captures from "@/lib/db/repositories/payment-capture-receipts.repository";
 import type { RefundExecutionEntity } from "@/lib/db/entities/refund-execution.entity";
 import { findBookingCancellationNotice, findBookingForUpdate } from "@/lib/db/repositories/bookings.repository";
-import { findInitialRevision } from "@/lib/db/repositories/booking-revisions.repository";
-import { findAdjustment } from "@/lib/db/repositories/booking-adjustments.repository";
 import { findReservationForUpdate } from "@/lib/db/repositories/reservations.repository";
 import { enqueueBookingNotification } from "@/lib/notifications/booking-delivery";
 import { bookingNotification, type BookingEmailEvent } from "@/lib/notifications/booking-email";
 import { refundObligationTotal, reservingObligations } from "./refund-allocation";
-import { allocateBookingRefund } from "./financials";
 import { refundFinancialSnapshotMatches, paymentHasCapturedEvidence, sameRefundSnapshot } from "./refund-integrity";
-import { refundableLateCapture, resolvableRefundEvents } from "./providers/stripe/refund-policy";
+import { resolvableRefundEvents } from "./providers/stripe/refund-policy";
 import type { RefundProviderFailure } from "./providers/types";
 import type { RefundStatus } from "./refunds";
 
@@ -35,22 +33,31 @@ const refundExecutionLeaseMilliseconds = 5 * 60 * 1000;
 // returns the original refund if the first request executed, so no duplicate.
 const refundReplayWindowMilliseconds = 23 * 60 * 60 * 1000;
 
+// Execution evidence is write-once; a later provider failure of a succeeded
+// refund is recorded on the writable check fields and decides the current status.
+const reversedRefund = "provider_refund_reversed";
+
 // Exceptional obligations notify once through the same durable financial transaction.
+// failed: definitive provider failure; unresolved: evidence missing beyond the safe
+// replay window; reversed: Stripe failed a refund it had reported succeeded.
 async function refundFailureNotice(manager: EntityManager, refund: payments.ProcessingRefund,
-  _previous: RefundStatus, status: RefundStatus): Promise<BookingEmailEvent | null> {
-  if (status !== "failed") return null;
-  // A pending refund-backed change notifies when it is decided (abandoned or exception).
-  if (refund.adjustment_id && (refund.reason === "booking_cancellation" || refund.reason === "booking_price_reduction")) return null;
+  cause: "failed" | "unresolved" | "reversed" | null): Promise<BookingEmailEvent | null> {
+  if (!cause) return null;
+  // A definitively failed obligation of a pending refund-backed change is reported
+  // when that change is decided (abandoned, or kept pending as an exception).
+  // Unresolved and reversed refunds are never decided there, so notify now.
+  if (cause === "failed" && refund.adjustment_id
+    && (refund.reason === "booking_cancellation" || refund.reason === "booking_price_reduction")) return null;
   const revision = await findBookingCancellationNotice(manager, refund.booking_id);
   const notice = revision ? bookingNotification("refund_incomplete", revision,
     { refund: { amountMinor: refund.amount_minor, currency: refund.currency } }) : null;
-  if (notice) await enqueueBookingNotification(manager, `refund:${refund.id}:exception`, notice);
+  if (notice) await enqueueBookingNotification(manager, `refund:${refund.id}:${cause === "reversed" ? "reversed" : "exception"}`, notice);
   return notice;
 }
 
 // Refund-only commands do not change occupancy. All paths use the same order:
 // booking -> reservation -> selected attempt -> ordered receipts -> obligation -> execution.
-async function lockAggregate(manager: EntityManager, bookingId: string, attemptId: string, refundId?: string) {
+async function lockAggregate(manager: EntityManager, bookingId: string, attemptId: string, refundId: string) {
   const booking = await findBookingForUpdate(manager, bookingId);
   if (!booking) return null;
   const reservation = await findReservationForUpdate(manager, booking.reservation_id);
@@ -58,8 +65,7 @@ async function lockAggregate(manager: EntityManager, bookingId: string, attemptI
   if (!reservation || !payment || payment.booking_id !== booking.id) return null;
   await captures.lockCaptureReceiptsForAttempt(manager, payment.id);
   const events = await payments.lockRefundEventsForAttempt(manager, payment.id);
-  const selectedRefundId = refundId ?? await payments.refundForAttempt(manager, attemptId, payment.adjustment_id ?? "cancellation");
-  const refund = selectedRefundId ? await payments.lockRefundForProcessing(manager, { id: selectedRefundId }) : null;
+  const refund = await payments.lockRefundForProcessing(manager, { id: refundId });
   return { booking, reservation, payments: [payment], payment, events, refund };
 }
 
@@ -79,26 +85,31 @@ function verifyExecution(refund: payments.ProcessingRefund, execution: RefundExe
       || execution.initiatedByUserId !== expected.initiatedByUserId || execution.createdAt.getTime() !== expected.createdAt.getTime())))
     throw new Error("Refund execution request changed");
 }
+// A reversed refund stays failed; replays keep that cause, so every check of it
+// (webhook redelivery, Admin) reuses the single :reversed notice identity.
+function failureCause(execution: RefundExecutionEntity, status: RefundStatus) {
+  return execution.lastError === reversedRefund ? "reversed" as const : status === "failed" ? "failed" as const : null;
+}
 function summary(execution: RefundExecutionEntity): RefundStatus {
-  if (execution.terminalResult === "succeeded") return "succeeded";
+  if (execution.terminalResult === "succeeded") return execution.lastError === reversedRefund ? "failed" : "succeeded";
   if (execution.terminalResult) return execution.terminalEvidence?.startsWith("retryable:") ? "pending_retry" : "failed";
   return execution.status === "uncertain" || execution.lastError ? "pending_retry" : "pending";
 }
 
 async function claimExecution(manager: EntityManager, refund: payments.ProcessingRefund, actorId: string | null,
-  allowReplacement: boolean): Promise<ClaimResult> {
+  retryRejected: boolean): Promise<ClaimResult> {
   // An abandoned change released this obligation; it is never processed again.
   if (refund.status === "voided") return { outcome: "terminal", status: "voided", notice: null };
   const history = await executions.listRefundExecutions(manager, refund.id);
   let execution = await executions.findUnresolvedRefundExecution(manager, refund.id) ?? history.at(-1);
   if (execution) verifyExecution(refund, execution);
+  // Terminal provider results are final. Only an affirmative retryable rejection
+  // (no money moved) may get a replacement execution, on explicit Admin request.
   const retryable = execution?.terminalEvidence?.startsWith("retryable:") ?? false;
-  if (retryable && execution?.completedAt && Date.now() - execution.completedAt.getTime() < 60 * 60 * 1000)
-    return { outcome: "busy", status: "pending_retry" };
-  if (execution?.terminalResult === "succeeded" || execution?.terminalResult && !allowReplacement && !retryable) {
+  if (execution?.terminalResult && !(retryable && retryRejected)) {
     const status = summary(execution);
     await payments.writeRefundStatus(manager, refund.id, status);
-    return { outcome: "terminal", status, notice: await refundFailureNotice(manager, refund, refund.status, status) };
+    return { outcome: "terminal", status, notice: await refundFailureNotice(manager, refund, failureCause(execution, status)) };
   }
   if (!execution || execution.terminalResult) {
     const id = randomUUID();
@@ -117,50 +128,18 @@ async function claimExecution(manager: EntityManager, refund: payments.Processin
   return { outcome: "ready", claim: { token, actorId, bookingId: refund.booking_id, refund, execution } };
 }
 
-export async function prepareAutomaticRefund(id: string): Promise<ClaimResult> {
+export async function prepareRefund(id: string, options: { actorId?: string; retryRejected?: boolean } = {}): Promise<ClaimResult> {
   return inTransaction(async manager => {
     const source = await payments.discoverRefundBooking(manager, id);
     const context = source ? await lockAggregate(manager, source.booking_id, source.payment_attempt_id, id) : null;
     if (!context?.refund) throw new Error("Refund missing");
     await verifyRefund(manager, context.refund);
-    return claimExecution(manager, context.refund, null, false);
-  });
-}
-
-// An exact verified capture whose checkout or modification had already ended
-// is returned automatically. Amount mismatches and other evidence problems are
-// not refundable here and stay visible for investigation.
-export async function prepareLateCaptureCompensation(eventId: string): Promise<string | null> {
-  return inTransaction(async manager => {
-    const attemptId = await payments.discoverEventAttempt(manager, eventId);
-    const bookingId = attemptId ? await payments.findSettlementBookingId(manager, attemptId) : null;
-    if (!attemptId || !bookingId) return null;
-    const context = await lockAggregate(manager, bookingId, attemptId);
-    if (!context) return null;
-    const { payment, booking, reservation, events } = context;
-    const event = events.find(e => e.provider === "stripe" && e.event_id === eventId);
-    if (payment.provider !== "stripe" || payment.method !== "online" || !payment.provider_payment_id
-      || !event?.reconciliation_required || !refundableLateCapture(event, payment, booking.status, reservation.status)) return null;
-    let refund = context.refund;
-    if (refund && !refundFinancialSnapshotMatches(refund, payment)) return null;
-    if (!refund) {
-      const adjustment = payment.adjustment_id ? await findAdjustment(manager, payment.adjustment_id) : null;
-      if (payment.adjustment_id && (!adjustment || adjustment.bookingId !== bookingId)) throw new Error("Refund adjustment context changed");
-      const [refundId] = await allocateBookingRefund(manager, { bookingId, actorId: null,
-        operationKey: adjustment?.id ?? "cancellation", amount: payment.amount_minor, onlyAttemptId: payment.id,
-        adjustmentId: adjustment?.id, reason: adjustment ? "failed_adjustment_compensation" : "late_capture_compensation",
-        contextRevisionId: adjustment?.baseRevisionId ?? (await findInitialRevision(manager, bookingId)).id });
-      if (!refundId) throw new Error("Refund request missing");
-      refund = await payments.lockRefundForProcessing(manager, { id: refundId });
-      if (!refund) throw new Error("Refund request missing");
-    }
-    await verifyRefund(manager, refund);
-    if (refund.status === "succeeded") {
-      // Verified completion already returned the money; close the review flag.
-      await payments.writeRefundEventResolution(manager, resolvableRefundEvents(context, payment.id), payment.id, null);
-      return null;
-    }
-    return refund.status === "pending" || refund.status === "pending_retry" ? refund.id : null;
+    const claim = await claimExecution(manager, context.refund, options.actorId ?? null, options.retryRejected ?? false);
+    // A distinct late capture event for a payment already fully refunded closes its review flag.
+    if (claim.outcome === "terminal" && claim.status === "succeeded" && context.refund.amount_minor === context.payment.amount_minor)
+      await payments.writeRefundEventResolution(manager, resolvableRefundEvents(context, context.payment.id),
+        context.payment.id, options.actorId ?? null);
+    return claim;
   });
 }
 
@@ -238,9 +217,37 @@ export async function commitRefundExecution(claim: RefundExecutionClaim, observa
       // Missing evidence after the safe replay window is explicitly unresolved;
       // preserve the obligation and execution and continue evidence-only checks.
       const unresolved = observation.kind === "error" && ["not_found", "evidence_mismatch"].includes(observation.evidence.kind);
-      const notice = await refundFailureNotice(manager, refund, unresolved ? "pending" : refund.status, unresolved ? "failed" : status);
+      const notice = await refundFailureNotice(manager, refund, unresolved ? "unresolved" : failureCause(latest, status));
       return { status, notice };
     }
     return { status: refund.status, notice: null };
   });
+}
+
+// A signed refund.updated/refund.failed for a refund already recorded as
+// succeeded: the caller re-read and verified the exact Stripe refund as failed.
+// Historical success evidence is preserved; the obligation becomes failed, the
+// customer is notified and Admin attention lists it. No replacement is created.
+export async function recordProviderRefundReversal(refundId: string, providerRefundId: string): Promise<{
+  status: RefundStatus; notice: BookingEmailEvent | null }> {
+  return inTransaction(async manager => {
+    const source = await payments.discoverRefundBooking(manager, refundId);
+    const context = source ? await lockAggregate(manager, source.booking_id, source.payment_attempt_id, refundId) : null;
+    if (!context?.refund) throw new Error("Refund missing");
+    const refund = context.refund;
+    const latest = (await executions.listRefundExecutions(manager, refund.id)).at(-1);
+    if (!latest || latest.terminalResult !== "succeeded" || latest.providerRefundId !== providerRefundId)
+      throw new Error("Refund reversal evidence does not match the recorded refund");
+    if (latest.lastError === reversedRefund) return { status: "failed" as const, notice: null };
+    await executions.recordRefundReversal(manager, { refundId: refund.id, executionId: latest.id,
+      lastError: reversedRefund, checkedAt: new Date() });
+    await payments.writeRefundStatus(manager, refund.id, "failed");
+    return { status: "failed" as const, notice: await refundFailureNotice(manager, refund, "reversed") };
+  });
+}
+
+// Read-only facts the refund webhook needs to re-read a completed refund at Stripe.
+export async function completedRefundExecution(refundId: string) {
+  const latest = (await executions.listRefundExecutions((await getDataSource()).manager, refundId)).at(-1);
+  return latest?.terminalResult === "succeeded" && latest.providerRefundId && latest.lastError !== reversedRefund ? latest : null;
 }

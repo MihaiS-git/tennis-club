@@ -1,21 +1,26 @@
 "use client";
 
 import Link from "next/link";
-import { Fragment, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
+import { Fragment, useState, type ReactNode } from "react";
+import { toast } from "sonner";
+import { Button } from "@/components/button";
 import { formatMoney } from "@/lib/pricing/money";
 import { reservationDateLabel } from "@/components/reservation-details";
 import { minuteToTime } from "@/lib/admin/opening-hours-validation";
 import type { AdminPaymentTransaction } from "@/lib/payments/admin";
 import { paymentMethodLabels, paymentProviderLabels, adminPaymentHref, parseAdminPaymentQuery, transactionStatusLabel, transactionTimestamp } from "@/lib/payments/admin-query";
+import { checkPaymentWithProviderAction, checkRefundWithProviderAction } from "./actions";
 
 const bookingStatusLabels: Record<string, string> = {
   confirmed: "Confirmed", cancelled: "Cancelled", pending_payment: "Awaiting payment", failed: "Failed", expired: "Expired",
 };
-// Plain-language outcomes; provider codes stay out of the UI. Automatic recovery
-// owns every financial transition, so these explain state rather than offer actions.
+// Plain-language outcomes; provider codes stay out of the UI. The only action is
+// checking an unconfirmed refund with Stripe; it never edits financial state.
 const refundFailures: Record<string, string> = {
   provider_refund_failed: "Stripe reported that the refund failed.",
   provider_request_rejected: "Stripe declined this refund.",
+  provider_refund_reversed: "Stripe reported that this refund failed after first confirming it, so the money was not returned.",
 };
 const capturedPaymentProblems: Record<string, string> = {
   expired: "The customer paid after checkout had expired, so the booking was not confirmed.",
@@ -68,6 +73,40 @@ function modification(t: AdminPaymentTransaction): { before: Version; after: Ver
     date: p.date, start: p.startMinute, end: p.endMinute, timezone: p.timezone, total: p.totalAmountMinor, currency: p.currency } };
 }
 
+const refundCheckResults: Record<string, string> = {
+  succeeded: "Stripe confirmed the refund.", failed: "Stripe reported that the refund failed.",
+  pending: "Stripe has accepted the refund but not completed it yet.",
+  pending_retry: "Stripe could not confirm the refund yet. Check again later.", voided: "No refund is owed.",
+};
+
+function CheckStripeButton({ refundId, attemptId }: { refundId: string; attemptId?: never } | { attemptId: string; refundId?: never }) {
+  const router = useRouter();
+  const [pending, setPending] = useState(false);
+  async function check() {
+    if (pending) return;
+    setPending(true);
+    const operation = (async () => {
+      const result = await (attemptId ? checkPaymentWithProviderAction({ attemptId }) : checkRefundWithProviderAction({ refundId })).catch(() => {
+        throw new Error("Unable to check with Stripe. Try again.");
+      });
+      if (!result.ok) throw new Error(result.message);
+      router.refresh();
+      return attemptId ? result.status === "succeeded" ? "Stripe confirmed the payment."
+        : result.status === "cancelled" ? "Stripe cancelled the payment; its hold was released."
+        : "Stripe has not confirmed a final outcome. Check again later."
+        : refundCheckResults[result.status] ?? "Refund checked.";
+    })();
+    toast.promise(operation, { id: `stripe-check-${attemptId ?? refundId}`, loading: "Checking with Stripe…",
+      success: (message: string) => message,
+      error: (error: unknown) => error instanceof Error ? error.message : "Unable to check with Stripe. Try again." });
+    try { await operation; }
+    catch { /* Sonner displays the failure. */ }
+    finally { setPending(false); }
+  }
+  return <Button type="button" variant="secondary" size="small" fullWidth={false} className="mt-2"
+    disabled={pending} aria-busy={pending} onClick={() => { void check(); }}>{pending ? "Checking…" : "Check with Stripe"}</Button>;
+}
+
 export function TransactionDetail({ transaction: t, listHref = "/admin/payments/transactions" }: {
   transaction: AdminPaymentTransaction; listHref?: string;
 }) {
@@ -84,20 +123,20 @@ export function TransactionDetail({ transaction: t, listHref = "/admin/payments/
   const providerReference = isRefund ? refund?.provider_refund_id ?? null : t.provider_payment_id;
   const bookingHref = adminPaymentHref({ ...parseAdminPaymentQuery({}), q: t.booking_id });
 
-  // Attention lists only genuine exceptions: money automation cannot return,
-  // recovery stalled beyond Stripe's idempotency window, or captured evidence.
+  // Attention lists only genuine exceptions: money Stripe could not return, a
+  // refund Stripe has not confirmed after a short grace period, or captured evidence.
   const refundFailed = refund?.status === "failed";
   const unresolvedEvents = t.reconciliation.filter((event) => event.reconciliation_required);
   const resolvedEvents = t.reconciliation.filter((event) => !event.reconciliation_required && event.resolved_at);
-  const attention = refundFailed || t.refundStalled || unresolvedEvents.length > 0;
+  const attention = refundFailed || t.refundUnconfirmed || t.payment_check_required || unresolvedEvents.length > 0;
 
   const outcome = isRefund ? refund?.status === "succeeded" ? "The refund was confirmed by Stripe."
       : refund?.status === "voided" ? "No money was refunded. The requested booking change was abandoned and the booking kept its original terms."
-      : (refund?.status === "pending" || refund?.status === "pending_retry") && !t.refundStalled
-        ? "The refund is being confirmed with Stripe automatically. No action is needed." : null
+      : (refund?.status === "pending" || refund?.status === "pending_retry") && !t.refundUnconfirmed
+        ? "The refund has been requested from Stripe and is awaiting confirmation." : null
     : t.transaction_status === "succeeded" ? null
     : t.transaction_status === "due" ? "The customer pays at the club."
-    : t.transaction_status === "pending" ? "Waiting for the customer to complete payment. The outcome is checked with Stripe automatically."
+    : t.transaction_status === "pending" ? "Waiting for the customer to complete payment. Stripe reports the outcome to the club."
     : captured ? null
     : t.transaction_status === "failed" ? "The payment did not go through. No money was taken."
     : t.transaction_status === "expired" ? "The payment window expired before the customer paid. No money was taken."
@@ -129,18 +168,27 @@ export function TransactionDetail({ transaction: t, listHref = "/admin/payments/
     {attention && <section aria-label="Needs attention" className="rounded-card border border-danger bg-danger-background/40 p-4 text-sm">
       <h3 className="mb-2 font-heading text-base font-semibold text-danger">Needs attention</h3>
       <ul className="space-y-3">
+        {t.payment_check_required && t.payment_attempt_id && <li>
+          This overdue payment has no confirmed Stripe outcome. An accepted capture keeps its court held
+          until Stripe confirms capture or cancellation. Check with Stripe retrieves the payment and
+          cancels an unused or interrupted authorization when possible; it never starts another capture.
+          <div><CheckStripeButton attemptId={t.payment_attempt_id} /></div>
+        </li>}
         {refund && refundFailed && <li>
           {refund.last_error && Object.hasOwn(refundFailures, refund.last_error) ? refundFailures[refund.last_error] : "This refund could not be completed."}
           {" "}The customer has not received this money and has been notified. Stripe will not be asked again automatically;
           arrange the repayment with the customer directly.
         </li>}
-        {refund && t.refundStalled && <li>
-          Automatic recovery has not been able to confirm this refund with Stripe for over a day. Check it in the Stripe
-          Dashboard before contacting the customer. Do not issue another refund for it.
+        {refund && t.refundUnconfirmed && <li>
+          Stripe has not confirmed this refund. Nothing retries it in the background. Check with Stripe records
+          Stripe&apos;s current answer; if Stripe declined it temporarily (for example, insufficient balance), the
+          check requests it again. It never sends a second refund while an earlier request&apos;s outcome is unknown,
+          and you should not issue one manually in the Stripe Dashboard.
+          <div><CheckStripeButton refundId={refund.id} /></div>
         </li>}
         {unresolvedEvents.map((event) => <li key={event.event_id}>
           {Object.hasOwn(capturedPaymentProblems, event.settlement_result) ? capturedPaymentProblems[event.settlement_result] : "A payment was received that needs review."}
-          {event.auto_refund ? " The court was not reclaimed; the payment is being returned automatically." : " Review this payment in Stripe."}
+          {event.auto_refund ? " The court was not reclaimed; a full refund was requested automatically." : " Review this payment in Stripe."}
         </li>)}
       </ul>
     </section>}

@@ -395,11 +395,13 @@ obligation of an abandoned change); provider references/errors come from executi
 Refund-backed booking changes (cancellation with refund, price reduction) are pending
 `booking_adjustments` rows; the booking is unchanged until a single transaction under the
 existing configuration fence → location → booking → reservation → attempts → refunds order
-applies or abandons them after every obligation is terminal. The automatic recovery
-worker (`src/lib/payments/recovery.ts`, started from `src/instrumentation.ts`, fenced by a
-`job_leases` row) drives payments, holds, late captures, refunds and these decisions when no
-request or webhook does; see [payments](payments-memberships.md#automatic-financial-recovery).
-There are no Admin financial controls, dual writes or provider history JSON.
+applies or abandons them after every obligation is terminal. There is no background
+worker: requests, signed Stripe webhooks (payment and refund events) and the Admin
+"Check with Stripe" action drive these decisions; see
+[payments](payments-memberships.md#recovery-without-a-scheduler). Admin payment/refund
+checks retrieve the registered provider operation; payment checks
+can cancel overdue unused authorizations but never initiate capture. There are no dual
+writes or provider history JSON.
 
 ## Booking email delivery
 
@@ -409,8 +411,10 @@ send the preserved text template through Brevo's transactional HTTP API after co
 Use only the snapshotted the current revision’s `customer_email`, never the current account email.
 Quote, stale, failed and unchanged-schedule saves send no rescheduling email;
 pending/failed/expired checkout sends no confirmation. Transition and webhook receipt
-checks prevent replayed operations from sending again. Delivery is best-effort with
-a 10-second HTTP timeout, sanitized error logging, and no persistent queue or retries.
+checks prevent replayed operations from sending again. Delivery uses the durable
+`booking_notification_deliveries` outbox, a 5-second HTTP timeout, sanitized error
+logging, request-driven retries, five-minute Supabase Cron retries and an Admin retry;
+see [notifications](booking-notifications.md).
 Email failure cannot change committed booking/payment state. Server-only
 `BREVO_API_KEY` and a Brevo-verified `BOOKING_MAIL_FROM` are required.
 Supabase Auth confirmation/recovery emails remain independent.

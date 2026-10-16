@@ -9,11 +9,11 @@ const { prepare, initiate, commit } = vi.hoisted(() => ({
   prepare: vi.fn(), initiate: vi.fn(), commit: vi.fn(),
 }));
 vi.mock("@/lib/payments/refund-commands", () => ({
-  prepareAutomaticRefund: prepare, initiateRefundExecution: initiate, commitRefundExecution: commit,
+  prepareRefund: prepare, initiateRefundExecution: initiate, commitRefundExecution: commit,
 }));
 vi.mock("@/lib/payments/providers", () => ({ onlinePaymentAdapter: async () => stripeAdapter }));
 vi.mock("@/lib/logger", () => ({ logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn() } }));
-import { processBookingRefund } from "@/lib/payments/refunds";
+import { processBookingRefund, RefundInProgressError } from "@/lib/payments/refunds";
 import type { RefundExecutionClaim } from "@/lib/payments/refund-commands";
 import { stripeAdapter } from "@/lib/payments/providers/stripe/adapter";
 const executionId = "cf000000-0000-4000-8000-000000000002";
@@ -171,17 +171,18 @@ test("service persists a returned identity even when evidence mismatches", async
     kind: "evidence_mismatch", operation: "create", providerRefundId: result.id,
   } });
 });
-test("service reuses an execution for empty recovery without creating", async () => {
+test("service reuses an execution for an empty lookup without creating", async () => {
   initiate.mockResolvedValue({ outcome: "dispatch", operation: "recover", execution: { ...claim.execution, dispatchInitiatedAt: new Date() } });
   expect(await processBookingRefund(refund.id)).toBe("pending_retry");
   expect(create).not.toHaveBeenCalled();
   expect(commit).toHaveBeenCalledWith(claim, { kind: "error", evidence: { kind: "not_found", operation: "discover", providerRefundId: null } });
 });
-test.each([null, "admin"])("automatic/Admin claimant %s uses the same definitive rejection completion", async actorId => {
+test.each([null, "admin"])("request/Admin claimant %s uses the same definitive rejection completion", async actorId => {
   create.mockRejectedValue(new Stripe.errors.StripeInvalidRequestError({ statusCode: 400 }));
   const prepared = { ...claim, actorId };
   prepare.mockResolvedValue({ outcome: "ready", claim: prepared });
-  expect(await processBookingRefund(refund.id, actorId ? prepared : undefined)).toBe("failed");
+  expect(await processBookingRefund(refund.id, actorId ? { actorId, retryRejected: true } : undefined)).toBe("failed");
+  expect(prepare).toHaveBeenCalledWith(refund.id, actorId ? { actorId, retryRejected: true } : {});
   expect(commit).toHaveBeenCalledWith(prepared, { kind: "error", evidence: {
     kind: "request_rejected", operation: "create", providerRefundId: null, retryable: false, failureReason: "invalid_request",
   } });
@@ -190,7 +191,7 @@ test("service retrieval failure retains known identity", async () => {
   initiate.mockResolvedValue({ outcome: "dispatch", operation: "recover", execution: { ...claim.execution, providerRefundId: result.id } });
   list.mockReturnValue((async function* () { yield result; })());
   retrieve.mockRejectedValue(new Stripe.errors.StripeInvalidRequestError({ statusCode: 404 }));
-  expect(await processBookingRefund(refund.id, { ...claim, actorId: "admin" })).toBe("pending_retry");
+  expect(await processBookingRefund(refund.id, { actorId: "admin" })).toBe("pending_retry");
   expect(commit).toHaveBeenCalledWith(expect.anything(), { kind: "error", evidence: {
     kind: "lookup_failed", operation: "retrieve", providerRefundId: result.id,
   } });
@@ -217,5 +218,12 @@ test("busy shared lease prevents provider requests", async () => {
 test("a failed dispatch transaction prevents Stripe calls", async () => {
   initiate.mockRejectedValue(new Error("database unavailable"));
   expect(await processBookingRefund(refund.id)).toBe("pending_retry");
+  expect(create).not.toHaveBeenCalled();
+});
+test("a busy execution is never dispatched; webhook and Admin callers are told to retry", async () => {
+  prepare.mockResolvedValue({ outcome: "busy", status: "pending" });
+  expect(await processBookingRefund(refund.id)).toBe("pending");
+  await expect(processBookingRefund(refund.id, { strict: true })).rejects.toBeInstanceOf(RefundInProgressError);
+  expect(initiate).not.toHaveBeenCalled();
   expect(create).not.toHaveBeenCalled();
 });

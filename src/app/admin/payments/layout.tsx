@@ -7,7 +7,7 @@ export const instant = false;
 export default async function PaymentsLayout({ children }: { children: React.ReactNode }) {
   await requireActiveAdmin();
   return <>
-    <AdminPageHeader title="Payments" description="Review transactions and manage payment provider settings." />
+    <AdminPageHeader title="Payments" description="Review transactions, undelivered notifications and payment provider settings." />
     {children}
   </>;
 }

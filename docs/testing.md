@@ -25,7 +25,7 @@ npm run test:e2e
 ```
 
 The initializer verifies the test stack endpoints and database identity before
-applying the existing three registered TypeORM migrations, atomically. It is
+applying pending migrations from the seven registered TypeORM migrations (924–930), atomically. It is
 idempotent and checks for pending migrations. It never drops data or runs the
 100-user development seed. Supabase application SQL migrations/seeding are disabled;
 Auth and Storage infrastructure still comes from native Supabase startup.
@@ -131,8 +131,8 @@ persistence to verify all five overlap exclusions (reservations, coverage, openi
 hours, schedule validity and pricing), valid adjacent intervals, partial payment uniqueness, positive
 payment/capture/refund amounts, capture identity/deduplication, immutable payment-request/provider-event/capture
 facts, refund/adjustment foreign keys, operation/request uniqueness, adjustment hold-fragment
-duration/state and restrictive financial deletes. It also requires exactly the three
-consolidated migrations and an empty TypeORM schema-builder diff. Security coverage includes
+duration/state and restrictive financial deletes. It also requires the seven registered
+migrations (924–930) and an empty TypeORM schema-builder diff. Security coverage includes
 browser-role table/column and future-table privileges, real denied reads, Auth signup
 and email synchronization, and private active-account avatar Storage access.
 Reservation, configuration, payment and profile integration suites provide additional
@@ -215,7 +215,7 @@ nonempty bucket. Runtime Storage access and policies are unchanged.
 
 ## Booking revision validation
 
-The migration-cutover suite checks the three-migration history, zero schema diff,
+The migration-cutover suite checks the seven-migration history (924–930), zero schema diff,
 non-synchronized Auth reference, composite current/predecessor relationships,
 strict linear numbering, atomic head advancement and revision UPDATE/DELETE/TRUNCATE
 rejection. Ownership checks reject guest/account reassignment in every direction,
@@ -246,17 +246,38 @@ The affected Stripe refunds, Admin reconciliation, booking-mutations and financi
 history suites retain cancellation idempotency, atomic receipt resolution, failed
 adjustment compensation and RON 50 → 75 → 100 → 75 → cancellation coverage.
 Regenerate the existing initial migration only against verified empty isolated
-infrastructure; apply exactly three migrations and verify zero metadata drift.
+infrastructure; apply all seven registered migrations (924–930) and verify zero metadata drift.
 No provider calls occur inside transactions, and no real Stripe/Brevo calls or
 normal development reset are part of these checks.
 
-## Automatic financial recovery
+## Request-driven payment recovery
 
-The Next.js server starts the payment recovery scheduler from `src/instrumentation.ts`
-(first run after 15 seconds, then every 60 seconds). It reads and writes the configured
-database and contacts Stripe. Set `PAYMENT_RECOVERY_INTERVAL_SECONDS=0` for E2E/manual
-runs that must observe intermediate pending states; otherwise expect pending refunds,
-uncertain payments and refund-backed changes to resolve within about a minute without
-any Admin action. Apply migration `1791462257927-AutomaticFinancialRecovery` before
-running the server against an existing local database. `runPaymentRecovery()` can be
-invoked directly from integration tests to execute one deterministic run.
+When switching an existing local checkout from the removed scheduler, stop its Next.js
+development servers and remove stale generated `dev/server/instrumentation.js` entrypoints
+from `.next` and `.next-test` before restarting. Otherwise Next.js can load the deleted
+instrumentation from an earlier compilation and start the obsolete timer. This concerns
+generated local output only; do not restore the removed source or change database data.
+
+No financial scheduler runs (Supabase Cron only retries emails; tests call
+`POST /api/notifications/deliver` directly and never schedule jobs in the test database). Integration tests drive each outcome the way production does: the
+checkout status poll, `processOnlinePaymentEvent` (signed webhook), and
+`processBookingRefund` with `{ strict: true, providerChanged: true }` (Stripe refund webhook) or
+`{ actorId, retryRejected: true, strict: true }` (Admin "Check with Stripe").
+Apply migrations `1791462257929-RequestDrivenPaymentRecovery` and
+`1791462257930-SurchargeCaptureAcceptance` with the guarded test initializer before running them against the isolated test database.
+`tests/integration/booking-notifications.integration.test.ts` covers post-commit email
+delivery, retries, concurrency and in-app acknowledgement.
+
+Focused surcharge/Cron regressions (no reset, full suites or build):
+
+```bash
+node --conditions=react-server --import=./scripts/ts-loader.mjs scripts/initialize-test-database.ts
+node node_modules/vitest/vitest.mjs run tests/unit/notification-cron-target.test.ts
+node node_modules/vitest/vitest.mjs run tests/unit/booking-notification-commit.test.ts -t 'paid|surcharge|adjustment|modification'
+node tests/run-integration.mjs tests/integration/db/booking-mutations.integration.test.ts -t 'accepted surcharge|a surcharge is authorized only|a surcharge authorization rejected|a surcharge whose capture fails'
+```
+
+The initializer applies pending additive migrations only to the verified isolated test
+project. Surcharge tests cover the capture deadline, acceptance with and without extra
+court holds, and capture racing expiry, dismissal, supersession and delayed provider
+signals. Cron guard tests do not connect, schedule jobs or contact external services.

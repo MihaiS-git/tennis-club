@@ -309,7 +309,7 @@ it("preserves nullable reservation details", () => {
 it.each([
   [undefined, "Booking cancelled."],
   ["succeeded", "Booking cancelled. Your payment has been refunded."],
-  ["pending_retry", "Booking cancelled. Your refund is being completed automatically."],
+  ["pending_retry", "Booking cancelled. Your refund has been requested; you will be emailed if it cannot be completed."],
   ["failed", "Booking cancelled. Part of the refund could not be completed; the club will contact you."],
 ])("customer cancellation shows refund state %s and refreshes Upcoming", async (refundStatus, message) => {
   const notification = vi.spyOn(toast, "success");

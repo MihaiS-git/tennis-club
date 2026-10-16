@@ -26,7 +26,9 @@ export async function insertCaptureReceiptFixture(manager: EntityManager, input:
 export async function setAdjustmentExpiryFixture(manager: EntityManager, id: string, expiresAt: string) {
   assertTestEnvironment();
   await manager.query("ALTER TABLE public.booking_adjustments DISABLE TRIGGER booking_adjustments_immutable");
-  await manager.query("UPDATE public.booking_adjustments SET expires_at=$2::timestamptz WHERE id=$1", [id, expiresAt]);
+  await manager.query(`UPDATE public.booking_adjustments SET expires_at=$2::timestamptz,
+    capture_accepted_at=CASE WHEN capture_accepted_at IS NULL THEN NULL
+      ELSE least(capture_accepted_at,$2::timestamptz-interval '1 microsecond') END WHERE id=$1`, [id, expiresAt]);
   await manager.query("ALTER TABLE public.booking_adjustments ENABLE TRIGGER booking_adjustments_immutable");
 }
 

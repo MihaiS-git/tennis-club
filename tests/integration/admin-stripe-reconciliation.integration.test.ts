@@ -13,11 +13,11 @@ vi.mock("@/lib/payments/providers/stripe/client", async () => {
   return { ...actual,stripeClient: () => ({ refunds: { create,list,retrieve } }) };
 });
 import { processBookingRefund } from "@/lib/payments/refunds";
-import { prepareAutomaticRefund, prepareLateCaptureCompensation } from "@/lib/payments/refund-commands";
-import { listAdminPaymentTransactions } from "@/lib/payments/admin";
+import { prepareRefund } from "@/lib/payments/refund-commands";
+import { checkAdminRefundWithProvider, listAdminPaymentTransactions } from "@/lib/payments/admin";
 import { parseAdminPaymentQuery } from "@/lib/payments/admin-query";
 
-test("Automatic late-capture recovery preserves payment identity, idempotency and occupancy; Admin inspection is read-only", async () => {
+test("Late-capture compensation preserves payment identity, idempotency and occupancy; Admin can only check refunds with Stripe", async () => {
   const db = localFixtureClient(), locationId = randomUUID(),courtId = randomUUID(),users: string[] = [];
   const admin = createClient(process.env.SUPABASE_URL!,process.env.SUPABASE_PUBLISHABLE_KEY!,{ auth: { persistSession:false,autoRefreshToken:false } });
   const second = createClient(process.env.SUPABASE_URL!,process.env.SUPABASE_PUBLISHABLE_KEY!,{ auth: { persistSession:false,autoRefreshToken:false } });
@@ -98,7 +98,8 @@ test("Automatic late-capture recovery preserves payment identity, idempotency an
     expect(await event(lateRow.eventId)).toMatchObject({ reconciliation_required:false,
       resolved_at:expect.any(String),resolved_by_user_id:null });
     const resolution = await event(lateRow.eventId);
-    expect(await prepareLateCaptureCompensation(lateRow.eventId)).toBeNull();
+    // A repeated check (refund webhook replay) changes nothing once resolved.
+    expect(await processBookingRefund(uncertain.id)).toBe("succeeded");
     expect(await event(lateRow.eventId)).toEqual(resolution);
     expect((await db.from("payment_refunds").select("id").eq("booking_id",lateRow.booking_id)).data).toEqual([{ id:uncertain.id }]);
     expect((await db.from("refund_executions").select("id").eq("refund_id",uncertain.id)).data).toEqual([{ id:completed.execution.id }]);
@@ -115,20 +116,22 @@ test("Automatic late-capture recovery preserves payment identity, idempotency an
 
     // A mismatch is an investigation case, never an automatic full refund.
     const mismatch = await late(840,true,true);
-    expect(await prepareLateCaptureCompensation(mismatch.eventId)).toBeNull();
+    expect(await event(mismatch.eventId)).toMatchObject({ reconciliation_required:true });
     expect((await db.from("payment_refunds").select("id").eq("booking_id",mismatch.booking_id)).data).toEqual([]);
     expect(create.mock.calls.length).toBe(providerCalls);
 
     // A definitive failure without retryable evidence cannot create a new
-    // generation just because another recovery cycle asks to process it.
+    // generation, even when an Admin checks it with Stripe.
     list.mockImplementation(() => (async function* () {})());
     create.mockImplementationOnce(async params => ({ id:`refund-${params.metadata.refund_execution_id}`,
       amount:params.amount,currency:"ron",payment_intent:params.payment_intent,status:"failed",
       failure_reason:"declined",metadata:params.metadata }));
     const terminal = await late(900,false,true), terminalRefund = await refund(terminal.booking_id);
     expect(terminalRefund.status).toBe("failed");
-    expect(await prepareAutomaticRefund(terminalRefund.id)).toMatchObject({outcome:"terminal",status:"failed"});
+    expect(await prepareRefund(terminalRefund.id)).toMatchObject({outcome:"terminal",status:"failed"});
     expect(await processBookingRefund(terminalRefund.id)).toBe("failed");
+    expect(await checkAdminRefundWithProvider({ refundId:terminalRefund.id },admin)).toEqual({ ok:true,status:"failed" });
+    expect(await checkAdminRefundWithProvider({ refundId:"not-a-uuid" },admin)).toEqual({ ok:false,message:"Choose a valid refund." });
     expect(create).toHaveBeenCalledTimes(providerCalls+1);
     expect((await refund(terminal.booking_id)).execution.id).toBe(terminalRefund.execution.id);
     expect((await db.from("refund_executions").select("id").eq("refund_id",terminalRefund.id)).data).toEqual([{id:terminalRefund.execution.id}]);
@@ -137,6 +140,7 @@ test("Automatic late-capture recovery preserves payment identity, idempotency an
     // still requires an active Admin account.
     expect((await db.from("user_roles").delete().eq("user_id",users[1]).eq("role_code","admin")).error).toBeNull();
     await expect(listAdminPaymentTransactions(query,second)).rejects.toThrow();
+    await expect(checkAdminRefundWithProvider({ refundId:terminalRefund.id },second)).rejects.toThrow();
     expect((await db.from("users").update({status:"suspended"}).eq("id",users[0])).error).toBeNull();
     await expect(listAdminPaymentTransactions(query,admin)).rejects.toThrow();
   } finally {

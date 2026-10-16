@@ -164,8 +164,8 @@ export async function cancelCustomerBookingCommand(id: string, actorId: string, 
 
 // Decides a refund-backed change (cancellation or price reduction) exactly once,
 // only after every refund obligation has succeeded. Called after refund commits and by
-// the recovery worker; the pending -> applied/unsuccessful transition under the
-// booking lock makes replays no-ops and guards the single notification.
+// any later check of a refund (Stripe webhook or Admin); the pending -> applied/unsuccessful
+// transition under the booking lock makes replays no-ops and guards the single notification.
 export async function resolveRefundBackedAdjustment(adjustmentId: string): Promise<BookingAdjustmentEntity["status"] | null> {
   const found = await adjustments.findAdjustment((await getDataSource()).manager, adjustmentId);
   if (!found || found.status !== "pending" || !refundBackedAdjustment(found)) return found?.status ?? null;
@@ -284,7 +284,7 @@ async function editEligibility(manager: EntityManager, a: Aggregate, actorId: st
 }
 
 async function executeReschedule(manager: EntityManager, a: Aggregate, edit: Edit, actorId: string,
-  notification: { value: BookingEmailEvent | null }, funded?: { id: string; adjustment: BookingAdjustmentEntity },
+  notification: { value: BookingEmailEvent | null }, funded?: { id: string; adjustment: BookingAdjustmentEntity; deadline: Date | null },
   superseded?: SupersededAttempt[]): Promise<BookingRescheduleResult> {
     const lockedFinancials = edit.save && !funded && a.booking.payment_method === "online"
       ? await bookingFinancials(manager,a.booking.id,true) : null;
@@ -419,10 +419,10 @@ async function executeReschedule(manager: EntityManager, a: Aggregate, edit: Edi
     if (timing(a, eligible.bypass, now) !== "eligible") return { ok: false,
       message: "The rescheduling window for this booking has closed." };
     let writeDeadline: string | null = null;
-    if (funded) {
-      const paid = funded.adjustment;
-      if (!paid || new Date(now) >= paid.expiresAt) return unavailableEdit;
-      writeDeadline = paid.expiresAt.toISOString();
+    if (funded?.deadline) {
+      // Unaccepted legacy captures must still settle before the original cutoff.
+      if (new Date(now) >= funded.deadline) return unavailableEdit;
+      writeDeadline = funded.deadline.toISOString();
     }
     if (timestampToEpochMicroseconds(now) >= timestampToEpochMicroseconds(targetStart)) return unavailableEdit;
     const reservationWritten = await reservations.updateCustomerReservationSchedule(manager, r.id, edit, writeDeadline);
@@ -452,7 +452,8 @@ export async function rescheduleCustomerBookingCommand(edit: Edit, actorId: stri
 
 // Called only inside the verified provider settlement transaction, which already
 // owns the configuration, location, booking, reservation and attempt locks.
-export async function applyCapturedBookingAdjustment(manager: EntityManager, adjustment: BookingAdjustmentEntity, attemptId: string) {
+export async function applyCapturedBookingAdjustment(manager: EntityManager, adjustment: BookingAdjustmentEntity, attemptId: string,
+  deadline: Date | null) {
   const booking = await bookings.findBookingForUpdate(manager, adjustment.bookingId, adjustment.baseRevisionId);
   const reservation = booking && await reservations.findReservationForUpdate(manager, booking.reservation_id, adjustment.target.expectedUpdatedAt);
   const resource = reservation && await reservations.findReservationResourceFacts(manager, reservation.court_id);
@@ -461,7 +462,7 @@ export async function applyCapturedBookingAdjustment(manager: EntityManager, adj
   const notification: { value: BookingEmailEvent | null } = { value: null };
   const result = await executeReschedule(manager, { booking, reservation, resource, location }, {
     ...adjustment.target, id: adjustment.bookingId, expectedRevisionId: adjustment.baseRevisionId, expectedTotal: adjustment.newTotal, save: true, priceAcknowledged: true,
-  }, adjustment.actorId, notification, { id: attemptId, adjustment });
+  }, adjustment.actorId, notification, { id: attemptId, adjustment, deadline });
   return { result, notification: notification.value };
 }
 export async function readCustomerBookingEditContext(id: string, date: string, actorId: string) {

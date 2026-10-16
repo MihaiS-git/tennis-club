@@ -185,3 +185,14 @@ export function ownsRefundExecutionLease(manager: EntityManager, input: ClaimedE
       id: input.executionId, refundId: input.refundId, token: input.token,
     }).getExists();
 }
+
+// A terminal execution keeps its write-once evidence; only the writable check
+// fields record a later provider reversal of a succeeded refund.
+export async function recordRefundReversal(manager: EntityManager, input: ExecutionIdentity & { lastError: string; checkedAt: Date }) {
+  await lockRefundExecution(manager, input);
+  const result = await manager.getRepository(RefundExecutionEntity).createQueryBuilder().update()
+    .set({ lastError: input.lastError, lastCheckedAt: input.checkedAt, updatedAt: () => "now()" })
+    .where("id = :id AND refund_id = :refundId AND terminal_result = 'succeeded'", { id: input.executionId, refundId: input.refundId })
+    .execute();
+  if (result.affected !== 1) throw new RefundExecutionIntegrityError("Only a succeeded refund execution can be reversed");
+}

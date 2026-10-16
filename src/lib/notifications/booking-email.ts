@@ -12,8 +12,10 @@ type BookingEmailSchedule = {
 export type BookingEmailEvent = {
   recipient: string;
   event_kind: "confirmed" | "customer_cancelled" | "admin_cancelled" | "customer_rescheduled"
-    // Definitive outcomes of requested changes; transient recovery sends nothing.
-    | "cancellation_failed" | "modification_failed" | "refund_incomplete";
+    // Definitive outcomes of requested changes; transient uncertainty sends nothing.
+    | "cancellation_failed" | "modification_failed" | "refund_incomplete"
+    // Captured after the checkout ended: no booking, full refund requested.
+    | "late_payment_refund";
   payload: BookingEmailSchedule & {
     booking_id: string;
     customer_name: string;
@@ -53,6 +55,7 @@ const subjects: Record<BookingEmailEvent["event_kind"], string> = {
   confirmed: "Booking confirmed", customer_cancelled: "Booking cancelled", admin_cancelled: "Booking cancelled",
   customer_rescheduled: "Booking rescheduled", cancellation_failed: "Booking cancellation not completed",
   modification_failed: "Booking change not completed", refund_incomplete: "Refund requires attention",
+  late_payment_refund: "Payment received after checkout ended",
 };
 export function renderBookingEmail(event: BookingEmailEvent): MailMessage {
   const p = event.payload;
@@ -65,12 +68,13 @@ export function renderBookingEmail(event: BookingEmailEvent): MailMessage {
     : kind === "cancellation_failed" ? "Your cancellation request could not be completed because the refund could not be processed. No money was returned and your booking remains confirmed. You can request the cancellation again or contact the club."
     : kind === "modification_failed" ? "Your requested booking change could not be completed. Your original booking is unchanged."
     : kind === "refund_incomplete" ? `A refund${p.refund_amount_minor ? ` of ${money(p.refund_amount_minor, p.currency)}` : ""} for your booking could not be completed automatically. The club will contact you to resolve it.`
+    : kind === "late_payment_refund" ? `Your payment${p.refund_amount_minor ? ` of ${money(p.refund_amount_minor, p.currency)}` : ""} was received after this checkout had already expired or been cancelled, so no booking was made. A full refund has been requested. It can take several business days to appear on your statement; you will be contacted if it cannot be completed.`
     : "Your court booking is confirmed.";
   const lines = [`Hello ${p.customer_name},`, "", intro, "",
     `Booking reference: ${p.booking_id}`, `Location: ${p.location_name}`, `Timezone: ${p.timezone}`];
   if (rescheduled && p.previous) lines.push(`Previous: ${interval(p.previous)}`);
   lines.push(`${rescheduled ? "New schedule" : "Schedule"}: ${interval(p)}`);
-  if (!cancelled && kind !== "refund_incomplete") lines.push(`Booking total: ${money(p.total_amount_minor, p.currency)}`);
+  if (!cancelled && kind !== "refund_incomplete" && kind !== "late_payment_refund") lines.push(`Booking total: ${money(p.total_amount_minor, p.currency)}`);
   if (cancelled && p.refund_status === "requested") lines.push("Your full payment refund has been requested.");
   if (cancelled && p.refund_status === "completed") lines.push("Your payment has been refunded.");
   if (rescheduled && p.refund_status === "completed") lines.push("The price difference has been refunded.");

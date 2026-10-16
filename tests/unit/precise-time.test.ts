@@ -50,3 +50,20 @@ test("payment settlement uses the earlier attempt deadline without losing micros
     attemptExpiry: "2099-10-15T00:00:00.000001Z", now: "2099-10-15T00:00:00.000001Z",
     outcome: "succeeded" }).result).toBe("expired");
 });
+
+test.each(["succeeded", "retryable_failed", "cancelled"] as const)("accepted manual capture %s remains authoritative after operational grace", outcome => {
+  const result = paymentTransition({ attemptStatus: "pending", bookingStatus: "pending_payment",
+    reservationStatus: "held", reservationExpiry: "2099-10-15T00:02:00.123456Z",
+    attemptExpiry: "2099-10-15T00:00:00.123456Z", now: "2099-10-15T01:00:00Z", outcome });
+  expect(result.deadline).toBeNull();
+  if (outcome === "succeeded") expect(result).toMatchObject({ result: "succeeded",
+    targets: { attempt: "succeeded", booking: "confirmed", reservation: "active" } });
+  if (outcome === "retryable_failed") expect(result).toMatchObject({ result: "pending", targets: null });
+  if (outcome === "cancelled") expect(result).toMatchObject({ result: "cancelled", targets: { reservation: "released" } });
+});
+
+test.each(["expired", "failed"])("verified Stripe cancellation resolves a locally %s checkout without reviving it", status => {
+  expect(paymentTransition({ attemptStatus: status, bookingStatus: status, reservationStatus: "released",
+    reservationExpiry: null, attemptExpiry: "2020-01-01T00:00:00Z", now: "2026-10-16T00:00:00Z", outcome: "cancelled" }))
+    .toEqual({ result: "cancelled", deadline: null, targets: { attempt: "cancelled", booking: status, reservation: "released" } });
+});

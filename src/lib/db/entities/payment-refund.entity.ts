@@ -23,7 +23,6 @@ import { refundReasons, type RefundReason } from "@/lib/payments/refund-context"
 @Check("payment_refunds_amount_minor_check", "(amount_minor > 0)")
 @Check("payment_refunds_provider_check", "(provider = ANY (ARRAY['stripe'::text, 'netopia'::text]))")
 @Check("payment_refunds_status_check", "(status = ANY (ARRAY['pending'::text, 'pending_retry'::text, 'succeeded'::text, 'failed'::text, 'voided'::text]))")
-@Index("payment_refunds_unresolved_idx", ["updatedAt"], { where: "status IN ('pending', 'pending_retry')" })
 @ForeignKey(() => BookingEntity, ["bookingId"], ["id"], { name: "payment_refunds_booking_id_fkey", onDelete: "RESTRICT" })
 @ForeignKey(() => PaymentAttemptEntity, ["paymentAttemptId"], ["id"], { name: "payment_refunds_payment_attempt_id_fkey", onDelete: "RESTRICT" })
 @ForeignKey(() => UserEntity, ["requestedByUserId"], ["id"], { name: "payment_refunds_requested_by_user_id_fkey", onDelete: "SET NULL" })

@@ -6,6 +6,7 @@ import { supportsOnlineCheckout } from "@/lib/payments/providers";
 import { startOnlineCheckout } from "@/lib/payments/checkout";
 import { paymentHoldDurationSeconds } from "@/lib/payments/domain";
 import { logger } from "@/lib/logger";
+import { deliverPendingBookingNotifications } from "@/lib/notifications/booking-delivery";
 
 // Provider initialization starts only after the TypeORM creation transaction commits.
 export async function commitCustomerCheckout(input: unknown) {
@@ -13,7 +14,9 @@ export async function commitCustomerCheckout(input: unknown) {
   if (intent.paymentMethod === "online" && !supportsOnlineCheckout(await activeOnlinePaymentProvider()))
     return { ok: false as const, message: "Online payment is unavailable. Choose Pay at club if offered, or try again later." };
   const result = await createCustomerBooking(intent);
-  if (!result.ok || result.status === "confirmed") return result;
+  if (!result.ok) return result;
+  // Pay at club confirms at creation; its committed confirmation email goes now.
+  if (result.status === "confirmed") { await deliverPendingBookingNotifications(); return result; }
   try {
     const checkout = await startOnlineCheckout(result.paymentAttemptId);
     return { ...result, checkout };

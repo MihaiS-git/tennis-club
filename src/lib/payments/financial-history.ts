@@ -11,7 +11,7 @@ import { describeFinancialContext, revisionContext } from "./financial-history-c
 import { summarizeReportedFinancials } from "./financials";
 
 const safeRefundErrors = new Set(["provider_request_incomplete", "provider_refund_failed", "provider_request_rejected",
-  "uncertain", "lookup_failed", "not_found", "evidence_mismatch"]);
+  "uncertain", "lookup_failed", "not_found", "evidence_mismatch", "provider_refund_reversed"]);
 const safeRefundError = (value: string | null) => value === null ? null
   : safeRefundErrors.has(value) ? value : "processing_error";
 
@@ -21,7 +21,7 @@ const refundSchema = z.object({ id: z.uuid(), amount_minor: z.number().int().pos
   status: z.enum(["pending", "pending_retry", "succeeded", "failed", "voided"]), provider_refund_id: z.string().nullable(),
   captured_amount_minor: z.number().int().positive(),
   requested_by_user_id: z.uuid().nullable(), requested_by_name: z.string().nullable(),
-  created_at: timestamp, updated_at: timestamp, recovery_started_at: timestamp, last_error: z.string().nullable() });
+  created_at: timestamp, updated_at: timestamp, outstanding_since: timestamp, last_error: z.string().nullable() });
 const transactionSchema = z.object({
   transaction_kind: z.enum(["payment", "refund", "booking"]), transaction_id: z.uuid(),
   payment_attempt_id: z.uuid().nullable(), adjustment_id: z.uuid().nullable(),
@@ -33,7 +33,7 @@ const transactionSchema = z.object({
   amount_minor: z.number().int().positive(), currency: z.enum(locationCurrencies), method: paymentMethodSchema.nullable(),
   provider: paymentProviderSchema.nullable(), payment_status: paymentStatusSchema.nullable(), provider_payment_id: z.string().nullable(),
   created_at: timestamp, updated_at: timestamp, refund: refundSchema.nullable(),
-  booking_status: z.string(), reservation_status: z.string(),
+  booking_status: z.string(), reservation_status: z.string(), payment_check_required: z.boolean().optional(),
   reconciliation: z.array(providerEventFactSchema.extend({ provider: paymentProviderSchema, attempt: paymentFactSchema, received_at: timestamp })),
 });
 

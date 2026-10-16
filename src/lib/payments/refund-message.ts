@@ -8,6 +8,6 @@ export function cancelledBookingMessage(result: CancellationOutcome) {
   const status = result.refundStatus;
   if (status === "succeeded") return "Booking cancelled. Your payment has been refunded.";
   if (status === "failed") return "Booking cancelled. Part of the refund could not be completed; the club will contact you.";
-  if (status) return "Booking cancelled. Your refund is being completed automatically.";
+  if (status) return "Booking cancelled. Your refund has been requested; you will be emailed if it cannot be completed.";
   return "Booking cancelled.";
 }

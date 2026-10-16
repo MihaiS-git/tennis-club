@@ -70,25 +70,101 @@ test.each(["confirmed", "expired"])("a late Stripe failure cannot overwrite the 
 });
 
 
-test.each(["timeout", "expiration"])("%s stops payment even with an unavailable server and ignores late Stripe responses", async reason => {
+test("3D Secure authentication longer than 30 seconds keeps Payment Element mounted and blocks another submission", async () => {
   vi.useFakeTimers();
-  let finish!: (value: unknown) => void;
-  pay.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+  let authenticate!: (value: unknown) => void;
+  pay.mockReturnValueOnce(new Promise(resolve => { authenticate = resolve; }));
+  // Stripe reports the intent as processing (requires_action) while the customer authenticates.
+  status.mockResolvedValue({ ok: true, status: "pending_payment", paymentStatus: "processing", paymentUncertain: true });
+  render(<OnlinePayment {...props} />);
+  const card = screen.getByLabelText("Card");
+  fireEvent.submit(screen.getByRole("form", { name: "Online payment" }));
+  expect(pay).toHaveBeenCalledOnce();
+  await act(async () => { await vi.advanceTimersByTimeAsync(45_000); });
+  // Never unmounted or replaced while Stripe authenticates; the spinner stops.
+  expect(screen.getByLabelText("Card")).toBe(card);
+  expect(toast.getToasts().some(item => "type" in item && item.type === "loading")).toBe(false);
+  expect(toast.warning).not.toHaveBeenCalled();
+  expect(screen.getByRole("status").textContent).toContain("Still waiting for card authentication");
+  const button = screen.getByRole("button", { name: "Waiting for authentication…" }) as HTMLButtonElement;
+  expect(button.disabled).toBe(true);
+  fireEvent.submit(screen.getByRole("form", { name: "Online payment" }));
+  expect(pay).toHaveBeenCalledOnce();
+  // Authentication succeeds after 45 s: only the server's verified capture confirms.
+  await act(async () => { authenticate({}); });
+  expect(props.onConfirmed).not.toHaveBeenCalled();
+  status.mockResolvedValue({ ok: true, status: "confirmed", paymentStatus: "succeeded", paymentUncertain: false,
+    totalAmountMinor: 1200, currency: "EUR", cancellationPolicy: null });
+  await act(async () => { await vi.advanceTimersByTimeAsync(2_100); });
+  expect(props.onConfirmed).toHaveBeenCalledWith(1200, "EUR", null);
+});
+
+test.each(["failed", "cancelled"])("%s 3D Secure authentication after 30 seconds allows another card on the same element", async () => {
+  vi.useFakeTimers();
+  let authenticate!: (value: unknown) => void;
+  pay.mockReturnValueOnce(new Promise(resolve => { authenticate = resolve; })).mockReturnValueOnce(new Promise(() => {}));
+  status.mockResolvedValue({ ok: true, status: "pending_payment", paymentStatus: "pending", paymentUncertain: false });
+  render(<OnlinePayment {...props} />);
+  const card = screen.getByLabelText("Card");
+  fireEvent.submit(screen.getByRole("form", { name: "Online payment" }));
+  await act(async () => { await vi.advanceTimersByTimeAsync(31_000); });
+  // Stripe reports failed or abandoned authentication as a card error.
+  await act(async () => { authenticate({ error: { type: "card_error", code: "payment_intent_authentication_failure",
+    message: "We are unable to authenticate your payment method." } }); });
+  expect(lastToast()).toBe("We are unable to authenticate your payment method.");
+  expect(screen.getByLabelText("Card")).toBe(card);
+  const button = screen.getByRole("button", { name: "Pay and confirm booking" }) as HTMLButtonElement;
+  expect(button.disabled).toBe(false);
+  fireEvent.submit(screen.getByRole("form", { name: "Online payment" }));
+  expect(pay).toHaveBeenCalledTimes(2);
+  expect(props.onConfirmed).not.toHaveBeenCalled();
+});
+
+test("checkout expiry during authentication keeps Payment Element until Stripe returns, then stops payment", async () => {
+  vi.useFakeTimers();
+  let authenticate!: (value: unknown) => void;
+  pay.mockReturnValue(new Promise(resolve => { authenticate = resolve; }));
   status.mockReturnValue(new Promise(() => {}));
-  render(<OnlinePayment {...props} holdExpiresAt={new Date(Date.now() + (reason === "expiration" ? 1000 : 600_000)).toISOString()} />);
+  render(<OnlinePayment {...props} holdExpiresAt={new Date(Date.now() + 1000).toISOString()} />);
+  const card = screen.getByLabelText("Card");
+  fireEvent.submit(screen.getByRole("form", { name: "Online payment" }));
+  await act(async () => { await vi.advanceTimersByTimeAsync(40_000); });
+  expect(screen.getByLabelText("Card")).toBe(card);
+  expect(screen.getByRole("status").textContent).toContain("do not pay again yet");
+  expect(toast.getToasts().some(item => "type" in item && item.type === "loading")).toBe(false);
+  // A late authorization result is never treated as a booking; the server cancels it.
+  await act(async () => { authenticate({}); });
+  expect(screen.queryByLabelText("Card")).toBeNull();
+  expect(toast.error).not.toHaveBeenCalled();
+  fireEvent.submit(screen.getByRole("form", { name: "Online payment" }));
+  expect(pay).toHaveBeenCalledOnce();
+  expect(props.onConfirmed).not.toHaveBeenCalled();
+});
+
+test("an authorized payment whose server confirmation stalls stops loading after 30 seconds and ignores late Stripe responses", async () => {
+  vi.useFakeTimers();
+  pay.mockResolvedValue({});
+  status.mockReturnValue(new Promise(() => {}));
+  render(<OnlinePayment {...props} holdExpiresAt={new Date(Date.now() + 600_000).toISOString()} />);
   fireEvent.submit(screen.getByRole("form", { name: "Online payment" }));
   expect(pay).toHaveBeenCalledOnce();
   const signal: unknown = status.mock.calls[0][1];
   if (!(signal instanceof AbortSignal)) throw new Error("Polling must support aborting independently of Server Actions");
-  await act(async () => { await vi.advanceTimersByTimeAsync(reason === "expiration" ? 1001 : 31_000); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(31_000); });
+  // No authentication is in flight, so the bounded uncertainty applies.
   expect(screen.queryByLabelText("Card")).toBeNull();
   expect(screen.getByRole("status").textContent).toContain("do not pay again yet");
   expect(toast.getToasts().some(item => "type" in item && item.type === "loading")).toBe(false);
-  await act(async () => { finish({ error: { type: "card_error", message: "Late decline" } }); });
-  expect(toast.error).not.toHaveBeenCalled();
   fireEvent.submit(screen.getByRole("form", { name: "Online payment" }));
   expect(pay).toHaveBeenCalledOnce();
   expect(props.onConfirmed).not.toHaveBeenCalled();
   cleanup();
   expect(signal.aborted).toBe(true);
+});
+
+test("a failed modification payment says the original booking is unchanged, never cancelled", async () => {
+  status.mockResolvedValue({ ok: true, status: "expired", paymentStatus: "refund_pending", paymentUncertain: false });
+  render(<OnlinePayment {...props} purpose="modification" />);
+  await waitFor(() => expect(screen.getByRole("status").textContent).toContain("Your original booking is unchanged"));
+  expect(screen.getByRole("status").textContent).not.toMatch(/cancelled|not confirmed/i);
 });

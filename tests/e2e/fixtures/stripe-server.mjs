@@ -36,7 +36,10 @@ const server = createServer(async (req, res) => {
   if(path==="/fixture/confirm") {
     const id=JSON.parse(raw).id; const intent=intents.get(id);
     if(!intent) return reply({error:"Missing intent"},404);
-    intent.status="succeeded"; intent.amount_received=intent.amount; return reply(intent);
+    // Manual-capture intents only authorize; the application server captures.
+    if(intent.capture_method==="manual") { intent.status="requires_capture"; intent.amount_capturable=intent.amount; }
+    else { intent.status="succeeded"; intent.amount_received=intent.amount; }
+    return reply(intent);
   }
   const key=req.headers["idempotency-key"];
   if(req.method==="POST" && key && requests.has(key)) return reply(requests.get(key));
@@ -44,6 +47,7 @@ const server = createServer(async (req, res) => {
     const id=`pi_fixture${++next}`;
     const intent={id,object:"payment_intent",amount:Number(body.get("amount")),amount_received:0,
       currency:body.get("currency"),status:"requires_payment_method",client_secret:`${id}_secret_fixture`,
+      capture_method:body.get("capture_method") ?? "automatic",amount_capturable:0,
       metadata:{payment_attempt_id:body.get("metadata[payment_attempt_id]")}};
     intents.set(id,intent); if(key) requests.set(key,intent); return reply(intent);
   }
@@ -53,6 +57,11 @@ const server = createServer(async (req, res) => {
     if(path.endsWith("/cancel")) {
       if(intent.status==="succeeded") return reply({error:{type:"invalid_request_error",message:"Already captured"}},400);
       intent.status="canceled";
+    }
+    if(path.endsWith("/capture")) {
+      if(intent.status!=="requires_capture") return reply({error:{type:"invalid_request_error",message:"Not capturable"}},400);
+      intent.status="succeeded"; intent.amount_received=intent.amount_capturable; intent.amount_capturable=0;
+      if(key) requests.set(key,intent);
     }
     return reply(intent);
   }

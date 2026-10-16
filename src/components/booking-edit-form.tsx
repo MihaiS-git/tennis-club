@@ -59,7 +59,7 @@ function BookingPrice({ id, context, draft, currency, quote, acknowledged, onQuo
       {formatMoney(Math.abs(currentQuote.total - context.total_amount_minor), currency)}
     </p>}
     {context.refunds.map(refund => <p key={refund.id} className="mt-2">
-      Refund {formatMoney(refund.amount, currency)}: {refund.status === "succeeded" ? "completed" : refund.status === "failed" ? "could not be completed; the club will contact you" : refund.status === "voided" ? "not made; the change was abandoned" : "being completed automatically"}
+      Refund {formatMoney(refund.amount, currency)}: {refund.status === "succeeded" ? "completed" : refund.status === "failed" ? "could not be completed; the club will contact you" : refund.status === "voided" ? "not made; the change was abandoned" : "requested, awaiting confirmation"}
     </p>)}
     {currentQuote && (currentQuote.total !== context.total_amount_minor || currentQuote.requiresConfirmation) && <label className="mt-2 flex items-center gap-2">
       <input type="checkbox" checked={acknowledged} disabled={pending} onChange={(event) => onAcknowledge(event.target.checked)} />
@@ -123,7 +123,7 @@ export function BookingEditForm({ booking, location, onCancel, onSaved, onPendin
       {adjustment.refundStatus && <dl className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
         <dt className="text-muted-foreground">Refund status</dt>
         <dd role="status" className={`rounded-full px-3 py-1 text-xs font-semibold ${adjustment.refundStatus === "succeeded" ? "bg-success-background text-success" : adjustment.refundStatus === "failed" ? "bg-danger-background text-danger" : "bg-warning-background text-foreground"}`}>
-          {adjustment.refundStatus === "succeeded" ? "Refund completed" : adjustment.refundStatus === "failed" ? "Refund could not be completed; the club will contact you" : "Refund being confirmed automatically"}
+          {adjustment.refundStatus === "succeeded" ? "Refund completed" : adjustment.refundStatus === "failed" ? "Refund could not be completed; the club will contact you" : "Refund requested, awaiting confirmation"}
         </dd>
       </dl>}
     </div>
@@ -132,7 +132,7 @@ export function BookingEditForm({ booking, location, onCancel, onSaved, onPendin
     : adjustment.adjustmentStatus === "pending" ? <>
       <p className="text-muted-foreground">Your original booking remains confirmed until payment and the change are verified.</p>
       {adjustment.checkout && adjustment.holdExpiresAt ? <OnlinePayment checkout={adjustment.checkout}
-        holdExpiresAt={adjustment.holdExpiresAt} confirmationMessage="Booking modification completed."
+        holdExpiresAt={adjustment.holdExpiresAt} purpose="modification" confirmationMessage="Booking modification completed."
         onConfirmed={() => { if (!active.current) return; onAdjustment?.(null); void onSaved().catch(() => toast.warning("Booking modification completed. Unable to refresh its details.")); }} />
         : <p role="status">Payment could not be started. Close this window; your booking has not changed.</p>}
     </> : adjustment.adjustmentStatus !== "applied" && <p className="text-muted-foreground">The original booking was preserved.</p>}

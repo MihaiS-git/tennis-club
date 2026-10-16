@@ -181,6 +181,11 @@ function ManagementNavigation({
                   matches("/admin/payments/transactions"),
                 )}
                 {destination(
+                  "Notifications",
+                  "/admin/payments/notifications",
+                  matches("/admin/payments/notifications"),
+                )}
+                {destination(
                   "Settings",
                   "/admin/payments/settings",
                   matches("/admin/payments/settings"),

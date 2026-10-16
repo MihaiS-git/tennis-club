@@ -366,7 +366,8 @@ commit instead: the booking stays confirmed until the refund is verified, is can
 then. Any incomplete refund preserves the original booking and reservation, including
 when other refunds have succeeded. Known transient provider failures permit new executions;
 permanent or ambiguous failures preserve the outstanding obligation and notify the customer
-for external resolution. External refund execution is post-commit and completed by automatic recovery.
+for external resolution. Refund execution runs after commit in the same request; an unconfirmed
+outcome is completed by a signed Stripe refund webhook or the Admin "Check with Stripe" action.
 Repeated requests reuse the existing request and refunds; other duplicate cancellations
 return a safe failure.
 Upcoming refreshes in place; cancelled bookings enter History and free occupancy.
@@ -1614,9 +1615,11 @@ Use only the snapshotted the current revision’s `customer_email`, never the cu
 Quote, stale, failed and unchanged-schedule saves send no rescheduling email;
 pending/failed/expired checkout sends no confirmation. Transition and webhook receipt
 checks and unique event keys prevent duplicate notification records. Booking email work
-commits atomically in `booking_notification_deliveries`; the existing recovery scheduler
-sends it through Brevo after commit, using leases, retry backoff and a stable provider
-idempotency key. Ambiguous delivery is retried: duplicates remain possible after Brevo's
+commits atomically in `booking_notification_deliveries`; the request that committed it
+sends it through Brevo after commit, using short leases, bounded retry backoff (later
+requests plus a five-minute Supabase Cron call to `POST /api/notifications/deliver`,
+authenticated by `NOTIFICATION_CRON_SECRET`) and a stable provider idempotency key. Important financial exceptions are
+also shown in My activity until the booking owner acknowledges them. Ambiguous delivery is retried: duplicates remain possible after Brevo's
 bounded key retention expires. Provider acceptance does not guarantee inbox delivery.
 Email failure cannot change committed booking/payment state. Server-only
 `BREVO_API_KEY` and a Brevo-verified `BOOKING_MAIL_FROM` are required.
@@ -1639,13 +1642,15 @@ lease expiry and a crash do not authorize another creation.
 
 Result transactions retain write-once identity, uncertainty and terminal evidence.
 Current lease tokens fence error/check updates and lease clearing; stale workers may
-record valid historical provider facts without clearing a newer lease. Verified success
-cannot regress. Eligible receipt resolution commits atomically with completion; existing
-automatic adjustment and Admin reconciliation attribution rules remain. Admin retry may
-allocate a distinct execution only after verified failure or definitive rejection.
-Automatic processing retains terminal short-circuits. PaymentRefund stores immutable
-obligation terms plus status/timestamps; provider references/errors come from executions.
-No refund notifications, scheduled worker, dual writes or provider history JSON remain.
+record valid historical provider facts without clearing a newer lease. Success evidence is
+write-once; if Stripe later fails a succeeded refund, the execution records
+`provider_refund_reversed` and the obligation becomes `failed` without a replacement.
+Eligible receipt resolution commits atomically with completion. The Admin "Check with
+Stripe" action may allocate a distinct execution only after Stripe affirmatively rejected
+the refund as retryable; definitive failures are never re-sent. PaymentRefund stores
+immutable obligation terms plus status/timestamps; provider references/errors come from
+executions. Refund exceptions notify the customer (`refund_incomplete`); there is no
+scheduled worker, dual write or provider history JSON.
 
 ## Application migrations and fresh local setup
 
@@ -1715,16 +1720,19 @@ redirect to their canonical destinations while preserving query parameters.
 Refund-backed changes require all obligations to succeed before application. Successful
 partial refunds cannot be reversed or repeated; remaining obligations retain their financial
 reservation. Only verified transient failures (`insufficient_funds` refund failure or
-`balance_insufficient` request rejection) authorize a replacement execution, after one hour.
+`balance_insufficient` request rejection) authorize a replacement execution, and only
+through the Admin "Check with Stripe" action.
 Other definitive failures require external repayment resolution, preserving the booking.
 
-After the 23-hour conservative replay cutoff, recovery fully paginates Stripe refunds for
+After the 23-hour conservative replay cutoff, a refund check fully paginates Stripe refunds for
 the PaymentIntent and matches obligation/execution metadata plus payment, amount and currency.
 It never resends an uncertain request beyond that cutoff. Missing/conflicting evidence is
 persisted as an explicit unresolved exception, not proof that no money moved; evidence-only
 reconciliation continues. Stripe cannot resolve every crash-before-dispatch ambiguity.
 
-Apply additive migration `1791462257928-DurableBookingNotifications` after the automatic
-recovery migration, before deploying these callers. Keep the existing Node scheduler enabled
-and Brevo configured. See [durable booking email guarantees](docs/booking-notifications.md).
-No development database rebuild or migration was run for these changes.
+There is no background financial scheduler (Supabase Cron only retries booking emails): payments and refunds resolve through requests, signed
+Stripe webhooks (subscribe to the payment and `refund.*` events listed in
+[payments](docs/payments-memberships.md#recovery-without-a-scheduler)) and the Admin
+"Check with Stripe" action, so the app runs on serverless hosting. Apply migrations
+`1791462257928-DurableBookingNotifications`, `1791462257929-RequestDrivenPaymentRecovery`
+and `1791462257930-SurchargeCaptureAcceptance` before deploying, and configure Brevo. See [durable booking email guarantees](docs/booking-notifications.md).

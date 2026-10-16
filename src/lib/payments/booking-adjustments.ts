@@ -8,6 +8,7 @@ import * as bookings from "@/lib/db/repositories/bookings.repository";
 import { lockLocations } from "@/lib/db/repositories/clubs.repository";
 import type { BookingRescheduleResult } from "@/lib/bookings/reschedule";
 import { logger } from "@/lib/logger";
+import { deliverPendingBookingNotifications } from "@/lib/notifications/booking-delivery";
 import { processBookingRefund } from "./refunds";
 import { summarizeRefunds, type PaymentProvider } from "./domain";
 import { onlinePaymentAdapter } from "./providers";
@@ -87,6 +88,9 @@ export async function dismissAdjustment(adjustmentId: string) {
     const locked = current && await payments.lockCheckoutAttempt(m, current.id);
     if (!locked || locked.status !== "pending" || !locked.provider) return null;
     await payments.revokeCheckoutCapability(m, locked.id);
+    // An authorization already accepted for capture is collected and applied, or
+    // refunded by settlement; dismissal never races it with a cancellation.
+    if ((await adjustments.findAdjustment(m, adjustmentId))?.captureAcceptedAt != null) return null;
     if (locked.providerPaymentId) return { id: locked.id, provider: locked.provider, providerPaymentId: locked.providerPaymentId };
     // No payment was ever registered: discard and release immediately.
     const status = (await adjustments.findAdjustment(m, adjustmentId))?.status;
@@ -104,6 +108,13 @@ export async function dismissAdjustment(adjustmentId: string) {
 }
 
 export async function finishBookingAdjustment(result: BookingRescheduleResult & { supersededAttempts?: DismissedAttempt[] }): Promise<BookingRescheduleResult> {
+  const outcome = await adjustmentOutcome(result);
+  // Same-price and Pay-at-club saves committed their email in the command.
+  await deliverPendingBookingNotifications();
+  return outcome;
+}
+
+async function adjustmentOutcome(result: BookingRescheduleResult & { supersededAttempts?: DismissedAttempt[] }): Promise<BookingRescheduleResult> {
   const { supersededAttempts = [], ...outcome } = result;
   for (const attempt of supersededAttempts) {
     try { await resolveDismissedPayment(attempt); }
@@ -115,7 +126,8 @@ export async function finishBookingAdjustment(result: BookingRescheduleResult & 
   const statuses = await Promise.all(refundIds.map(id => processBookingRefund(id)));
   if (refundIds.length) {
     // A reduction waits for verified refunds; Stripe usually confirms at once and
-    // the change is then already applied. Otherwise recovery finishes it later.
+    // the change is then already applied. Otherwise the Stripe refund webhook (or
+    // an Admin check) finishes it later.
     const current = await adjustments.findAdjustment((await getDataSource()).manager, outcome.adjustmentId);
     return { ...outcome, refundIds, refundStatus: summarizeRefunds(statuses), adjustmentStatus: current?.status ?? outcome.adjustmentStatus };
   }

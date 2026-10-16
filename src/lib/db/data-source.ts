@@ -29,14 +29,12 @@ import { PricingRuleSetEntity } from "./entities/pricing-rule-set.entity";
 import { OpeningHoursScheduleEntity } from "./entities/opening-hours-schedule.entity";
 
 import { BookingAdjustmentEntity } from "./entities/booking-adjustment.entity";
-import { JobLeaseEntity } from "./entities/job-lease.entity";
 
 const entities = {
   AuthUserEntity,
   RefundExecutionEntity,
   BookingRevisionEntity,
   BookingAdjustmentEntity,
-  JobLeaseEntity,
   OpeningHoursScheduleEntity,
   BookingEntity, PaymentAttemptEntity, PaymentCaptureReceiptEntity, PaymentProviderChangeEntity, PaymentProviderEventEntity,
   PaymentProviderSettingEntity, PaymentRefundEntity, CourtReservationEntity,

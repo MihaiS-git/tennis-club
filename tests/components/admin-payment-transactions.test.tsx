@@ -3,8 +3,9 @@ import { afterEach, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { TransactionRow } from "@/app/admin/payments/transaction-row";
 import type { AdminPaymentTransaction } from "@/lib/payments/admin";
-const { push } = vi.hoisted(() => ({ push: vi.fn() }));
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
+const { push, refresh, check } = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn(), check: vi.fn() }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push, refresh }) }));
+vi.mock("@/app/admin/payments/actions", () => ({ checkRefundWithProviderAction: check, checkPaymentWithProviderAction: check }));
 const contract = {
   revisionId: "cd000000-0000-4000-8000-000000000005", bookingState: "cancelled" as const,
   courtId: "cd000000-0000-4000-8000-000000000006", locationId: "cd000000-0000-4000-8000-000000000007",
@@ -32,19 +33,20 @@ const transaction: AdminPaymentTransaction = {
   booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660, court_name: "Court 1", location_name: "Club", location_timezone: "UTC",
   refund: { id: "cd000000-0000-4000-8000-000000000003", amount_minor: 5000, currency: "RON", status: "pending_retry", provider_refund_id: null,
     reason: "booking_cancellation", context_revision_id: contract.revisionId, captured_amount_minor: 5000,
-    requested_by_user_id: null, requested_by_name: "Administrator", created_at: "2026-10-06T11:00:00Z", updated_at: "2026-10-06T12:00:00Z", recovery_started_at: "2026-10-06T11:00:00Z", last_error: "provider_request_incomplete" },
-  reconciliation: [], needsAttention: false, refundStalled: false,
+    requested_by_user_id: null, requested_by_name: "Administrator", created_at: "2026-10-06T11:00:00Z", updated_at: "2026-10-06T12:00:00Z", outstanding_since: "2026-10-06T11:00:00Z", last_error: "provider_request_incomplete" },
+  reconciliation: [], needsAttention: false, refundUnconfirmed: false,
 };
-afterEach(() => { cleanup(); push.mockReset(); });
+afterEach(() => { cleanup(); push.mockReset(); refresh.mockReset(); check.mockReset(); });
 
 const lateEvent: AdminPaymentTransaction["reconciliation"][number] = {
   event_id: "late-capture-event", provider: "stripe", outcome: "succeeded", settlement_result: "expired",
   reconciliation_required: true, auto_refund: true, received_at: "2026-10-06T11:00:00Z", resolved_at: null, resolved_by_user_id: null,
 };
 
-test("routine refund uncertainty explains automatic recovery without manual controls", () => {
+test("a recently requested refund awaits Stripe without manual controls", () => {
   render(<TransactionRow detail transaction={transaction} />);
-  expect(screen.getByText("The refund is being confirmed with Stripe automatically. No action is needed.")).toBeDefined();
+  expect(screen.getByText("The refund has been requested from Stripe and is awaiting confirmation.")).toBeDefined();
+  expect(screen.queryByRole("button", { name: "Check with Stripe" })).toBeNull();
   expect(screen.queryByRole("region", { name: "Needs attention" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Retry refund" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Refund captured payment" })).toBeNull();
@@ -53,7 +55,7 @@ test("routine refund uncertainty explains automatic recovery without manual cont
 test("late captured payment explains automatic compensation without reclaiming the court", () => {
   render(<TransactionRow detail transaction={{ ...transaction, refund: null, reconciliation: [lateEvent], needsAttention: true }} />);
   const attention = within(screen.getByRole("region", { name: "Needs attention" }));
-  expect(attention.getByText(/court was not reclaimed; the payment is being returned automatically/)).toBeDefined();
+  expect(attention.getByText(/court was not reclaimed; a full refund was requested automatically/)).toBeDefined();
   expect(screen.queryByRole("button", { name: "Refund captured payment" })).toBeNull();
 });
 
@@ -127,11 +129,16 @@ test.each([
   expect(screen.getByText(/arrange the repayment with the customer directly/)).toBeDefined();
 });
 
-test("stalled recovery requests investigation without offering another refund", () => {
-  render(<TransactionRow detail transaction={{ ...transaction, needsAttention: true, refundStalled: true }} />);
-  expect(screen.getByText(/over a day.*Check it in the Stripe Dashboard/)).toBeDefined();
-  expect(screen.getByText(/Do not issue another refund/)).toBeDefined();
-  expect(screen.queryByRole("button")).toBeNull();
+test("an unconfirmed refund offers only Check with Stripe, never another refund", async () => {
+  check.mockResolvedValue({ ok: true, status: "succeeded" });
+  render(<TransactionRow detail transaction={{ ...transaction, needsAttention: true, refundUnconfirmed: true }} />);
+  const attention = within(screen.getByRole("region", { name: "Needs attention" }));
+  expect(attention.getByText(/Stripe has not confirmed this refund/)).toBeDefined();
+  expect(attention.getByText(/never sends a second refund/)).toBeDefined();
+  expect(screen.queryByRole("button", { name: "Retry refund" })).toBeNull();
+  fireEvent.click(attention.getByRole("button", { name: "Check with Stripe" }));
+  await vi.waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+  expect(check).toHaveBeenCalledWith({ refundId: transaction.refund?.id });
 });
 
 test("Admin detail excludes execution internals and raw provider errors", () => {
@@ -141,4 +148,15 @@ test("Admin detail excludes execution internals and raw provider errors", () => 
   expect(screen.queryByRole("region", { name: "Refund execution history" })).toBeNull();
   expect(screen.queryByText("Technical details")).toBeNull();
   expect(screen.queryByText("capture-original")).toBeNull();
+});
+
+test("an overdue payment is visible with an explicit evidence-only Stripe check", async () => {
+  check.mockResolvedValue({ ok: true, status: "cancelled" });
+  render(<TransactionRow detail transaction={{ ...transaction, transaction_kind: "payment", refund: null,
+    transaction_status: "pending", payment_check_required: true, needsAttention: true }} />);
+  const attention = within(screen.getByRole("region", { name: "Needs attention" }));
+  expect(attention.getByText(/never starts another capture/)).toBeDefined();
+  fireEvent.click(attention.getByRole("button", { name: "Check with Stripe" }));
+  await vi.waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+  expect(check).toHaveBeenCalledWith({ attemptId: transaction.payment_attempt_id });
 });

@@ -50,9 +50,10 @@ afterAll(async () => {
   await database.destroy();
 });
 
-test("five registered migrations match application metadata without schema changes", async () => {
+test("seven registered migrations match application metadata without schema changes", async () => {
   expect((await database.query("SELECT name FROM public.migrations ORDER BY timestamp")).map((row: { name: string }) => row.name))
-    .toEqual(["InitialApplicationSchema1791462257924", "ApplicationNativeIntegrity1791462257925", "SupabaseAuthStorage1791462257926", "AutomaticFinancialRecovery1791462257927", "DurableBookingNotifications1791462257928"]);
+    .toEqual(["InitialApplicationSchema1791462257924", "ApplicationNativeIntegrity1791462257925", "SupabaseAuthStorage1791462257926", "AutomaticFinancialRecovery1791462257927", "DurableBookingNotifications1791462257928", "RequestDrivenPaymentRecovery1791462257929", "SurchargeCaptureAcceptance1791462257930"]);
+  expect(await database.query("SELECT to_regclass('public.job_leases') AS job_leases")).toEqual([{ job_leases: null }]);
   const diff = await database.driver.createSchemaBuilder().log();
   expect(diff.upQueries).toEqual([]);
   expect(diff.downQueries).toEqual([]);

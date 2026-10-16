@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { renderBookingEmail, type BookingEmailEvent } from "@/lib/notifications/booking-email";
-import { sendMail } from "@/lib/mail/brevo";
+import { deliverMail } from "@/lib/mail/brevo";
 const logError = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/logger", () => ({ logger: { error: logError } }));
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); logError.mockClear(); });
@@ -42,7 +42,7 @@ function configuredFetch() {
 }
 test("Brevo accepts the preserved text template with server credentials and a bounded request", async () => {
   const request = configuredFetch();
-  await sendMail(message);
+  expect(await deliverMail(message)).toBe("accepted");
   const [url, options] = request.mock.calls[0];
   expect(url).toBe("https://api.brevo.com/v3/smtp/email");
   expect(options.headers["api-key"]).toBe("private-test-key");
@@ -52,10 +52,16 @@ test("Brevo accepts the preserved text template with server credentials and a bo
 });
 test("provider rejection logs only the HTTP status and resolves without retries", async () => {
   const request = configuredFetch().mockResolvedValue(new Response("sensitive provider body", { status: 400 }));
-  await expect(sendMail(message)).resolves.toBeUndefined();
+  await expect(deliverMail(message)).resolves.toBe("rejected");
   expect(request).toHaveBeenCalledTimes(1);
   expect(logError.mock.calls).toEqual([[{ event: "booking_email.provider_rejected", status: 400 }, "Brevo rejected booking email"]]);
 });
+test.each([[408, "unavailable"], [429, "unavailable"], [500, "unavailable"], [503, "unavailable"], [401, "rejected"], [422, "rejected"]] as const)(
+  "Brevo HTTP %i is classified as %s", async (status, result) => {
+    configuredFetch().mockResolvedValue(new Response("sensitive provider body", { status }));
+    await expect(deliverMail(message)).resolves.toBe(result);
+    expect(JSON.stringify(logError.mock.calls)).not.toContain("sensitive");
+  });
 test("timeout aborts the request and resolves without retries or transport details", async () => {
   const request = configuredFetch();
   const controller = new AbortController();
@@ -63,16 +69,16 @@ test("timeout aborts the request and resolves without retries or transport detai
   request.mockImplementation((_url, options) => new Promise((_resolve, reject) => {
     options.signal.addEventListener("abort", () => reject(new Error("sensitive transport details")));
   }));
-  const sending = sendMail(message);
+  const sending = deliverMail(message);
   controller.abort();
-  await expect(sending).resolves.toBeUndefined();
-  expect(timeout).toHaveBeenCalledWith(10_000);
+  await expect(sending).resolves.toBe("unconfirmed");
+  expect(timeout).toHaveBeenCalledWith(5_000);
   expect(request).toHaveBeenCalledTimes(1);
   expect(logError.mock.calls).toEqual([[{ event: "booking_email.delivery_failed" }, "Brevo request failed or timed out"]]);
 });
 test("missing configuration skips HTTP and reports required variables safely", async () => {
   const request = configuredFetch(); vi.stubEnv("BREVO_API_KEY", "");
-  await expect(sendMail(message)).resolves.toBeUndefined();
+  await expect(deliverMail(message)).resolves.toBe("not_configured");
   expect(request).not.toHaveBeenCalled();
   expect(logError).toHaveBeenCalled();
 });

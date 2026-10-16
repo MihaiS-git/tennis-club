@@ -2,10 +2,22 @@ import { publicationHoursSchema, publicationPricingSchema } from "@/lib/location
 import "server-only";
 
 import type { EntityManager } from "typeorm";
+import { checkoutCaptureGraceSeconds } from "@/lib/payments/domain";
 import { z } from "zod";
 import { openingIntervalSchema } from "@/lib/admin/opening-hours-validation";
 import { mondayWeekday } from "@/lib/pricing/resolution";
 import { CourtReservationEntity } from "../entities/court-reservation.entity";
+
+// Static SQL alias r is used by occupancy and expiry reads. Accepted capture
+// owns occupancy until a definitive provider outcome, independently of grace.
+// Initial checkout retains its existing exact hold-extension acceptance marker.
+export const acceptedCaptureOccupancy = `(
+  EXISTS (SELECT 1 FROM public.bookings cb JOIN public.payment_attempts cp ON cp.booking_id=cb.id
+    WHERE cb.reservation_id=r.id AND cp.adjustment_id IS NULL AND cp.status='pending'
+      AND r.hold_expires_at=cp.expires_at+make_interval(secs => ${checkoutCaptureGraceSeconds}))
+  OR EXISTS (SELECT 1 FROM public.booking_adjustments ca JOIN public.payment_attempts cp ON cp.adjustment_id=ca.id
+    WHERE ca.id=r.adjustment_id AND ca.status='pending' AND ca.capture_accepted_at IS NOT NULL AND cp.status='pending')
+)`;
 
 // Casting before pg hydration preserves microseconds. PostgreSQL's timestamp
 // text trims fractional zeros, matching PostgREST's UTC timestamptz tokens.
@@ -133,7 +145,7 @@ export async function findReservationOccupancy(manager: EntityManager, scope: { 
   if ("courtIds" in scope && !scope.courtIds.length) return [];
   const rows: unknown = await manager.query(
     `SELECT r.court_id, r.starts_at_minute, r.ends_at_minute, r.status,
-     ${timestamp("r.hold_expires_at")} AS hold_expires_at FROM public.court_reservations r
+     ${timestamp("r.hold_expires_at")} AS hold_expires_at, ${acceptedCaptureOccupancy} AS capture_accepted FROM public.court_reservations r
      JOIN public.courts c ON c.id = r.court_id AND c.is_active
      JOIN public.locations l ON l.id = c.location_id AND l.is_active AND l.archived_at IS NULL
      WHERE r.booking_date = $1 AND r.status IN ('active', 'held')
@@ -143,7 +155,7 @@ export async function findReservationOccupancy(manager: EntityManager, scope: { 
     [date, "courtIds" in scope ? scope.courtIds : scope.locationId, excludeReservationId ?? null, offset, limit],
   );
   return z.array(z.object({ court_id: z.uuid(), starts_at_minute: z.number().int(), ends_at_minute: z.number().int(),
-    status: z.enum(["active", "held"]), hold_expires_at: instant.nullable() })).parse(rows);
+    status: z.enum(["active", "held"]), hold_expires_at: instant.nullable(), capture_accepted: z.boolean() })).parse(rows);
 }
 
 export async function findReservationEditContext(manager: EntityManager, id: string, ownerId?: string) {
@@ -208,8 +220,8 @@ export async function insertCustomerReservation(manager: EntityManager, input: {
 export async function findCheckoutOccupancy(manager: EntityManager, courtId: string, date: string, excludeId?: string, checkedAt?: string) {
   const rows: unknown = await manager.query(
     `SELECT court_id,booking_date::text,starts_at_minute,ends_at_minute
-     FROM public.court_reservations WHERE court_id=$1 AND booking_date=$2
-       AND (status='active' OR (status='held' AND hold_expires_at > coalesce($4::timestamptz,statement_timestamp())))
+     FROM public.court_reservations r WHERE court_id=$1 AND booking_date=$2
+       AND (status='active' OR (status='held' AND (hold_expires_at > coalesce($4::timestamptz,statement_timestamp()) OR ${acceptedCaptureOccupancy})))
        AND ($3::uuid IS NULL OR id<>$3)`, [courtId, date, excludeId ?? null, checkedAt ?? null],
   );
   return z.array(z.object({ court_id: z.uuid(), booking_date: z.iso.date(),
@@ -248,11 +260,26 @@ export async function listCustomerEditOccupancy(manager: EntityManager, location
     `SELECT r.court_id,r.starts_at_minute,r.ends_at_minute FROM public.court_reservations r
      JOIN public.courts c ON c.id=r.court_id AND c.is_active
      WHERE c.location_id=$1 AND r.booking_date=$2 AND r.id<>$3
-       AND (r.status='active' OR (r.status='held' AND r.hold_expires_at>clock_timestamp()))
+       AND (r.status='active' OR (r.status='held' AND (r.hold_expires_at>clock_timestamp() OR ${acceptedCaptureOccupancy})))
      ORDER BY r.court_id,r.starts_at_minute,r.id`, [locationId,date,excludeId]);
   return z.array(z.object({ court_id:z.uuid(),starts_at_minute:z.number().int(),ends_at_minute:z.number().int() })).parse(rows);
 }
 
+
+// Caller holds the location, booking, reservation and attempt locks and has
+// accepted a manual-capture authorization. The hold ends exactly at the attempt
+// deadline plus the operational grace, which records acceptance durably.
+// Occupancy remains protected after that marker until the operation resolves.
+export async function extendCheckoutHoldForCapture(manager: EntityManager, input: {
+  reservationId: string; attemptId: string; graceSeconds: number;
+}) {
+  const rows: unknown = await manager.query(`WITH changed AS (UPDATE public.court_reservations r
+    SET hold_expires_at=p.expires_at+make_interval(secs => $3::integer)
+    FROM public.payment_attempts p WHERE r.id=$1 AND p.id=$2 AND r.status='held' AND p.status='pending'
+      AND r.hold_expires_at>clock_timestamp() AND p.expires_at>clock_timestamp()
+    RETURNING r.id) SELECT id FROM changed`, [input.reservationId, input.attemptId, input.graceSeconds]);
+  return z.array(z.object({ id: z.uuid() })).parse(rows).length === 1;
+}
 
 export async function updateSettlementReservationStatus(manager: EntityManager, id: string, status: string) {
   await manager.query("UPDATE public.court_reservations SET status=$2,hold_expires_at=NULL WHERE id=$1", [id,status]);
@@ -263,7 +290,7 @@ export async function listPublicDayOccupancy(manager: EntityManager, locationId:
     FROM public.court_reservations r JOIN public.courts c ON c.id=r.court_id AND c.is_active
     JOIN public.locations l ON l.id=c.location_id AND l.is_active AND l.archived_at IS NULL AND l.is_public
     WHERE l.id=$1 AND r.court_id=ANY($2::uuid[]) AND r.booking_date=$3::date
-      AND (r.status='active' OR (r.status='held' AND r.hold_expires_at>statement_timestamp()))`,
+      AND (r.status='active' OR (r.status='held' AND (r.hold_expires_at>statement_timestamp() OR ${acceptedCaptureOccupancy})))`,
     [locationId,courtIds,date]);
 }
 

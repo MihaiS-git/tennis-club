@@ -71,7 +71,7 @@ export async function readInternalOccupancy(scope: { courtIds: string[] } | { lo
       for (const row of rows) {
         const expiry = Date.parse(row.hold_expires_at ?? "");
         const submillisecond = row.hold_expires_at?.match(/\.(\d+)/)?.[1].slice(3) ?? "";
-        if (row.status === "active" || expiry > now.getTime()
+        if (row.status === "active" || row.capture_accepted || expiry > now.getTime()
           || expiry === now.getTime() && /[1-9]/.test(submillisecond)) {
           occupancy.push({ court_id: row.court_id, starts_at_minute: row.starts_at_minute, ends_at_minute: row.ends_at_minute });
         }

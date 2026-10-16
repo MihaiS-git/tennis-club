@@ -2,6 +2,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import type { EntityManager } from "typeorm";
 import { z } from "zod";
+import { checkoutCaptureGraceSeconds } from "@/lib/payments/domain";
 import { BookingAdjustmentEntity, type AdjustmentKind, type AdjustmentTarget } from "../entities/booking-adjustment.entity";
 import { PaymentAttemptEntity } from "../entities/payment-attempt.entity";
 import { PaymentRefundEntity } from "../entities/payment-refund.entity";
@@ -18,12 +19,12 @@ export async function findAdjustment(manager: EntityManager, id: string) {
 export async function findPendingAdjustment(manager: EntityManager, bookingId: string) {
   return manager.getRepository(BookingAdjustmentEntity).findOne({ where: { bookingId, status: "pending" } });
 }
-// Payment attempt facts are immutable, so the occupancy lease lives on the
-// target holds. A hold lease later than the immutable lateness cutoff records
-// verified evidence of a live (processing) payment.
+// Accepted capture protects a proposal even when it needs no extra occupancy.
+// Processing payments retain their existing bounded occupancy lease.
 const liveHold = `EXISTS(SELECT 1 FROM public.court_reservations r WHERE r.adjustment_id=a.id AND r.status='held'
   AND r.hold_expires_at>a.expires_at AND r.hold_expires_at>clock_timestamp())`;
-const livePayment = `p.status='pending' AND ${liveHold}`;
+const liveCapture = `a.capture_accepted_at IS NOT NULL`;
+const livePayment = `p.status='pending' AND ((${liveCapture}) OR ${liveHold})`;
 export async function listBookingsWithLivePayment(manager: EntityManager, bookingIds: readonly string[]) {
   if (!bookingIds.length) return new Set<string>();
   const rows: unknown = await manager.query(`SELECT DISTINCT a.booking_id FROM public.booking_adjustments a
@@ -40,12 +41,35 @@ export async function hasLivePayment(manager: EntityManager, adjustmentId: strin
 // lateness cutoff (booking_adjustments.expires_at) never moves.
 export async function extendAdjustmentLease(manager: EntityManager, adjustmentId: string, until: string) {
   await manager.query(`UPDATE public.court_reservations SET hold_expires_at=greatest(hold_expires_at,$2::timestamptz),updated_at=now()
-    WHERE adjustment_id=$1 AND status='held' AND $2::timestamptz>clock_timestamp()`, [adjustmentId, until]);
+    WHERE adjustment_id=$1 AND status='held' AND $2::timestamptz>clock_timestamp()
+      AND NOT EXISTS (SELECT 1 FROM public.booking_adjustments a WHERE a.id=$1 AND a.capture_accepted_at IS NOT NULL)`, [adjustmentId, until]);
 }
 // The payment is no longer in flight; the lease returns to the lateness cutoff.
 export async function resetAdjustmentLease(manager: EntityManager, adjustmentId: string) {
   await manager.query(`UPDATE public.court_reservations r SET hold_expires_at=a.expires_at,updated_at=now()
-    FROM public.booking_adjustments a WHERE a.id=$1 AND r.adjustment_id=a.id AND r.status='held' AND r.hold_expires_at>a.expires_at`, [adjustmentId]);
+    FROM public.booking_adjustments a WHERE a.id=$1 AND r.adjustment_id=a.id AND r.status='held' AND r.hold_expires_at>a.expires_at AND a.capture_accepted_at IS NULL`, [adjustmentId]);
+}
+// Occupancy validity only; capture acceptance lives on the proposal itself.
+export async function readAdjustmentHolds(manager: EntityManager, adjustmentId: string) {
+  const rows: unknown = await manager.query(`SELECT count(*)::int AS total,
+      count(*) FILTER (WHERE status='held' AND hold_expires_at>clock_timestamp())::int AS valid
+    FROM public.court_reservations WHERE adjustment_id=$1`, [adjustmentId]);
+  return z.array(z.object({ total: z.number().int(), valid: z.number().int() })).length(1).parse(rows)[0];
+}
+// Caller owns location -> booking -> reservation -> attempt locks. Acceptance
+// and any occupancy extension commit together, including the zero-fragment case.
+// The final conditional write rechecks wall time and every fragment.
+export async function acceptAdjustmentCapture(manager: EntityManager, adjustmentId: string) {
+  const rows: unknown = await manager.query(`WITH accepted AS (
+    UPDATE public.booking_adjustments a SET capture_accepted_at=clock_timestamp(),updated_at=now()
+    WHERE a.id=$1 AND a.status='pending' AND a.capture_accepted_at IS NULL AND a.expires_at>clock_timestamp()
+      AND NOT EXISTS (SELECT 1 FROM public.court_reservations r WHERE r.adjustment_id=a.id
+        AND (r.status<>'held' OR r.hold_expires_at<=clock_timestamp()))
+    RETURNING a.id,a.expires_at), extended AS (
+    UPDATE public.court_reservations r SET hold_expires_at=a.expires_at+make_interval(secs => $2::integer),updated_at=now()
+    FROM accepted a WHERE r.adjustment_id=a.id AND r.status='held' RETURNING r.id)
+    SELECT id FROM accepted`, [adjustmentId, checkoutCaptureGraceSeconds]);
+  return z.array(z.object({ id: z.uuid() })).max(1).parse(rows).length === 1;
 }
 export async function findAdjustmentRequest(manager: EntityManager, bookingId: string, requestKey: string) {
   return manager.getRepository(BookingAdjustmentEntity).findOneBy({ bookingId, requestKey });
@@ -88,6 +112,7 @@ export async function listExpiredAdjustmentCandidates(manager: EntityManager, lo
     .where("court.locationId=:locationId", { locationId })
     .andWhere("adjustment.status IN (:...statuses)", { statuses: ["pending", "cancelled"] })
     .andWhere("adjustment.expiresAt <= clock_timestamp()")
+    .andWhere("adjustment.captureAcceptedAt IS NULL")
     .andWhere(qb => "EXISTS " + qb.subQuery().select("1").from(PaymentAttemptEntity, "attempt")
       .where("attempt.adjustmentId=adjustment.id").andWhere("attempt.status=:attemptStatus").getQuery(),
       { attemptStatus: "pending" })
@@ -97,17 +122,6 @@ export async function listExpiredAdjustmentCandidates(manager: EntityManager, lo
       .andWhere("lease.holdExpiresAt > clock_timestamp()").getQuery())
     .orderBy("adjustment.bookingId").getRawMany();
   return z.array(z.object({ id: z.uuid(), booking_id: z.uuid() })).parse(rows);
-}
-// Completed refunds apply the change; unreported failures enqueue an exception.
-// Already reported failures stay pending without starving later completed changes.
-export async function listDecidableRefundAdjustments(manager: EntityManager, limit: number) {
-  const rows: unknown = await manager.query(`SELECT a.id FROM public.booking_adjustments a
-    WHERE a.status='pending' AND EXISTS (SELECT 1 FROM public.payment_refunds f WHERE f.adjustment_id=a.id)
-      AND (NOT EXISTS (SELECT 1 FROM public.payment_refunds f WHERE f.adjustment_id=a.id AND f.status<>'succeeded')
-        OR EXISTS (SELECT 1 FROM public.payment_refunds f WHERE f.adjustment_id=a.id AND f.status='failed'
-          AND NOT EXISTS (SELECT 1 FROM public.booking_notification_deliveries d WHERE d.event_key='refund:' || f.id::text || ':exception')))
-    ORDER BY a.created_at,a.id LIMIT $1`, [limit]);
-  return z.array(z.object({ id: z.uuid() })).parse(rows).map(row => row.id);
 }
 export async function listBookingsWithPendingChange(manager: EntityManager, bookingIds: readonly string[]) {
   if (!bookingIds.length) return new Map<string, AdjustmentKind>();

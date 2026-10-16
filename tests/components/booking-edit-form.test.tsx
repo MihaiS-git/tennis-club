@@ -211,7 +211,7 @@ it("shows the eligible difference and durable pending refund instead of claiming
   await screen.findByText("Current reservation"); extendInterval();
   await screen.findByText(/Eligible refund:.*25\.00/);
   fireEvent.click(screen.getByRole("checkbox")); fireEvent.click(saveButton());
-  await screen.findByText("Refund being confirmed automatically");
+  await screen.findByText("Refund requested, awaiting confirmation");
   expect(screen.getByText("Refund amount")).toBeTruthy();
   expect(screen.getByText("Refund status")).toBeTruthy();
   expect(screen.queryByText("Refund completed")).toBeNull();
@@ -227,7 +227,7 @@ it.each(["succeeded", "failed", "pending"])("separates refund amount and %s stat
   await screen.findByRole("checkbox"); fireEvent.click(screen.getByRole("checkbox")); fireEvent.click(saveButton());
   await screen.findByText("Refund amount");
   expect(screen.getByText("Updated total")).toBeTruthy();
-  expect(screen.getByRole("status").textContent).toContain(refundStatus === "succeeded" ? "Refund completed" : refundStatus === "failed" ? "Refund could not be completed; the club will contact you" : "Refund being confirmed automatically");
+  expect(screen.getByRole("status").textContent).toContain(refundStatus === "succeeded" ? "Refund completed" : refundStatus === "failed" ? "Refund could not be completed; the club will contact you" : "Refund requested, awaiting confirmation");
   expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
 });
 

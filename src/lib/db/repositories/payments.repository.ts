@@ -1,8 +1,9 @@
 import "server-only";
 
 import { In, type EntityManager } from "typeorm";
+import { acceptedCaptureOccupancy } from "./reservations.repository";
 import { z } from "zod";
-import { paymentProviderSchema, stalledRefundHours } from "@/lib/payments/domain";
+import { paymentProviderSchema, checkoutCaptureGraceSeconds, unconfirmedRefundMinutes } from "@/lib/payments/domain";
 import type { PaymentProvider } from "@/lib/payments/domain";
 import { PaymentAttemptEntity } from "../entities/payment-attempt.entity";
 import { RefundExecutionEntity } from "../entities/refund-execution.entity";
@@ -82,11 +83,6 @@ const providerReceiptSchema = z.object({
 });
 export type ProviderReceipt = z.infer<typeof providerReceiptSchema>;
 
-export async function findSettlementBookingId(manager: EntityManager, attemptId: string) {
-  const rows: unknown = await manager.query("SELECT booking_id FROM public.payment_attempts WHERE id=$1", [attemptId]);
-  return z.array(z.object({ booking_id: z.uuid() })).max(1).parse(rows)[0]?.booking_id ?? null;
-}
-
 export async function lockSettlementAttempt(manager: EntityManager, id: string) {
   const rows: unknown = await manager.query(
     `SELECT id,booking_id,adjustment_id,method,provider,provider_payment_id,amount_minor,currency,status,
@@ -152,12 +148,6 @@ export async function discoverRefundBooking(manager: EntityManager, id: string) 
   return z.array(z.object({ booking_id: z.uuid(), payment_attempt_id: z.uuid() })).max(1).parse(rows)[0] ?? null;
 }
 
-export async function discoverEventAttempt(manager: EntityManager, eventId: string) {
-  const rows: unknown = await manager.query(
-    "SELECT attempt_id FROM public.payment_provider_events WHERE provider='stripe' AND event_id=$1", [eventId]);
-  return z.array(z.object({ attempt_id: z.uuid() })).max(1).parse(rows)[0]?.attempt_id ?? null;
-}
-
 export async function lockRefundForProcessing(manager: EntityManager, target: { id: string }) {
   const rows: unknown = await manager.query(
     `SELECT ${processingRefundProjection} FROM public.payment_refunds WHERE id=$1 FOR UPDATE`,
@@ -198,10 +188,16 @@ export async function writeRefundEventResolution(manager: EntityManager,
   }
 }
 
+// Derived attention only: local expiry never proves that Stripe cancelled an
+// intent. Accepted or abandoned overdue payments remain visible until checked.
+const paymentCheckRequired = `coalesce(op.kind='payment' AND p.provider='stripe' AND p.provider_payment_id IS NOT NULL
+  AND p.status IN ('pending','expired','failed')
+  AND p.expires_at+make_interval(secs => ${checkoutCaptureGraceSeconds})<=clock_timestamp(),false)`;
+
 export async function listAdminTransactionProjection(manager: EntityManager, query: {
   page: number; status: string; provider: string; method: string; attention: boolean;
   search: string; sort: string; direction: string; bookingId: string | null;
-  attentionRefundStatuses: readonly string[]; stalledRefundHours?: number;
+  attentionRefundStatuses: readonly string[]; unconfirmedRefundMinutes?: number;
   transaction?: { kind: "payment" | "refund" | "booking"; id: string };
 }): Promise<unknown> {
   const rows: unknown = await manager.query(`with operations as (
@@ -250,11 +246,12 @@ export async function listAdminTransactionProjection(manager: EntityManager, que
       to_jsonb(f) || jsonb_build_object(
         'requested_by_name',nullif(concat_ws(' ',u.first_name,u.last_name),''),
         'provider_refund_id',execution.provider_refund_id,'last_error',execution.last_error,
-        'recovery_started_at',coalesce(execution.dispatch_initiated_at,execution.first_uncertain_at,execution.created_at,f.created_at)) as refund,
+        'outstanding_since',coalesce(execution.dispatch_initiated_at,execution.first_uncertain_at,execution.created_at,f.created_at)) as refund,
       coalesce(e.reconciliation, '[]'::jsonb) as reconciliation,
-      (coalesce(f.status = any($10::text[]), false)
-        or coalesce(f.status = 'pending_retry' and coalesce(execution.dispatch_initiated_at,execution.first_uncertain_at,execution.created_at,f.created_at)
-          < clock_timestamp() - make_interval(hours => $14::integer), false)
+      ${paymentCheckRequired} as payment_check_required,
+      (${paymentCheckRequired} or coalesce(f.status = any($10::text[]), false)
+        or coalesce(f.status in ('pending','pending_retry') and coalesce(execution.dispatch_initiated_at,execution.first_uncertain_at,execution.created_at,f.created_at)
+          < clock_timestamp() - make_interval(mins => $14::integer), false)
         or ($11::boolean and coalesce(e.required,false))) as matches_attention
     from operations op
     join public.bookings b on b.id=op.booking_id
@@ -267,7 +264,7 @@ export async function listAdminTransactionProjection(manager: EntityManager, que
     left join public.payment_refunds f on f.id=op.refund_id
     left join public.users u on u.id=f.requested_by_user_id
     -- Dispatch is write-once; first uncertainty may only be observed after an outage.
-    -- The latest execution gives a genuinely new attempt its own recovery age.
+    -- The latest execution gives a genuinely new attempt its own outstanding age.
     left join lateral (select re.provider_refund_id,re.last_error,re.dispatch_initiated_at,re.first_uncertain_at,re.created_at from public.refund_executions re
       where re.refund_id=f.id order by re.execution_number desc limit 1) execution on true
     left join lateral (
@@ -319,7 +316,7 @@ export async function listAdminTransactionProjection(manager: EntityManager, que
         and o.position <= least($1::integer,s.total_pages)*20),'[]'::jsonb)) AS result from stats s;`,
     [query.page,query.status,query.provider,query.method,query.attention,query.search,query.sort,
       query.direction,query.bookingId,query.attentionRefundStatuses,true,query.transaction?.kind ?? null,query.transaction?.id ?? null,
-      query.stalledRefundHours ?? stalledRefundHours]);
+      query.unconfirmedRefundMinutes ?? unconfirmedRefundMinutes]);
   return z.array(z.object({ result: z.unknown() })).length(1).parse(rows)[0].result;
 }
 
@@ -343,7 +340,7 @@ export async function discoverExpiredHoldLocations(manager: EntityManager, scope
   const rows: unknown = await manager.query(`SELECT DISTINCT c.location_id
     FROM public.bookings b LEFT JOIN public.booking_revisions v ON v.id=b.current_revision_id JOIN public.court_reservations r ON r.id=b.reservation_id
     JOIN public.courts c ON c.id=r.court_id
-    WHERE ((b.status IN ('pending_payment','cancelled') AND r.status='held' AND r.hold_expires_at<=clock_timestamp()) OR EXISTS (SELECT 1 FROM public.booking_adjustments ba WHERE ba.booking_id=b.id AND ba.status IN ('pending','cancelled') AND ba.expires_at<=clock_timestamp() AND EXISTS(SELECT 1 FROM public.payment_attempts pa WHERE pa.adjustment_id=ba.id AND pa.status='pending') AND NOT EXISTS(SELECT 1 FROM public.court_reservations lr WHERE lr.adjustment_id=ba.id AND lr.status='held' AND lr.hold_expires_at>clock_timestamp())))
+    WHERE ((b.status IN ('pending_payment','cancelled') AND r.status='held' AND r.hold_expires_at<=clock_timestamp() AND NOT ${acceptedCaptureOccupancy}) OR EXISTS (SELECT 1 FROM public.booking_adjustments ba WHERE ba.booking_id=b.id AND ba.status IN ('pending','cancelled') AND ba.capture_accepted_at IS NULL AND ba.expires_at<=clock_timestamp() AND EXISTS(SELECT 1 FROM public.payment_attempts pa WHERE pa.adjustment_id=ba.id AND pa.status='pending') AND NOT EXISTS(SELECT 1 FROM public.court_reservations lr WHERE lr.adjustment_id=ba.id AND lr.status='held' AND lr.hold_expires_at>clock_timestamp())))
       AND ($1::uuid IS NULL OR r.court_id=$1) AND ($2::uuid IS NULL OR c.location_id=$2)
     ORDER BY c.location_id LIMIT $3`, [scope.courtId ?? null,scope.locationId ?? null,limit]);
   return z.array(z.object({ location_id: z.uuid() })).parse(rows);
@@ -360,7 +357,7 @@ export async function lockExpiredHoldBookings(manager: EntityManager, locationId
   const rows: unknown = await manager.query(`SELECT b.id,b.reservation_id FROM public.bookings b LEFT JOIN public.booking_revisions v ON v.id=b.current_revision_id
     JOIN public.court_reservations r ON r.id=b.reservation_id JOIN public.courts c ON c.id=r.court_id
     WHERE c.location_id=$1 AND b.status IN ('pending_payment','cancelled') AND r.status='held'
-      AND r.hold_expires_at<=clock_timestamp() AND ($2::uuid IS NULL OR r.court_id=$2)
+      AND r.hold_expires_at<=clock_timestamp() AND NOT ${acceptedCaptureOccupancy} AND ($2::uuid IS NULL OR r.court_id=$2)
       AND ($3::uuid IS NULL OR r.id<>$3)
     ORDER BY b.id LIMIT $4 FOR UPDATE OF b${input.skipLocked ? " SKIP LOCKED" : ""}`,
     [locationId,input.courtId ?? null,input.excludeReservationId ?? null,input.limit ?? null]);
@@ -411,10 +408,6 @@ export async function countBookingPaymentAttempts(manager: EntityManager, bookin
 }
 
 
-export async function refundForAttempt(manager: EntityManager, attemptId: string, operationKey: string) {
-  const rows: unknown = await manager.query("SELECT id FROM public.payment_refunds WHERE payment_attempt_id=$1 AND operation_key=$2",[attemptId,operationKey]);
-  return z.array(z.object({id:z.uuid()})).max(1).parse(rows)[0]?.id;
-}
 export async function listRefundObligationsForAttempt(manager: EntityManager, paymentAttemptId: string) {
   return manager.getRepository(PaymentRefundEntity).find({ where: { paymentAttemptId }, select: { amountMinor: true, status: true } });
 }
@@ -424,44 +417,12 @@ export async function findRefundOperation(manager: EntityManager, id: string) {
     select: { id: true, bookingId: true, adjustmentId: true, reason: true, status: true } });
 }
 
-// Recovery work selection only. Due/backoff, eligibility and every financial
-// decision stay in TypeScript and the existing locked commands.
-export async function listUnresolvedRefunds(manager: EntityManager, limit: number) {
-  const rows: unknown = await manager.query(`SELECT f.id,
-      replace((f.created_at AT TIME ZONE 'UTC')::text,' ','T') || '+00:00' AS created_at,
-      replace((e.dispatch_initiated_at AT TIME ZONE 'UTC')::text,' ','T') || '+00:00' AS dispatch_initiated_at,
-      replace((e.first_uncertain_at AT TIME ZONE 'UTC')::text,' ','T') || '+00:00' AS first_uncertain_at,
-      replace((e.last_checked_at AT TIME ZONE 'UTC')::text,' ','T') || '+00:00' AS last_checked_at
-    FROM public.payment_refunds f
-    LEFT JOIN LATERAL (SELECT re.dispatch_initiated_at,re.first_uncertain_at,re.last_checked_at FROM public.refund_executions re
-      WHERE re.refund_id=f.id ORDER BY re.execution_number DESC LIMIT 1) e ON true
-    WHERE f.status IN ('pending','pending_retry')
-    ORDER BY coalesce(e.last_checked_at,f.created_at),f.id LIMIT $1`, [limit]);
-  const instant = z.iso.datetime({ offset: true }).nullable();
-  return z.array(z.object({ id: z.uuid(), created_at: z.iso.datetime({ offset: true }), dispatch_initiated_at: instant,
-    first_uncertain_at: instant, last_checked_at: instant })).parse(rows);
-}
-
-// Online payments whose provider outcome is not yet recorded locally: open
-// checkouts (missing webhooks) and ended requests whose intent may still move.
-export async function listPaymentsToReconcile(manager: EntityManager, limit: number) {
-  const rows: unknown = await manager.query(`SELECT p.id,p.adjustment_id,p.provider,p.provider_payment_id,p.status
-    FROM public.payment_attempts p
-    WHERE p.method='online' AND p.provider IS NOT NULL AND p.provider_payment_id IS NOT NULL
-      AND ((p.status='pending' AND p.created_at<=clock_timestamp()-interval '60 seconds')
-        OR (p.status IN ('expired','failed') AND p.completed_at>clock_timestamp()-interval '7 days'
-          AND NOT EXISTS (SELECT 1 FROM public.payment_provider_events e
-            WHERE e.attempt_id=p.id AND e.outcome IN ('succeeded','cancelled'))))
-    ORDER BY p.status='pending' DESC,p.created_at DESC,p.id LIMIT $1`, [limit]);
-  return z.array(z.object({ id: z.uuid(), adjustment_id: z.uuid().nullable(), provider: paymentProviderSchema,
-    provider_payment_id: z.string().min(1), status: z.enum(["pending", "expired", "failed"]) })).parse(rows);
-}
-
-export async function listUnresolvedCaptureEvents(manager: EntityManager, limit: number) {
-  const rows: unknown = await manager.query(`SELECT provider,event_id FROM public.payment_provider_events
-    WHERE reconciliation_required AND outcome='succeeded' AND received_at>clock_timestamp()-interval '30 days'
-    ORDER BY received_at,provider,event_id LIMIT $1`, [limit]);
-  return z.array(z.object({ provider: paymentProviderSchema, event_id: z.string().min(1) })).parse(rows);
+// Compensation that settlement of this attempt owes and has not finished.
+export async function listOutstandingCompensationRefunds(manager: EntityManager, attemptId: string) {
+  const rows: unknown = await manager.query(`SELECT id FROM public.payment_refunds WHERE payment_attempt_id=$1
+    AND status IN ('pending','pending_retry') AND reason IN ('late_capture_compensation','failed_adjustment_compensation')
+    ORDER BY created_at,id`, [attemptId]);
+  return z.array(z.object({ id: z.uuid() })).parse(rows).map(row => row.id);
 }
 
 // A dismissed modification can never be resumed or polled again.

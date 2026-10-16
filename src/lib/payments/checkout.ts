@@ -13,7 +13,9 @@ import { lockCheckoutBooking, findCheckoutBookingStatus } from "@/lib/db/reposit
 import { findCheckoutAttempt, lockCheckoutAttempt, attachCheckoutPayment } from "@/lib/db/repositories/payments.repository";
 import { expirePaymentHolds, expireAdjustmentsAtLocation, extendLiveAdjustmentHold } from "./hold-expiry";
 import { readCreatedBookingCancellationPolicy } from "@/lib/bookings/confirmation-policy";
-import { paymentProviderSchema, summarizeRefunds, type OnlineCheckout } from "./domain";
+import { captureAccepted, checkoutCaptureGraceSeconds, checkoutDeadline, paymentProviderSchema, summarizeRefunds,
+  type OnlineCheckout, type PaymentProvider } from "./domain";
+import { timestampToEpochMicroseconds } from "@/lib/precise-time";
 import { onlinePaymentAdapter } from "./providers";
 import { locationCurrencies } from "@/lib/admin/locations-validation";
 import { processOnlinePaymentEvent, settleOnlinePayment } from "./service";
@@ -51,6 +53,12 @@ async function requestCheckoutCancellation(access: z.infer<typeof checkoutAccess
         throw new Error("Payment unavailable.");
       if (booking.reservation_id !== parent.reservation_id || resource?.location_id !== parent.location_id)
         throw new CheckoutParentChanged();
+      // An accepted authorization is being captured; its outcome decides the booking.
+      // Full-precision deadline: the acceptance record is an exact microsecond value.
+      const deadline = (await payments.lockSettlementAttempt(manager, attempt.id))?.expires_at;
+      if (booking.status === "pending_payment" && reservation.status === "held" && reservation.hold_expires_at && deadline
+        && captureAccepted(reservation.hold_expires_at, deadline))
+        throw new Error("This payment is being confirmed. Wait for the result.");
       // Initial checkout capability cannot undo later management operations or
       // override an explicit owner/Admin cancellation/refund decision.
       if (reservation.status === "cancelled" || booking.status === "confirmed" && (booking.revision.revisionNumber > 2 || await hasBookingAdjustments(manager,booking.id)))
@@ -86,19 +94,149 @@ async function requestCheckoutCancellation(access: z.infer<typeof checkoutAccess
 
 // Provider retrieval is authoritative evidence, not a browser confirmation.
 // A stable observation receipt makes polling safe alongside delayed webhooks.
-async function observeCheckoutPayment(attempt: z.infer<typeof attemptSchema> & { providerPaymentId: string }) {
+type PaymentReference = { id: string; provider: PaymentProvider; providerPaymentId: string };
+type PaymentEvidence = { status: "succeeded" | "cancelled"; amountMinor: number; currency: string; providerCaptureId: string | null };
+
+async function recordObservation(attempt: PaymentReference, result: PaymentEvidence) {
+  await processOnlinePaymentEvent({ attemptId: attempt.id, provider: attempt.provider,
+    providerPaymentId: attempt.providerPaymentId, eventId: `checkout-observation-${attempt.id}-${result.status}`,
+    outcome: result.status, amountMinor: result.amountMinor, currency: result.currency,
+    ...(result.providerCaptureId ? { providerCaptureId: result.providerCaptureId } : {}) });
+  revalidateCourtActivity("create");
+}
+
+// Modification surcharge: capture only for the live proposal of an unchanged
+// booking whose target holds are intact, before its immutable cutoff. A
+// dismissed (X), superseded or ended proposal is never charged.
+async function decideAdjustmentAuthorization(manager: EntityManager, booking: { id: string; status: string; current_revision_id: string },
+  attempt: { adjustment_id?: string | null; checkout_capability: boolean }, accept: boolean): Promise<"capture" | "release" | "observe"> {
+  const adjustment = attempt.adjustment_id ? await adjustments.findAdjustment(manager, attempt.adjustment_id) : null;
+  if (!adjustment || adjustment.bookingId !== booking.id || adjustment.status !== "pending") return "release";
+  const now = timestampToEpochMicroseconds(await reservations.readReservationClockTime(manager));
+  const cutoff = BigInt(adjustment.expiresAt.getTime()) * BigInt(1000);
+  if (adjustment.captureAcceptedAt !== null) {
+    // Let the original operation finish during grace. Afterwards ask Stripe to
+    // cancel; occupancy stays protected unless Stripe confirms cancellation.
+    return now < cutoff + BigInt(checkoutCaptureGraceSeconds * 1_000_000) ? "observe" : "release";
+  }
+  const holds = await adjustments.readAdjustmentHolds(manager, adjustment.id);
+  if (!attempt.checkout_capability || booking.status !== "confirmed" || booking.current_revision_id !== adjustment.baseRevisionId
+    || holds.valid !== holds.total) return "release";
+  if (cutoff <= now) return "release";
+  if (!accept) return "observe";
+  return await adjustments.acceptAdjustmentCapture(manager, adjustment.id) ? "capture" : "release";
+}
+
+// Manual capture: money is collected only if the authorization arrived before
+// the checkout (or modification) deadline, decided under location -> booking ->
+// reservation -> attempt locks. Surcharge acceptance lives on its proposal;
+// booking acceptance extends its original hold. Expiry preserves accepted
+// operations until a definitive provider result, even after grace. A late authorization
+// is cancelled at Stripe, releasing the card hold without any charge.
+async function decideAuthorization(attempt: PaymentReference, authorized: { amountMinor: number; currency: string } | null,
+  retry = 0): Promise<"capture" | "release" | "settled" | "observe"> {
+  try {
+    return await inTransaction(async manager => {
+      const parent = await payments.discoverSettlementParent(manager, attempt.id);
+      if (!parent) throw new Error("Payment unavailable.");
+      await lockLocations(manager, [parent.location_id]);
+      const booking = await bookings.findBookingForUpdate(manager, parent.booking_id);
+      const reservation = booking && await reservations.findReservationForUpdate(manager, booking.reservation_id);
+      const current = await payments.lockSettlementAttempt(manager, attempt.id);
+      const resource = reservation && await reservations.findReservationResourceFacts(manager, reservation.court_id);
+      if (!booking || !reservation || !current || current.booking_id !== booking.id || current.method !== "online"
+        || current.provider !== attempt.provider || current.provider_payment_id !== attempt.providerPaymentId)
+        throw new Error("Payment unavailable.");
+      if (booking.reservation_id !== parent.reservation_id || resource?.location_id !== parent.location_id)
+        throw new CheckoutParentChanged();
+      if (current.status !== "pending") return current.status === "succeeded" ? "settled" : "release";
+      if (authorized && (authorized.amountMinor !== current.amount_minor || authorized.currency.toUpperCase() !== current.currency.toUpperCase()))
+        return "release";
+      if (current.adjustment_id) return decideAdjustmentAuthorization(manager, booking, current, authorized !== null);
+      if (booking.status !== "pending_payment" || reservation.status !== "held" || !reservation.hold_expires_at || !current.expires_at)
+        return "release";
+      const now = timestampToEpochMicroseconds(await reservations.readReservationClockTime(manager));
+      if (captureAccepted(reservation.hold_expires_at, current.expires_at))
+        return timestampToEpochMicroseconds(reservation.hold_expires_at) > now ? "observe" : "release";
+      if (timestampToEpochMicroseconds(checkoutDeadline(reservation.hold_expires_at, current.expires_at)) <= now) return "release";
+      if (!authorized) return "observe";
+      return await reservations.extendCheckoutHoldForCapture(manager, { reservationId: reservation.id, attemptId: current.id,
+        graceSeconds: checkoutCaptureGraceSeconds }) ? "capture" : "release";
+    });
+  } catch (error) {
+    if (error instanceof CheckoutParentChanged && retry < 2) return decideAuthorization(attempt, authorized, retry + 1);
+    throw error;
+  }
+}
+
+// Shared by checkout polling and the verified amount_capturable_updated webhook.
+// Never trusts the event: Stripe is re-read. No transaction spans a provider call.
+async function resolveAuthorization(attempt: PaymentReference, authorized: { amountMinor: number; currency: string }) {
+  const adapter = await onlinePaymentAdapter(attempt.provider);
+  const decision = await decideAuthorization(attempt, authorized);
+  if (decision === "settled") return "succeeded" as const;
+  // Never dispatch another capture. After grace, cancellation resolves the
+  // exact intent at Stripe before any accepted occupancy can be released.
+  if (decision === "observe") return "processing" as const;
+  if (decision === "capture") {
+    const captured = await adapter.capturePayment(attempt);
+    await recordObservation(attempt, captured);
+    return captured.status;
+  }
+  return cancelCheckoutPayment(attempt);
+}
+
+async function cancelCheckoutPayment(attempt: PaymentReference) {
+  const adapter = await onlinePaymentAdapter(attempt.provider);
+  const outcome = await adapter.cancelPayment(attempt);
+  if (outcome === "cancelled") {
+    await settleOnlinePayment({ attemptId: attempt.id, provider: attempt.provider,
+      providerPaymentId: attempt.providerPaymentId, outcome: "cancelled" });
+    revalidateCourtActivity("create");
+  } else if (outcome === "succeeded") {
+    const evidence = await adapter.readPayment(attempt);
+    if (evidence.status === "succeeded") await recordObservation(attempt, { ...evidence, status: "succeeded" });
+  }
+  return outcome;
+}
+
+export async function resolveAuthorizedCheckoutPayment(input: { attemptId: string; providerPaymentId: string }) {
+  const row = await findCheckoutAttempt((await getDataSource()).manager, input.attemptId);
+  const attempt = attemptSchema.extend({ providerPaymentId: z.string().min(1) }).parse(row);
+  if (attempt.providerPaymentId !== input.providerPaymentId) return null;
+  const evidence = await (await onlinePaymentAdapter(attempt.provider)).readPayment(attempt);
+  if (evidence.status === "authorized") return resolveAuthorization(attempt, evidence);
+  if (evidence.status === "succeeded" || evidence.status === "cancelled")
+    await recordObservation(attempt, { ...evidence, status: evidence.status });
+  return evidence.status;
+}
+
+// Provider retrieval is authoritative evidence, not a browser confirmation.
+async function observeCheckoutPayment(attempt: z.infer<typeof attemptSchema> & { providerPaymentId: string }, accept = true) {
   const result = await (await onlinePaymentAdapter(attempt.provider)).readPayment({
     id: attempt.id, providerPaymentId: attempt.providerPaymentId,
   });
   if (attempt.adjustmentId && result.live) await extendLiveAdjustmentHold(attempt.id, attempt.providerPaymentId);
-  if (result.status === "succeeded" || result.status === "cancelled") {
-    await processOnlinePaymentEvent({ attemptId: attempt.id, provider: attempt.provider,
-      providerPaymentId: attempt.providerPaymentId, eventId: `checkout-observation-${attempt.id}-${result.status}`,
-      outcome: result.status, amountMinor: result.amountMinor, currency: result.currency,
-      ...(result.providerCaptureId ? { providerCaptureId: result.providerCaptureId } : {}) });
-    revalidateCourtActivity("create");
+  if (result.status === "authorized" && accept) {
+    const resolved = await resolveAuthorization(attempt, result);
+    return resolved === "succeeded" || resolved === "cancelled" ? resolved : "processing" as const;
   }
-  return result.status;
+  if (result.status === "succeeded" || result.status === "cancelled") {
+    await recordObservation(attempt, { ...result, status: result.status });
+    return result.status;
+  }
+  // Expired payment entry and interrupted acceptance both need provider cleanup,
+  // including intents still waiting for a card or authentication. The decision
+  // uses database wall time and the same aggregate locks as acceptance.
+  if (await decideAuthorization(attempt, null) === "release") return cancelCheckoutPayment(attempt);
+  return result.status === "authorized" ? "processing" as const : result.status;
+}
+
+// Trusted request/Admin recovery: exact registered intent only, never capture.
+export async function checkOnlinePayment(attemptId: string) {
+  const attempt = attemptSchema.extend({ providerPaymentId: z.string().min(1) })
+    .parse(await findCheckoutAttempt((await getDataSource()).manager, z.uuid().parse(attemptId)));
+  return observeCheckoutPayment(attempt, false);
 }
 
 // Validate the capability before contacting the provider, including retries.
@@ -129,7 +267,8 @@ export async function startOnlineCheckout(attemptId: string): Promise<OnlineChec
   const attempt = attemptSchema.parse(await findCheckoutAttempt((await getDataSource()).manager, attemptId));
   if (attempt.status !== "pending" || attempt.expiresAt.getTime() <= Date.now()) throw new Error("Payment hold expired.");
   const adapter = await onlinePaymentAdapter(attempt.provider);
-  // No database transaction remains open across this network call.
+  // No database transaction remains open across this network call. Booking and
+  // surcharge checkouts authorize only, so a late authorization never becomes a charge.
   const payment = await adapter.createPayment({ id: attempt.id, amountMinor: attempt.amountMinor, currency: attempt.currency });
   const providerPaymentId = z.string().min(1).max(255).parse(payment.providerPaymentId);
   const token = randomBytes(32).toString("hex");
@@ -172,21 +311,9 @@ export async function readOnlineCheckout(input: unknown) {
   }
   const expiry = await expirePaymentHolds();
   const booking = await findCheckoutBookingStatus(manager, attempt.bookingId);
-  let current = attemptSchema.parse(await findCheckoutAttempt(manager, access.attemptId, tokenHash(access.token)));
+  const current = attemptSchema.parse(await findCheckoutAttempt(manager, access.attemptId, tokenHash(access.token)));
   if (!booking) throw new Error("Payment unavailable.");
   const status = z.enum(["pending_payment", "confirmed", "expired", "failed", "cancelled", "completed"]).parse(booking.status);
-  if (attempt.providerPaymentId && !["succeeded", "cancelled", "failed"].includes(current.status)
-    && (status === "cancelled" || status === "expired")) {
-    try {
-      const cancelled = await (await onlinePaymentAdapter(attempt.provider)).cancelPayment({ id: attempt.id,
-        providerPaymentId: attempt.providerPaymentId });
-      providerStatus = cancelled;
-      if (cancelled === "cancelled") await settleOnlinePayment({ attemptId: attempt.id, provider: attempt.provider,
-        providerPaymentId: attempt.providerPaymentId, outcome: "cancelled" });
-      else if (cancelled === "succeeded") await observeCheckoutPayment({ ...attempt, providerPaymentId: attempt.providerPaymentId });
-      current = attemptSchema.parse(await findCheckoutAttempt(manager, access.attemptId, tokenHash(access.token)));
-    } catch { providerStatus = "unknown"; }
-  }
   const { captures } = await payments.findRefundCaptureEvidence(manager, attempt.id);
   const refund = await payments.findCheckoutRefund(manager, attempt.id);
   const captured = captures.some(receipt => receipt.provider === attempt.provider

@@ -4,7 +4,7 @@ import Stripe from "stripe";
 import { RefundProviderError } from "../types";
 import { stripeClient, StripeProviderError } from "./client";
 import { stripeConfig } from "./config";
-import type { OnlinePaymentAdapter, OnlinePaymentEvent, OnlinePaymentProcessing } from "../types";
+import type { OnlinePaymentAdapter, OnlinePaymentAuthorized, OnlinePaymentEvent, OnlinePaymentProcessing, OnlineRefundChanged } from "../types";
 
 export const stripeAdapter: OnlinePaymentAdapter = {
   async resumePayment(attempt) {
@@ -21,11 +21,13 @@ export const stripeAdapter: OnlinePaymentAdapter = {
       throw new StripeProviderError("cancellation");
     return {
       status: intent.status === "succeeded" ? "succeeded" : intent.status === "canceled" ? "cancelled"
-        : intent.status === "processing" || intent.status === "requires_capture" || intent.status === "requires_action" ? "processing" : "pending",
-      amountMinor: intent.status === "succeeded" ? intent.amount_received : intent.amount,
+        : intent.status === "requires_capture" ? "authorized"
+        : intent.status === "processing" || intent.status === "requires_action" ? "processing" : "pending",
+      amountMinor: intent.status === "succeeded" ? intent.amount_received
+        : intent.status === "requires_capture" ? intent.amount_capturable : intent.amount,
       currency: intent.currency.toUpperCase(),
-      // This integration creates automatic-capture PaymentIntents. The intent
-      // is the stable provider identity for its one successful collection.
+      // Each PaymentIntent is captured at most once (in full); the intent is the
+      // stable provider identity for its one successful collection.
       providerCaptureId: intent.status === "succeeded" ? intent.id : null,
       live: liveIntent(intent.status),
     };
@@ -137,6 +139,29 @@ export const stripeAdapter: OnlinePaymentAdapter = {
       throw new StripeProviderError("cancellation");
     }
   },
+  async capturePayment(attempt) {
+    const client = stripeClient();
+    const evidence = (intent: Stripe.PaymentIntent) => {
+      if (intent.id !== attempt.providerPaymentId || intent.metadata.payment_attempt_id !== attempt.id)
+        throw new StripeProviderError("capture");
+      if (intent.status === "succeeded") return { status: "succeeded" as const, amountMinor: intent.amount_received,
+        currency: intent.currency.toUpperCase(), providerCaptureId: intent.id };
+      if (intent.status === "canceled") return { status: "cancelled" as const, amountMinor: intent.amount,
+        currency: intent.currency.toUpperCase(), providerCaptureId: null };
+      throw new StripeProviderError("capture");
+    };
+    try {
+      // SDK transport/reconnect retries belong to this accepted operation and may
+      // finish after operational grace. Every dispatch uses the same stable key.
+      return evidence(await client.paymentIntents.capture(attempt.providerPaymentId, {},
+        { idempotencyKey: `court-capture-${attempt.id}` }));
+    } catch (error) {
+      if (error instanceof StripeProviderError) throw error;
+      // The capture may have run (lost response) or the authorization may have
+      // ended; only a re-read decides. Anything else stays unknown.
+      return evidence(await client.paymentIntents.retrieve(attempt.providerPaymentId));
+    }
+  },
   async dismissPayment(attempt) {
     const client = stripeClient();
     const read = async () => {
@@ -165,6 +190,8 @@ export const stripeAdapter: OnlinePaymentAdapter = {
           amount: attempt.amountMinor,
           currency: attempt.currency.toLowerCase(),
           allowed_payment_method_types: ["card"],
+          // Booking and surcharge checkouts authorize only; the server captures inside the deadline.
+          capture_method: "manual",
           metadata: { payment_attempt_id: attempt.id },
         },
         { idempotencyKey: `court-payment-${attempt.id}` },
@@ -184,15 +211,16 @@ export const stripeAdapter: OnlinePaymentAdapter = {
   },
 };
 
-// Automatic capture only: requires_capture is listed for completeness.
+// Submitted and still able to succeed without the customer or the server.
+// A manual-capture authorization (requires_capture) waits for the server instead.
 function liveIntent(status: Stripe.PaymentIntent.Status) {
-  return status === "processing" || status === "requires_capture";
+  return status === "processing";
 }
 
 export function verifyStripeEvent(
   body: string,
   signature: string,
-): OnlinePaymentEvent | OnlinePaymentProcessing | null {
+): OnlinePaymentEvent | OnlinePaymentProcessing | OnlinePaymentAuthorized | OnlineRefundChanged | null {
   let event;
   try {
     event = stripeClient().webhooks.constructEvent(
@@ -203,10 +231,15 @@ export function verifyStripeEvent(
   } catch {
     throw new StripeProviderError("signature");
   }
-  if (event.type === "payment_intent.processing") {
+  if (event.type === "refund.created" || event.type === "refund.updated" || event.type === "refund.failed") {
+    // Only refunds this application created carry its obligation identity.
+    const refundId = z.uuid().safeParse(event.data.object.metadata?.payment_refund_id);
+    return refundId.success ? { provider: "stripe", refundId: refundId.data, outcome: "refund_changed" } : null;
+  }
+  if (event.type === "payment_intent.processing" || event.type === "payment_intent.amount_capturable_updated") {
     const attemptId = z.uuid().safeParse(event.data.object.metadata.payment_attempt_id);
-    return attemptId.success ? { provider: "stripe", attemptId: attemptId.data,
-      providerPaymentId: event.data.object.id, outcome: "processing" } : null;
+    return attemptId.success ? { provider: "stripe", attemptId: attemptId.data, providerPaymentId: event.data.object.id,
+      outcome: event.type === "payment_intent.processing" ? "processing" : "authorized" } : null;
   }
   if (
     event.type !== "payment_intent.succeeded" &&

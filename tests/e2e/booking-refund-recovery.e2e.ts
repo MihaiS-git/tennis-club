@@ -142,20 +142,3 @@ test("Definitive refund failure keeps the booking confirmed; a fresh customer ca
   expect(await booking.db.query("SELECT status FROM public.payment_refunds WHERE booking_id=$1 ORDER BY created_at",[booking.bookingId])).toEqual([{status:"voided"},{status:"succeeded"}]);
   expect(await booking.db.query("SELECT status FROM public.bookings WHERE id=$1",[booking.bookingId])).toEqual([{status:"cancelled"}]);
 });
-
-test("Automatic scheduler recovers a durable refund without any customer or Admin request", async ({ request, booking }) => {
-  test.setTimeout(60000);
-  const refundId=randomUUID();
-  await booking.db.query(`INSERT INTO public.payment_refunds
-    (id,booking_id,payment_attempt_id,provider,provider_payment_id,amount_minor,captured_amount_minor,currency,reason,context_revision_id,operation_key)
-    SELECT $1::uuid,b.id,$2::uuid,'stripe',$3,5000,5000,'RON','late_capture_compensation',b.current_revision_id,$1::uuid::text
-    FROM public.bookings b WHERE b.id=$4`,[refundId,booking.attemptId,booking.paymentId,booking.bookingId]);
-  // No application HTTP request, action, webhook, or direct worker invocation follows.
-  await expect.poll(async()=> (await booking.db.query("SELECT status FROM public.payment_refunds WHERE id=$1",[refundId]))[0].status,
-    {timeout:45000,intervals:[500,1000]}).toBe("succeeded");
-  const evidence=evidenceSchema.parse(await(await request.get(`${providerUrl}/fixture/evidence?paymentId=${booking.paymentId}`)).json());
-  expect(evidence.refunds).toEqual([expect.objectContaining({status:"succeeded",amount:5000})]);
-  expect(evidence.dispatches).toHaveLength(1);
-  expect(await booking.db.query("SELECT last_completed_at IS NOT NULL AS completed FROM public.job_leases WHERE name='payment_recovery'"))
-    .toEqual([{completed:true}]);
-});

@@ -24,6 +24,11 @@ export async function settleAdjustment(manager: EntityManager, input: {
   if (!adjustment || adjustment.bookingId !== attempt.booking_id || input.mismatch)
     return { ...ended, result: "amount_mismatch" as const };
   const now = new Date(await reservations.readReservationClockTime(manager));
+  // A delayed decline from an earlier card attempt cannot undo authorization
+  // already accepted for capture. Only provider evidence resolves that operation.
+  if (input.outcome === "retryable_failed" && adjustment.captureAcceptedAt !== null
+    && adjustment.status === "pending" && attempt.status === "pending")
+    return { ...ended, result: "pending" as const };
   // A decline is retryable only while the customer still holds the checkout
   // capability and the cutoff has not passed. The payment is no longer in flight.
   if (input.outcome === "retryable_failed" && adjustment.status === "pending" && now < adjustment.expiresAt
@@ -37,9 +42,10 @@ export async function settleAdjustment(manager: EntityManager, input: {
     const state = adjustment.status === "cancelled" ? "cancelled" : now >= adjustment.expiresAt ? "expired" : "cancelled";
     await adjustments.updateAdjustment(manager, adjustment.id, state);
     await adjustments.releaseAdjustmentHolds(manager, adjustment.id);
-    if (attempt.status === "pending") await payments.updateSettlementAttempt(manager, attempt.id, {
-      status: input.outcome === "cancelled" ? "cancelled" : "failed",
-      providerPaymentId: input.providerPaymentId, deadline: null });
+    if (attempt.status === "pending" || input.outcome === "cancelled" && ["expired", "failed"].includes(attempt.status))
+      await payments.updateSettlementAttempt(manager, attempt.id, {
+        status: input.outcome === "cancelled" ? "cancelled" : "failed",
+        providerPaymentId: input.providerPaymentId, deadline: null });
     // A failed intent could otherwise be confirmed again; cancel it after commit.
     return { ...ended, result: state, abandonProviderPayment: input.outcome !== "cancelled" };
   }
@@ -48,11 +54,16 @@ export async function settleAdjustment(manager: EntityManager, input: {
   const firstCapture = attempt.status !== "succeeded";
   if (attempt.status !== "succeeded") await payments.updateSettlementAttempt(manager, attempt.id, { status: "succeeded", providerPaymentId: input.providerPaymentId, deadline: null });
   if (adjustment.status === "applied") return { ...ended, result: "succeeded" as const };
+  // Timely acceptance authorizes completion of the same capture even after
+  // grace, including zero-fragment proposals. Unaccepted late success is invalid.
+  const accepted = adjustment.captureAcceptedAt !== null;
+  const deadline = accepted ? null : adjustment.expiresAt;
+  const timely = deadline === null || now < deadline;
   await adjustments.releaseAdjustmentHolds(manager, adjustment.id);
-  if (adjustment.status === "pending" && now < adjustment.expiresAt) {
+  if (adjustment.status === "pending" && timely) {
     await manager.query("SAVEPOINT booking_adjustment_apply");
     let applied: Awaited<ReturnType<typeof applyCapturedBookingAdjustment>> | null = null;
-    try { applied = await applyCapturedBookingAdjustment(manager, adjustment, attempt.id); }
+    try { applied = await applyCapturedBookingAdjustment(manager, adjustment, attempt.id, deadline); }
     catch (error) {
       const failure = normalizeDatabaseError(error);
       if (!(error instanceof BookingRevisionFenceError) && !(failure.sqlState === "23P01" && failure.constraint === "court_reservation_no_overlap")) throw error;

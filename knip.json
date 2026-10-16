@@ -8,8 +8,7 @@
     "tests/e2e/fixtures/stripe-server.mjs",
     "tests/e2e/recovery-verification.config.ts",
     "tests/e2e-live/**/*.e2e.ts",
-    "tests/e2e-live/dev-server.mjs",
-    "tests/local/notification-recovery-worker.ts"
+    "tests/e2e-live/dev-server.mjs"
   ],
   "project": [
     "src/**/*.{ts,tsx,mjs,css}",

@@ -186,7 +186,7 @@ test("online creation shares the full-precision DB deadline and initialization a
   expect(checkout).toMatchObject({ attemptId: created.paymentAttemptId, token: expect.stringMatching(/^[a-f0-9]{64}$/),
     presentation: { kind: "stripe", clientSecret: "pi_phase5_secret" } });
   expect(createPayment).toHaveBeenCalledWith({ amount: 5000, currency: "ron", allowed_payment_method_types: ["card"],
-    metadata: { payment_attempt_id: created.paymentAttemptId } }, { idempotencyKey: `court-payment-${created.paymentAttemptId}` });
+    capture_method: "manual", metadata: { payment_attempt_id: created.paymentAttemptId } }, { idempotencyKey: `court-payment-${created.paymentAttemptId}` });
   expect(await counts()).toEqual({ reservations: 1, bookings: 1, attempts: 1 });
   await expect(readOnlineCheckout({ attemptId: checkout.attemptId, token: "0".repeat(64) })).rejects.toThrow();
   expect(await readOnlineCheckout({ attemptId: checkout.attemptId, token: checkout.token })).toMatchObject({ status: "pending_payment", totalAmountMinor: 5000, currency: "RON" });

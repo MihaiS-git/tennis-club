@@ -112,7 +112,7 @@ test("verified webhook settles original hold once, keeps retryable failure, rele
     await configureCheckoutPolicyFixture(db,locationId,courtId);
     const held = await hold(600), checkout = await begin(held.payment_attempt_id);
     expect(create).toHaveBeenCalledWith({ amount: 5000, currency: "ron", allowed_payment_method_types: ["card"],
-      metadata: { payment_attempt_id: held.payment_attempt_id } }, { idempotencyKey: `court-payment-${held.payment_attempt_id}` });
+      capture_method: "manual", metadata: { payment_attempt_id: held.payment_attempt_id } }, { idempotencyKey: `court-payment-${held.payment_attempt_id}` });
     expect((await insertCheckoutFixture(db, params(600))).error?.code).toBe("23P01");
     expect(await email(held.booking_id)).toEqual([]);
     expect(await readOnlineCheckout({ attemptId: checkout.attemptId, token: checkout.token })).toMatchObject({ status: "pending_payment" });
@@ -188,9 +188,10 @@ test("verified webhook settles original hold once, keeps retryable failure, rele
     expect((await POST(webhook(cancelledCheckout.attemptId, "payment_intent.succeeded"))).status).toBe(200);
     expect((await POST(webhook(cancelledCheckout.attemptId, "payment_intent.canceled"))).status).toBe(200);
     await evidence(cancelled, "cancelled", ["created", "cancelled"], "cancelled", 5000);
-    expect(await email(cancelled.booking_id)).toEqual([]);
-    // A distinct late duplicate can mark a new receipt; automatic recovery resolves it against the verified refund.
-    await (await import("@/lib/payments/recovery")).runPaymentRecovery();
+    // One notice that the late payment is being refunded, even across duplicate deliveries.
+    expect(await email(cancelled.booking_id)).toEqual([{ subject: "Payment received after checkout ended" }]);
+    // A distinct late duplicate marks a new receipt; its settlement re-checks the
+    // already verified refund and resolves it without another refund.
     expect((await db.from("payment_provider_events").select("reconciliation_required").eq("attempt_id", cancelledCheckout.attemptId)
       .eq("outcome", "succeeded")).data).toEqual([{ reconciliation_required: false }, { reconciliation_required: false }]);
     retrieve.mockImplementation(async (id: string) => ({ id, status: "requires_payment_method", amount: 5000, amount_received: 0,
@@ -205,7 +206,8 @@ test("verified webhook settles original hold once, keeps retryable failure, rele
     expect((await POST(webhook(expiredCheckout.attemptId, "payment_intent.succeeded"))).status).toBe(200);
     expect(await readOnlineCheckout({ attemptId: expiredCheckout.attemptId, token: expiredCheckout.token })).toMatchObject({ status: "expired" });
     expect((await db.from("court_reservations").select("status").eq("id", replacement.reservation_id).single()).data?.status).toBe("held");
-    expect(await email(expired.booking_id)).toEqual([]);
+    // One notice that the late payment is being refunded, even across duplicate deliveries.
+    expect(await email(expired.booking_id)).toEqual([{ subject: "Payment received after checkout ended" }]);
     await evidence(expired, "expired", ["created"], "expired", 5000);
     expect((await db.from("payment_provider_events").select("settlement_result,reconciliation_required").eq("attempt_id", expiredCheckout.attemptId)).data)
       .toEqual([{ settlement_result: "expired", reconciliation_required: false }]);
@@ -226,7 +228,7 @@ test("verified webhook settles original hold once, keeps retryable failure, rele
     expect((await db.from("court_reservations").select("status").eq("id", racing.reservation_id).single()).data?.status).toBe("released");
     const raceReplacement = await hold(900);
     await evidence(racing, "cancelled", ["created", "cancelled"], "pending", 0);
-    const racingEvent = `evt_${randomUUID()}`;
+    const racingEvent = `evt_${randomUUID()}`, createsBeforeRace = refundCreate.mock.calls.length;
     refundCreate.mockImplementationOnce(async (input, options) => {
       // Stripe accepted the operation but its HTTP response was lost. Recovery
       // rediscovers this same execution; it must not issue another creation.
@@ -235,8 +237,11 @@ test("verified webhook settles original hold once, keeps retryable failure, rele
       throw new Error("Refund response uncertain");
     });
     expect((await POST(webhook(racingCheckout.attemptId, "payment_intent.succeeded", racingEvent))).status).toBe(200);
+    // The webhook does not acknowledge an unconfirmed compensation refund: it
+    // re-checks it under the same idempotency key before answering 200.
     expect((await db.from("payment_refunds").select("status").eq("booking_id", racing.booking_id)).data)
-      .toEqual([{ status: "pending_retry" }]);
+      .toEqual([{ status: "succeeded" }]);
+    expect(refundCreate.mock.calls.length).toBe(createsBeforeRace + 1);
     const creationCallsBeforeRecovery=refundCreate.mock.calls.length;
     releaseCancel();
     await cancellation;
@@ -246,7 +251,8 @@ test("verified webhook settles original hold once, keeps retryable failure, rele
       .toMatchObject([{ status: "succeeded", amount_minor: 5000 }]);
     expect((await db.from("payment_refunds").select("id").eq("booking_id", racing.booking_id)).data).toHaveLength(1);
     expect((await db.from("court_reservations").select("status").eq("id", racing.reservation_id).single()).data?.status).toBe("released");
-    expect(await email(racing.booking_id)).toEqual([]);
+    // Money moved after the customer cancelled: one notice that it is being refunded.
+    expect(await email(racing.booking_id)).toEqual([{ subject: "Payment received after checkout ended" }]);
     await evidence(racing, "cancelled", ["created", "cancelled"], "succeeded", 5000);
     expect((await db.from("court_reservations").select("status").eq("id", raceReplacement.reservation_id).single()).data?.status).toBe("held");
     expect((await Promise.all([POST(webhook(racingCheckout.attemptId, "payment_intent.succeeded", racingEvent)),
@@ -302,7 +308,7 @@ test("verified webhook settles original hold once, keeps retryable failure, rele
     expect(await readOnlineCheckout(uncertainAccess)).toMatchObject({ status: "expired", paymentStatus: "refunded" });
     await evidence(uncertainExpiry, "expired", ["created"], "expired", 5000);
     expect((await db.from("court_reservations").select("status").eq("id", nextOccupant.reservation_id).single()).data?.status).toBe("held");
-    expect(await email(uncertainExpiry.booking_id)).toEqual([]);
+    expect(await email(uncertainExpiry.booking_id)).toEqual([{ subject: "Payment received after checkout ended" }]);
     // A capture with no webhook racing the cancellation request is refunded,
     // preserving the guest capability and original financial snapshots.
     const capturedCancel = await hold(1080), capturedCheckout = await begin(capturedCancel.payment_attempt_id);
@@ -310,7 +316,7 @@ test("verified webhook settles original hold once, keeps retryable failure, rele
       currency: "ron", metadata: { payment_attempt_id: id.slice(3) } }));
     expect(await abandonOnlineCheckout({ attemptId: capturedCheckout.attemptId, token: capturedCheckout.token }))
       .toMatchObject({ released: true, paymentStatus: "refunded" });
-    expect(await email(capturedCancel.booking_id)).toEqual([]);
+    expect(await email(capturedCancel.booking_id)).toEqual([{ subject: "Payment received after checkout ended" }]);
     await evidence(capturedCancel, "cancelled", ["created", "cancelled"], "succeeded", 5000);
     expect((await db.from("payment_attempts").select("status,amount_minor").eq("id", capturedCheckout.attemptId).single()).data)
       .toEqual({ status: "succeeded", amount_minor: 5000 });
@@ -328,7 +334,7 @@ test("verified webhook settles original hold once, keeps retryable failure, rele
     expect((await POST(webhook(uncertainCancelCheckout.attemptId, "payment_intent.succeeded", lateEvent))).status).toBe(200);
     await evidence(uncertainCancel, "cancelled", ["created", "cancelled"], "succeeded", 5000);
     expect((await db.from("court_reservations").select("status").eq("id", uncertainReplacement.reservation_id).single()).data?.status).toBe("held");
-    expect(await email(uncertainCancel.booking_id)).toEqual([]);
+    expect(await email(uncertainCancel.booking_id)).toEqual([{ subject: "Payment received after checkout ended" }]);
     const mismatch = await hold(720), mismatchCheckout = await begin(mismatch.payment_attempt_id);
     expect((await POST(webhook(mismatchCheckout.attemptId, "payment_intent.succeeded", undefined, 1))).status).toBe(200);
     expect(await email(mismatch.booking_id)).toEqual([]);

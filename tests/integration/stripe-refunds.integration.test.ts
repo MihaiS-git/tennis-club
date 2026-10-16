@@ -17,9 +17,8 @@ import { cancelOwnCustomerBooking } from "@/lib/bookings/self-cancellation-servi
 import { cancelCustomerBookingAsAdmin } from "@/lib/reservations/service";
 import { cancelBookingCommand } from "@/lib/bookings/cancellation-service";
 import { processBookingRefund } from "@/lib/payments/refunds";
-import { runPaymentRecovery } from "@/lib/payments/recovery";
 
-test("customer/Admin refunds preserve occupancy until verified, recover automatically, and remain replay-safe", async () => {
+test("customer/Admin refunds preserve occupancy until verified, complete on a later refund check, and remain replay-safe", async () => {
   const db = localFixtureClient();
   const database = await getDataSource();
   const restoreQueue = await isolateNotificationQueue(database.manager);
@@ -145,13 +144,13 @@ test("customer/Admin refunds preserve occupancy until verified, recover automati
     expect(await cancelOwnCustomerBooking(ownerFlow.booking_id, member)).toEqual({ ok: true, outcome: "cancellation_pending" });
     expect((await rows("bookings",ownerFlow.booking_id))[0].status).toBe("confirmed");
     const ownerRefund = (await rows("payment_refunds", ownerFlow.booking_id))[0];
-    const clock=vi.spyOn(Date,"now").mockReturnValue(Date.now()+120_000);
-    await runPaymentRecovery();clock.mockRestore();
+    // The Stripe refund webhook for this refund replays the unconfirmed request.
+    expect(await processBookingRefund(ownerRefund.id, { strict: true })).toBe("succeeded");
     await cancelled(ownerFlow);
     expect(await cancelOwnCustomerBooking(ownerFlow.booking_id, member)).toEqual({ ok: true, outcome: "cancelled", refundStatus: "succeeded" });
     expect(await rows("payment_refunds", ownerFlow.booking_id)).toHaveLength(1);
     expect(refundPayment).toHaveBeenLastCalledWith(expect.objectContaining({ id: ownerRefund.id, amountMinor: 5000 }));
-    await deliverPendingBookingNotifications(Date.now()+5000);
+    await deliverPendingBookingNotifications({ deadline: Date.now() + 5000 });
     for (const booking of [own, adminFlow, secondAdminFlow, ownerFlow, replacement]) {
       expect((await bookingNotifications(database.manager, booking.booking_id)).filter(row => row.subject === "Booking cancelled")).toHaveLength(1);
       expect(cancellations(booking.booking_id)).toHaveLength(1);
@@ -169,13 +168,13 @@ test("customer/Admin refunds preserve occupancy until verified, recover automati
     await cancelled(failedDelivery);
     expect((await rows("payment_refunds", failedDelivery.booking_id))[0].status).toBe("succeeded");
     expect(await cancelOwnCustomerBooking(failedDelivery.booking_id, member)).toEqual({ ok: true, outcome: "cancelled", refundStatus: "succeeded" });
-    await deliverPendingBookingNotifications(Date.now()+5000);
+    await deliverPendingBookingNotifications({ deadline: Date.now() + 5000 });
     expect(cancellations(failedDelivery.booking_id)).toHaveLength(1);
     expect(await database.query("SELECT attempts,delivered_at,last_error FROM public.booking_notification_deliveries WHERE message->>'text' LIKE $1 AND message->>'subject'='Booking cancelled'", [`%${failedDelivery.booking_id}%`]))
-      .toMatchObject([{ attempts: 1, delivered_at: null, last_error: "delivery_unconfirmed" }]);
+      .toMatchObject([{ attempts: 1, delivered_at: null, last_error: "unconfirmed" }]);
     failDelivery = false;
     await database.query("UPDATE public.booking_notification_deliveries SET next_attempt_at=clock_timestamp() WHERE message->>'text' LIKE $1", [`%${failedDelivery.booking_id}%`]);
-    await deliverPendingBookingNotifications(Date.now()+5000);
+    await deliverPendingBookingNotifications({ deadline: Date.now() + 5000 });
     expect(cancellations(failedDelivery.booking_id)).toHaveLength(2);
     expect(await rows("payment_refunds", failedDelivery.booking_id)).toMatchObject([{ status: "succeeded", amount_minor: 5000 }]);
     expect((await member.from("payment_refunds").select("*")).error?.code).toBe("42501");

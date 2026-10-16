@@ -24,22 +24,24 @@ export function checkoutPersistence(method: PaymentMethod) {
   return { booking_status: online ? "pending_payment" : "confirmed", reservation_status: online ? "held" : "active",
     attempt_status: online ? "pending" : "due", hold_seconds: online ? paymentHoldDurationSeconds : null } as const;
 }
-// Routine uncertainty is retried automatically. Attention means money that the
-// automation cannot return (definitive failure), recovery stalled beyond the
-// provider idempotency window, or captured evidence needing investigation.
+// Attention means money Stripe definitively failed to return, a refund still
+// unconfirmed after a short grace period (nothing retries it in the background:
+// a Stripe refund webhook or an Admin "Check with Stripe" resolves it), or
+// captured evidence needing investigation.
 export const attentionRefundStatuses = ["failed"];
-export const stalledRefundHours = 24;
-export function refundRecoveryStalled(status: string | null | undefined, recoveryStartedAt: string | null | undefined, now = Date.now()) {
-  return status === "pending_retry" && !!recoveryStartedAt && now - Date.parse(recoveryStartedAt) > stalledRefundHours * 3_600_000;
+export const unconfirmedRefundMinutes = 15;
+export function refundUnconfirmed(status: string | null | undefined, outstandingSince: string | null | undefined, now = Date.now()) {
+  return (status === "pending" || status === "pending_retry") && !!outstandingSince
+    && now - Date.parse(outstandingSince) > unconfirmedRefundMinutes * 60_000;
 }
 export function summarizeRefunds(statuses: RefundStatus[]): RefundStatus | undefined {
   const active = statuses.filter(status => status !== "voided");
   return active.includes("failed") ? "failed" : active.includes("pending_retry") ? "pending_retry"
     : active.includes("pending") ? "pending" : active.length ? "succeeded" : undefined;
 }
-export function paymentNeedsAttention(refund: { status: string; recovery_started_at?: string | null } | null | undefined,
+export function paymentNeedsAttention(refund: { status: string; outstanding_since?: string | null } | null | undefined,
   events: readonly { reconciliation_required: boolean }[]) {
-  return attentionRefundStatuses.includes(refund?.status ?? "") || refundRecoveryStalled(refund?.status, refund?.recovery_started_at)
+  return attentionRefundStatuses.includes(refund?.status ?? "") || refundUnconfirmed(refund?.status, refund?.outstanding_since)
     || events.some((event) => event.reconciliation_required);
 }
 export type CheckoutLifecycle =
@@ -66,11 +68,36 @@ export const checkoutStatusResponseSchema = z.discriminatedUnion("ok", [
   }),
 ]);
 
+// Booking checkouts use manual capture. An authorization accepted before the
+// attempt deadline extends only the reservation hold, to exactly the attempt
+// deadline plus this operational grace. That exact extension is the durable
+// acceptance marker; unresolved accepted occupancy stays protected beyond it.
+export const checkoutCaptureGraceSeconds = 120;
+export function captureAccepted(reservationExpiry: string, attemptExpiry: string) {
+  const reservation = timestampToEpochMicroseconds(reservationExpiry), attempt = timestampToEpochMicroseconds(attemptExpiry);
+  // Exact equality: only the acceptance write produces this value.
+  return reservation === attempt + BigInt(checkoutCaptureGraceSeconds) * BigInt(1_000_000);
+}
+// Operational grace marker for accepted checkout, otherwise the earlier deadline.
+export function checkoutDeadline(reservationExpiry: string, attemptExpiry: string) {
+  if (captureAccepted(reservationExpiry, attemptExpiry)) return reservationExpiry;
+  return timestampToEpochMicroseconds(reservationExpiry) <= timestampToEpochMicroseconds(attemptExpiry)
+    ? reservationExpiry : attemptExpiry;
+}
+
 export function paymentTransition(input: {
   attemptStatus: string; bookingStatus: string; reservationStatus: string;
   reservationExpiry: string | null; attemptExpiry: string | null; now: string;
   outcome: "succeeded" | "failed" | "retryable_failed" | "cancelled";
 }) {
+  // Local expiry/failure is not provider cancellation. Persist a later verified
+  // cancellation so expired intents stop appearing as unresolved cleanup work.
+  if (["expired", "failed"].includes(input.attemptStatus) && input.outcome === "cancelled"
+    && ["expired", "failed", "cancelled"].includes(input.bookingStatus)
+    && ["held", "released"].includes(input.reservationStatus))
+    return { result: "cancelled", deadline: null, targets: {
+      attempt: "cancelled", booking: input.bookingStatus, reservation: "released",
+    } };
   if (input.attemptStatus !== "pending") return { result: input.attemptStatus, targets: null, deadline: null };
   // Booking cancellation intent is durable even while Stripe is uncertain.
   // Never turn a later capture into a booking confirmation.
@@ -83,11 +110,11 @@ export function paymentTransition(input: {
   if (input.bookingStatus !== "pending_payment" || input.reservationStatus !== "held")
     return { result: "unavailable", targets: null, deadline: null };
   if (input.reservationExpiry === null || input.attemptExpiry === null) throw new Error("Payment hold deadline missing.");
-  const deadlineValue = timestampToEpochMicroseconds(input.reservationExpiry) <= timestampToEpochMicroseconds(input.attemptExpiry)
-    ? input.reservationExpiry : input.attemptExpiry;
-  const expired = timestampToEpochMicroseconds(deadlineValue) <= timestampToEpochMicroseconds(input.now);
+  const deadlineValue = checkoutDeadline(input.reservationExpiry, input.attemptExpiry);
+  const accepted = captureAccepted(input.reservationExpiry, input.attemptExpiry);
+  const expired = !accepted && timestampToEpochMicroseconds(deadlineValue) <= timestampToEpochMicroseconds(input.now);
   const outcome = expired ? "expired" : input.outcome;
-  const deadline = expired ? null : deadlineValue;
+  const deadline = expired || accepted ? null : deadlineValue;
   if (outcome === "retryable_failed") return { result: "pending", targets: null, deadline };
   return { result: outcome, deadline, targets: {
     attempt: input.outcome === "cancelled" ? "cancelled" : outcome,

@@ -26,6 +26,7 @@ it.each([
   ["/admin/payments/transactions", "Transactions"],
   ["/admin/payments/transactions/refund/transaction-id", "Transactions"],
   ["/admin/payments/settings", "Settings"],
+  ["/admin/payments/notifications", "Notifications"],
   ["/admin/reservations", "Reservations"],
   ["/admin/reservations/day", "Reservations"],
   ["/admin/users", "Users"],
@@ -35,8 +36,8 @@ it.each([
   render(<AdminNavigation isAdmin={true} />);
   const nav = screen.getByRole("navigation", { name: "Management navigation" });
   const links = within(nav).getAllByRole("link");
-  expect(links.map((link) => link.textContent)).toEqual(["Locations", "Reservations", "Transactions", "Settings", "Users"]);
-  expect(links.map((link) => link.getAttribute("href"))).toEqual(["/admin/locations", "/admin/reservations", "/admin/payments/transactions", "/admin/payments/settings", "/admin/users"]);
+  expect(links.map((link) => link.textContent)).toEqual(["Locations", "Reservations", "Transactions", "Notifications", "Settings", "Users"]);
+  expect(links.map((link) => link.getAttribute("href"))).toEqual(["/admin/locations", "/admin/reservations", "/admin/payments/transactions", "/admin/payments/notifications", "/admin/payments/settings", "/admin/users"]);
   for (const link of links) {
     expect(link.getAttribute("aria-current")).toBe(link.textContent === label ? "page" : null);
     expect(link.className.includes("bg-primary text-primary-foreground")).toBe(link.textContent === label);
@@ -64,6 +65,7 @@ it.each(["details", "opening-hours", "courts", "pricing", "public-booking"])(
 it.each([
   ["/admin/payments/transactions", "Transactions", "Settings"],
   ["/admin/payments/settings", "Settings", "Transactions"],
+  ["/admin/payments/notifications", "Notifications", "Settings"],
 ])("keeps Payments active on %s with the correct secondary tab", async (pathname, active, inactive) => {
   navigation.pathname = pathname;
   render(<><AdminNavigation isAdmin={true} />{await PaymentsLayout({ children: <p>Settings content</p> })}</>);

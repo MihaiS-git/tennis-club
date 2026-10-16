@@ -30,6 +30,7 @@ export type AdjustmentTarget = { courtId: string; date: string; startMinute: num
 @Check("booking_adjustments_new_total_check", "new_total > 0")
 @Check("booking_adjustments_status_check", "status IN ('pending', 'applied', 'cancelled', 'expired', 'unsuccessful')")
 @Check("booking_adjustments_expires_at_check", "isfinite(expires_at)")
+@Check("booking_adjustments_capture_acceptance_check", "capture_accepted_at IS NULL OR (isfinite(capture_accepted_at) AND capture_accepted_at < expires_at AND kind='reschedule' AND new_total > original_total)")
 @ForeignKey(() => BookingRevisionEntity, ["bookingId", "baseRevisionId"], ["bookingId", "id"], { name: "booking_adjustments_base_revision_fkey", onDelete: "RESTRICT" })
 export class BookingAdjustmentEntity {
   @Column({ name: "base_revision_id", type: "uuid" }) baseRevisionId!: string;
@@ -45,6 +46,7 @@ export class BookingAdjustmentEntity {
   @Column({ type: "text" }) currency!: string;
   @Column({ type: "text" }) status!: AdjustmentState;
   @Column({ name: "expires_at", type: "timestamptz" }) expiresAt!: Date;
+  @Column({ name: "capture_accepted_at", type: "timestamptz", nullable: true }) captureAcceptedAt: Date | null = null;
   @Column({ name: "created_at", type: "timestamptz", default: () => "now()" }) createdAt!: Date;
   @Column({ name: "updated_at", type: "timestamptz", default: () => "now()" }) updatedAt!: Date;
 }
