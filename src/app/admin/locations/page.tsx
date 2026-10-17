@@ -25,11 +25,16 @@ export default async function AdminLocationsPage({ searchParams }: {
     {rows.length === 0 ? <p className="rounded-control border border-border bg-surface px-4 py-6 text-sm text-muted-foreground">
       {archived ? "No archived locations." : "No locations found."}
     </p> : <>
-      <div className="relative overflow-x-auto rounded-control border border-border bg-surface">
-        <table className="w-full min-w-[1100px] text-left text-sm" aria-label={archived ? "Archived locations" : "Locations"}>
+      <div className="space-y-3 md:hidden">
+        {rows.map(({ location, countryName }) => <LocationItem key={`${location.id}-${location.updated_at}`} mobile
+          location={location} missing={location.missing} countryName={countryName} />)}
+      </div>
+      <div className="relative hidden overflow-x-auto rounded-card border border-border bg-surface md:block">
+        <table className="w-full min-w-[760px] text-left text-sm" aria-label={archived ? "Archived locations" : "Locations"}>
           <thead className="border-b border-border bg-surface-muted text-xs font-semibold text-muted-foreground">
-            <tr>{["Location", "Status", "City / Country", "Timezone", "Currency", "Details", "Opening hours", "Courts", "Pricing", "Public booking"].map((label, index) =>
-              <th key={label} scope="col" className={`px-3 py-3 whitespace-nowrap ${index >= 5 && index <= 8 ? "text-center" : ""}`}>{label}</th>)}</tr>
+            <tr>{["Location", "Status", "Region", "Setup", "Public booking"].map((label) =>
+              <th key={label} scope="col" title={label === "Setup" ? "Details · Opening hours · Courts · Pricing" : undefined}
+                className="whitespace-nowrap px-3 py-2.5">{label}</th>)}</tr>
           </thead>
           <tbody className="divide-y divide-border">
             {rows.map(({ location, countryName }) => <LocationItem key={`${location.id}-${location.updated_at}`}

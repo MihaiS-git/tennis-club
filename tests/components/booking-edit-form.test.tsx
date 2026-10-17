@@ -5,7 +5,8 @@ import type { ComponentProps } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { BookingEditForm } from "@/components/booking-edit-form";
-const { load, quote, save, abandon } = vi.hoisted(() => ({ load: vi.fn(), quote: vi.fn(), save: vi.fn(), abandon: vi.fn() }));
+const { refreshUnread, load, quote, save, abandon } = vi.hoisted(() => ({ refreshUnread: vi.fn(), load: vi.fn(), quote: vi.fn(), save: vi.fn(), abandon: vi.fn() }));
+vi.mock("@/components/notification-unread", () => ({ refreshNotificationUnread: refreshUnread }));
 vi.mock("@/app/book/actions", () => ({ abandonCheckoutAction: abandon }));
 vi.mock("@/app/book/online-payment", () => ({ OnlinePayment: (props: ComponentProps<typeof import("@/app/book/online-payment").OnlinePayment>) =>
   <button type="button" onClick={() => props.onConfirmed(10000,"RON",null)}>Simulate verified modification payment</button> }));
@@ -275,4 +276,21 @@ it.each(["cancelled", "expired", "unsuccessful"])("presents the %s modification 
   expect(screen.getByText("The original booking was preserved.")).toBeTruthy();
   expect(screen.getByText("Proposed total")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
+});
+
+
+it.each([true, false])("refreshes unread only after a completed reschedule command (success=%s)", async success => {
+  quote.mockResolvedValue({ ok: true, totalAmountMinor: 7500 });
+  let finish!: (result: { ok: true; totalAmountMinor: number } | { ok: false; message: string }) => void;
+  save.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  renderBooking("owner");
+  await screen.findByText("Current reservation");
+  extendInterval();
+  await waitFor(() => expect(saveButton()).toHaveProperty("disabled", false));
+  expect(refreshUnread).not.toHaveBeenCalled();
+  fireEvent.click(saveButton());
+  expect(save).toHaveBeenCalledOnce();
+  expect(refreshUnread).not.toHaveBeenCalled();
+  await act(async () => finish(success ? { ok: true, totalAmountMinor: 7500 } : { ok: false, message: "Try again." }));
+  expect(refreshUnread).toHaveBeenCalledTimes(success ? 1 : 0);
 });

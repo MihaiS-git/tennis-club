@@ -17,7 +17,7 @@ const acknowledgedKinds: ReadonlySet<BookingEmailEvent["event_kind"]> = new Set(
 export async function enqueueBookingNotification(manager: EntityManager, key: string, event: BookingEmailEvent) {
   if (!manager.queryRunner?.isTransactionActive) throw new Error("Booking notification requires the state-change transaction");
   await notifications.insertBookingNotification(manager, { key, message: renderBookingEmail(event),
-    bookingId: event.payload.booking_id, requiresAcknowledgement: acknowledgedKinds.has(event.event_kind) });
+    bookingId: event.payload.booking_id, eventKind: event.event_kind, requiresAcknowledgement: acknowledgedKinds.has(event.event_kind) });
 }
 
 // Automatic retry policy. A temporary failure is retried with exponential backoff

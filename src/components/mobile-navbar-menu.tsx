@@ -1,5 +1,8 @@
 "use client";
 
+import { SignOutButton } from "./sign-out-button";
+
+import { NotificationBell } from "./notification-bell";
 import { Menu, X } from "lucide-react";
 import { signOutAction } from "@/app/account/actions";
 import { ProfileDepartureForm, ProfileDepartureLink as Link } from "./profile-departure-navigation";
@@ -90,6 +93,7 @@ export function MobileNavbarControls({ isAuthenticated, canReserve, avatarUrl = 
 
   return (
     <>
+          {isAuthenticated && <NotificationBell />}
           <button
             ref={triggerRef}
             type="button"
@@ -171,9 +175,7 @@ export function MobileNavbarControls({ isAuthenticated, canReserve, avatarUrl = 
                 </Link>
                 {/* The departure guard protects unsaved Profile drafts before the unchanged action runs. */}
                 <ProfileDepartureForm action={signOutAction} onSubmit={closeMenu}>
-                  <button type="submit" className="flex min-h-12 w-full items-center text-left text-sm font-medium text-primary hover:text-accent">
-                    Sign out
-                  </button>
+                  <SignOutButton className="flex min-h-12 w-full items-center text-left text-sm font-medium text-primary" />
                 </ProfileDepartureForm>
               </>
             ) : (

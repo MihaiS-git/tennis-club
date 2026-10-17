@@ -11,12 +11,12 @@ const mapId = "home-location-map";
 
 // A street line plus a city or postal code is required for a trustworthy map
 // destination; anything less would let Google Maps guess a place.
-function mapQuery(location: PublicLocation): string | null {
+export function mapQuery(location: PublicLocation): string | null {
   if (!location.address_line1?.trim() || !(location.city?.trim() || location.postal_code?.trim())) return null;
   return locationAddressLines(location).join(", ");
 }
 
-function directionsUrl(query: string) {
+export function directionsUrl(query: string) {
   return `https://www.google.com/maps/dir/?${new URLSearchParams({ api: "1", destination: query })}`;
 }
 

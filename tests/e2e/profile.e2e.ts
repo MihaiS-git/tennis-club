@@ -122,11 +122,14 @@ test("profile refinement: authenticated lifecycle, country, keyboard, navigation
     await section(page, "Player identity");
     await page.reload();
     await expect(page.getByRole("heading", { name: "Mihai Suciu", exact: true })).toBeVisible();
-    await page.getByText("Edit photo", { exact: true }).click();
+    await page.getByRole("button", { name: "Edit photo", exact: true }).click();
     await page.getByLabel("Upload avatar").setInputFiles({ name: "avatar.png", mimeType: "image/png", buffer: png });
     await page.getByRole("button", { name: "Save avatar" }).click();
     await expect(page.getByText("Avatar saved.", { exact: true })).toBeVisible();
     await expect(page.getByRole("img", { name: "Your player avatar" })).toBeVisible();
+    const avatarDialog = page.getByRole("dialog", { name: "Edit photo", exact: true });
+    await avatarDialog.getByRole("button", { name: "Close dialog", exact: true }).click();
+    await expect(avatarDialog).toBeHidden();
 
     for (const width of [375, 768, 1440]) {
       await page.setViewportSize({ width, height: 900 });
@@ -157,11 +160,12 @@ test("profile refinement: authenticated lifecycle, country, keyboard, navigation
       await section(page, "Personal information");
       await expect(page.getByLabel("First name")).toHaveValue("Changed");
       await section(page, "Player identity");
-      await page.getByText("Edit photo", { exact: true }).click();
-      if (!await page.getByLabel("Change avatar").isVisible()) await page.getByText("Edit photo", { exact: true }).click();
+      await page.getByRole("button", { name: "Edit photo", exact: true }).click();
       await expect(page.getByLabel("Change avatar")).toBeVisible();
       await expect(page.getByRole("button", { name: "Remove avatar" })).toBeVisible();
       await assertNoOverflow(page);
+      await avatarDialog.getByRole("button", { name: "Close dialog", exact: true }).click();
+      await expect(avatarDialog).toBeHidden();
       const mobile = width < 1024;
       if (mobile) await page.getByRole("button", { name: "Open menu" }).click();
       const profileLink = mobile
@@ -181,12 +185,15 @@ test("profile refinement: authenticated lifecycle, country, keyboard, navigation
       await assertNoOverflow(page);
       if (mobile) await page.getByRole("dialog", { name: "Mobile navigation menu" }).getByRole("button", { name: "Close menu", exact: true }).click();
     }
+    await page.getByRole("button", { name: "Edit photo", exact: true }).click();
     await page.getByLabel("Change avatar").setInputFiles({ name: "replacement.png", mimeType: "image/png", buffer: png });
     await page.getByRole("button", { name: "Save avatar" }).click();
     await expect(page.getByRole("link", { name: "Profile", exact: true }).locator("img")).toBeVisible();
     await page.getByRole("button", { name: "Remove avatar" }).click();
     await expect(page.getByRole("img", { name: "Default player avatar" })).toBeVisible();
     await expect(page.getByRole("link", { name: "Profile", exact: true }).locator("img")).toHaveCount(0);
+    await avatarDialog.getByRole("button", { name: "Close dialog", exact: true }).click();
+    await expect(avatarDialog).toBeHidden();
     expect(forbiddenRequests).toEqual([]);
     // Navbar sign out guards the current page's drafts.
     await section(page, "Tennis profile");

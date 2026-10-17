@@ -13,7 +13,8 @@ import { PricingRules } from "../../pricing/pricing-rules";
 import { LocationForm } from "../location-form";
 import { LocationOpeningHours } from "../location-opening-hours";
 import { LocationWorkspace } from "../location-workspace";
-import { configurationAreas, LocationStatus, publicationState } from "../configuration-status";
+import { countries } from "@/lib/profile/countries";
+import { configurationAreas, ConfigurationIndicator, LocationStatus, PublicationStatus, publicationState } from "../configuration-status";
 import { PublicationControl } from "../publication-control";
 
 export const instant = false;
@@ -33,11 +34,11 @@ export default async function LocationManagementPage({ params }: { params: Promi
   const periods = allPeriods.filter((period) => courtIds.has(period.court_id));
   const unavailable = !location.is_active || location.archived_at !== null;
   return <>
-    <AdminPageHeader title={location.name} description={[location.address_line1, location.city, location.country_code, location.timezone, location.currency].filter(Boolean).join(" · ")} />
-    <div className="mb-4 flex flex-wrap gap-x-6 gap-y-2 text-sm"><LocationStatus location={location} />
-      <span>Public booking: {publicationState(location, location.missing)}</span>
-      <span>Configuration: {location.missing.length ? "Setup incomplete" : "Ready"}</span>
-    </div>
+    <AdminPageHeader title={location.name} description={[location.address_line1, location.city,
+      countries.find((entry) => entry.code === location.country_code)?.name, location.timezone, location.currency].filter(Boolean).join(" · ")}>
+      <LocationStatus location={location} />
+      <span className="sr-only">Public booking:</span><PublicationStatus location={location} missing={location.missing} />
+    </AdminPageHeader>
     <LocationWorkspace key={location.id} panels={{
       details: <LocationForm location={location} />,
       "opening-hours": <>
@@ -49,15 +50,28 @@ export default async function LocationManagementPage({ params }: { params: Promi
         : <CourtInventory scoped location={location} courts={courts} locations={locations} periods={periods} />,
       pricing: location.archived_at ? <p>Restore this location before configuring pricing.</p>
         : <PricingRules location={location} courts={courts} rules={rules} openingHours={intervals} schedules={schedules} />,
-      "public-booking": <>
-        <p className="text-sm">{publicationState(location, location.missing)}. Publication {location.is_public ? "enabled" : "disabled"}.</p>
-        {unavailable && <p className="mt-2 text-sm text-muted-foreground">{location.archived_at ? "Restore and activate" : "Activate"} this location before making it available for public booking.</p>}
-        {location.missing.length > 0 && <><p className="mt-2 text-sm text-muted-foreground">Complete these requirements before enabling public booking:</p>
-          <ul className="mt-2 space-y-1 text-sm">{configurationAreas.filter((area) => location.missing.includes(area.requirement)).map((area) => <li key={area.target}>
-            <Link href={`?tab=${area.target}`} className={linkClass}>{area.missing}</Link>
-          </li>)}</ul></>}
-        {!location.archived_at && <PublicationControl key={String(location.is_public)} id={location.id} published={location.is_public} blocked={unavailable || location.missing.length > 0} />}
-      </>,
+      "public-booking": <div className="grid gap-6 md:grid-cols-[minmax(0,1fr)_minmax(0,18rem)] md:gap-8">
+        <div className="min-w-0">
+          <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Setup checklist</h2>
+          <p className="mt-1 text-sm text-muted-foreground">{location.missing.length ? "Complete these requirements before enabling public booking:" : "All setup requirements are complete."}</p>
+          <ul className="mt-3 divide-y divide-border rounded-control border border-border text-sm">{configurationAreas.map((area) => {
+            const missing = location.missing.includes(area.requirement);
+            const waitingForCourts = area.target === "pricing" && location.missing.includes("an active court");
+            return <li key={area.target} className="flex min-h-11 items-center gap-3 px-3 py-2">
+              <span aria-hidden="true" className="inline-flex"><ConfigurationIndicator area={area} missing={location.missing} /></span>
+              {missing ? <Link href={`?tab=${area.target}`} className={linkClass}>{area.missing}</Link>
+                : <span className={waitingForCourts ? "text-muted-foreground" : "text-foreground"}>
+                  {waitingForCourts ? "Add active courts before configuring pricing" : `${area.label} configured`}</span>}
+            </li>;
+          })}</ul>
+        </div>
+        <div className="min-w-0 md:border-l md:border-border md:pl-8">
+          <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Publication</h2>
+          <p className="mt-2 text-sm">{publicationState(location, location.missing)}. Publication {location.is_public ? "enabled" : "disabled"}.</p>
+          {unavailable && <p className="mt-2 text-sm text-muted-foreground">{location.archived_at ? "Restore and activate" : "Activate"} this location before making it available for public booking.</p>}
+          {!location.archived_at && <PublicationControl key={String(location.is_public)} id={location.id} published={location.is_public} blocked={unavailable || location.missing.length > 0} />}
+        </div>
+      </div>,
     }} />
   </>;
 }

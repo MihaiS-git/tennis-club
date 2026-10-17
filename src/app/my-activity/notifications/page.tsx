@@ -4,8 +4,8 @@ import { FinancialNotices } from "../financial-notices";
 
 export const metadata: Metadata = { title: "Notifications | Tennis Club" };
 
-export default function NotificationsPage() {
+export default function NotificationsPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   return <Suspense fallback={<p role="status" className="text-sm text-muted-foreground">Loading notifications…</p>}>
-    <FinancialNotices />
+    <FinancialNotices searchParams={searchParams} />
   </Suspense>;
 }

@@ -124,7 +124,10 @@ it("handles incomplete profiles and identity fallbacks", async () => {
   await page(incomplete);
   expect(screen.getByRole("heading", { name: user.email })).toBeTruthy();
   expect(screen.getByText("No avatar uploaded")).toBeTruthy();
-  expect(screen.getAllByText("—").length).toBeGreaterThan(5);
+  expect(screen.getByText("No tennis profile added yet.")).toBeTruthy();
+  expect(screen.queryByText("—")).toBeNull();
+  const header = screen.getByRole("heading", { name: user.email }).closest("header")!;
+  expect(within(header).getAllByText(user.email)).toHaveLength(1);
 });
 
 it("refreshes after suspension/reactivation and updates controls from fresh server data", async () => {
@@ -151,4 +154,15 @@ it("rejects malformed, missing and unauthorized user reads", async () => {
   mocks.details.mockClear();
   await expect(UserManagementPage({ params: Promise.resolve({ userId: user.id }), searchParams: Promise.resolve({}) })).rejects.toThrow("not-found");
   expect(mocks.details).not.toHaveBeenCalled();
+});
+
+it("keeps populated personal fields and replaces missing sections with clear empty states", async () => {
+  navigate("?tab=personal");
+  await page({ ...user, personal: { first_name: null, last_name: null, phone: null, date_of_birth: null,
+    address_line1: null, address_line2: null, city: null, postal_code: null, country_code: null } });
+  const profile = screen.getByRole("region", { name: "Personal profile" });
+  expect(within(profile).getByText(user.email)).toBeTruthy();
+  expect(within(profile).getByText("No personal details added yet.")).toBeTruthy();
+  expect(within(profile).getByText("No address added yet.")).toBeTruthy();
+  expect(within(profile).queryByText("—")).toBeNull();
 });

@@ -85,6 +85,19 @@ test("merges before pagination, preserves kind/ID ties, and keeps options before
   expect(filtered.courts).toEqual([{ id: id(2), name: "Court A", location_id: id(3) }]);
 });
 
+test("ignores a court filter that does not belong to the selected location", async () => {
+  serve([booking]);
+  const all = await listOwnCourtActivity("upcoming", parseActivityQuery({ location: id(3) }, "upcoming"), userClient, now);
+  expect(all.rows.map((row) => row.id)).toEqual([booking.id]);
+  for (const court of [id(2), id(998)]) {
+    const query = parseActivityQuery({ location: id(3), court }, "upcoming");
+    expect((await listOwnCourtActivity("upcoming", query, userClient, now)).rows.map((row) => row.id)).toEqual([booking.id]);
+  }
+  const elsewhere = await listOwnCourtActivity("upcoming", { ...parseActivityQuery({ location: id(999) }, "upcoming"), court: id(2) }, userClient, now);
+  expect(elsewhere.rows).toEqual([]);
+  expect(elsewhere.courts).toEqual([{ id: id(2), name: "Court A", location_id: id(3) }]);
+});
+
 test("classifies exact ends using one instant across timezones and excludes unpaid online rows", async () => {
   serve([
     { ...booking, reservation: { ...interval, ends_at_minute: 900 } },

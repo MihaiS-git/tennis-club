@@ -3,6 +3,7 @@ import "server-only";
 import type { MailMessage } from "../mail/brevo";
 import type { RevisionSnapshot } from "../bookings/revision";
 import { customerCancellationNoticeLabel, guestCancellationInstruction } from "../bookings/self-cancellation";
+import { bookingEmailSubjects } from "./booking-email-subjects";
 
 type BookingEmailSchedule = {
   booking_date: string;
@@ -57,12 +58,6 @@ const money = (minor: number, currency: string) => `${(minor / 100).toFixed(2)} 
 function interval(value: BookingEmailSchedule) {
   return `${value.booking_date}, ${time(value.starts_at_minute)}–${time(value.ends_at_minute)}, ${value.court_name}`;
 }
-const subjects: Record<BookingEmailEvent["event_kind"], string> = {
-  confirmed: "Booking confirmed", customer_cancelled: "Booking cancelled", admin_cancelled: "Booking cancelled",
-  customer_rescheduled: "Booking rescheduled", cancellation_failed: "Booking cancellation not completed",
-  modification_failed: "Booking change not completed", refund_incomplete: "Refund requires attention",
-  late_payment_refund: "Payment received after checkout ended",
-};
 export function renderBookingEmail(event: BookingEmailEvent): MailMessage {
   const p = event.payload;
   const kind = event.event_kind;
@@ -90,5 +85,5 @@ export function renderBookingEmail(event: BookingEmailEvent): MailMessage {
     lines.push("The additional payment you made for this change is being refunded.");
   if (p.guest_cancellation_notice_minutes !== undefined)
     lines.push("", "Cancellation terms", `This booking requires ${customerCancellationNoticeLabel(p.guest_cancellation_notice_minutes)}.`, guestCancellationInstruction);
-  return { to: event.recipient, subject: subjects[kind], text: lines.join("\n") };
+  return { to: event.recipient, subject: bookingEmailSubjects[kind], text: lines.join("\n") };
 }

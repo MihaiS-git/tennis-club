@@ -3,22 +3,24 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { refreshNotificationUnread } from "@/components/notification-unread";
 import { Button } from "@/components/button";
-import { acknowledgeFinancialNoticeAction } from "./actions";
+import { acknowledgeFinancialNoticeAction, markNotificationReadAction } from "./actions";
 
-export function AcknowledgeNoticeButton({ id }: { id: string }) {
+export function AcknowledgeNoticeButton({ id, important = true }: { id: string; important?: boolean }) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
   async function acknowledge() {
     if (pending) return;
     setPending(true);
     try {
-      const result = await acknowledgeFinancialNoticeAction(id);
+      const result = await (important ? acknowledgeFinancialNoticeAction(id) : markNotificationReadAction(id));
       if (!result.ok) toast.error(result.message);
+      else refreshNotificationUnread();
       router.refresh();
     } catch { toast.error("Unable to save. Try again."); }
     finally { setPending(false); }
   }
   return <Button type="button" variant="secondary" size="small" fullWidth={false} className="mt-3"
-    disabled={pending} aria-busy={pending} onClick={() => { void acknowledge(); }}>{pending ? "Saving…" : "OK"}</Button>;
+    disabled={pending} aria-busy={pending} onClick={() => { void acknowledge(); }}>{pending ? "Saving…" : important ? "OK" : "Mark as read"}</Button>;
 }

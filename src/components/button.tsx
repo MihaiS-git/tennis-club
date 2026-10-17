@@ -14,10 +14,10 @@ export function Button({
   ...props
 }: ButtonProps) {
   const variants = {
-    primary: "border-primary bg-primary text-primary-foreground hover:bg-primary-hover",
-    secondary: "border-border-strong bg-surface text-primary hover:bg-surface-muted",
-    destructive: "border-danger bg-danger-background text-danger hover:bg-surface-muted",
-    subtle: "border-transparent bg-transparent text-muted-foreground hover:bg-surface-muted hover:text-primary",
+    primary: "border-primary bg-primary text-primary-foreground enabled:hover:bg-primary-hover",
+    secondary: "border-border-strong bg-surface text-primary enabled:hover:bg-surface-muted",
+    destructive: "border-danger bg-danger-background text-danger enabled:hover:bg-surface-muted",
+    subtle: "border-transparent bg-transparent text-muted-foreground enabled:hover:bg-surface-muted enabled:hover:text-primary",
   };
   const sizes = {
     default: "min-h-10 px-4 py-2.5 text-sm",
@@ -25,8 +25,4 @@ export function Button({
     icon: "size-8 shrink-0 p-1 text-sm",
   };
   return <button {...props} className={`inline-flex items-center justify-center rounded-control border font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:cursor-not-allowed disabled:opacity-60 aria-busy:cursor-wait ${variants[variant]} ${sizes[size]} ${fullWidth ? "w-full" : ""} ${className}`} />;
-}
-
-export function DialogCloseButton(props: Omit<ButtonProps, "variant" | "size" | "fullWidth" | "children" | "type">) {
-  return <Button {...props} type="button" variant="subtle" size="small">Close</Button>;
 }

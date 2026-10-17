@@ -4,7 +4,7 @@ const facts = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/db/data-source", () => ({ getDataSource: async () => ({ manager: {} }) }));
 vi.mock("@/lib/db/repositories/clubs.repository", () => ({ listPublicLocationFacts: facts }));
 
-import { listPublicLocationsWithCourts } from "@/lib/courts/public";
+import { listPublicLocationsWithCourts, listPublicVisitorLocations } from "@/lib/courts/public";
 
 const hour = (weekday: number, opens: number, closes: number, starts_on: string, ends_on: string | null) => ({
   id: crypto.randomUUID(), weekday, opens_at_minute: opens, closes_at_minute: closes, starts_on, ends_on,
@@ -38,4 +38,27 @@ it("resolves today's opening hours from the effective schedule in each location'
 it("reports no hours on a weekday without configured intervals", async () => {
   facts.mockResolvedValue([location("Europe/Bucharest", [hour(2, 480, 1200, "2026-01-01", null)])]);
   expect((await listPublicLocationsWithCourts())[0].todayOpeningHours).toEqual([]);
+});
+
+it("resolves each weekday of the coming week on its own date and keeps only eligible locations", async () => {
+  const hours = [
+    hour(3, 780, 1200, "2026-01-01", "2026-10-15"), hour(3, 480, 720, "2026-01-01", "2026-10-15"),
+    hour(2, 420, 1320, "2026-01-01", "2026-10-15"), hour(3, 600, 900, "2026-10-16", null), hour(2, 600, 900, "2026-10-16", null),
+  ];
+  facts.mockResolvedValue([
+    { ...location("Europe/Bucharest", hours), customer_cancellation_notice_minutes: 180 },
+    { ...location("Europe/Bucharest", hours), is_public: false },
+    location("Europe/Bucharest", hours),
+  ]);
+  const visitors = await listPublicVisitorLocations();
+  expect(visitors).toHaveLength(2);
+  // Bucharest's week runs Thursday 2026-10-15 to Wednesday 2026-10-21, across the schedule change.
+  expect(visitors[0].weekOpeningHours).toEqual([
+    { weekday: 0, intervals: [] }, { weekday: 1, intervals: [] },
+    { weekday: 2, intervals: [{ opens_at_minute: 600, closes_at_minute: 900 }] },
+    { weekday: 3, intervals: [{ opens_at_minute: 480, closes_at_minute: 720 }, { opens_at_minute: 780, closes_at_minute: 1200 }] },
+    { weekday: 4, intervals: [] }, { weekday: 5, intervals: [] }, { weekday: 6, intervals: [] },
+  ]);
+  expect(visitors[0].todayOpeningHours).toEqual(visitors[0].weekOpeningHours[3].intervals);
+  expect(visitors.map((visitor) => visitor.cancellationNoticeMinutes)).toEqual([180, null]);
 });

@@ -9,8 +9,10 @@ export type SidebarLink = { label: string; href: string; icon?: LucideIcon; exac
 export type SidebarGroup = { label: string; icon?: LucideIcon; section?: string; links: readonly SidebarLink[] };
 export type SidebarEntry = SidebarLink | SidebarGroup;
 
+// A page with unsaved Profile edits renders [data-profile-unsaved]; mark its link and the drawer trigger.
+const unsavedDot = "[:root:has([data-profile-unsaved])_&]:after:ml-auto [:root:has([data-profile-unsaved])_&]:after:size-2 [:root:has([data-profile-unsaved])_&]:after:shrink-0 [:root:has([data-profile-unsaved])_&]:after:rounded-full [:root:has([data-profile-unsaved])_&]:after:bg-accent [:root:has([data-profile-unsaved])_&]:after:content-['']";
 const sidebarLinkClass = (active: boolean) =>
-  `flex min-h-11 items-center gap-3 rounded-control px-3 py-2 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-surface-muted hover:text-primary"}`;
+  `flex min-h-11 items-center gap-3 rounded-control px-3 py-2 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${active ? `bg-primary text-primary-foreground ${unsavedDot}` : "text-muted-foreground hover:bg-surface-muted hover:text-primary"}`;
 
 // `slideIn` reuses the main mobile menu's slide transition for the mobile drawer.
 type SidebarProps = { title: string; entries: readonly SidebarEntry[]; slideIn?: boolean };
@@ -130,7 +132,7 @@ export function SidebarNavigation({ title, entries, slideIn = false }: SidebarPr
         onClick={() => setOpen(true)}
         aria-expanded={open}
         aria-controls={id}
-        className="mb-5 inline-flex min-h-11 items-center gap-2 rounded-control border border-border-strong bg-surface px-4 text-sm font-semibold text-primary lg:hidden"
+        className={`mb-5 inline-flex min-h-11 items-center gap-2 rounded-control border border-border-strong bg-surface px-4 text-sm font-semibold text-primary lg:hidden ${unsavedDot}`}
       >
         <Menu aria-hidden="true" className="size-5" />
         {title} menu

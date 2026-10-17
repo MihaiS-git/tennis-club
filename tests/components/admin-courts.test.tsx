@@ -52,7 +52,7 @@ it("reopens Create court with fresh validity and no previous draft", async () =>
   expect(screen.getByLabelText("Name")).toHaveProperty("value", "");
   expect(screen.getByRole("button", { name: "Save court" })).toHaveProperty("disabled", true);
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Discarded draft" } });
-  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  fireEvent.click(screen.getByRole("button", { name: "Close dialog" }));
   fireEvent.click(screen.getByRole("button", { name: "Create court" }));
   expect(screen.getByRole("button", { name: "Save court" })).toHaveProperty("disabled", true);
 });
@@ -62,7 +62,7 @@ it("reopens Edit court with the refreshed record as its pristine baseline", () =
   fireEvent.click(screen.getByRole("row", { name: "Edit court Court One" }));
   expect(screen.getByRole("button", { name: "Save court" })).toHaveProperty("disabled", true);
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Discarded draft" } });
-  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  fireEvent.click(screen.getByRole("button", { name: "Close dialog" }));
   rerender(<table><CourtItem court={{ ...court, name: "Refreshed court" }} locations={locations} periods={[]} /></table>);
   fireEvent.click(screen.getByRole("row", { name: "Edit court Refreshed court" }));
   expect(screen.getByLabelText("Name")).toHaveProperty("value", "Refreshed court");
@@ -161,7 +161,7 @@ it.each(["create", "edit"])("disables pending %s court saves and preserves valid
   fireEvent.click(save);
   expect(save).toHaveProperty("disabled", true);
   expect(save.getAttribute("aria-busy")).toBe("true");
-  expect(screen.getByRole("button", { name: "Close" })).toHaveProperty("disabled", true);
+  expect(screen.getByRole("button", { name: "Close dialog" })).toHaveProperty("disabled", true);
   expect(screen.getByLabelText("Name").matches(":disabled")).toBe(true);
   fireEvent.click(save);
   expect(saveCourtAction).toHaveBeenCalledTimes(1);

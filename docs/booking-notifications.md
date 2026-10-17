@@ -123,11 +123,8 @@ immediately, ignoring its backoff and any stopped state, with the same Brevo ide
 key; a row another request is sending is left alone. The result shown is the recorded
 outcome.
 
-`listOwnFinancialNotices` still returns a signed-in owner's failed ordinary emails (up to
-30 days) after their unacknowledged important notices, but the customer
-`/my-activity/notifications` page shows only the important financial notices; ordinary
-booking emails and delivery status are not shown to customers. Admins see every failed
-email, including guests', in Admin → Payments → Notifications.
+Every customer email event also has a durable in-app copy for the booking’s associated
+account. Admins see every failed email, including guests’, in Admin → Payments → Notifications.
 
 Each delivery UUID is passed as Brevo's `headers.idempotencyKey`. A matching provider
 idempotency rejection acknowledges the original submission. Brevo documents a
@@ -174,3 +171,53 @@ Deployment requires migrations `1791462257928-DurableBookingNotifications` and
 Node.js worker or queue runs; this works on serverless hosting such as Vercel. Without the
 schedule, emails are still delivered by later requests and Admin retries, as before.
 Application-table browser grants remain denied.
+
+
+## Persistent customer inbox
+
+Migration `1791462257931-CustomerNotificationHistory` adds `customer_notifications` and
+backfills retained deliveries, including existing financial acknowledgments. Already
+removed email records cannot be recovered. Supabase Auth confirmation/recovery emails
+remain provider-managed and separate from these application-generated customer events.
+
+The existing enqueue operation renders each message once and inserts its email delivery
+and customer copy in the same state-change transaction, before any Brevo request. It
+covers `confirmed`, `customer_cancelled`, `admin_cancelled`, `customer_rescheduled`,
+`cancellation_failed`, `modification_failed`, `refund_incomplete` and `late_payment_refund`.
+The inbox stores subject, complete text, event kind, booking UUID and generation timestamp.
+Only the booking’s non-null `account_user_id` associates an owner; email addresses never
+establish ownership. Guests remain email-only.
+
+The inbox has a unique event key and no foreign key to delivery records. Retries do not
+write inbox rows. Replays, including after Admin delivery deletion, cannot duplicate or
+replace the original inbox snapshot. User deletion sets `deleted_at`, retaining the event
+key and financial acknowledgment history. It never deletes deliveries, bookings, payments
+or refunds. Application table grants deny direct browser access.
+
+My Activity → Notifications searches subjects and message bodies across all visible
+history, with a 350ms debounce, read/unread and event filters, newest/oldest ordering,
+and server-side pages of 25. URL parameters preserve controls between pages. Each row
+shows its type, preview, timestamp and read state. Each subject links to
+`/my-activity/notifications/[notificationId]`, displaying the complete subject/message,
+type, creation time, read state and booking reference. Back to Notifications preserves
+search, filters, sort and page. Opening the inbox or details does not change read state;
+the explicit read/unread action controls it. Missing, deleted and foreign IDs show the
+same unavailable message. Details reuse the inbox mutation service and confirmed deletion.
+Individual and page-selection bulk actions support read,
+unread and inbox deletion; deletion requires confirmation. All queries and updates are
+restricted to the active verified account UUID. Read messages remain in history.
+
+Unresolved financial alerts remain separately visible above the inbox, even when their
+copy is filtered, read or deleted. Reading/deleting is never financial acknowledgment.
+Only **OK** acknowledges the operational record and its inbox copy atomically. Marking
+an acknowledged notification unread does not reopen the financial exception.
+
+Authenticated navbar controls include a Lucide bell beside the desktop profile and
+immediately beside the mobile hamburger, outside the drawer. Both share one client
+unread store and display a green dot when unread inbox copies exist. The private,
+non-cached `GET /api/notifications/unread` endpoint returns only a boolean, using an
+owner-filtered TypeORM EXISTS query after active-account authorization. The store loads
+on mount, refreshes on focus/visibility restoration and successful inbox/acknowledgment
+actions, and polls every 60 seconds while visible. Hidden tabs stop polling; unmounting
+the last bell removes timers/listeners and clears state. Failed requests retain the last
+known value until the next refresh. No WebSockets or Supabase browser access is used.

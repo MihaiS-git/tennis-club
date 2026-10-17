@@ -33,3 +33,44 @@
     transform: none;
   }
 }
+
+/* Editorial motion shared by the public pages: CSS only. Scroll reveals use view
+   timelines where supported and otherwise leave content static; everything is off
+   for reduced motion. */
+
+@media (prefers-reduced-motion: no-preference) {
+  .heroImage {
+    animation: heroSettle 1600ms var(--ui-ease-standard) both;
+  }
+
+  .photo img {
+    transition: transform 900ms var(--ui-ease-standard);
+  }
+
+  .photo:hover img {
+    transform: scale(1.025);
+  }
+
+  @supports (animation-timeline: view()) {
+    .reveal,
+    .stagger > * {
+      animation: reveal linear both;
+      animation-timeline: view();
+      animation-range: entry 0% entry 60%;
+    }
+
+    .stagger > :nth-child(2) { animation-range: entry 8% entry 68%; }
+    .stagger > :nth-child(3) { animation-range: entry 16% entry 76%; }
+    .stagger > :nth-child(n + 4) { animation-range: entry 24% entry 84%; }
+  }
+}
+
+@keyframes heroSettle {
+  from { transform: scale(1.06); }
+  to { transform: scale(1); }
+}
+
+@keyframes reveal {
+  from { opacity: 0; transform: translateY(24px); }
+  to { opacity: 1; transform: translateY(0); }
+}

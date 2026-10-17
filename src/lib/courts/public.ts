@@ -33,6 +33,7 @@ const locationSchema = z.object({
   timezone: z.string(),
   currency: z.enum(locationCurrencies),
   allow_pay_at_club: z.boolean().default(false),
+  customer_cancellation_notice_minutes: z.number().int().min(0).optional(),
   is_active: z.boolean(),
   is_public: z.boolean(),
   archived_at: z.iso.datetime({ offset: true }).nullable(),
@@ -42,7 +43,7 @@ const locationSchema = z.object({
 
 export type PublicCourt = Omit<z.infer<typeof courtSchema>, "location_pricing_rules" | "is_active">;
 type PublicOpeningInterval = { opens_at_minute: number; closes_at_minute: number };
-export type PublicLocation = Omit<z.infer<typeof locationSchema>, "is_active" | "is_public" | "archived_at" | "location_opening_hours" | "courts"> & {
+export type PublicLocation = Omit<z.infer<typeof locationSchema>, "is_active" | "is_public" | "archived_at" | "location_opening_hours" | "courts" | "customer_cancellation_notice_minutes"> & {
   courts: PublicCourt[];
   // Weekly intervals of the schedule effective on the location's local publication date.
   todayOpeningHours: PublicOpeningInterval[];
@@ -55,7 +56,21 @@ function openingHoursOn(hours: readonly z.infer<typeof publicationHoursSchema>[]
     .sort((a, b) => a.opens_at_minute - b.opens_at_minute);
 }
 
-export async function listPublicLocationsWithCourts(): Promise<PublicLocation[]> {
+// Visitor information of a public location: its schedule for the coming week and
+// the customer cancellation notice it currently applies.
+export type PublicVisitorLocation = PublicLocation & {
+  cancellationNoticeMinutes: number | null;
+  // Monday-first weekdays, each resolved on its date within the next seven local days.
+  weekOpeningHours: { weekday: number; intervals: PublicOpeningInterval[] }[];
+};
+
+function addDays(date: string, days: number) {
+  const next = new Date(`${date}T00:00:00Z`);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next.toISOString().slice(0, 10);
+}
+
+async function readEligibleLocations<T>(project: (location: z.infer<typeof locationSchema>, today: string) => T): Promise<T[]> {
   try {
     const data = await listPublicLocationFacts((await getDataSource()).manager);
     const parsed = z.array(locationSchema).safeParse(data);
@@ -65,19 +80,40 @@ export async function listPublicLocationsWithCourts(): Promise<PublicLocation[]>
     }
     return parsed.data.map((location) => ({ location, today: publicationToday(location.timezone) }))
       .filter(({ location, today }) => isPubliclyEligible(location, today))
-      .map(({ location, today }) => ({
-        id: location.id, name: location.name, slug: location.slug,
-        address_line1: location.address_line1, address_line2: location.address_line2,
-        city: location.city, postal_code: location.postal_code, country_code: location.country_code,
-        timezone: location.timezone, currency: location.currency, allow_pay_at_club: location.allow_pay_at_club,
-        courts: location.courts.map((court) => ({
-          id: court.id, name: court.name, slug: court.slug, surface: court.surface,
-          environment: court.environment, has_lighting: court.has_lighting,
-        })),
-        todayOpeningHours: openingHoursOn(location.location_opening_hours, today),
-      }));
+      .map(({ location, today }) => project(location, today));
   } catch (error: unknown) {
     logger.error({ event: "courts.public_read_failed", code: normalizeDatabaseError(error).sqlState }, "Database projection failed");
     throw new Error("Unable to load courts.");
   }
+}
+
+function toPublicLocation(location: z.infer<typeof locationSchema>, today: string): PublicLocation {
+  return {
+    id: location.id, name: location.name, slug: location.slug,
+    address_line1: location.address_line1, address_line2: location.address_line2,
+    city: location.city, postal_code: location.postal_code, country_code: location.country_code,
+    timezone: location.timezone, currency: location.currency, allow_pay_at_club: location.allow_pay_at_club,
+    courts: location.courts.map((court) => ({
+      id: court.id, name: court.name, slug: court.slug, surface: court.surface,
+      environment: court.environment, has_lighting: court.has_lighting,
+    })),
+    todayOpeningHours: openingHoursOn(location.location_opening_hours, today),
+  };
+}
+
+export async function listPublicLocationsWithCourts(): Promise<PublicLocation[]> {
+  return readEligibleLocations(toPublicLocation);
+}
+
+export async function listPublicVisitorLocations(): Promise<PublicVisitorLocation[]> {
+  return readEligibleLocations((location, today) => {
+    const week = Array.from({ length: 7 }, (_, offset) => addDays(today, offset))
+      .map((date) => ({ weekday: mondayWeekday(date), intervals: openingHoursOn(location.location_opening_hours, date) }))
+      .sort((a, b) => a.weekday - b.weekday);
+    return {
+      ...toPublicLocation(location, today),
+      cancellationNoticeMinutes: location.customer_cancellation_notice_minutes ?? null,
+      weekOpeningHours: week,
+    };
+  });
 }

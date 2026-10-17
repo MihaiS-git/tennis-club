@@ -5,6 +5,28 @@ import { CourtReservationEntity } from "../entities/court-reservation.entity";
 import { CourtEntity } from "../entities/court.entity";
 import { findRevision, insertRevision } from "./booking-revisions.repository";
 import type { RevisionSnapshot } from "@/lib/bookings/revision";
+import { z } from "zod";
+import { locationCurrencies } from "@/lib/admin/locations-validation";
+
+// Read the contractual snapshot, including historical/cancelled bookings and
+// inactive resources. The caller must authorize an active Admin first.
+export async function findAdminBookingDetails(manager: EntityManager, id: string) {
+  const rows: unknown = await manager.query(`SELECT b.id,b.status,v.booking_date::text AS booking_date,
+    v.starts_at_minute,v.ends_at_minute,
+    v.location_name,v.timezone AS location_timezone,v.court_name,
+    v.customer_name,v.customer_email,v.customer_phone,v.cancellation_notice_minutes,
+    v.total_amount_minor,v.currency,v.payment_method,b.account_user_id
+    FROM public.bookings b JOIN public.booking_revisions v ON v.id=b.current_revision_id AND v.booking_id=b.id
+    WHERE b.id=$1`, [id]);
+  return z.array(z.object({
+    id: z.uuid(), status: z.enum(["confirmed", "cancelled", "pending_payment", "failed", "expired"]),
+    booking_date: z.iso.date(), starts_at_minute: z.number().int(), ends_at_minute: z.number().int(),
+    location_name: z.string(), location_timezone: z.string(), court_name: z.string(),
+    customer_name: z.string(), customer_email: z.string(), customer_phone: z.string(),
+    cancellation_notice_minutes: z.number().int(), total_amount_minor: z.number().int(), currency: z.enum(locationCurrencies),
+    payment_method: z.enum(["online", "pay_at_club"]), account_user_id: z.uuid().nullable(),
+  })).max(1).parse(rows)[0] ?? null;
+}
 
 export async function insertCheckoutBooking(manager: EntityManager, input: {
   id: string; reservationId: string; accountUserId: string | null; status: BookingEntity["status"]; revision: RevisionSnapshot;
@@ -42,4 +64,9 @@ export async function findBookingForUpdate(manager: EntityManager, id: string, r
 }
 export async function updateSettlementBookingStatus(manager: EntityManager, id: string, status: BookingEntity["status"]) {
   await manager.getRepository(BookingEntity).update(id, { status, updatedAt: new Date() });
+}
+// Owner-scoped read: another account's booking is indistinguishable from a missing one.
+export async function findOwnedBookingRevision(manager: EntityManager, id: string, accountUserId: string) {
+  const booking = await manager.getRepository(BookingEntity).findOneBy({ id, accountUserId });
+  return booking ? { status: booking.status, revision: await findRevision(manager, booking.currentRevisionId) } : null;
 }

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { expectToast, lastToast } from "../helpers/notifications";
 import { toast } from "sonner";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { PaymentSettings } from "../../src/lib/payments/domain";
 const mocks = vi.hoisted(() => ({ save: vi.fn(), refresh: vi.fn() }));
@@ -11,12 +11,11 @@ import { PaymentProviderSettings } from "../../src/app/admin/payments/provider-s
 const settings: PaymentSettings = { activeProvider: "stripe", providers: [{ id: "stripe", configured: true }, { id: "netopia", configured: true }] };
 beforeEach(() => { vi.clearAllMocks(); mocks.save.mockResolvedValue({ ok: true, activeProvider: "netopia" }); });
 afterEach(cleanup);
-it("balances configuration and selection sections, initializes persisted selection, and saves explicitly", async () => {
+it("shows selection and configuration in one panel, initializes persisted selection, and saves explicitly", async () => {
   render(<PaymentProviderSettings settings={settings} />);
   const section = screen.getByRole("region", { name: "Payment providers" });
-  expect(section.className).toContain("grid-cols-1");
-  expect(section.className).toContain("lg:grid-cols-2");
-  expect(screen.getByRole("table", { name: "Provider configuration" })).toBeTruthy();
+  expect(within(section).getByRole("combobox")).toBeTruthy();
+  expect(within(section).getByRole("table", { name: "Provider configuration" })).toBeTruthy();
   const select = screen.getByRole("combobox");
   expect(select).toHaveProperty("value", "stripe");
   const save = screen.getByRole("button", { name: "Save changes" });
@@ -26,12 +25,12 @@ it("balances configuration and selection sections, initializes persisted selecti
   fireEvent.change(select, { target: { value: "netopia" } });
   expect(save).toHaveProperty("disabled", false);
   expect(mocks.save).not.toHaveBeenCalled();
-  expect(screen.getByText("Persisted active provider: Stripe")).toBeTruthy();
+  expect(screen.getByText("Saved provider: Stripe")).toBeTruthy();
   fireEvent.change(select, { target: { value: "stripe" } });
   expect(save).toHaveProperty("disabled", true);
   fireEvent.change(select, { target: { value: "netopia" } });
   fireEvent.click(save);
-  await waitFor(() => expect(screen.getByText("Persisted active provider: NETOPIA")).toBeTruthy());
+  await waitFor(() => expect(screen.getByText("Saved provider: NETOPIA")).toBeTruthy());
   expect(mocks.save).toHaveBeenCalledExactlyOnceWith({ provider: "netopia" });
   expect(save).toHaveProperty("disabled", true);
   expect(lastToast("success")).toBe("Payment provider settings saved.");
@@ -69,9 +68,9 @@ it.each([false, true])("preserves failed selection for retry and blocks duplicat
   expect(lastToast()).toBe(throws ? "Unable to change the payment provider. Try again." : "Unable to save.");
   expect(screen.queryByRole("alert")).toBeNull();
   expect(select).toHaveProperty("value", "netopia");
-  expect(screen.getByText("Persisted active provider: Stripe")).toBeTruthy();
+  expect(screen.getByText("Saved provider: Stripe")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
-  await waitFor(() => expect(screen.getByText("Persisted active provider: NETOPIA")).toBeTruthy());
+  await waitFor(() => expect(screen.getByText("Saved provider: NETOPIA")).toBeTruthy());
   expect(mocks.save).toHaveBeenCalledTimes(2);
   expect(vi.mocked(toast.promise).mock.calls[1][1]?.id).toBe(notificationId);
   expect(toast.getToasts().filter((item) => item.id === notificationId)).toHaveLength(1);
@@ -82,5 +81,5 @@ it("allows explicitly disabling online payments", async () => {
   fireEvent.change(screen.getByRole("combobox"), { target: { value: "" } });
   fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
   await waitFor(() => expect(mocks.save).toHaveBeenCalledExactlyOnceWith({ provider: null }));
-  expect(screen.getByText("Persisted active provider: Not selected")).toBeTruthy();
+  expect(screen.getByText("Saved provider: Not selected")).toBeTruthy();
 });

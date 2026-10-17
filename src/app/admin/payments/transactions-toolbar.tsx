@@ -26,8 +26,8 @@ export function TransactionsToolbar() {
     params.delete("page"); currentQuery.current = params.toString();
     router.replace(`${pathname}${params.size ? `?${params}` : ""}`, { scroll: false });
   }
-  const control = "min-h-10 rounded-control border border-border-strong bg-surface px-3 py-2 text-foreground";
-  return <AdminToolbar primary={<label className="flex w-full flex-col gap-1.5 font-medium text-primary sm:max-w-sm">
+  const control = "min-h-10 w-full rounded-control border border-border-strong bg-surface px-3 py-2 text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus";
+  return <AdminToolbar primary={<label className="flex w-full flex-col gap-1.5 font-medium text-primary sm:w-72">
     Search<input type="search" value={text} maxLength={200} placeholder="Customer, booking or transaction ID" className={control}
       onChange={(event) => {
         const next = event.target.value; setDraft({ queryString, text: next }); cancelSearch();
@@ -38,7 +38,7 @@ export function TransactionsToolbar() {
     {([
       ["status", "Transaction status", { ...paymentStatusLabels, succeeded: "Succeeded" }], ["provider", "Provider", paymentProviderLabels],
       ["method", "Method", paymentMethodLabels], ["attention", "Attention", { required: "Needs attention" }],
-    ] as const).map(([key, label, options]) => <label key={key} className="flex flex-col gap-1.5 font-medium text-primary">
+    ] as const).map(([key, label, options]) => <label key={key} className="flex w-[calc(50%-0.375rem)] flex-col gap-1.5 font-medium text-primary sm:w-36">
       {label}<select value={filters[key]} className={control} onChange={(event) => navigate(key, event.target.value)}>
         <option value="all">All</option>{Object.entries(options).map(([value, name]) => <option key={value} value={value}>{name}</option>)}
       </select>

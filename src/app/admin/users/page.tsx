@@ -41,7 +41,7 @@ export default async function AdminUsersPage({ searchParams }: {
       <UsersToolbar />
 
       {users.length === 0 ? (
-        <div className="rounded-card border border-border bg-surface px-6 py-8 text-muted-foreground">
+        <div className="rounded-card border border-border bg-surface px-4 py-5 text-sm text-muted-foreground">
           {hasFilters ? "No users match these filters." : "No users found."}
         </div>
       ) : (
@@ -55,10 +55,10 @@ export default async function AdminUsersPage({ searchParams }: {
               <thead className="border-b border-border bg-surface-muted text-xs font-semibold text-muted-foreground">
                 <tr>
                   {([
-                    ["email", "Email", "w-[30%]"],
-                    ["status", "Status", "w-[15%]"],
+                    ["email", "Email", "w-[42%]"],
+                    ["status", "Status", "w-[17%]"],
                     ["roles", "Roles", ""],
-                    ["joined", "Joined", "w-[17%]"],
+                    ["joined", "Joined", "w-[18%]"],
                   ] as const).map(([column, label, width]) => {
                     const active = filters.sort === column;
                     const dir = active ? (filters.dir === "asc" ? "desc" : "asc") : column === "joined" ? "desc" : "asc";
@@ -67,7 +67,7 @@ export default async function AdminUsersPage({ searchParams }: {
                     query.set("dir", dir);
                     const Icon = active ? filters.dir === "asc" ? ArrowUp : ArrowDown : ArrowUpDown;
                     return (
-                      <th key={column} scope="col" aria-sort={active ? filters.dir === "asc" ? "ascending" : "descending" : "none"} className={`${width} px-3 py-3`}>
+                      <th key={column} scope="col" aria-sort={active ? filters.dir === "asc" ? "ascending" : "descending" : "none"} className={`${width} px-4 py-2.5 lg:px-5`}>
                         <Link href={`/admin/users?${query}`} scroll={false} className="inline-flex items-center gap-1.5 rounded-control hover:text-primary focus-visible:outline-2 focus-visible:outline-primary">
                           {label}<Icon aria-hidden="true" size={14} />
                         </Link>

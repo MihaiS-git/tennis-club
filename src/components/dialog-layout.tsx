@@ -1,14 +1,16 @@
 import type { ReactNode } from "react";
 import { X } from "lucide-react";
 import { Button } from "@/components/button";
+import { StatusBadge, type StatusTone } from "@/components/status-badge";
 
-export function DialogHeader({ titleId, title, status, onClose, disabled = false }: {
-  titleId: string; title: string; status?: string; onClose: () => void; disabled?: boolean;
+export function DialogHeader({ titleId, title, status, statusTone, onClose, disabled = false }: {
+  titleId: string; title: string; status?: string; statusTone?: StatusTone; onClose: () => void; disabled?: boolean;
 }) {
   return <header className="flex items-start justify-between gap-3 border-b border-border pb-4">
     <div className="flex flex-wrap items-center gap-2">
       <h2 id={titleId} className="font-heading text-xl font-semibold text-primary">{title}</h2>
-      {status && <span className="rounded-full bg-surface-muted px-2 py-1 text-xs font-semibold">{status}</span>}
+      {status && statusTone && <StatusBadge tone={statusTone}>{status}</StatusBadge>}
+      {status && !statusTone && <span className="rounded-full bg-surface-muted px-2 py-1 text-xs font-semibold">{status}</span>}
     </div>
     <Button type="button" variant="subtle" size="icon" aria-label="Close dialog" disabled={disabled} onClick={onClose}><X aria-hidden className="size-5" /></Button>
   </header>;

@@ -143,3 +143,15 @@ it("guards the navbar Sign out before invoking the existing form action", async 
   fireEvent.click(screen.getByRole("button", { name: "Sign out" })); await screen.findByText("You have unsaved changes in Personal information.");
   fireEvent.click(screen.getByRole("button", { name: "Leave without saving" })); await waitFor(() => expect(signOut).toHaveBeenCalledOnce());
 });
+
+it("shows the unsaved state beside Save and marks the page for the sidebar indicator", async () => {
+  render(app("personal"));
+  expect(screen.getByText("No unsaved changes")).toBeTruthy();
+  expect(document.querySelector("[data-profile-unsaved]")).toBeNull();
+  change("First name", "Changed");
+  expect(screen.getByText("Unsaved changes")).toBeTruthy();
+  expect(document.querySelector("[data-profile-unsaved]")).not.toBeNull();
+  save("Save personal information");
+  await waitFor(() => expect(screen.getByText("No unsaved changes")).toBeTruthy());
+  expect(document.querySelector("[data-profile-unsaved]")).toBeNull();
+});

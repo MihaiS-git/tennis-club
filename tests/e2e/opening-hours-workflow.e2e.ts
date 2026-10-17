@@ -46,14 +46,14 @@ test("Admin opening-hours, pricing and reservation lifecycle survives sequential
     await form.getByRole("button", { name: "Done", exact: true }).click();
   }
   async function selectPolicy(from: string) {
-    const selector = page.getByLabel("Current/Scheduled schedule", { exact: true });
+    const selector = page.getByRole("combobox", { name: "Schedule", exact: true });
     const value = await selector.locator("option").filter({ hasText: from }).getAttribute("value");
     expect(value).toBeTruthy();
     await selector.selectOption(value!);
   }
   async function createSchedule(from: string, end: string, hours: [string,string][]) {
     const create = page.getByRole("button", { name: "New schedule", exact: true });
-    await expect(page.getByLabel("Current/Scheduled schedule", { exact: true }).or(page.getByLabel("Historical schedule", { exact: true }))).toBeEnabled();
+    await expect(page.getByRole("combobox", { name: "Schedule", exact: true })).toBeEnabled();
     if (await create.isEnabled()) await create.click();
     const form = editor();
     await form.getByLabel("Valid from",{ exact: true }).fill(from);
@@ -106,7 +106,7 @@ test("Admin opening-hours, pricing and reservation lifecycle survives sequential
     await test.step("Create first split schedule, save and price both daily intervals with blank validity", async () => {
       await saveSchedule(await createSchedule(today,"",[["08:00","12:00"],["14:00","20:00"]]));
       await expect(page.getByText("Some newly opened hours need pricing configuration for one or more courts.",{ exact:true })).toBeVisible();
-      await expect(page.getByLabel("Current/Scheduled schedule")).toContainText(`Current · ${today} → Unlimited`);
+      await expect(page.getByRole("combobox", { name: "Schedule", exact: true })).toContainText(`Current · ${today} → Unlimited`);
       await page.reload();
       await expect(editor().getByLabel("Opening time", { exact: true }).nth(0)).toHaveValue("08:00");
       await expect(editor().getByLabel("Opening time", { exact: true }).nth(1)).toHaveValue("14:00");
@@ -157,7 +157,7 @@ test("Admin opening-hours, pricing and reservation lifecycle survives sequential
       await expect(page.getByLabel("Price per hour (RON)")).toHaveValue("55.00");
       expect(await prices()).toEqual(savedPrices);
       await expect(first(page)).toContainText("60");
-      await page.getByRole("dialog",{ name:"Edit pricing",exact:true }).getByRole("button",{ name:"Close",exact:true }).click();
+      await page.getByRole("dialog",{ name:"Edit pricing",exact:true }).getByRole("button",{ name:"Close dialog",exact:true }).click();
       await first(page).click();
       await expect(page.getByLabel("Price per hour (RON)")).toHaveValue("60.00");
       await page.getByLabel("Price per hour (RON)").fill("50.00");
@@ -208,15 +208,15 @@ test("Admin opening-hours, pricing and reservation lifecycle survives sequential
       const form = await createSchedule(future,until,[["09:00","12:00"],["14:00","19:00"]]);
       await expect(form.getByRole("status")).toContainText(`on ${shift(future,-1)}`);
       await saveSchedule(form);
-      await expect(page.getByLabel("Current/Scheduled schedule")).toContainText(`Current · ${today} → ${shift(future,-1)}`);
-      await expect(page.getByLabel("Current/Scheduled schedule")).toContainText(`Scheduled · ${future} → ${until}`);
+      await expect(page.getByRole("combobox", { name: "Schedule", exact: true })).toContainText(`Current · ${today} → ${shift(future,-1)}`);
+      await expect(page.getByRole("combobox", { name: "Schedule", exact: true })).toContainText(`Scheduled · ${future} → ${until}`);
       expect(await contracts()).toEqual(beforeContracts);
       await tab("Pricing");
       await page.getByRole("button",{ name:"Add rule",exact:true }).click();
       const summary = page.getByRole("dialog",{ name:"Add pricing",exact:true }).getByRole("region",{ name:"Opening hours",exact:true });
       await expect(summary.getByText(`${today} – ${shift(future,-1)} · Current`,{ exact:true })).toBeVisible();
       await expect(summary.getByText(`${future} – ${until} · Scheduled`,{ exact:true })).toBeVisible();
-      await page.getByRole("dialog",{ name:"Add pricing",exact:true }).getByRole("button",{ name:"Close",exact:true }).click();
+      await page.getByRole("dialog",{ name:"Add pricing",exact:true }).getByRole("button",{ name:"Close dialog",exact:true }).click();
       await page.goto(`/admin/reservations?location=${locationId}&date=${future}`);
       await expect(page.getByRole("button",{ name:new RegExp(`Audit Court One ${future} 08:00–09:00, Reservation`) })).toBeVisible();
       await expect(page.getByRole("button",{ name:`Audit Court One ${future} 09:00–09:30, Available`,exact:true })).toBeVisible();
@@ -239,7 +239,7 @@ test("Admin opening-hours, pricing and reservation lifecycle survives sequential
       await expect(editor().getByRole("button",{ name:"Save changes",exact:true })).toBeDisabled();
       await editor().getByRole("button",{ name:"Cancel edit",exact:true }).click();
       await saveSchedule(await createSchedule(shift(today,-14),shift(today,-1),[["10:00","12:00"]]));
-      await expect(page.getByLabel("Historical schedule")).toContainText(`History · ${shift(today,-14)} → ${shift(today,-1)}`);
+      await expect(page.getByRole("combobox", { name: "Schedule", exact: true })).toContainText(`Expired · ${shift(today,-14)} → ${shift(today,-1)}`);
       await expect(editor().getByLabel("Opening time", { exact: true })).toBeDisabled();
       await page.goto(`/admin/reservations?location=${locationId}&date=${shift(today,15)}`);
       await expect(page.getByText(/is closed on/)).toBeVisible();
@@ -285,17 +285,17 @@ test("Admin opening-hours, pricing and reservation lifecycle survives sequential
       await editor().getByLabel("Valid until (optional)").fill(shift(future,-1));
       await expect(editor().getByRole("status")).toContainText(`on ${shift(today,2)}`);
       await saveSchedule(editor());
-      await expect(page.getByLabel("Current/Scheduled schedule")).toContainText(`Current · ${today} → ${shift(today,2)}`);
+      await expect(page.getByRole("combobox", { name: "Schedule", exact: true })).toContainText(`Current · ${today} → ${shift(today,2)}`);
       await times(editor(),0,"08:00","12:00");
-      await page.getByRole("button", { name: "History", exact: true }).click();
+      await page.getByRole("button", { name: "Expired", exact: true }).click();
       const discard = page.getByRole("dialog", { name: "Discard opening-hours changes?", exact: true });
       await expect(discard).toBeVisible();
       await discard.getByRole("button", { name: "Cancel", exact: true }).click();
       await expect(editor().getByLabel("Opening time", { exact: true }).nth(0)).toHaveValue("08:00");
-      await page.getByRole("button", { name: "History", exact: true }).click();
+      await page.getByRole("button", { name: "Expired", exact: true }).click();
       await discard.getByRole("button", { name: "Discard changes", exact: true }).click();
       await expect(editor().getByLabel("Opening time", { exact: true })).toBeDisabled();
-      await page.getByRole("button", { name: "Current/Scheduled", exact: true }).click();
+      await page.getByRole("button", { name: "Current & scheduled", exact: true }).click();
       await expect(editor().getByLabel("Opening time", { exact: true }).nth(0)).toHaveValue("07:17");
       const screenshot = test.info().outputPath("final-opening-hours-workspace.png");
       await page.screenshot({ path:screenshot,fullPage:true });

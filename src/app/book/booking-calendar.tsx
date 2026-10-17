@@ -4,10 +4,10 @@ import { toast } from "sonner";
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { CourtTimelineGrid } from "@/components/court-timeline-grid";
+import { CourtTimelineGrid, TimelineLegend, timelineCellLabels, timelineCellStyles, timelineSelectedStyle } from "@/components/court-timeline-grid";
 import { BookingCancellationTerms } from "@/components/booking-cancellation-terms";
 import type { ConfirmedCancellationPolicy } from "@/lib/bookings/confirmation-policy";
-import { CheckCircle2 } from "lucide-react";
+import { CalendarX2, CheckCircle2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { minuteToTime } from "@/lib/admin/opening-hours-validation";
 import type { PaymentMethod } from "@/lib/payments/domain";
@@ -18,14 +18,6 @@ import { formatMoney, type LocationCurrency } from "@/lib/pricing/money";
 import { formatHourlyRate } from "@/lib/courts/price-bands";
 import { BookingConfirmation, BookingSummary, type BookingSummaryDetails } from "./booking-confirmation";
 
-const cellStyles = {
-  available: "border-success bg-success-background text-primary",
-  booked: "border-danger bg-danger-background text-danger",
-  closed: "border-danger bg-danger-background text-danger",
-  unavailable: "border-danger bg-danger-background text-danger",
-  past: "border-danger bg-danger-background text-danger",
-} as const;
-const cellLabels = { booked: "Booked", closed: "Closed", unavailable: "No pricing", past: "Past" } as const;
 
 const emptyContact: BookingContact = { customerName: "", customerEmail: "", customerPhone: "" };
 
@@ -78,15 +70,15 @@ export function BookingCalendar({ day, date, locationName, currency, initialCont
     startMinute: selection.startMinute, endMinute: selection.endMinute,
     durationMinutes: selection.durationMinutes, priceMinor: selection.priceMinor, currency,
   } : null;
-  if (committed) return <section aria-label="Booking confirmed" className="mt-5 max-w-xl rounded-card border border-success bg-surface p-5 sm:p-6">
+  if (committed) return <section aria-label="Booking confirmed" className="mt-5 max-w-xl rounded-card border border-border border-t-4 border-t-success bg-surface p-5 shadow-card sm:p-6">
     <CheckCircle2 aria-hidden className="mb-3 size-9 text-success" />
     <h2 className="font-heading text-2xl font-semibold text-primary">Booking confirmed</h2>
     <p className="mt-2 text-sm text-muted-foreground">Your court is booked. A confirmation email will be sent to {contact?.customerEmail}. {committed.paymentMethod === "pay_at_club" ? "Payment is due at the club." : "Online payment received."}</p>
     <div className="mt-4"><BookingSummary details={committed} /></div>
     <div>{committed.cancellationPolicy && <BookingCancellationTerms noticeMinutes={committed.cancellationPolicy.noticeMinutes} cutoff={committed.cancellationPolicy.cutoff} timezone={timezone} guest={!authenticated} />}</div>
     <div className="mt-5 flex flex-wrap gap-2">
-      {authenticated && <Link href="/my-activity/bookings" className="inline-flex min-h-10 items-center rounded-control bg-primary px-4 text-sm font-semibold text-primary-foreground">View my bookings</Link>}
-      <button type="button" onClick={() => setCommitted(null)} className={`min-h-10 rounded-control border px-4 text-sm font-semibold ${authenticated ? "border-border-strong text-primary" : "border-primary bg-primary text-primary-foreground"}`}>Book another court</button>
+      {authenticated && <Link href="/my-activity/bookings" className="inline-flex min-h-11 items-center rounded-control bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus sm:min-h-10">View my bookings</Link>}
+      <button type="button" onClick={() => setCommitted(null)} className={`min-h-11 rounded-control border px-4 text-sm font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus sm:min-h-10 ${authenticated ? "border-border-strong bg-surface text-primary hover:bg-surface-muted" : "border-primary bg-primary text-primary-foreground hover:bg-primary-hover"}`}>Book another court</button>
     </div>
   </section>;
   return <div ref={contentRef} className="relative min-w-0" onFocusCapture={(event) => {
@@ -95,25 +87,31 @@ export function BookingCalendar({ day, date, locationName, currency, initialCont
     const obscuredHeight = event.target.getBoundingClientRect().bottom - bar.getBoundingClientRect().top;
     if (obscuredHeight > 0) window.scrollBy({ top: obscuredHeight + 8 });
   }}>
-    {day.times.length === 0 ? <p className="mt-5 rounded-card border border-border bg-surface p-5 text-muted-foreground">
-      {locationName} is closed on {dateLabel}.
-    </p> : <>
-      <p className="mt-3 text-xs text-muted-foreground">Rates are shown in {currency}/hour beneath each court. Select a half-hour cell to start a one-hour interval, then click adjacent cells to adjust. This does not reserve a court.</p>
+    {day.times.length === 0 ? <div className="mt-4 flex items-center gap-3 rounded-card border border-border bg-surface p-5 text-muted-foreground">
+      <CalendarX2 aria-hidden className="size-5 shrink-0 text-accent" /><p>{locationName} is closed on {dateLabel}.</p>
+    </div> : <>
+      <TimelineLegend cells={day.courts.flatMap((courtDay) => courtDay.cells)}>
+        Select a half-hour cell to start a one-hour interval, then click adjacent cells to adjust. This does not reserve a court.
+      </TimelineLegend>
       <BookingTimetable day={day} date={date} timezone={timezone} currency={currency} selection={selection} onSelect={(courtDay, rowIndex) => {
         setSelection((current) => selectCalendarCell({ courtId: courtDay.court.id,
           times: day.times, cells: courtDay.cells, hourlyPrices: courtDay.hourlyPrices }, current, rowIndex));
       }} />
     </>}
-    {selection && selectedCourt && <section ref={actionBarRef} aria-label="Selected interval" aria-live="polite" className="sticky bottom-0 z-30 mt-3 rounded-card border border-border bg-surface p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-floating sm:p-4">
-      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="font-heading text-lg font-semibold text-primary">Your selected time</h2>
-          <p className="mt-1 text-sm text-muted-foreground">{locationName} · {selectedCourt.court.name} · {dateLabel}</p>
-          <p className="mt-1 font-semibold tabular-nums text-foreground">{minuteToTime(selection.startMinute)}–{minuteToTime(selection.endMinute)} · {selection.durationMinutes} min</p>
-          <p className="mt-1 text-sm text-foreground">Total: <strong>{formatMoney(selection.priceMinor, currency)}</strong></p>
+    {selection && selectedCourt && <section ref={actionBarRef} aria-label="Selected interval" aria-live="polite" className="sticky bottom-0 z-30 mt-3 rounded-card border border-border border-t-primary/40 bg-surface p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-floating sm:p-4">
+      <div className="mx-auto flex max-w-7xl flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
+        <div className="flex min-w-0 items-start justify-between gap-4 sm:justify-start sm:gap-8">
+          <div className="min-w-0">
+            <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-accent">Your selected time</h2>
+            <p className="mt-1 font-heading text-lg font-semibold leading-tight tabular-nums text-primary sm:text-xl">{minuteToTime(selection.startMinute)}–{minuteToTime(selection.endMinute)} · {selection.durationMinutes} min</p>
+            <p className="mt-0.5 truncate text-sm text-muted-foreground">{locationName} · {selectedCourt.court.name} · {dateLabel}</p>
+          </div>
+          <p className="shrink-0 text-right text-xs font-semibold text-muted-foreground sm:text-left">Total: <strong className="block text-lg tabular-nums text-primary sm:text-xl">{formatMoney(selection.priceMinor, currency)}</strong></p>
         </div>
-        <div className="flex gap-2"><button type="button" onClick={() => setSelection(null)} className="min-h-9 rounded-control border border-border-strong px-3 text-sm font-semibold text-primary">Clear selection</button>
-          <button type="button" onClick={() => { setContact((current) => current ?? initialContact); setConfirming(true); }} className="min-h-10 rounded-control bg-primary px-5 text-sm font-semibold text-primary-foreground">Continue</button></div>
+        <div className="flex gap-2">
+          <button type="button" onClick={() => setSelection(null)} className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-control border border-border-strong bg-surface px-3 text-sm font-semibold text-primary transition-colors hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus sm:min-h-10"><X aria-hidden className="size-4" />Clear selection</button>
+          <button type="button" onClick={() => { setContact((current) => current ?? initialContact); setConfirming(true); }} className="inline-flex min-h-11 flex-1 items-center justify-center rounded-control bg-primary px-6 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus sm:min-h-10 sm:flex-none">Continue</button>
+        </div>
       </div>
     </section>}
     {confirming && selection && details && contact && <BookingConfirmation authenticated={authenticated} onlinePaymentAvailable={onlinePaymentAvailable} allowPayAtClub={allowPayAtClub} cancellationNoticeMinutes={cancellationNoticeMinutes} timezone={timezone} selection={selection} details={details} contact={contact}
@@ -140,13 +138,13 @@ function BookingTimetable({ day, date, timezone, currency, selection, onSelect }
       const price = courtDay.hourlyPrices[rowIndex];
       const selected = selection?.courtId === courtDay.court.id && rowIndex >= selection.startRowIndex && rowIndex < selection.endRowIndex;
       const selectable = state === "available" && (courtDay.cells[rowIndex - 1] === "available" || courtDay.cells[rowIndex + 1] === "available");
-      const label = state === "available" ? formatHourlyRate(price!, currency) : cellLabels[state];
+      const label = state === "available" ? formatHourlyRate(price!, currency) : timelineCellLabels[state];
       const accessibleLabel = `${courtDay.court.name} ${date} ${minuteToTime(minute)}–${minuteToTime(minute + 30)}, ${label}${selected ? ", selected" : ""}`;
       return <div key={minute} role="cell" className={`min-w-0 border-b ${selected ? "border-primary" : "border-border"}`}>
         {selectable ? <button type="button" aria-pressed={selected} aria-label={accessibleLabel}
           onClick={() => onSelect(courtDay, rowIndex)}
-          className={`h-full w-full border-r px-0.5 text-center text-[length:var(--timeline-cell-font-size)] font-medium tabular-nums focus-visible:relative focus-visible:z-10 focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-accent ${selected ? "border-primary bg-primary text-primary-foreground" : `border-border ${cellStyles[state]}`}`}>
-        </button> : <div aria-label={accessibleLabel} className={`flex h-full items-center justify-center border-r border-border px-0.5 text-[length:var(--timeline-cell-font-size)] tabular-nums ${cellStyles[state]}`} />}
+          className={`h-full w-full border-r px-0.5 text-center text-[length:var(--timeline-cell-font-size)] font-medium tabular-nums focus-visible:relative focus-visible:z-10 focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-accent ${selected ? `border-primary ${timelineSelectedStyle}` : `border-border ${timelineCellStyles[state]}`}`}>
+        </button> : <div aria-label={accessibleLabel} className={`flex h-full items-center justify-center border-r border-border px-0.5 text-[length:var(--timeline-cell-font-size)] tabular-nums ${timelineCellStyles[state]}`} />}
       </div>;
     })} />;
 }

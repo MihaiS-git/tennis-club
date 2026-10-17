@@ -4,8 +4,15 @@ import { useRouter } from "next/navigation";
 import { CalendarDateNavigation } from "@/components/calendar-date-navigation";
 import { LocationSelect } from "@/components/location-select";
 
-export function CalendarControls({ locations, locationId, date, today }: {
-  locations: readonly { id: string; name: string }[]; locationId: string; date: string | null; today: string;
+function relativeDay(date: string, today: string) {
+  if (date === today) return "Today";
+  const tomorrow = new Date(`${today}T12:00:00Z`);
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  return date === tomorrow.toISOString().slice(0, 10) ? "Tomorrow" : null;
+}
+
+export function CalendarControls({ locations, locationId, date, today, timezone }: {
+  locations: readonly { id: string; name: string }[]; locationId: string; date: string | null; today: string; timezone?: string;
 }) {
   const router = useRouter();
   const navigate = (location: string, selectedDate?: string) => {
@@ -14,8 +21,18 @@ export function CalendarControls({ locations, locationId, date, today }: {
     if (selectedDate) params.set("date", selectedDate);
     router.push(`/book${params.size ? `?${params}` : ""}`);
   };
-  return <div className="flex flex-wrap gap-3">
-    <LocationSelect id="book-location" locations={locations} selectedId={locationId} onChange={(id) => navigate(id)} />
-    <CalendarDateNavigation id="book-date" date={date} today={today} onChange={(selectedDate) => navigate(locationId, selectedDate)} />
+  const dateLabel = date && new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })
+    .format(new Date(`${date}T00:00:00Z`));
+  const relative = date && relativeDay(date, today);
+  return <div className="mt-5 flex flex-col gap-4 rounded-card border border-border bg-surface p-4 shadow-card sm:p-5 lg:flex-row lg:items-end lg:justify-between">
+    <div className="min-w-0">
+      {relative && <p className="text-xs font-semibold uppercase tracking-[0.14em] text-accent">{relative}</p>}
+      <h2 className="font-heading text-xl font-semibold leading-tight text-primary sm:text-2xl">{dateLabel || "Choose a date"}</h2>
+      {timezone && <p className="mt-1 text-xs text-muted-foreground">Times shown in {timezone}.</p>}
+    </div>
+    <div className="grid gap-3 sm:flex sm:flex-wrap sm:items-end">
+      <LocationSelect id="book-location" locations={locations} selectedId={locationId} onChange={(id) => navigate(id)} />
+      <CalendarDateNavigation id="book-date" date={date} today={today} onChange={(selectedDate) => navigate(locationId, selectedDate)} />
+    </div>
   </div>;
 }

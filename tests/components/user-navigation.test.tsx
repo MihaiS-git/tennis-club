@@ -2,8 +2,11 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 
-const navigation = vi.hoisted(() => ({ pathname: "/my-activity/bookings" }));
-vi.mock("next/navigation", () => ({ usePathname: () => navigation.pathname, useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }));
+const navigation = vi.hoisted(() => ({ pathname: "/my-activity/bookings", suspended: false }));
+vi.mock("next/navigation", () => ({ usePathname: () => {
+  if (navigation.suspended) throw new Promise(() => {});
+  return navigation.pathname;
+}, useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }));
 
 import { AdminNavigation } from "../../src/components/admin-navigation";
 import { UserNavigation } from "../../src/components/user-navigation";
@@ -11,10 +14,18 @@ import { UserAreaShell } from "../../src/components/management-shell";
 import MyActivityLayout from "../../src/app/my-activity/layout";
 import ProfileLayout from "../../src/app/profile/layout";
 
-afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); navigation.suspended = false; vi.clearAllMocks(); vi.unstubAllGlobals(); });
 
 const labels = ["Bookings", "Booking history", "Notifications", "Player identity", "Personal information", "Tennis profile", "Account & security"];
 const hrefs = ["/my-activity/bookings", "/my-activity/history", "/my-activity/notifications", "/profile", "/profile/personal", "/profile/tennis", "/profile/security"];
+
+it("isolates a suspended dynamic pathname to the sidebar while keeping the page visible", () => {
+  navigation.suspended = true;
+  render(<MyActivityLayout><p>Notification details</p></MyActivityLayout>);
+  expect(screen.getByRole("status").textContent).toBe("Loading account navigation…");
+  expect(screen.getByRole("heading", { name: "My activity" })).toBeDefined();
+  expect(screen.getByText("Notification details")).toBeDefined();
+});
 
 it.each([
   ["/my-activity/bookings", "Bookings", "My activity"],

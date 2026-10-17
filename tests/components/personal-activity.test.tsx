@@ -15,7 +15,9 @@ import type { PersonalReservation } from "@/lib/reservations/personal";
 const { load, cancel, cancelBooking, edit, availability } = vi.hoisted(() => ({ load: vi.fn<typeof import("@/app/my-activity/bookings/actions").loadPersonalActivityAction>(), cancel: vi.fn(), cancelBooking: vi.fn(), edit: vi.fn(), availability: vi.fn() }));
 vi.mock("@/app/my-activity/bookings/actions", () => ({ loadPersonalActivityAction: load, cancelOwnReservationAction: cancel, cancelOwnCustomerBookingAction: cancelBooking,
   editOwnReservationAction: edit, loadReservationEditDayAction: availability,
-  loadOwnBookingEditDayAction: vi.fn(), quoteOwnBookingAction: vi.fn(), rescheduleOwnBookingAction: vi.fn() }));
+  loadOwnBookingEditDayAction: vi.fn(), quoteOwnBookingAction: vi.fn(), rescheduleOwnBookingAction: vi.fn(),
+  loadOwnBookingPaymentAction: vi.fn(async () => ({ ok: true, payment: { method: "online", currency: "RON", timezone: "UTC",
+    total: 5000, paid: 5000, refunded: 0, refundPending: 0, outstanding: 0, dueAtClub: 0, operations: [] } })) }));
 
 const navigation = vi.hoisted(() => ({ replace: vi.fn() }));
 vi.mock("next/navigation", () => ({
@@ -261,13 +263,18 @@ it("renders filter options even for empty results and resets the page when selec
   render(<PersonalActivity staff userId="owner" initialActivity={activity} initialError=""
     listQuery={{ page: "3", type: "reservation" }} />);
   expect(screen.getByRole("option", { name: "Central" })).toHaveProperty("value", location);
-  expect(screen.getByRole("option", { name: "Central court" })).toHaveProperty("value", court);
+  expect(screen.queryByRole("option", { name: "Central court" })).toBeNull();
+  expect(screen.getByRole("combobox", { name: "Court" })).toHaveProperty("disabled", true);
   fireEvent.change(screen.getByRole("combobox", { name: "Location" }), { target: { value: location } });
   const params = new URL(navigation.replace.mock.lastCall![0], "http://localhost").searchParams;
   expect(params.get("location")).toBe(location);
   expect(params.get("type")).toBe("reservation");
   expect(params.has("page")).toBe(false);
   expect(screen.getByText("No upcoming bookings or reservations match your filters.")).toBeDefined();
+  cleanup();
+  render(<PersonalActivity staff userId="owner" initialActivity={activity} initialError=""
+    listQuery={{ type: "reservation", location }} />);
+  expect(screen.getByRole("option", { name: "Central court" })).toHaveProperty("value", court);
 });
 
 it("uses hasNext across page transitions and retains filters in pagination links", () => {
@@ -276,6 +283,7 @@ it("uses hasNext across page transitions and retains filters in pagination links
   const query = { location, type: "booking", sort: "duration", direction: "desc" };
   const { rerender } = render(<PersonalActivity staff userId="owner" initialActivity={first} initialError="" listQuery={query} />);
   expect(screen.queryByRole("link", { name: "Previous" })).toBeNull();
+  expect(screen.getByLabelText("Page 1").getAttribute("aria-current")).toBe("page");
   const next = screen.getByRole("link", { name: "Next" });
   expect(Object.fromEntries(new URL(next.getAttribute("href")!, "http://localhost").searchParams))
     .toMatchObject({ ...query, page: "2" });
@@ -375,4 +383,22 @@ it("toasts a stale cancellation error while keeping confirmation open and preven
   await waitFor(() => expect(lastToast()).toContain("has expired"));
   expect(load).toHaveBeenCalledOnce();
   expect(screen.getByRole("dialog", { name: "Booking" })).toBeDefined();
+});
+
+it("shows each upcoming booking's actual status in the table and its details dialog", () => {
+  const booking = (id: string, flags: Pick<PersonalCustomerBooking, "payment_pending" | "pending_change">): PersonalCustomerBooking => ({
+    id, starts_at_instant: "2099-10-15T10:00:00Z", booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660,
+    location_name: "Club", location_timezone: "UTC", court_name: `Court ${id}`, customer_name: "Customer", customer_email: "c@example.test",
+    customer_phone: "123", cancellation_notice_minutes: 120, total_amount_minor: 5000, currency: "RON", ...flags,
+  });
+  const rows = [booking("a", {}), booking("b", { payment_pending: true }), booking("c", { pending_change: "reschedule" }),
+    booking("d", { pending_change: "cancellation", payment_pending: true })];
+  render(<PersonalActivity staff={false} initialActivity={activityFixture(rows.map(bookingItem))} initialError="" />);
+  expect(screen.getByRole("columnheader", { name: "Status" })).toBeTruthy();
+  const statuses = screen.getAllByRole("row").slice(1).map(row => within(row).getAllByRole("cell").at(-1)?.textContent);
+  expect(statuses).toEqual(["Confirmed", "Payment processing", "Modification pending", "Cancellation pending"]);
+  fireEvent.click(screen.getByRole("row", { name: /Court b/ }));
+  const dialog = screen.getByRole("dialog");
+  expect(within(dialog).getByText("Payment processing")).toBeTruthy();
+  expect(within(dialog).queryByText("Confirmed")).toBeNull();
 });

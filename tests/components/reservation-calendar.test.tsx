@@ -7,17 +7,17 @@ import type { AdminOperationalOccupancy } from "@/lib/reservations/service";
 import { ReservationCalendar } from "@/app/admin/reservations/reservation-calendar";
 import { localMinute, localToday } from "@/lib/courts/local-time";
 
-const { ownerEdit, ownerAvailability, ownerBookingLoad, ownerBookingQuote, ownerBookingSave, ownerBookingCancel, cancelAction, ownerCancelAction, cancelBookingAction, editAction, adminAvailability, refresh } = vi.hoisted(() => ({ ownerEdit: vi.fn(), ownerAvailability: vi.fn(), ownerBookingLoad: vi.fn(), ownerBookingQuote: vi.fn(), ownerBookingSave: vi.fn(), ownerBookingCancel: vi.fn(), ownerCancelAction: vi.fn(), cancelAction: vi.fn(), cancelBookingAction: vi.fn(), editAction: vi.fn(), adminAvailability: vi.fn(), refresh: vi.fn() }));
+const { reserveAction, ownerEdit, ownerAvailability, ownerBookingLoad, ownerBookingQuote, ownerBookingSave, ownerBookingCancel, cancelAction, ownerCancelAction, cancelBookingAction, editAction, adminAvailability, refresh } = vi.hoisted(() => ({ reserveAction: vi.fn(), ownerEdit: vi.fn(), ownerAvailability: vi.fn(), ownerBookingLoad: vi.fn(), ownerBookingQuote: vi.fn(), ownerBookingSave: vi.fn(), ownerBookingCancel: vi.fn(), ownerCancelAction: vi.fn(), cancelAction: vi.fn(), cancelBookingAction: vi.fn(), editAction: vi.fn(), adminAvailability: vi.fn(), refresh: vi.fn() }));
 vi.mock("@/app/my-activity/bookings/actions", () => ({ cancelOwnReservationAction: ownerCancelAction, editOwnReservationAction: ownerEdit,
   loadReservationEditDayAction: ownerAvailability, loadOwnBookingEditDayAction: ownerBookingLoad,
   quoteOwnBookingAction: ownerBookingQuote, rescheduleOwnBookingAction: ownerBookingSave, cancelOwnCustomerBookingAction: ownerBookingCancel }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
-vi.mock("@/app/admin/reservations/actions", () => ({ reserveCourtAction: vi.fn(), cancelAdminReservationAction: cancelAction,
+vi.mock("@/app/admin/reservations/actions", () => ({ reserveCourtAction: reserveAction, cancelAdminReservationAction: cancelAction,
   cancelAdminCustomerBookingAction: cancelBookingAction, editAdminReservationAction: editAction, loadAdminReservationEditDayAction: adminAvailability }));
 beforeAll(() => {
   installDialogMock();
 });
-afterEach(() => { cleanup(); [ownerEdit, ownerAvailability, ownerBookingLoad, ownerBookingQuote, ownerBookingSave, ownerBookingCancel].forEach((mock) => mock.mockReset()); ownerCancelAction.mockReset(); cancelAction.mockReset(); cancelBookingAction.mockReset(); editAction.mockReset(); adminAvailability.mockReset(); refresh.mockReset(); });
+afterEach(() => { cleanup(); reserveAction.mockReset(); [ownerEdit, ownerAvailability, ownerBookingLoad, ownerBookingQuote, ownerBookingSave, ownerBookingCancel].forEach((mock) => mock.mockReset()); ownerCancelAction.mockReset(); cancelAction.mockReset(); cancelBookingAction.mockReset(); editAction.mockReset(); adminAvailability.mockReset(); refresh.mockReset(); });
 
 it("offers a reason and Reserve action after selection, without pricing", () => {
   render(<ReservationCalendar canManage date="2099-10-15" location={{ id: "11111111-1111-4111-8111-111111111111", name: "Club", timezone: "UTC", courts: [] }}
@@ -476,4 +476,30 @@ it("Coach reschedules own booking with price acknowledgement and owner stale tok
     expectedUpdatedAt: "2026-10-01T12:00:00.123456Z", expectedRevisionId: "2026-10-01T12:00:00.123457Z",
     expectedTotal: 10000, priceAcknowledged: true, save: true }));
   expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+
+it("preserves the selected interval while reservation creation is pending and allows retry after failure", async () => {
+  let finish!: (result: { ok: false; message: string }) => void;
+  reserveAction.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  const court = { id: "22222222-2222-4222-8222-222222222222", name: "Court 1" };
+  render(<ReservationCalendar canManage date="2099-10-15"
+    location={{ id: "11111111-1111-4111-8111-111111111111", name: "Club", timezone: "UTC", courts: [court] }}
+    day={{ times: [600, 630], courts: [{ court, cells: ["available", "available"] }] }} />);
+  expect(screen.queryByRole("button", { name: "Clear selection" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /10:00–10:30, Available/ }));
+  const clear = screen.getByRole("button", { name: "Clear selection" });
+  expect(clear).toHaveProperty("disabled", false);
+  expect(screen.getByRole("button", { name: "Reserve court" })).toHaveProperty("disabled", true);
+  fireEvent.change(screen.getByRole("textbox", { name: "Reason" }), { target: { value: "Practice" } });
+  fireEvent.click(screen.getByRole("button", { name: "Reserve court" }));
+  expect(clear).toHaveProperty("disabled", true);
+  expect(screen.getByRole("button", { name: "Reserving…" })).toHaveProperty("disabled", true);
+  fireEvent.click(clear);
+  expect(screen.getByLabelText("Selected reservation")).toBeTruthy();
+  await act(async () => finish({ ok: false, message: "Try again." }));
+  expect(clear).toHaveProperty("disabled", false);
+  expect(screen.getByRole("button", { name: "Reserve court" })).toHaveProperty("disabled", false);
+  fireEvent.click(clear);
+  expect(screen.queryByLabelText("Selected reservation")).toBeNull();
 });

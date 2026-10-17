@@ -1,44 +1,27 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
+import { parseInboxQuery } from "@/lib/notifications/inbox-query";
 
-const { context, list, redirect } = vi.hoisted(() => ({ context: vi.fn(), list: vi.fn(), redirect: vi.fn(() => { throw new Error("redirect"); }) }));
-vi.mock("next/navigation", () => ({ redirect, useRouter: () => ({ refresh: vi.fn() }) }));
+const { context, list, financial, redirect } = vi.hoisted(() => ({ context: vi.fn(), list: vi.fn(), financial: vi.fn(), redirect: vi.fn(() => { throw new Error("redirect"); }) }));
+vi.mock("next/navigation", () => ({ redirect, useRouter: () => ({ refresh: vi.fn(), replace: vi.fn() }) }));
 vi.mock("@/lib/profile/profile", () => ({ profileContext: context }));
-vi.mock("@/lib/notifications/financial-notices", () => ({ listOwnFinancialNotices: list }));
-vi.mock("@/app/my-activity/actions", () => ({ acknowledgeFinancialNoticeAction: vi.fn() }));
-
+vi.mock("@/lib/notifications/financial-notices", () => ({ listOwnNotifications: list, listOwnFinancialNotices: financial }));
+vi.mock("@/app/my-activity/actions", () => ({ acknowledgeFinancialNoticeAction: vi.fn(), markNotificationReadAction: vi.fn(), manageNotificationsAction: vi.fn() }));
 import { FinancialNotices } from "@/app/my-activity/financial-notices";
 
-afterEach(() => { cleanup(); vi.clearAllMocks(); });
-
+afterEach(() => { cleanup(); vi.resetAllMocks(); });
 const client = {};
 const active = { account: { state: "active", userId: "owner", roles: [] }, client };
 
-it("shows only important financial alerts with acknowledgement, without ordinary emails or delivery diagnostics", async () => {
+it("keeps unresolved financial alerts visible when the inbox is empty or filtered", async () => {
   context.mockResolvedValue(active);
-  list.mockResolvedValue([
-    { id: "c9000000-0000-4000-8000-000000000001", subject: "Refund requires attention", text: "Refund could not be completed.", important: true, emailFailed: true },
-    { id: "c9000000-0000-4000-8000-000000000002", subject: "Booking confirmed", text: "Your booking is confirmed.", important: false, emailFailed: true },
-    { id: "c9000000-0000-4000-8000-000000000003", subject: "Booking rescheduled", text: "Your booking moved.", important: false, emailFailed: true },
-  ]);
-  render(await FinancialNotices());
-  expect(list).toHaveBeenCalledWith(client);
-  const alerts = screen.getAllByRole("alert");
-  expect(alerts).toHaveLength(1);
-  expect(within(alerts[0]).getByRole("heading", { name: "Refund requires attention" })).toBeDefined();
-  expect(within(alerts[0]).getByRole("button", { name: "OK" })).toBeDefined();
-  expect(screen.queryByText("Booking confirmed")).toBeNull();
-  expect(screen.queryByText("Booking rescheduled")).toBeNull();
-  expect(screen.queryByText(/could not deliver this message/)).toBeNull();
-});
-
-it("explains when nothing needs attention", async () => {
-  context.mockResolvedValue(active);
-  list.mockResolvedValue([{ id: "c9000000-0000-4000-8000-000000000002", subject: "Booking confirmed", text: "", important: false, emailFailed: true }]);
-  render(await FinancialNotices());
-  expect(screen.getByText("You have no notifications that need your attention.")).toBeDefined();
-  expect(screen.queryByRole("alert")).toBeNull();
+  list.mockResolvedValue({ notices: [], total: 0, totalPages: 1, query: parseInboxQuery({ status: "read" }) });
+  financial.mockResolvedValue([{ id: "financial", subject: "Refund requires attention", text: "Contact the club.", important: true }]);
+  render(await FinancialNotices({ searchParams: Promise.resolve({ status: "read" }) }));
+  expect(list).toHaveBeenCalledWith({ status: "read" }, client);
+  expect(within(screen.getByRole("alert")).getByRole("button", { name: "OK" })).toBeDefined();
+  expect(screen.getByText("No notifications match your search and filters.")).toBeDefined();
 });
 
 it("requires a signed-in active account", async () => {

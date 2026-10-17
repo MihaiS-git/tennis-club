@@ -8,6 +8,7 @@ import { Input } from "@/components/input";
 import { SearchableCombobox } from "@/components/searchable-combobox";
 import { Button } from "@/components/button";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
+import { StatusBadge } from "@/components/status-badge";
 import {
   groupedWeeklySchedule, minuteToTime, openingHoursScheduleKey, timeToMinute, weeklyHoursMutationSchema,
   weekdayGroupLabel, weekdays, scheduleStatus, planOpeningHoursPeriod,
@@ -28,8 +29,14 @@ const closingOptions = [...openingOptions, { value: "24:00", label: "24:00" }];
 const draftSnapshot = (draft: Draft) => JSON.stringify({ ...draft, rows: draft.rows.map(({ weekdays, opens_at, closes_at }) => ({
   weekdays: [...weekdays].sort((a, b) => a - b), opens_at, closes_at,
 })) });
-const scheduleLabel = (schedule: OpeningHoursSchedule, today: string) =>
-  `${scheduleStatus(schedule, today)} · ${schedule.starts_on} → ${schedule.ends_on ?? "Unlimited"}`;
+// "History" is the domain status; staff see it as Expired.
+const statusLabel = (schedule: OpeningHoursSchedule, today: string) => {
+  const status = scheduleStatus(schedule, today);
+  return status === "History" ? "Expired" : status;
+};
+const statusTones = { Current: "success", Scheduled: "warning", Expired: "neutral" } as const;
+const scheduleRange = (schedule: OpeningHoursSchedule) => `${schedule.starts_on} → ${schedule.ends_on ?? "Unlimited"}`;
+const scheduleLabel = (schedule: OpeningHoursSchedule, today: string) => `${statusLabel(schedule, today)} · ${scheduleRange(schedule)}`;
 
 export function OpeningHours({ locationId, intervals, schedules = [], today = "", onUpdated }: {
   locationId: string; intervals: OpeningInterval[]; schedules?: OpeningHoursSchedule[]; today?: string;
@@ -160,31 +167,37 @@ export function OpeningHours({ locationId, intervals, schedules = [], today = ""
 
   const availableSchedules = schedules.filter((s) => (scheduleStatus(s, today) === "History") === history);
   return <section aria-labelledby={`${prefix}-heading`} className="min-w-0 text-sm">
-    <h2 id={`${prefix}-heading`} className="mb-3 font-semibold text-foreground">Weekly schedule</h2>
+    <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+      <h2 id={`${prefix}-heading`} className="font-semibold text-foreground">Weekly schedule</h2>
+      <div role="group" aria-label="Schedules to show" className="inline-flex rounded-control border border-border bg-surface p-0.5">
+        {([[false, "Current & scheduled"], [true, "Expired"]] as const).map(([value, label]) =>
+          <button key={label} type="button" aria-pressed={history === value} disabled={pending || !hydrated}
+            onClick={() => { if (history !== value) requestSelection({ history: value, schedule: value ? schedules.find((s) => scheduleStatus(s, today) === "History") ?? null : defaultSchedule() }); }}
+            className={`min-h-9 rounded-[calc(var(--radius-control)-2px)] px-3 text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus disabled:opacity-60 ${history === value ? "bg-primary text-primary-foreground" : "text-muted-foreground enabled:hover:bg-surface-muted enabled:hover:text-primary"}`}>{label}</button>)}
+      </div>
+    </div>
     <div className="mb-4 flex flex-wrap items-end gap-3">
-      <label className="min-w-0 flex-1 text-xs font-medium" htmlFor={`${prefix}-schedule`}>{history ? "Historical schedule" : "Current/Scheduled schedule"}
-        <select id={`${prefix}-schedule`} aria-label={history ? "Historical schedule" : "Current/Scheduled schedule"}
+      <label className="min-w-0 flex-1 text-xs font-medium" htmlFor={`${prefix}-schedule`}>Schedule
+        <select id={`${prefix}-schedule`}
           value={creating ? "" : selectedSchedule?.id ?? ""} disabled={pending || !hydrated}
-          className="mt-1 min-h-10 w-full rounded-control border border-border bg-surface px-3 text-sm"
+          className="mt-1 min-h-10 w-full rounded-control border border-border-strong bg-surface px-3 text-sm"
           onChange={(event) => { const schedule = schedules.find((s) => s.id === event.target.value); if (schedule) requestSelection({ schedule, history }); }}>
           {creating && <option value="">New schedule</option>}
           {availableSchedules.map((schedule) => <option key={schedule.id} value={schedule.id}>{scheduleLabel(schedule, today)}</option>)}
           {!creating && !availableSchedules.length && <option value="">No schedules</option>}
         </select>
       </label>
-      <Button type="button" variant="secondary" size="small" disabled={pending || !hydrated || creating}
+      <Button type="button" variant="secondary" disabled={pending || !hydrated || creating}
         onClick={() => requestSelection({ schedule: null, history: false })}>New schedule</Button>
-      <Button type="button" variant="secondary" size="small" disabled={pending || !hydrated} aria-pressed={history}
-        onClick={() => requestSelection({ history: !history, schedule: history ? defaultSchedule() : schedules.find((s) => scheduleStatus(s, today) === "History") ?? null })}>
-        {history ? "Current/Scheduled" : "History"}
-      </Button>
     </div>
     <ConfirmationDialog open={panelActive && switching !== null} title="Discard opening-hours changes?"
       message="Your unsaved changes will be discarded." confirmLabel="Discard changes"
       onClose={() => setSwitching(null)} onConfirm={() => { if (switching) selectSchedule(switching); }} />
     {history && !availableSchedules.length ? <p className="py-4 text-muted-foreground">No expired schedules.</p> :
     <form aria-label="Opening hours editor" onSubmit={(event) => { event.preventDefault(); void save(); }}>
-      <p className="mb-3 text-muted-foreground">{creating ? "New schedule" : selectedSchedule ? scheduleLabel(selectedSchedule, today) : "Not configured"}</p>
+      <p className="mb-3 flex flex-wrap items-center gap-2 text-muted-foreground">{creating ? <StatusBadge tone="neutral">New schedule</StatusBadge>
+        : selectedSchedule ? <><StatusBadge tone={statusTones[statusLabel(selectedSchedule, today)]}>{statusLabel(selectedSchedule, today)}</StatusBadge>
+          <span className="tabular-nums text-foreground">{scheduleRange(selectedSchedule)}</span></> : "Not configured"}</p>
       {readOnly && <p className="mb-4 text-muted-foreground">Expired schedules are read-only.</p>}
       <fieldset disabled={pending || !hydrated || readOnly}>
         <legend className="sr-only">Weekly policy</legend>

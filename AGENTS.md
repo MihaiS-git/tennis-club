@@ -618,7 +618,7 @@ post-commit Brevo delivery; see `docs/booking-notifications.md`.
  `/profile` contains identity and settings;
 `/my-activity` redirects to `/my-activity/bookings`, which
 contains current/upcoming personal booking/reservation management. `/my-activity/history`
-is the current account's completed/cancelled bookings and staff-owned direct reservations. `/my-activity/notifications` shows important financial notices. My Activity and `/profile/*` pages use the shared user sidebar (`UserAreaShell`, same `SidebarNavigation` as Admin). The server activity service authorizes the active account before bounded, privileged owner-filtered SELECTs; direct reservations require an Admin/Coach role. TypeScript classifies, filters and sorts the combined dataset before fixed 20-row pagination, with kind/ID tie-breakers. URL controls preserve filters/sort across pages and reset page 1 when changed.
+is the current account's completed/cancelled bookings and staff-owned direct reservations. `/my-activity/notifications` provides a persistent account-owned booking-email inbox with server-side search/filter/sort and 25-row pagination. Inbox read/unread and soft deletion are independent of email delivery and explicit financial acknowledgment; unresolved financial alerts remain visible until OK. My Activity and `/profile/*` pages use the shared user sidebar (`UserAreaShell`, same `SidebarNavigation` as Admin). The server activity service authorizes the active account before bounded, privileged owner-filtered SELECTs; direct reservations require an Admin/Coach role. TypeScript classifies, filters and sorts the combined dataset before fixed 20-row pagination, with kind/ID tie-breakers. URL controls preserve filters/sort across pages and reset page 1 when changed.
 Coupled personal reservation reads bind explicitly to the verified actor UUID through TypeORM and use location-local time for lifecycle classification. Activity/history reads use owner-filtered TypeORM projections through the current activity service.
 Active Admins and Coaches can cancel
 only their own active Upcoming reservations after explicit confirmation. Server authorization and database checks
@@ -1401,3 +1401,16 @@ The committing request delivers through Brevo after commit, outside transactions
 leases, unique event keys and stable provider idempotency keys. Delivery is at-least-once submission;
 ambiguous acceptance can duplicate email after provider key expiry. See
 `docs/booking-notifications.md` and migrations `1791462257928`/`1791462257929`.
+
+
+## Customer notification inbox
+
+Every `enqueueBookingNotification` call atomically snapshots the rendered subject/body,
+booking reference, event kind and timestamp into `customer_notifications` for the booking's
+non-null authoritative `account_user_id`. Never associate by email. A unique event key,
+retained after inbox soft deletion, prevents replay duplicates. There is no delivery FK;
+Admin email deletion cannot remove inbox history. Active owners alone may search, read,
+mark unread or soft-delete their copies. Financial OK acknowledgment updates the existing
+operational delivery record and inbox timestamp in one statement; read/unread/deletion
+never acknowledges financial alerts. Keep unresolved alerts visible outside inbox filters.
+Migration `1791462257931-CustomerNotificationHistory` backfills retained delivery records.

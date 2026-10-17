@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { UserRound } from "lucide-react";
-import { effectiveDisplayName, playerAvatarUrl } from "@/lib/profile/presentation";
+import { effectiveDisplayName, playerAvatarUrl, tennisChoiceLabel, tennisChoiceLabels, tennisChoiceNames } from "@/lib/profile/presentation";
 import { readOwnProfile } from "./own-profile";
 import { AvatarForms } from "./profile-forms";
 
@@ -12,30 +12,51 @@ export default async function ProfilePage() {
   const { profile } = result;
   const imageUrl = playerAvatarUrl(profile.player);
   const playerName = effectiveDisplayName(profile.player?.display_name, profile.personal) || "Your profile";
+  const player = profile.player;
+  const highlights = [
+    ["Club rating", player?.rating !== null && player?.rating !== undefined ? String(player.rating) : null],
+    ["Sportya level", player?.sportya_level ? `Level ${player.sportya_level}` : null],
+  ].filter((item): item is [string, string] => item[1] !== null);
   return (
-    <section aria-labelledby="player-identity-heading" className="rounded-card border border-border bg-surface-elevated p-5 shadow-card sm:p-6 lg:p-8">
-      <div className="grid min-w-0 gap-5 md:grid-cols-[minmax(0,1fr)_18rem] md:items-center md:gap-8">
-        <div className="flex min-w-0 items-center gap-4 sm:gap-6">
+    <section aria-labelledby="player-identity-heading" className="min-w-0 rounded-card border border-border bg-surface-elevated shadow-card">
+      <div className="flex min-w-0 flex-col gap-5 p-5 sm:flex-row sm:items-center sm:gap-7 md:p-6">
+        <div className="flex max-w-full shrink-0 flex-col items-start gap-2 sm:w-36 sm:items-center">
           {imageUrl ?
             // eslint-disable-next-line @next/next/no-img-element -- The authenticated avatar endpoint serves normalized images directly.
-            <img src={imageUrl} alt="Your player avatar" width={112} height={112} loading="eager" className="size-20 shrink-0 rounded-full object-cover sm:size-28" />
-            : <div role="img" aria-label="Default player avatar" className="flex size-20 shrink-0 items-center justify-center rounded-full bg-surface-muted text-primary sm:size-28"><UserRound className="size-9 sm:size-12" aria-hidden="true" /></div>}
-          <div className="min-w-0">
-            <p className="text-xs font-semibold uppercase tracking-wider text-accent">Player profile</p>
-            <h2 id="player-identity-heading" className="mt-1 break-words font-heading text-2xl font-semibold text-primary sm:text-3xl">{playerName}</h2>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">{profile.player ? "Your player identity at Tennis Club." : "Add your tennis details to complete your player profile."}</p>
-            {(profile.player?.rating !== null && profile.player?.rating !== undefined || profile.player?.sportya_level) && (
-              <dl className="mt-4 flex flex-wrap gap-x-6 gap-y-3 text-sm">
-                {profile.player?.rating !== null && profile.player?.rating !== undefined && <div><dt className="text-xs text-muted-foreground">Club rating</dt><dd className="mt-1 font-semibold text-primary">{profile.player.rating}</dd></div>}
-                {profile.player?.sportya_level && <div className="min-w-0"><dt className="text-xs text-muted-foreground">Sportya level</dt><dd className="mt-1 break-words font-semibold text-primary">{profile.player.sportya_level}</dd></div>}
-              </dl>
-            )}
-          </div>
+            <img src={imageUrl} alt="Your player avatar" width={144} height={144} loading="eager" className="size-28 shrink-0 rounded-full border-4 border-surface object-cover ring-1 ring-border sm:size-36" />
+            : <div role="img" aria-label="Default player avatar" className="flex size-28 shrink-0 items-center justify-center rounded-full border-4 border-surface bg-surface-muted text-primary ring-1 ring-border sm:size-36"><UserRound className="size-12 sm:size-16" aria-hidden="true" /></div>}
+          <AvatarForms hasAvatar={Boolean(player?.avatar_path)} hasProfile={Boolean(player)} />
         </div>
-        <div className="min-w-0 border-t border-border pt-4 md:border-l md:border-t-0 md:pl-6 md:pt-0">
-          <AvatarForms hasAvatar={Boolean(profile.player?.avatar_path)} hasProfile={Boolean(profile.player)} />
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-accent">Player profile</p>
+          <h2 id="player-identity-heading" className="mt-1 break-words font-heading text-2xl font-semibold leading-tight text-primary sm:text-3xl">{playerName}</h2>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">{player ? "Your player identity at Tennis Club." : "Add your tennis details to complete your player profile."}</p>
+          {highlights.length > 0 && <dl className="mt-3 flex flex-wrap gap-x-8 gap-y-2">
+            {highlights.map(([label, value]) => <div key={label} className="min-w-0">
+              <dt className="text-xs text-muted-foreground">{label}</dt>
+              <dd className="mt-0.5 break-words font-heading text-lg font-semibold leading-tight text-primary">{value}</dd>
+            </div>)}
+          </dl>}
         </div>
       </div>
+      {player && <div className="space-y-6 border-t border-border p-5 md:p-6">
+        <section aria-labelledby="playing-style-heading">
+          <h3 id="playing-style-heading" className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Playing style</h3>
+          <dl className="mt-3 grid grid-cols-1 gap-x-6 gap-y-4 min-[360px]:grid-cols-2 xl:grid-cols-4">
+            {tennisChoiceNames.map((name) => {
+              const value = tennisChoiceLabel(name, player[name]);
+              return <div key={name} className="min-w-0">
+                <dt className="text-xs text-muted-foreground">{tennisChoiceLabels[name]}</dt>
+                <dd className={`mt-1 break-words text-sm leading-6 ${value ? "font-semibold text-foreground" : "text-muted-foreground"}`}>{value ?? "Not specified"}</dd>
+              </div>;
+            })}
+          </dl>
+        </section>
+        <section aria-labelledby="about-me-heading">
+          <h3 id="about-me-heading" className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">About me</h3>
+          <p className={`mt-3 max-w-prose whitespace-pre-wrap text-sm leading-7 [overflow-wrap:anywhere] ${player.bio?.trim() ? "text-foreground" : "text-muted-foreground"}`}>{player.bio?.trim() ? player.bio : "You haven’t added a biography yet."}</p>
+        </section>
+      </div>}
     </section>
   );
 }

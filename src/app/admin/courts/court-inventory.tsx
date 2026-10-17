@@ -41,8 +41,8 @@ export function CourtInventory({ location: selected, courts, locations, periods,
   return <>
     <CourtsToolbar locations={locations} selectedId={selected.id} scoped={scoped} />
     <section aria-label={`${selected.name} courts`}>
-      {visibleIds.size === 0 ? <div className="rounded-card border border-border bg-surface px-6 py-8 text-muted-foreground">{hasFilters && locationCourtCount ? "No courts match these filters at this location." : "No courts at this location."}</div> : null}
-      <div hidden={visibleIds.size === 0} className="space-y-4 lg:hidden">
+      {visibleIds.size === 0 ? <div className="rounded-card border border-border bg-surface px-4 py-5 text-sm text-muted-foreground">{hasFilters && locationCourtCount ? "No courts match these filters at this location." : "No courts at this location."}</div> : null}
+      <div hidden={visibleIds.size === 0} className="space-y-3 lg:hidden">
         {locationCourts.map((court) => <CourtItem key={court.id} court={court} visible={visibleIds.has(court.id)} locations={locations} periods={periods.filter((period) => period.court_id === court.id)} mobile />)}
       </div>
       <div hidden={visibleIds.size === 0} className="hidden overflow-hidden rounded-card border border-border bg-surface lg:block">
@@ -51,7 +51,7 @@ export function CourtInventory({ location: selected, courts, locations, periods,
             <tr>{(["name", "status", "surface", "environment", "lighting"] as const).map((column) => {
               const active = options.sort === column;
               const Icon = active ? options.dir === "asc" ? ArrowUp : ArrowDown : ArrowUpDown;
-              return <th key={column} scope="col" aria-sort={active ? options.dir === "asc" ? "ascending" : "descending" : "none"} className="px-3 py-3">
+              return <th key={column} scope="col" aria-sort={active ? options.dir === "asc" ? "ascending" : "descending" : "none"} className="px-4 py-2.5">
                 <Link href={sortHref(column)} scroll={false} onClick={scoped ? (event) => {
                   if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
                   event.preventDefault();

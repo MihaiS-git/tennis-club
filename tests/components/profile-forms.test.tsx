@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { expectToast } from "../helpers/notifications";
+import { installDialogMock } from "../helpers/dialog";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ProfileActionState } from "../../src/lib/profile/validation";
@@ -9,7 +10,7 @@ const { personal, tennis, upload, remove } = vi.hoisted(() => ({
 vi.mock("../../src/app/profile/actions", () => ({ savePersonalAction: personal, saveTennisAction: tennis, uploadAvatarAction: upload, removeAvatarAction: remove }));
 import { PersonalInformationForm, TennisProfileForm, AvatarForms } from "../../src/app/profile/profile-forms";
 const emptyPersonal = { first_name: null, last_name: null, phone: null, date_of_birth: null, address_line1: null, address_line2: null, city: null, postal_code: null, country_code: null };
-beforeEach(() => { vi.resetAllMocks(); personal.mockResolvedValue({}); tennis.mockResolvedValue({}); });
+beforeEach(() => { installDialogMock(); vi.resetAllMocks(); personal.mockResolvedValue({}); tennis.mockResolvedValue({}); });
 afterEach(cleanup);
 
 it("preserves personal values and shows accessible inline validation", async () => {
@@ -27,7 +28,7 @@ it("never submits a free-form country search value and permits clearing a countr
   render(<PersonalInformationForm profile={emptyPersonal} />);
   const country = screen.getByRole("combobox", { name: "Country" });
   expect(country.getAttribute("placeholder")).toBe("Select a country");
-  expect(country.parentElement?.querySelector('[aria-hidden="true"]')).toBeNull();
+  expect(country.parentElement?.querySelector("[data-country-flag]")).toBeNull();
   fireEvent.focus(country);
   fireEvent.change(country, { target: { value: "arbitrary" } });
   fireEvent.blur(country);
@@ -54,6 +55,7 @@ it("keeps a chosen display name after personal-name changes and submits only ind
 it("keeps server image validation errors visible until a new file is selected", async () => {
   upload.mockResolvedValue({ fieldErrors: { avatar: "Choose a valid JPEG, PNG, or WebP image." } });
   render(<AvatarForms hasAvatar={false} hasProfile />);
+  fireEvent.click(screen.getByRole("button", { name: "Edit photo" }));
   const input = screen.getByLabelText("Upload avatar");
   fireEvent.change(input, { target: { files: [new File(["malformed"], "avatar.png", { type: "image/png" })] } });
   fireEvent.submit(screen.getByRole("button", { name: "Save avatar" }).closest("form")!);
@@ -62,12 +64,30 @@ it("keeps server image validation errors visible until a new file is selected", 
   expect(screen.queryByText("Choose a valid JPEG, PNG, or WebP image.")).toBeNull();
 });
 
-it.each(["remove"])("disables both avatar controls and blocks duplicate submits during %s", async (operation) => {
+it("opens a labelled photo dialog and returns focus when dismissed", () => {
+  render(<AvatarForms hasAvatar hasProfile />);
+  const trigger = screen.getByRole("button", { name: "Edit photo" });
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Save avatar" })).toBeNull();
+  fireEvent.click(trigger);
+  const dialog = screen.getByRole("dialog", { name: "Edit photo" });
+  expect(dialog.getAttribute("aria-describedby")).toBe("avatar-help");
+  expect(document.body.style.overflow).toBe("hidden");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Close dialog" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+  expect(document.body.style.overflow).toBe("");
+  fireEvent.click(trigger);
+  expect(screen.getByRole("dialog", { name: "Edit photo" })).toBeTruthy();
+});
+
+it.each(["upload", "remove"])("disables both avatar controls and blocks duplicate submits during %s", async (operation) => {
   let finish: (state: ProfileActionState) => void = () => {};
   const activeAction = operation === "upload" ? upload : remove;
   const otherAction = operation === "upload" ? remove : upload;
   activeAction.mockImplementation(() => new Promise<ProfileActionState>((resolve) => { finish = resolve; }));
   render(<AvatarForms hasAvatar hasProfile />);
+  fireEvent.click(screen.getByRole("button", { name: "Edit photo" }));
   const input = screen.getByLabelText("Change avatar");
   const uploadForm = screen.getByRole("button", { name: "Save avatar" }).closest("form")!;
   const removeForm = screen.getByRole("button", { name: "Remove avatar" }).closest("form")!;
@@ -78,6 +98,9 @@ it.each(["remove"])("disables both avatar controls and blocks duplicate submits 
   await waitFor(() => expect(activeAction).toHaveBeenCalledOnce());
   expect(otherAction).not.toHaveBeenCalled();
   expect(input.hasAttribute("disabled")).toBe(true);
+  const dialog = screen.getByRole("dialog", { name: "Edit photo" });
+  expect(screen.getByRole("button", { name: "Close dialog" }).hasAttribute("disabled")).toBe(true);
+  expect(fireEvent(dialog, new Event("cancel", { cancelable: true }))).toBe(false);
   for (const form of [uploadForm, removeForm]) {
     expect(within(form).getByRole("button").hasAttribute("disabled")).toBe(true);
     fireEvent.submit(form);
@@ -86,5 +109,34 @@ it.each(["remove"])("disables both avatar controls and blocks duplicate submits 
   await act(async () => finish({ formError: "Please retry." }));
   await expectToast("Please retry.");
   expect(input.hasAttribute("disabled")).toBe(false);
-  for (const form of [uploadForm, removeForm]) expect(within(form).getByRole("button").hasAttribute("disabled")).toBe(false);
+  expect(within(removeForm).getByRole("button")).toHaveProperty("disabled", false);
+  expect(within(uploadForm).getByRole("button")).toHaveProperty("disabled", operation === "upload");
+});
+
+it("requires a valid avatar selection and disables Save again when cleared or reset after upload", async () => {
+  upload.mockResolvedValue({ success: "Avatar saved." });
+  render(<AvatarForms hasAvatar={false} hasProfile />);
+  fireEvent.click(screen.getByRole("button", { name: "Edit photo" }));
+  const input = screen.getByLabelText("Upload avatar");
+  const save = screen.getByRole("button", { name: "Save avatar" });
+  expect(save).toHaveProperty("disabled", true);
+  expect(screen.queryByRole("button", { name: "Remove avatar" })).toBeNull();
+  fireEvent.focus(input);
+  expect(save).toHaveProperty("disabled", true);
+  for (const file of [new File(["bad"], "avatar.gif", { type: "image/gif" }), new File([new Uint8Array(5 * 1024 * 1024 + 1)], "big.png", { type: "image/png" })]) {
+    fireEvent.change(input, { target: { files: [file] } });
+    expect(save).toHaveProperty("disabled", true);
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+  }
+  const file = new File(["image"], "avatar.png", { type: "image/png" });
+  fireEvent.change(input, { target: { files: [file] } });
+  expect(save).toHaveProperty("disabled", false);
+  fireEvent.change(input, { target: { files: [] } });
+  expect(save).toHaveProperty("disabled", true);
+  fireEvent.change(input, { target: { files: [file] } });
+  fireEvent.submit(save.closest("form")!);
+  await waitFor(() => expect(upload).toHaveBeenCalledOnce());
+  await waitFor(() => expect(save).toHaveProperty("disabled", true));
+  fireEvent.change(input, { target: { files: [file] } });
+  expect(save).toHaveProperty("disabled", false);
 });

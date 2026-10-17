@@ -2,7 +2,7 @@
 
 import { Fragment, useCallback, useLayoutEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { ProfileUnsavedChanges } from "./unsaved-changes";
+import { ProfileUnsavedChanges, useDirtyProfileSections } from "./unsaved-changes";
 
 // Guards one Profile page's drafts. Sidebar and navbar departures share the
 // registered handler; a completed departure starts the next visit fresh.
@@ -16,5 +16,11 @@ export function ProfileSettings({ path, children }: { path: string; children: Re
   }, [leaveVisit]);
   return <ProfileUnsavedChanges onDeparture={leaveVisit} captureLinksFrom={path}>
     <Fragment key={`${bfcacheId}:${visit}`}>{children}</Fragment>
+    <UnsavedMarker />
   </ProfileUnsavedChanges>;
+}
+
+// The sidebar sits outside this subtree; it styles its current link from this marker.
+function UnsavedMarker() {
+  return useDirtyProfileSections().length > 0 ? <span hidden data-profile-unsaved="" /> : null;
 }

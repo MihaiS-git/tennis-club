@@ -63,7 +63,7 @@ test("Admin Users shows live profiles and private avatars while preserving manag
         const sections = [...element.querySelectorAll("section")].map((section) => section.getBoundingClientRect());
         return { sameRow: sections[0].y === sections[1].y, overflow: element.scrollWidth > element.clientWidth };
       });
-      expect(layout.sameRow).toBe(width >= 768);
+      expect(layout.sameRow).toBe(width >= 1024);
       expect(layout.overflow).toBe(false);
     }
     await tabs.getByRole("link", { name: "Tennis profile", exact: true }).click();

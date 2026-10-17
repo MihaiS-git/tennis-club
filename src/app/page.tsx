@@ -49,7 +49,7 @@ export default function Home({ searchParams }: PageProps<"/">) {
             height="1402"
             fetchPriority="high"
             decoding="async"
-            className="h-full w-full object-cover object-[center_75%] md:object-[center_60%] lg:object-[60%_center]"
+            className={`${styles.heroImage} h-full w-full object-cover object-[center_75%] md:object-[center_60%] lg:object-[60%_center]`}
           />
         </picture>
         <div
@@ -182,7 +182,7 @@ export default function Home({ searchParams }: PageProps<"/">) {
       </section>
 
       <section aria-labelledby="club-intro-title" className="bg-forest-900 px-0 py-16 text-chalk md:px-8 md:py-20 xl:py-28">
-        <div className="mx-auto max-w-7xl lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:items-center lg:gap-16">
+        <div className={`${styles.stagger} mx-auto max-w-7xl lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:items-center lg:gap-16`}>
           <div className="max-w-2xl px-6 md:px-0 lg:max-w-none">
             <h2 id="club-intro-title" className="max-w-[13ch] font-heading text-[clamp(36px,4vw,56px)] font-semibold leading-[1.08] tracking-[-0.035em]">
               A tennis club built around playing.
@@ -202,7 +202,7 @@ export default function Home({ searchParams }: PageProps<"/">) {
           </div>
 
           <div className="px-3 md:px-0">
-            <picture>
+            <picture className={`${styles.photo} mt-10 block max-w-[960px] overflow-hidden lg:mt-0 lg:max-w-none`}>
               <source type="image/avif" srcSet="/images/tennis-club-aerial.avif" />
               <source type="image/webp" srcSet="/images/tennis-club-aerial.webp" />
               <img
@@ -212,7 +212,7 @@ export default function Home({ searchParams }: PageProps<"/">) {
                 decoding="async"
                 width="1536"
                 height="1024"
-                className="mt-10 aspect-3/2 w-full max-w-[960px] object-cover lg:mt-0 lg:max-w-none"
+                className="aspect-3/2 w-full object-cover"
               />
             </picture>
           </div>
@@ -222,7 +222,7 @@ export default function Home({ searchParams }: PageProps<"/">) {
       <section aria-labelledby="facilities-title" className="bg-chalk px-6 py-16 md:px-8 md:py-20 xl:py-28">
         <div className="mx-auto max-w-7xl">
           <div className="lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:gap-x-16">
-            <div>
+            <div className={styles.reveal}>
               <h2 id="facilities-title" className="max-w-[13ch] font-heading text-[clamp(36px,4vw,56px)] font-semibold leading-[1.08] tracking-[-0.035em] text-foreground">
                 Courts and everything you need to play.
               </h2>
@@ -254,7 +254,7 @@ export default function Home({ searchParams }: PageProps<"/">) {
             </Link>
           </div>
 
-          <picture className="mt-12 block md:mt-16 lg:mt-20">
+          <picture className={`${styles.photo} ${styles.reveal} mt-12 block overflow-hidden md:mt-16 lg:mt-20`}>
             <source type="image/avif" srcSet="/images/tennis-courts-facilities.avif" />
             <source type="image/webp" srcSet="/images/tennis-courts-facilities.webp" />
             <img
@@ -271,7 +271,7 @@ export default function Home({ searchParams }: PageProps<"/">) {
       </section>
 
       <section aria-labelledby="coaching-section-title" className="bg-forest-900 px-6 py-16 md:px-8 md:py-20 xl:py-28">
-        <div className="mx-auto max-w-7xl lg:grid lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:items-center lg:gap-x-12 xl:gap-x-20">
+        <div className={`${styles.stagger} mx-auto max-w-7xl lg:grid lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:items-center lg:gap-x-12 xl:gap-x-20`}>
           <div className="lg:col-start-2 lg:row-start-1">
             <h2 id="coaching-section-title" className="max-w-[13ch] font-heading text-[clamp(36px,4vw,56px)] font-semibold leading-[1.08] tracking-[-0.035em] text-chalk">
               Coaching for every stage of your game.
@@ -290,7 +290,7 @@ export default function Home({ searchParams }: PageProps<"/">) {
             </Link>
           </div>
 
-          <picture className="-mx-3 mt-12 block w-[calc(100%+1.5rem)] md:mx-0 md:mt-16 md:w-auto lg:col-start-1 lg:row-start-1 lg:mt-0">
+          <picture className={`${styles.photo} -mx-3 mt-12 block w-[calc(100%+1.5rem)] overflow-hidden md:mx-0 md:mt-16 md:w-auto lg:col-start-1 lg:row-start-1 lg:mt-0`}>
             <source type="image/avif" srcSet="/images/tennis-coaching-session.avif" />
             <source type="image/webp" srcSet="/images/tennis-coaching-session.webp" />
             <img
@@ -307,7 +307,7 @@ export default function Home({ searchParams }: PageProps<"/">) {
       </section>
 
       <section aria-labelledby="matches-community-title" className="bg-background px-6 py-16 md:px-8 md:py-20 xl:py-28">
-        <div className="mx-auto max-w-7xl lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:items-center lg:gap-x-12 xl:gap-x-20">
+        <div className={`${styles.stagger} mx-auto max-w-7xl lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:items-center lg:gap-x-12 xl:gap-x-20`}>
           <div>
             <h2 id="matches-community-title" className="max-w-[13ch] font-heading text-[clamp(36px,4vw,56px)] font-semibold leading-[1.08] tracking-[-0.035em] text-foreground">
               Find the right people to play with.
@@ -325,7 +325,7 @@ export default function Home({ searchParams }: PageProps<"/">) {
             </Link>
           </div>
 
-          <picture className="-mx-3 mt-12 block w-[calc(100%+1.5rem)] md:mx-0 md:mt-16 md:w-auto lg:mt-0">
+          <picture className={`${styles.photo} -mx-3 mt-12 block w-[calc(100%+1.5rem)] overflow-hidden md:mx-0 md:mt-16 md:w-auto lg:mt-0`}>
             <source type="image/avif" srcSet="/images/tennis-matches-community.avif" />
             <source type="image/webp" srcSet="/images/tennis-matches-community.webp" />
             <img

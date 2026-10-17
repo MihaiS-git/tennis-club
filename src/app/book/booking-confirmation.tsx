@@ -1,9 +1,12 @@
 "use client";
 
+import { refreshNotificationUnread } from "@/components/notification-unread";
+
 import { toast } from "sonner";
 
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
+import { AlertTriangle, Clock } from "lucide-react";
 import { minuteToTime } from "@/lib/admin/opening-hours-validation";
 import { fieldValidationErrors } from "@/lib/auth/validation";
 import type { CheckoutPaymentStatus, PaymentMethod } from "@/lib/payments/domain";
@@ -27,22 +30,26 @@ export type BookingSummaryDetails = { locationName: string; courtName: string; d
   priceMinor: number; currency: LocationCurrency };
 
 export function BookingSummary({ details }: { details: BookingSummaryDetails }) {
-  const dateLabel = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })
+  const dateLabel = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })
     .format(new Date(`${details.date}T00:00:00Z`));
   const items = [
     ["Location", details.locationName], ["Court", details.courtName], ["Date", dateLabel],
     ["Time", `${minuteToTime(details.startMinute)}–${minuteToTime(details.endMinute)}`],
     ["Duration", `${details.durationMinutes} min`],
   ];
-  return <div className="rounded-control bg-surface-muted"><dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 p-4 text-sm">
+  return <div className="rounded-control border border-border bg-background"><dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 p-4 text-sm">
     {items.map(([label, value]) => <div key={label} className="contents">
-      <dt className="font-medium text-muted-foreground">{label}</dt><dd className="font-semibold text-foreground">{value}</dd>
+      <dt className="font-medium text-muted-foreground">{label}</dt><dd className="font-semibold tabular-nums text-foreground">{value}</dd>
     </div>)}
   </dl><div className="flex items-baseline justify-between gap-3 border-t border-border px-4 py-3">
     <span className="text-sm font-semibold text-muted-foreground">Total</span>
-    <strong className="text-2xl text-primary">{formatMoney(details.priceMinor, details.currency)}</strong>
+    <strong className="font-heading text-2xl tabular-nums text-primary">{formatMoney(details.priceMinor, details.currency)}</strong>
   </div></div>;
 }
+
+const sectionHeading = "mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground";
+const paymentOption = "flex min-h-11 cursor-pointer items-center gap-2.5 rounded-control border border-border bg-surface px-3 font-medium text-foreground transition-colors hover:border-border-strong has-[:checked]:border-primary has-[:checked]:bg-success-background has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60";
+const stickyActions = "sticky bottom-0 z-10 -mx-4 bg-surface px-4 pb-4 sm:-mx-6 sm:px-6 sm:pb-6";
 
 export function BookingConfirmation({ selection, details, contact, onContactChange, onBack, onCommitted, onUnavailable, onAbandoned, cancellationNoticeMinutes, timezone, allowPayAtClub = false, onlinePaymentAvailable = false, authenticated = false }: {
   authenticated?: boolean; onlinePaymentAvailable?: boolean; allowPayAtClub?: boolean; cancellationNoticeMinutes: number; timezone: string; selection: CalendarSelection; details: BookingSummaryDetails; contact: BookingContact;
@@ -96,6 +103,7 @@ export function BookingConfirmation({ selection, details, contact, onContactChan
     }, 15_000);
     try {
       const result = await abandonCheckoutAction({ attemptId: checkout.payment.attemptId, token: checkout.payment.token });
+      if (result.ok) refreshNotificationUnread();
       if (dismissed.current) return;
       if (result.ok) {
         const text = result.paymentStatus === "refund_failed" ? "Booking cancelled, but the refund failed. Contact the club; do not pay again yet."
@@ -137,6 +145,7 @@ export function BookingConfirmation({ selection, details, contact, onContactChan
     }, 15_000);
     try {
       const result = await commitCustomerBookingAction(parsed.data);
+      if (result.ok && result.status === "confirmed") refreshNotificationUnread();
       if (dismissed.current) return;
       if (result.ok) {
         if (result.status === "pending_payment") {
@@ -182,16 +191,20 @@ export function BookingConfirmation({ selection, details, contact, onContactChan
         onBack();
       }
     }}
-    className="fixed inset-0 m-auto w-[calc(100%-2rem)] max-w-lg rounded-card border border-border bg-surface p-5 text-foreground shadow-floating backdrop:bg-foreground/50">
-    <DialogHeader titleId={titleId} title={checkout ? "Complete your payment" : previousPrice ? "Price changed" : "Confirm your booking"} onClose={requestClose} />
-    {previousPrice && <div role="alert" className="mt-3 rounded-control bg-warning-background px-3 py-2 text-sm text-foreground">
+    className="fixed inset-0 m-auto w-[calc(100%-1.5rem)] max-w-lg rounded-card border border-border bg-surface px-4 py-0 text-foreground shadow-floating backdrop:bg-foreground/50 sm:w-[calc(100%-2rem)] sm:px-6">
+    {/* Header and actions stay in view while the details scroll on small screens. */}
+    <div className="sticky top-0 z-10 -mx-4 bg-surface px-4 pt-4 sm:-mx-6 sm:px-6 sm:pt-6">
+      <DialogHeader titleId={titleId} title={checkout ? "Complete your payment" : previousPrice ? "Price changed" : "Confirm your booking"} onClose={requestClose} />
+    </div>
+    {previousPrice && <div role="alert" className="mt-4 flex gap-2.5 rounded-control border border-border-strong bg-warning-background px-3 py-2.5 text-sm text-foreground">
+      <AlertTriangle aria-hidden className="mt-0.5 size-4 shrink-0 text-accent" /><div className="min-w-0">
       <p>The price for this booking has changed. Please review the new total before confirming.</p>
-      <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
+      <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 tabular-nums">
         <dt>Previous total</dt><dd className="font-semibold">{formatMoney(previousPrice.totalAmountMinor, previousPrice.currency)}</dd>
         <dt>New total</dt><dd className="font-semibold">{formatMoney(reviewedPrice.totalAmountMinor, reviewedPrice.currency)}</dd>
       </dl>
-    </div>}
-    <div className="mt-4"><BookingSummary details={{ ...details, priceMinor: reviewedPrice.totalAmountMinor, currency: reviewedPrice.currency }} /></div>
+    </div></div>}
+    <section aria-label="Booking details" className="mt-4"><h3 className={sectionHeading}>Booking details</h3><BookingSummary details={{ ...details, priceMinor: reviewedPrice.totalAmountMinor, currency: reviewedPrice.currency }} /></section>
     <BookingCancellationTerms noticeMinutes={cancellationNoticeMinutes} timezone={timezone} guest={!authenticated} />
     {checkout ? <>
       {!checkoutStopped && <OnlinePayment checkout={checkout.payment} holdExpiresAt={checkout.expiresAt} disabled={confirmAbandonment || pending}
@@ -199,9 +212,9 @@ export function BookingConfirmation({ selection, details, contact, onContactChan
         onConfirmed={(amount, currency, policy) => {
           if (!dismissed.current && !cancellationStarted.current) onCommitted(amount, currency, policy, "online");
         }} />}
-      {cancellationMessage && <p role="status" className="mt-3 text-sm font-semibold">{cancellationMessage}</p>}
-      {confirmAbandonment && <p className="text-sm font-semibold">Cancel payment? A captured payment will require a refund.</p>}
-      <DialogFooter>
+      {cancellationMessage && <p role="status" className="mt-4 flex gap-2 rounded-control border border-border-strong bg-warning-background px-3 py-2.5 text-sm font-semibold text-foreground"><Clock aria-hidden className="mt-0.5 size-4 shrink-0 text-accent" /><span>{cancellationMessage}</span></p>}
+      {confirmAbandonment && <p className="mt-4 flex gap-2 rounded-control border border-border-strong bg-warning-background px-3 py-2.5 text-sm font-semibold text-foreground"><AlertTriangle aria-hidden className="mt-0.5 size-4 shrink-0 text-accent" /><span>Cancel payment? A captured payment will require a refund.</span></p>}
+      <div className={stickyActions}><DialogFooter>
         <Button type="button" variant="secondary" onClick={requestClose}>Close</Button>
         {confirmAbandonment ? <>
           {!checkoutStopped && (paymentState === "pending" || paymentState === "processing") && <Button type="button" variant="secondary" onClick={() => setConfirmAbandonment(false)}>Keep paying</Button>}
@@ -209,12 +222,12 @@ export function BookingConfirmation({ selection, details, contact, onContactChan
         </> : <Button type="button" variant="secondary" disabled={pending} onClick={() => {
           if (checkoutStopped) void abandon(); else setConfirmAbandonment(true);
         }}>{pending ? "Cancelling…" : checkoutStopped ? "Retry cancellation" : "Cancel payment"}</Button>}
-      </DialogFooter>
+      </DialogFooter></div>
     </> : <form noValidate onSubmit={submit} className="mt-5">
-      <section className="space-y-3" aria-label="Customer contact"><h3 className="font-heading text-base font-semibold text-primary">Customer details</h3>
-      {fields.map(([key, label, type, autoComplete]) => <FormField key={key} label={label} htmlFor={`${fieldPrefix}-${key}`}
+      <section className="grid gap-3 sm:grid-cols-2" aria-label="Customer contact"><h3 className={`${sectionHeading} sm:col-span-2`}>Customer details</h3>
+      {fields.map(([key, label, type, autoComplete]) => <div key={key} className={key === "customerName" ? "sm:col-span-2" : undefined}><FormField label={label} htmlFor={`${fieldPrefix}-${key}`}
         error={fieldErrors[key]} errorId={`${fieldPrefix}-${key}-error`}>
-        <Input id={`${fieldPrefix}-${key}`} name={key} type={type} autoComplete={autoComplete} required
+        <Input id={`${fieldPrefix}-${key}`} name={key} className="max-sm:text-base" type={type} autoComplete={autoComplete} required
           value={contact[key]} disabled={pending} aria-invalid={Boolean(fieldErrors[key])}
           aria-describedby={fieldErrors[key] ? `${fieldPrefix}-${key}-error` : undefined}
           onBlur={(event) => {
@@ -225,19 +238,21 @@ export function BookingConfirmation({ selection, details, contact, onContactChan
             const parsed = customerBookingInputSchema.shape[key].safeParse(event.target.value);
             setFieldErrors((current) => current[key] === undefined ? current
               : { ...current, [key]: parsed.success ? "" : parsed.error.issues[0].message }); }} />
-      </FormField>)}
+      </FormField></div>)}
       </section>
-      <fieldset disabled={pending} className="mt-4 space-y-2 text-sm">
-        <legend className="mb-2 font-semibold">Payment method</legend>
-        <label className="flex items-center gap-2"><input type="radio" name="paymentMethod" value="online" disabled={!onlinePaymentAvailable} checked={paymentMethod === "online"} onChange={() => setPaymentMethod("online")} />Online payment</label>
-        {allowPayAtClub && <label className="flex items-center gap-2"><input type="radio" name="paymentMethod" value="pay_at_club" checked={paymentMethod === "pay_at_club"} onChange={() => setPaymentMethod("pay_at_club")} />Pay at club</label>}
-        {!onlinePaymentAvailable && <p className="text-muted-foreground">Online payment is currently unavailable.</p>}
-        {paymentMethod === "online" && onlinePaymentAvailable && <p className="text-muted-foreground">Continue to secure payment. Your court is held for {paymentHoldDurationSeconds / 60} minutes while you pay.</p>}
+      <fieldset disabled={pending} className="mt-5 text-sm">
+        <legend className={sectionHeading}>Payment method</legend>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <label className={paymentOption}><input type="radio" name="paymentMethod" value="online" disabled={!onlinePaymentAvailable} checked={paymentMethod === "online"} onChange={() => setPaymentMethod("online")} className="size-4 accent-primary" />Online payment</label>
+          {allowPayAtClub && <label className={paymentOption}><input type="radio" name="paymentMethod" value="pay_at_club" checked={paymentMethod === "pay_at_club"} onChange={() => setPaymentMethod("pay_at_club")} className="size-4 accent-primary" />Pay at club</label>}
+        </div>
+        {!onlinePaymentAvailable && <p className="mt-2 text-muted-foreground">Online payment is currently unavailable.</p>}
+        {paymentMethod === "online" && onlinePaymentAvailable && <p className="mt-2 flex gap-2 text-muted-foreground"><Clock aria-hidden className="mt-0.5 size-4 shrink-0" /><span>Continue to secure payment. Your court is held for {paymentHoldDurationSeconds / 60} minutes while you pay.</span></p>}
       </fieldset>
-      <DialogFooter>
+      <div className={stickyActions}><DialogFooter>
         <Button type="button" variant="secondary" fullWidth={false} disabled={pending} onClick={() => dialogRef.current?.close()}>Back</Button>
         <Button type="submit" fullWidth={false} disabled={pending || (paymentMethod === "online" && !onlinePaymentAvailable)} aria-busy={pending}>{pending ? "Submitting…" : paymentMethod === "online" ? "Continue to payment" : "Confirm booking"}</Button>
-      </DialogFooter>
+      </DialogFooter></div>
     </form>}
   </ModalDialog>, document.body);
 }

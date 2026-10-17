@@ -1,5 +1,6 @@
 import { AlertCircle, CircleCheck, CircleMinus } from "lucide-react";
 import type { AdminLocation } from "@/lib/admin/locations";
+import { StatusBadge, type StatusTone } from "@/components/status-badge";
 
 export const configurationAreas = [
   { label: "Details", requirement: "valid location details", missing: "Location details require attention", target: "details" },
@@ -14,7 +15,7 @@ export function ConfigurationIndicator({ area, missing }: { area: typeof configu
   const attention = incomplete && (area.target === "details" || (area.target === "pricing" && !needsCourts));
   const Icon = attention ? AlertCircle : incomplete ? CircleMinus : CircleCheck;
   const description = needsCourts ? "Add active courts before configuring pricing" : incomplete ? area.missing : `${area.label} configured`;
-  return <span title={description} className={`inline-flex items-center gap-2 ${attention ? "text-amber-700" : incomplete ? "text-muted-foreground" : "text-success"}`}>
+  return <span title={description} className={`inline-flex items-center gap-2 ${attention ? "text-accent" : incomplete ? "text-muted-foreground" : "text-success"}`}>
     <Icon size={16} aria-hidden="true" /><span className="sr-only">{description}</span>
   </span>;
 }
@@ -25,9 +26,16 @@ export function publicationState(location: Pick<AdminLocation, "is_active" | "is
   return location.is_public ? "Published" : "Ready to publish";
 }
 
+const publicationTones: Record<ReturnType<typeof publicationState>, StatusTone> = {
+  Published: "success", "Ready to publish": "neutral", "Setup incomplete": "warning", Unavailable: "neutral",
+};
+
+export function PublicationStatus({ location, missing }: { location: Pick<AdminLocation, "is_active" | "is_public" | "archived_at">; missing: string[] }) {
+  const state = publicationState(location, missing);
+  return <StatusBadge tone={publicationTones[state]}>{state}</StatusBadge>;
+}
+
 export function LocationStatus({ location }: { location: AdminLocation }) {
   const label = location.archived_at ? "Archived" : location.is_active ? "Active" : "Inactive";
-  return <span className="inline-flex items-center gap-2 whitespace-nowrap">
-    <span aria-hidden="true" className={`size-2 rounded-full ${location.archived_at ? "bg-muted-foreground" : location.is_active ? "bg-success" : "bg-danger"}`} />{label}
-  </span>;
+  return <StatusBadge tone={location.is_active && !location.archived_at ? "success" : "neutral"}>{label}</StatusBadge>;
 }

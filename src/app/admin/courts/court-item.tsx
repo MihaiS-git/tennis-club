@@ -7,15 +7,13 @@ import type { AdminLocation } from "@/lib/admin/locations";
 import type { CoveragePeriod } from "@/lib/courts/coverage-validation";
 import { courtSurfaceLabels, courtEnvironmentLabels } from "@/lib/admin/courts-validation";
 import { CourtDialog } from "./court-dialog";
+import { StatusBadge } from "@/components/status-badge";
 import { CoveragePeriods } from "./coverage-periods";
 
 type LocationChoice = Pick<AdminLocation, "id" | "name" | "is_active">;
 
 function CourtStatus({ active }: { active: boolean }) {
-  return <span className={`inline-flex rounded-control px-2.5 py-1 text-xs font-semibold ${active
-    ? "bg-success-background text-success" : "bg-danger-background text-danger"}`}>
-    {active ? "Active" : "Inactive"}
-  </span>;
+  return <StatusBadge tone={active ? "success" : "neutral"}>{active ? "Active" : "Inactive"}</StatusBadge>;
 }
 
 export function CourtItem({ court, locations, periods, mobile, visible = true }: {
@@ -38,30 +36,31 @@ export function CourtItem({ court, locations, periods, mobile, visible = true }:
     setOpen(nextOpen);
     if (!nextOpen) rowRef.current?.focus();
   }} />, document.body);
+  // Mobile: one card per court; coverage sits under the court's summary, outside the clickable area.
   if (mobile) return <>
-    <article hidden={!visible} {...rowProps} role="button" className={`min-w-0 rounded-card border border-border-strong bg-surface p-5 ${hover}`}>
-      <p className="break-words font-semibold text-foreground">{court.name}</p>
-      <dl className="mt-4 grid grid-cols-[6rem_minmax(0,1fr)] gap-x-3 gap-y-3 text-sm">
-        <dt className="text-muted-foreground">Status</dt><dd><CourtStatus active={court.is_active} /></dd>
-        <dt className="text-muted-foreground">Surface</dt><dd>{courtSurfaceLabels[court.surface]}</dd>
-        <dt className="text-muted-foreground">Environment</dt><dd>{courtEnvironmentLabels[court.environment]}</dd>
-        <dt className="text-muted-foreground">Lighting</dt><dd>{court.has_lighting ? "Floodlit" : "No lighting"}</dd>
-      </dl>
-    </article>
-    {court.environment === "outdoor" && <div hidden={!visible} className="rounded-card border border-border bg-surface p-5">
-      <CoveragePeriods courtId={court.id} courtName={court.name} periods={periods} />
-    </div>}
+    <div hidden={!visible} className="min-w-0 overflow-hidden rounded-card border border-border bg-surface">
+      <article {...rowProps} role="button" className={`min-w-0 p-4 ${hover}`}>
+        <div className="flex items-start justify-between gap-3">
+          <p className="min-w-0 break-words font-semibold text-foreground">{court.name}</p>
+          <CourtStatus active={court.is_active} />
+        </div>
+        <p className="mt-1 text-sm text-muted-foreground">{courtSurfaceLabels[court.surface]} · {courtEnvironmentLabels[court.environment]} · {court.has_lighting ? "Floodlit" : "No lighting"}</p>
+      </article>
+      {court.environment === "outdoor" && <div className="border-t border-border bg-background px-4 py-2">
+        <CoveragePeriods courtId={court.id} courtName={court.name} periods={periods} />
+      </div>}
+    </div>
     {dialog}
   </>;
-  return <><tbody hidden={!visible} className="border-t-2 border-border [&:first-of-type]:border-t-0">
+  return <><tbody hidden={!visible} className="border-t border-border [&:first-of-type]:border-t-0">
     <tr {...rowProps} className={hover}>
-      <td className="break-words px-4 py-5 font-semibold text-foreground lg:px-5">{court.name}</td>
-      <td className="px-4 py-5 lg:px-5"><CourtStatus active={court.is_active} /></td>
-      <td className="px-4 py-5 lg:px-5">{courtSurfaceLabels[court.surface]}</td>
-      <td className="px-4 py-5 lg:px-5">{courtEnvironmentLabels[court.environment]}</td>
-      <td className="px-4 py-5 lg:px-5">{court.has_lighting ? "Floodlit" : "No lighting"}</td>
+      <td className="break-words px-4 py-3 font-semibold text-foreground">{court.name}</td>
+      <td className="px-4 py-3"><CourtStatus active={court.is_active} /></td>
+      <td className="px-4 py-3">{courtSurfaceLabels[court.surface]}</td>
+      <td className="px-4 py-3">{courtEnvironmentLabels[court.environment]}</td>
+      <td className="px-4 py-3">{court.has_lighting ? "Floodlit" : "No lighting"}</td>
     </tr>
-    {court.environment === "outdoor" && <tr className="bg-surface-muted/40"><td colSpan={5} className="px-5 pb-3">
+    {court.environment === "outdoor" && <tr className="bg-background"><td colSpan={5} className="px-4 py-1.5">
       <CoveragePeriods courtId={court.id} courtName={court.name} periods={periods} />
     </td></tr>}
   </tbody>{dialog}</>;

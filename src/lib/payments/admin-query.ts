@@ -59,6 +59,13 @@ export function transactionTimestamp(value: string, timezone: string) {
     dateStyle: "medium", timeStyle: "medium", timeZone: timezone,
   }).format(new Date(value));
 }
+// Tone for the shared status badge: attention and failures first, then in-flight, then completed.
+export function transactionStatusTone(t: Pick<import("./admin").AdminPaymentTransaction, "needsAttention" | "transaction_status">) {
+  if (t.needsAttention || t.transaction_status === "failed") return "danger" as const;
+  if (t.transaction_status === "pending" || t.transaction_status === "pending_retry") return "warning" as const;
+  return t.transaction_status === "succeeded" ? "success" as const : "neutral" as const;
+}
+
 export function transactionStatusLabel(t: Pick<import("./admin").AdminPaymentTransaction,
   "transaction_kind" | "transaction_status" | "amount_minor" | "refunded_minor">) {
   if (!t.transaction_status) return "Unknown";

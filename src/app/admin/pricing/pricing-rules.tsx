@@ -5,7 +5,8 @@ import { createPortal } from "react-dom";
 import { usePathname, useSearchParams, useRouter } from "next/navigation";
 import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 import { AdminToolbar } from "@/components/admin-page-controls";
-import { Button, DialogCloseButton } from "@/components/button";
+import { Button } from "@/components/button";
+import { DialogHeader } from "@/components/dialog-layout";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { ModalDialog } from "@/components/modal-dialog";
 import { toast } from "sonner";
@@ -183,10 +184,8 @@ export function PricingRules({ location, locations = [], courts, rules, openingH
       onClose={() => { if (panelActive) close(); }} onCancel={(event) => { if (pendingRef.current) event.preventDefault(); }}
       className="fixed inset-0 m-auto w-[calc(100%-1.5rem)] max-w-3xl rounded-card border border-border bg-surface p-0 text-foreground shadow-floating backdrop:bg-foreground/50 sm:w-[calc(100%-2rem)]">
       <div className="p-4 sm:p-6">
-        <header className="mb-5 flex items-start justify-between gap-4 border-b border-border pb-4">
-          <h2 id="pricing-dialog-title" className="font-heading text-xl font-semibold">{editing.rule ? "Edit pricing" : "Add pricing"}</h2>
-          <DialogCloseButton disabled={pending} onClick={() => dialogRef.current?.close()} />
-        </header>
+        <div className="mb-5"><DialogHeader titleId="pricing-dialog-title" title={editing.rule ? "Edit pricing" : "Add pricing"}
+          disabled={pending} onClose={() => dialogRef.current?.close()} /></div>
 
         <PricingRuleForm key={editing.rule?.rule_set_id ?? "new"} location={location} courts={courts} rule={editing.rule} openingHours={openingHours} schedules={schedules} today={localToday(location.timezone, new Date())}
           pending={pending} fieldErrors={fieldErrors} onSave={(input) => void mutate(() => savePricingRuleAction(input))}

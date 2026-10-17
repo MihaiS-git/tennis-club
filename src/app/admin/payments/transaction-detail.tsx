@@ -1,15 +1,18 @@
 "use client";
 
+import { refreshNotificationUnread } from "@/components/notification-unread";
+
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Fragment, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/button";
+import { StatusBadge } from "@/components/status-badge";
 import { formatMoney } from "@/lib/pricing/money";
 import { reservationDateLabel } from "@/components/reservation-details";
 import { minuteToTime } from "@/lib/admin/opening-hours-validation";
 import type { AdminPaymentTransaction } from "@/lib/payments/admin";
-import { paymentMethodLabels, paymentProviderLabels, adminPaymentHref, parseAdminPaymentQuery, transactionStatusLabel, transactionTimestamp } from "@/lib/payments/admin-query";
+import { paymentMethodLabels, paymentProviderLabels, adminPaymentHref, parseAdminPaymentQuery, transactionStatusLabel, transactionStatusTone, transactionTimestamp } from "@/lib/payments/admin-query";
 import { checkPaymentWithProviderAction, checkRefundWithProviderAction } from "./actions";
 
 const bookingStatusLabels: Record<string, string> = {
@@ -30,14 +33,7 @@ const capturedPaymentProblems: Record<string, string> = {
   unavailable: "A payment was received but could not be applied to the booking.",
   pending: "A payment was received but has not been applied to the booking.",
 };
-const tones = {
-  success: "bg-success-background text-success", warning: "bg-warning-background text-foreground",
-  danger: "bg-danger-background text-danger", neutral: "bg-surface-muted text-muted-foreground",
-};
 
-function Badge({ tone, children }: { tone: keyof typeof tones; children: ReactNode }) {
-  return <span className={`inline-flex whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ${tones[tone]}`}>{children}</span>;
-}
 function Fields({ entries }: { entries: [string, ReactNode][] }) {
   return entries.map(([label, value]) => <Fragment key={label}><dt className="text-muted-foreground">{label}</dt><dd className="min-w-0 break-words">{value}</dd></Fragment>);
 }
@@ -49,11 +45,6 @@ function Card({ title, label, children }: { title: string; label?: string; child
 const schedule = (value: { date: string; start: number; end: number; timezone: string }, timezone: string) =>
   `${reservationDateLabel(value.date)} · ${minuteToTime(value.start)}–${minuteToTime(value.end)}${value.timezone === timezone ? "" : ` (${value.timezone})`}`;
 
-function statusTone(t: AdminPaymentTransaction): keyof typeof tones {
-  if (t.needsAttention || t.transaction_status === "failed") return "danger";
-  if (t.transaction_status === "pending" || t.transaction_status === "pending_retry") return "warning";
-  return t.transaction_status === "succeeded" ? "success" : "neutral";
-}
 
 type Version = { court: string; location: string; date: string; start: number; end: number; timezone: string; total: number; currency: AdminPaymentTransaction["currency"] };
 
@@ -90,6 +81,7 @@ function CheckStripeButton({ refundId, attemptId }: { refundId: string; attemptI
         throw new Error("Unable to check with Stripe. Try again.");
       });
       if (!result.ok) throw new Error(result.message);
+      refreshNotificationUnread();
       router.refresh();
       return attemptId ? result.status === "succeeded" ? "Stripe confirmed the payment."
         : result.status === "cancelled" ? "Stripe cancelled the payment; its hold was released."
@@ -159,7 +151,7 @@ export function TransactionDetail({ transaction: t, listHref = "/admin/payments/
       <div className="flex w-full flex-col items-start gap-1 text-left sm:w-auto sm:items-end sm:text-right">
         <span className="text-sm text-muted-foreground">{amountLabel}</span>
         <strong className="text-2xl tabular-nums text-foreground">{isRefund ? "−" : "+"}{formatMoney(t.amount_minor, t.currency)}</strong>
-        <Badge tone={statusTone(t)}>{status}</Badge>
+        <StatusBadge tone={transactionStatusTone(t)}>{status}</StatusBadge>
       </div>
     </div>
     {outcome && <p className="text-sm text-muted-foreground">{outcome}</p>}
@@ -193,7 +185,7 @@ export function TransactionDetail({ transaction: t, listHref = "/admin/payments/
       </ul>
     </section>}
 
-    <div className={`grid gap-4${change ? " lg:grid-cols-2" : " max-w-3xl"}`}>
+    <div className={`grid w-full gap-4${change ? " lg:grid-cols-2" : " lg:mx-auto lg:w-[calc((100%_-_1rem)/2)]"}`}>
       <Card title="Customer and transaction">
         <dl className="grid grid-cols-[5.5rem_minmax(0,1fr)] sm:grid-cols-[7.5rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm">
           <Fields entries={[

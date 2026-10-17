@@ -16,7 +16,7 @@ export async function BookingHistoryContent({ searchParams }: { searchParams: Pr
 
   return <>
     <ActivityControls staff={staff} scope="history" query={query} options={history} />
-    <section aria-label="Booking history" className="rounded-card border border-border bg-surface p-5">
+    <section aria-label="Booking history">
       <HistoryActivity rows={history.rows} page={query.page} staff={staff} query={query} />
     </section>
     <ActivityPagination scope="history" query={query} hasNext={history.hasNext} empty={!history.rows.length} />

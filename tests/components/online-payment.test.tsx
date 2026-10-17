@@ -5,7 +5,8 @@ import { afterEach, expect, test, vi } from "vitest";
 import { useEffect, type ReactNode } from "react";
 import { toast } from "sonner";
 
-const { pay, status, elements } = vi.hoisted(() => ({ pay: vi.fn(), status: vi.fn(), elements: {} }));
+const { refreshUnread, pay, status, elements } = vi.hoisted(() => ({ refreshUnread: vi.fn(), pay: vi.fn(), status: vi.fn(), elements: {} }));
+vi.mock("@/components/notification-unread", () => ({ refreshNotificationUnread: refreshUnread }));
 vi.mock("@stripe/stripe-js", () => ({ loadStripe: vi.fn() }));
 vi.mock("@stripe/react-stripe-js", () => ({
   Elements: ({ children }: { children: ReactNode }) => children,
@@ -59,8 +60,10 @@ test.each(["confirmed", "expired"])("a late Stripe failure cannot overwrite the 
   render(<OnlinePayment {...props} />);
   fireEvent.submit(screen.getByRole("form", { name: "Online payment" }));
   await waitFor(() => expect(pay).toHaveBeenCalledOnce());
+  expect(refreshUnread).not.toHaveBeenCalled();
   const notificationId = vi.mocked(toast.loading).mock.results.at(-1)?.value;
   await act(async () => finishStatus({ ok: true, status: terminal, paymentStatus: terminal === "confirmed" ? "succeeded" : "expired", totalAmountMinor: 1200, currency: "EUR", cancellationPolicy: null }));
+  expect(refreshUnread).toHaveBeenCalledOnce();
   const terminalMessage = terminal === "confirmed" ? lastToast("success") : screen.getByRole("status").textContent;
   await act(async () => failPayment(new Error("Late provider failure")));
   expect(toast.warning).not.toHaveBeenCalled();

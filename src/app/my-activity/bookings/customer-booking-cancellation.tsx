@@ -1,5 +1,7 @@
 "use client";
 
+import { refreshNotificationUnread } from "@/components/notification-unread";
+
 import { toast } from "sonner";
 import { cancelledBookingMessage } from "@/lib/payments/refund-message";
 import { useEffect, useRef, useState } from "react";
@@ -38,6 +40,7 @@ export function CustomerBookingCancellation({ booking, staff, onCancelled, onPen
     try {
       const result = await cancelOwnCustomerBookingAction(booking.id);
       if (!result.ok) { toast.error(result.message, { id: notification }); return; }
+      refreshNotificationUnread();
       cancelledMessage = cancelledBookingMessage(result);
       setConfirming(false);
       await onCancelled();

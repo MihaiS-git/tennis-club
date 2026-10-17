@@ -1,6 +1,7 @@
 "use client";
 
 import { useId, useState } from "react";
+import { Check, ChevronDown } from "lucide-react";
 import { Input } from "@/components/input";
 import { countries, countryFlag } from "@/lib/profile/countries";
 
@@ -28,11 +29,11 @@ export function CountrySelect({ value, onChange, error }: {
   }
   return <div className="relative min-w-0">
     <input type="hidden" name="country_code" value={value} />
-    {selectedFlag && <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-3 flex items-center">{selectedFlag}</span>}
+    {selectedFlag && <span aria-hidden="true" data-country-flag="" className="pointer-events-none absolute inset-y-0 left-3 flex items-center">{selectedFlag}</span>}
     <Input id="country_code" role="combobox" aria-autocomplete="list" aria-expanded={open}
       aria-controls={listId} aria-activedescendant={open && options[active] ? `${listId}-${active}` : undefined}
       aria-invalid={Boolean(error)} aria-describedby={error ? "country_code-error" : undefined}
-      autoComplete="off" placeholder="Select a country" className={`min-h-11 min-w-0${selectedFlag ? " pl-11" : ""}`}
+      autoComplete="off" placeholder="Select a country" className={`min-h-11 min-w-0 pr-10${selectedFlag ? " pl-11" : ""}`}
       value={open ? search : selectedName}
       onFocus={() => { setOpen(true); setSearch(""); setActive(0); }}
       onBlur={() => { setOpen(false); setSearch(""); }}
@@ -49,13 +50,15 @@ export function CountrySelect({ value, onChange, error }: {
           event.preventDefault(); setOpen(false); setSearch("");
         }
       }} />
+    <ChevronDown aria-hidden="true" className={`pointer-events-none absolute right-3 top-3.5 size-4 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`} />
     {open && <div id={listId} role="listbox" aria-label="Countries"
-      className="absolute z-20 mt-1 max-h-60 w-full overflow-y-auto rounded-control border border-border bg-surface shadow-card">
+      className="absolute z-20 mt-1 max-h-60 w-full overflow-y-auto rounded-control border border-border bg-surface py-1 shadow-floating">
       {options.map((country, index) => <button key={country.code} id={`${listId}-${index}`} type="button"
         role="option" tabIndex={-1} aria-selected={country.code === value}
         onMouseDown={(event) => event.preventDefault()} onClick={() => choose(country.code)}
-        className={`block min-h-11 w-full break-words px-3 py-2 text-left text-sm hover:bg-surface-muted ${index === active ? "bg-surface-muted" : ""}`}>
-        {country.code && <span aria-hidden="true" className="mr-2">{countryFlag(country.code)}</span>}{country.name}
+        className={`flex min-h-11 w-full items-center gap-2 break-words px-3 py-2 text-left text-sm hover:bg-surface-muted ${index === active ? "bg-surface-muted" : ""} ${country.code === value ? "font-semibold text-primary" : "text-foreground"}`}>
+        {country.code && <span aria-hidden="true">{countryFlag(country.code)}</span>}<span className="min-w-0 flex-1">{country.name}</span>
+        {country.code === value && <Check aria-hidden="true" className="size-4 shrink-0 text-primary" />}
       </button>)}
       {options.length === 0 && <p role="status" className="px-3 py-3 text-sm text-muted-foreground">No countries found.</p>}
     </div>}

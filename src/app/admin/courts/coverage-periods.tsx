@@ -52,25 +52,28 @@ export function CoveragePeriods({ courtId, courtName, periods }: { courtId: stri
     });
   }
 
-  return <section aria-labelledby={`${prefix}-heading`} className="mt-4 border-t border-border pt-3 lg:mt-0 lg:border-t-0 lg:pt-0">
-    <h3 id={`${prefix}-heading`} className="text-sm font-semibold text-muted-foreground">Coverage periods</h3>
-    {periods.length === 0 && <p className="mt-1 text-sm text-muted-foreground">No coverage periods.</p>}
-    <ul className="mt-1 divide-y divide-border">
-      {periods.map((period) => <li key={period.id} className="flex items-center justify-between gap-2 py-1 text-sm">
-        <span className="min-w-0">{dateLabel(period.starts_on)} — {dateLabel(period.ends_on)}</span>
-        <div className="flex shrink-0 gap-1">
-          <Button type="button" variant="subtle" size="icon" aria-label="Edit period" title="Edit period" disabled={pending} onClick={() => { reset(); setEditing(period); setFieldErrors({}); }}><Pencil size={16} aria-hidden="true" /></Button>
-          <Button type="button" variant="destructive" size="icon" aria-label="Remove period" title="Remove period" disabled={pending} onClick={(event) => { removeTriggerRef.current = event.currentTarget; setRemoving(period); }}><Trash2 size={16} aria-hidden="true" /></Button>
+  return <section aria-labelledby={`${prefix}-heading`} className="min-w-0 text-sm">
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+    <h3 id={`${prefix}-heading`} className="text-xs font-semibold text-muted-foreground">Coverage periods</h3>
+    {periods.length === 0 && <p className="text-muted-foreground">None</p>}
+    <ul className="flex flex-wrap gap-1">
+      {periods.map((period) => <li key={period.id} className="inline-flex items-center gap-1 rounded-full border border-border bg-surface py-0.5 pl-3 pr-1">
+        <span className="min-w-0 tabular-nums">{dateLabel(period.starts_on)} — {dateLabel(period.ends_on)}</span>
+        <div className="flex shrink-0">
+          <Button type="button" variant="subtle" size="icon" className="rounded-full" aria-label="Edit period" title="Edit period" disabled={pending} onClick={() => { reset(); setEditing(period); setFieldErrors({}); }}><Pencil size={14} aria-hidden="true" /></Button>
+          <Button type="button" variant="subtle" size="icon" className="rounded-full enabled:hover:bg-danger-background enabled:hover:text-danger" aria-label="Remove period" title="Remove period" disabled={pending} onClick={(event) => { removeTriggerRef.current = event.currentTarget; setRemoving(period); }}><Trash2 size={14} aria-hidden="true" /></Button>
         </div>
       </li>)}
     </ul>
+    {!editing && <Button type="button" variant="subtle" size="small" className="gap-1" aria-label="Add coverage period" disabled={pending} onClick={() => { reset(); setEditing("new"); setFieldErrors({}); }}><Plus size={14} aria-hidden="true" /> Add period</Button>}
+    </div>
 
     <ConfirmationDialog open={panelActive && removing !== null} title={`Remove coverage period${courtName ? ` from ${courtName}` : ""}?`}
       message={removing ? `Coverage from ${dateLabel(removing.starts_on)} to ${dateLabel(removing.ends_on)} will no longer apply to ${courtName ?? "this court"}.` : ""}
       confirmLabel="Remove period" pending={pending} returnFocusRef={removeTriggerRef}
       onClose={() => { if (!pendingRef.current) { setRemoving(null); } }}
       onConfirm={() => { if (removing) mutate(() => removeCoverageAction({ id: removing.id, court_id: courtId })); }} />
-    {editing ? <form key={editing === "new" ? "new" : editing.id} ref={attach} onInput={sync} onChange={sync} className="mt-3" onSubmit={(event) => {
+    {editing && <form key={editing === "new" ? "new" : editing.id} ref={attach} onInput={sync} onChange={sync} className="mt-2 pb-2" onSubmit={(event) => {
       event.preventDefault();
       if (pendingRef.current || !dirty || !valid) return;
       const data = new FormData(event.currentTarget);
@@ -87,6 +90,6 @@ export function CoveragePeriods({ courtId, courtName, periods }: { courtId: stri
         <Button type="submit" variant="primary" size="small" fullWidth={false} disabled={pending || !dirty || !valid} aria-busy={pending}>{pending ? "Saving…" : "Save period"}</Button>
         <Button type="button" variant="secondary" size="small" onClick={() => { reset(); setEditing(null); setFieldErrors({}); }}>Cancel</Button>
       </fieldset>
-    </form> : <Button type="button" variant="subtle" size="small" className="mt-1 gap-1" aria-label="Add coverage period" disabled={pending} onClick={() => { reset(); setEditing("new"); setFieldErrors({}); }}><Plus size={14} aria-hidden="true" /> Add period</Button>}
+    </form>}
   </section>;
 }

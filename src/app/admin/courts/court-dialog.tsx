@@ -3,7 +3,8 @@
 import { useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Input } from "@/components/input";
-import { Button, DialogCloseButton } from "@/components/button";
+import { Button } from "@/components/button";
+import { DialogHeader } from "@/components/dialog-layout";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { useEditableFormBaseline } from "@/components/use-editable-form-baseline";
 import { ModalDialog } from "@/components/modal-dialog";
@@ -100,10 +101,8 @@ export function CourtDialog({ court, locations, locationId, triggerLabel = "Crea
       onClose={() => { if (panelActive) setOpen(false); }} onCancel={(event) => { if (pendingRef.current) event.preventDefault(); }}
       className="fixed inset-0 m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-lg overflow-y-auto rounded-card border border-border bg-surface p-0 text-foreground shadow-floating backdrop:bg-foreground/50">
       {open && <div className="p-5 sm:p-6">
-        <header className="mb-5 flex items-start justify-between gap-4 border-b border-border pb-5">
-          <h2 id={`${prefix}-title`} className="font-heading text-xl font-semibold">{court ? "Edit court" : "Create court"}</h2>
-          <DialogCloseButton disabled={pending} onClick={() => dialogRef.current?.close()} />
-        </header>
+        <div className="mb-5"><DialogHeader titleId={`${prefix}-title`} title={court ? "Edit court" : "Create court"}
+          disabled={pending} onClose={() => dialogRef.current?.close()} /></div>
         <form ref={attach} onInput={sync} onChange={sync} onSubmit={(event) => {
           event.preventDefault();
           if (court?.is_active && new FormData(event.currentTarget).get("is_active") === "false") {

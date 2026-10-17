@@ -1,9 +1,12 @@
 "use client";
 
+import { refreshNotificationUnread } from "@/components/notification-unread";
+
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import { Elements, PaymentElement, useElements, useStripe } from "@stripe/react-stripe-js";
 import { loadStripe } from "@stripe/stripe-js";
+import { AlertCircle, AlertTriangle, CheckCircle2, Clock, Info, Loader2 } from "lucide-react";
 import { Button } from "@/components/button";
 import type { CheckoutPaymentStatus, OnlineCheckout } from "@/lib/payments/domain";
 import type { ConfirmedCancellationPolicy } from "@/lib/bookings/confirmation-policy";
@@ -38,6 +41,16 @@ const endedMessages: Record<PaymentPurpose, Record<"refund_failed" | "refund_pen
     expired: "The modification deadline has passed. Your original booking is unchanged. Any payment already submitted is still being checked; do not pay again yet.",
   },
 };
+// Status tones mirror the outcome: progress is neutral information, an ended
+// checkout is muted, uncertain or refund outcomes need caution, failures need attention.
+function statusPresentation(status: CheckoutPaymentStatus, processing: boolean) {
+  if (status === "succeeded") return { Icon: CheckCircle2, spin: false, className: "border-success/30 bg-success-background text-success" };
+  if (status === "failed" || status === "refund_failed") return { Icon: AlertCircle, spin: false, className: "border-danger/30 bg-danger-background text-danger" };
+  if (status === "processing" && processing) return { Icon: Loader2, spin: true, className: "border-border bg-info-background text-info" };
+  if (status === "pending") return { Icon: Clock, spin: false, className: "border-border bg-info-background text-info" };
+  if (status === "cancelled" || status === "refunded") return { Icon: Info, spin: false, className: "border-border bg-surface-muted text-foreground" };
+  return { Icon: AlertTriangle, spin: false, className: "border-border-strong bg-warning-background text-foreground" };
+}
 const processingMessage = "Processing payment and waiting for booking confirmation…";
 const slowAuthenticationMessage = "Still waiting for card authentication. Complete it in your bank's window; do not pay again.";
 
@@ -75,6 +88,7 @@ function PaymentForm({ checkout, holdExpiresAt, onConfirmed, onPaymentStatus, di
     finished.current = false;
     generation.current += 1;
     let disposed = false, busy = false, expiredLocally = false;
+    let notificationOutcome = "";
     let request: AbortController | undefined;
     function showStatus(status: CheckoutPaymentStatus, text: string) {
       setPaymentStatus(status); setMessage(text);
@@ -111,6 +125,7 @@ function PaymentForm({ checkout, holdExpiresAt, onConfirmed, onPaymentStatus, di
           return;
         }
         if (result.status === "confirmed") {
+          refreshNotificationUnread();
           finished.current = true;
           processingStarted.current = null;
           showStatus("succeeded", confirmationMessage);
@@ -121,6 +136,11 @@ function PaymentForm({ checkout, holdExpiresAt, onConfirmed, onPaymentStatus, di
         }
         const state = result.paymentStatus;
         if (result.status !== "pending_payment" || state === "refund_pending" || state === "refund_failed" || state === "refunded") {
+          const outcome = `${result.status}:${state}`;
+          if (outcome !== notificationOutcome) {
+            notificationOutcome = outcome;
+            refreshNotificationUnread();
+          }
           uncertain.current = true;
           processingStarted.current = null; setProcessing(false);
           const text = state === "refund_failed" ? messages.refund_failed
@@ -235,13 +255,16 @@ function PaymentForm({ checkout, holdExpiresAt, onConfirmed, onPaymentStatus, di
   // or an uncertain status; it is removed once confirmPayment has returned.
   const showPaymentElement = canPay || authenticating;
   const busy = processing || authenticating;
+  const status = statusPresentation(paymentStatus, processing);
   return <form onSubmit={pay} className="mt-5 space-y-4" aria-label="Online payment">
-    {canPay && <p className="rounded-control border border-border bg-surface-muted p-3 text-sm text-foreground">Temporary hold deadline: <time dateTime={holdExpiresAt} className="font-semibold">{new Date(holdExpiresAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</time></p>}
+    {canPay && <p className="flex items-start gap-2.5 rounded-control border border-border bg-background p-3 text-sm text-foreground"><Clock aria-hidden className="mt-0.5 size-4 shrink-0 text-accent" /><span>Temporary hold deadline: <time dateTime={holdExpiresAt} className="font-semibold tabular-nums">{new Date(holdExpiresAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</time></span></p>}
     {showPaymentElement && <div inert={disabled || busy || paymentStatus !== "pending"} aria-describedby={fieldError ? "payment-field-error" : undefined}><PaymentElement onReady={() => { if (!finished.current) setReady(true); }} onLoadError={() => {
       if (!finished.current) toast.error("Unable to load payment details. Please try again later.", { id: `payment-element-${checkout.attemptId}` });
     }} /></div>}
-    {fieldError && <p id="payment-field-error" role="alert" className="text-sm text-danger">{fieldError}</p>}
-    {message && <p role="status" className="text-sm text-muted-foreground">{message}</p>}
+    {fieldError && <p id="payment-field-error" role="alert" className="flex items-start gap-2 text-sm font-medium text-danger"><AlertCircle aria-hidden className="mt-0.5 size-4 shrink-0" /><span>{fieldError}</span></p>}
+    {message && <p role="status" className={`flex items-start gap-2.5 rounded-control border px-3 py-2.5 text-sm font-medium ${status.className}`}>
+      <status.Icon aria-hidden className={`mt-0.5 size-4 shrink-0 ${status.spin ? "motion-safe:animate-spin" : ""}`} /><span>{message}</span>
+    </p>}
     {canPay && <Button type="submit" disabled={disabled || !stripe || !elements || !ready || busy || paymentStatus !== "pending"} aria-busy={busy}>
       {processing ? "Processing…" : authenticating ? "Waiting for authentication…" : "Pay and confirm booking"}
     </Button>}

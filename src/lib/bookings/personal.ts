@@ -21,3 +21,22 @@ export type PersonalCustomerBooking = {
   // booking remains confirmed; Edit and Cancel stay hidden until it resolves.
   pending_change?: "cancellation" | "reschedule";
 };
+
+// Upcoming bookings are confirmed. A pending refund-backed change outranks a
+// processing modification payment because Edit and Cancel are both withheld.
+export function upcomingBookingStatus(booking: Pick<PersonalCustomerBooking, "payment_pending" | "pending_change">) {
+  if (booking.pending_change === "cancellation") return { label: "Cancellation pending", tone: "warning" } as const;
+  if (booking.pending_change === "reschedule") return { label: "Modification pending", tone: "warning" } as const;
+  if (booking.payment_pending) return { label: "Payment processing", tone: "warning" } as const;
+  return { label: "Confirmed", tone: "success" } as const;
+}
+
+// Customer-safe payment summary. Carries no provider, attempt or refund identifiers.
+export type OwnBookingPaymentOperation = {
+  kind: "payment" | "refund"; label: string; amount: number; state: "completed" | "pending" | "failed"; at: string | null;
+};
+export type OwnBookingPayment = {
+  method: "online" | "pay_at_club"; currency: LocationCurrency; timezone: string;
+  total: number; paid: number; refunded: number; refundPending: number; outstanding: number; dueAtClub: number;
+  operations: OwnBookingPaymentOperation[];
+};

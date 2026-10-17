@@ -5,8 +5,9 @@ import { afterAll, afterEach, assert, beforeAll, expect, test, vi } from "vitest
 import { getDataSource } from "@/lib/db/data-source";
 import { deliverPendingBookingNotifications, enqueueBookingNotification, maxAutomaticDeliveryAttempts as maxAttempts } from "@/lib/notifications/booking-delivery";
 import type { BookingEmailEvent } from "@/lib/notifications/booking-email";
-import { acknowledgeOwnFinancialNotice, listOwnFinancialNotices } from "@/lib/notifications/financial-notices";
-import { adminNotificationsPageSize, listAdminUndeliveredNotifications, retryAdminNotification } from "@/lib/notifications/admin-notifications";
+import { acknowledgeOwnFinancialNotice, listOwnFinancialNotices, listOwnNotifications, markOwnNotificationRead, manageOwnNotifications, readOwnNotification, readOwnUnreadNotifications } from "@/lib/notifications/financial-notices";
+import { adminNotificationsPageSize, deleteAdminNotifications, listAdminUndeliveredNotifications, retryAdminNotification } from "@/lib/notifications/admin-notifications";
+import { claimDueBookingNotification } from "@/lib/db/repositories/booking-notifications.repository";
 import { POST as scheduledDelivery } from "@/app/api/notifications/deliver/route";
 import { cleanupAuthFixtures, localFixtureClient } from "./auth-fixtures";
 import { cleanupBookingFixtures, insertBookingFixture } from "./checkout-fixtures";
@@ -35,6 +36,7 @@ beforeAll(async () => {
 afterEach(async () => {
   vi.unstubAllGlobals(); vi.unstubAllEnvs(); submitted.length = 0; brevoStatus = 201;
   // Each test observes only its own queued rows.
+  await database.query("DELETE FROM public.customer_notifications WHERE booking_id = ANY($1::uuid[])", [bookingIds]);
   await database.query("DELETE FROM public.booking_notification_deliveries WHERE booking_id = ANY($1::uuid[])", [bookingIds]);
 });
 afterAll(async () => {
@@ -69,9 +71,9 @@ async function account() {
   return { id: created.data.user.id, client };
 }
 async function booking(accountUserId: string | null) {
-  const reservationId = randomUUID(), id = randomUUID(), start = 360 + bookingIds.length * 60;
+  const reservationId = randomUUID(), id = randomUUID(), start = 360 + (bookingIds.length % 18) * 60;
   assert.strictEqual((await service.from("court_reservations").insert({ id: reservationId, court_id: courtId,
-    booking_date: "2099-10-15", starts_at_minute: start, ends_at_minute: start + 60 })).error, null);
+    booking_date: `2099-10-${15 + Math.floor(bookingIds.length / 18)}`, starts_at_minute: start, ends_at_minute: start + 60 })).error, null);
   assert.strictEqual((await insertBookingFixture(service, { id, reservation_id: reservationId, account_user_id: accountUserId,
     payment_method: "pay_at_club", customer_name: "Notice Customer", customer_email: "notice@example.test", customer_phone: "123",
     cancellation_notice_minutes: 120, total_amount_minor: 5000, currency: "RON", status: "confirmed" })).error, null);
@@ -350,4 +352,237 @@ test("important notices stay visible beyond list limits and Admin pages are comp
   } finally {
     await service.from("user_roles").delete().eq("user_id", admin.id).eq("role_code", "admin");
   }
+});
+
+const setState = (id: string, sql: string) => database.query(`UPDATE public.booking_notification_deliveries SET ${sql} WHERE id=$1`, [id]);
+const exists = async (id: string) => (await database.query("SELECT 1 FROM public.booking_notification_deliveries WHERE id=$1", [id])).length === 1;
+const stop = "attempts=8,last_error='unavailable',next_attempt_at='infinity'";
+
+test("Admins delete only stopped, non-financial email records; active, retrying and financial rows are protected", async () => {
+  const member = await account(), admin = await account();
+  assert.strictEqual((await service.from("user_roles").insert({ user_id: admin.id, role_code: "admin" })).error, null);
+  try {
+    const owned = await booking(member.id);
+    const [stopped, rejected, retrying, queued, sending, financial] = [
+      await enqueue(owned, "confirmed"), await enqueue(owned, "customer_rescheduled"), await enqueue(owned, "confirmed"),
+      await enqueue(owned, "confirmed"), await enqueue(owned, "confirmed"), await enqueue(owned, "refund_incomplete")];
+    await setState(stopped, stop);
+    await setState(rejected, "attempts=1,last_error='rejected',next_attempt_at='infinity'");
+    await setState(retrying, "attempts=1,last_error='unavailable',next_attempt_at=clock_timestamp()+interval '1 hour'");
+    await setState(sending, `${stop},lease_token=gen_random_uuid(),lease_until=clock_timestamp()+interval '5 minutes'`);
+    await setState(financial, stop);
+    const listed = (await listAdminUndeliveredNotifications({ q: owned }, admin.client)).rows;
+    expect(Object.fromEntries(listed.map((item) => [item.id, [item.state, item.deletable]]))).toEqual({
+      [stopped]: ["stopped", true], [rejected]: ["stopped", true], [retrying]: ["retrying", false],
+      [queued]: ["queued", false], [sending]: ["sending", false], [financial]: ["stopped", false] });
+    const bookingBefore = await database.query("SELECT to_jsonb(b) AS booking FROM public.bookings b WHERE b.id=$1", [owned]);
+
+    // Only an active Admin may delete, and the input is validated before any database work.
+    await expect(deleteAdminNotifications({ ids: [stopped] }, member.client)).rejects.toThrow();
+    for (const ids of [[], ["not-a-uuid"], [stopped, stopped], Array.from({ length: adminNotificationsPageSize + 1 }, () => randomUUID())])
+      expect(await deleteAdminNotifications({ ids }, admin.client)).toEqual({ ok: false, message: "Choose valid notifications to delete." });
+
+    // Individual deletion.
+    expect(await deleteAdminNotifications({ ids: [stopped] }, admin.client)).toEqual({ ok: true, deleted: [stopped], skipped: 0 });
+    expect(await exists(stopped)).toBe(false);
+    // Bulk deletion skips every protected row, including ones selected by a stale page.
+    const bulk = await deleteAdminNotifications({ ids: [rejected, retrying, queued, sending, financial, randomUUID()] }, admin.client);
+    expect(bulk).toEqual({ ok: true, deleted: [rejected], skipped: 5 });
+    for (const id of [retrying, queued, sending, financial]) expect(await exists(id)).toBe(true);
+    // Booking records and the customer's financial notice are untouched.
+    expect(await database.query("SELECT to_jsonb(b) AS booking FROM public.bookings b WHERE b.id=$1", [owned])).toEqual(bookingBefore);
+    expect((await listOwnFinancialNotices(member.client)).map((notice) => notice.id)).toContain(financial);
+  } finally {
+    await service.from("user_roles").delete().eq("user_id", admin.id).eq("role_code", "admin");
+  }
+});
+
+test("a manual retry that claims a selected row first prevents its deletion; a deleted row cannot be claimed", async () => {
+  const admin = await account();
+  assert.strictEqual((await service.from("user_roles").insert({ user_id: admin.id, role_code: "admin" })).error, null);
+  try {
+    const guest = await booking(null);
+    const claimed = await enqueue(guest, "confirmed"), deleted = await enqueue(guest, "confirmed");
+    await setState(claimed, stop); await setState(deleted, stop);
+    // The Admin selected both rows; a retry then claims one before the deletion runs.
+    const claim = await database.transaction((manager) => claimDueBookingNotification(manager, randomUUID(), claimed));
+    expect(claim?.id).toBe(claimed);
+    expect(await deleteAdminNotifications({ ids: [claimed, deleted] }, admin.client)).toEqual({ ok: true, deleted: [deleted], skipped: 1 });
+    expect(await exists(claimed)).toBe(true);
+    // Deleted rows are gone for every later delivery.
+    expect(await database.transaction((manager) => claimDueBookingNotification(manager, randomUUID(), deleted))).toBeUndefined();
+    // A deletion waiting on a row lock re-checks the lease once the claim commits.
+    await setState(claimed, "lease_token=NULL,lease_until=NULL");
+    const runner = database.createQueryRunner();
+    await runner.connect(); await runner.startTransaction();
+    try {
+      await runner.query("UPDATE public.booking_notification_deliveries SET lease_token=gen_random_uuid(),lease_until=clock_timestamp()+interval '5 minutes' WHERE id=$1", [claimed]);
+      const pending = deleteAdminNotifications({ ids: [claimed] }, admin.client);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      await runner.commitTransaction();
+      expect(await pending).toEqual({ ok: true, deleted: [], skipped: 1 });
+    } finally { if (runner.isTransactionActive) await runner.rollbackTransaction(); await runner.release(); }
+    expect(await exists(claimed)).toBe(true);
+  } finally {
+    await service.from("user_roles").delete().eq("user_id", admin.id).eq("role_code", "admin");
+  }
+});
+
+test("Admin search, filters, sorting and pagination are applied in the database before paging", async () => {
+  const admin = await account();
+  assert.strictEqual((await service.from("user_roles").insert({ user_id: admin.id, role_code: "admin" })).error, null);
+  try {
+    const first = await booking(null), second = await booking(null);
+    const confirmed = await enqueue(first, "confirmed"), cancelled = await enqueue(first, "customer_cancelled"),
+      other = await enqueue(second, "confirmed");
+    await setState(confirmed, "attempts=3,last_error='unavailable',next_attempt_at=clock_timestamp()+interval '2 hours',created_at='2099-01-10T12:00:00Z'");
+    await setState(cancelled, `${stop},created_at='2099-01-11T22:30:00Z'`);
+    await setState(other, "attempts=1,last_error='unavailable',next_attempt_at=clock_timestamp()+interval '1 hour',created_at='2099-01-12T12:00:00Z'");
+    const ids = async (params: Record<string, string>) => (await listAdminUndeliveredNotifications(params, admin.client)).rows
+      .map((item) => item.id).filter((id) => [confirmed, cancelled, other].includes(id));
+    // Search: booking ID (full or partial), subject and recipient; LIKE wildcards are literal.
+    expect(await ids({ q: first })).toEqual([cancelled, confirmed]);
+    expect(await ids({ q: first.slice(0, 13).toUpperCase() })).toEqual([cancelled, confirmed]);
+    expect((await ids({ q: "Booking cancelled" }))).toEqual([cancelled]);
+    expect(await ids({ q: "notice@example.test" })).toEqual([other, cancelled, confirmed]);
+    expect(await ids({ q: "%" })).toEqual([]);
+    // Filters combine: status, type (by its fixed subject) and the creation date in the club timezone.
+    expect(await ids({ status: "stopped", q: first })).toEqual([cancelled]);
+    expect(await ids({ status: "retrying", type: "confirmed" })).toEqual([other, confirmed]);
+    expect(await ids({ type: "customer_cancelled", status: "retrying" })).toEqual([]);
+    // 22:30 UTC on 11 January is 00:30 on 12 January in Europe/Bucharest.
+    expect(await ids({ from: "2099-01-12", to: "2099-01-12" })).toEqual([other, cancelled]);
+    expect(await ids({ from: "2099-01-10", to: "2099-01-11" })).toEqual([confirmed]);
+    // Sorting: created (default newest), attempts, next retry (stopped rows last) and status,
+    // within this test's dates so other rows on the shared stack do not page them out.
+    const range = { from: "2099-01-10", to: "2099-01-12" };
+    expect(await ids({ sort: "created", dir: "asc", ...range })).toEqual([confirmed, cancelled, other]);
+    expect(await ids({ sort: "attempts", dir: "desc", ...range })).toEqual([cancelled, confirmed, other]);
+    expect(await ids({ sort: "next_retry", dir: "asc", ...range })).toEqual([other, confirmed, cancelled]);
+    expect(await ids({ sort: "status", dir: "asc", ...range })).toEqual([other, confirmed, cancelled]);
+    // Filtered totals drive pagination; an empty result is a valid first page.
+    const filtered = await listAdminUndeliveredNotifications({ q: first, page: "4" }, admin.client);
+    expect({ total: filtered.total, page: filtered.page, totalPages: filtered.totalPages }).toEqual({ total: 2, page: 1, totalPages: 1 });
+    expect(await listAdminUndeliveredNotifications({ q: randomUUID() }, admin.client)).toMatchObject({ rows: [], total: 0, page: 1, totalPages: 1 });
+  } finally {
+    await service.from("user_roles").delete().eq("user_id", admin.id).eq("role_code", "admin");
+  }
+});
+
+
+test("all customer email events persist once before delivery, remain after retry and reading, and exclude guests", async () => {
+  brevo();
+  const owner = await account(), other = await account();
+  const owned = await booking(owner.id), guest = await booking(null);
+  const kinds: BookingEmailEvent["event_kind"][] = ["confirmed", "customer_cancelled", "admin_cancelled", "customer_rescheduled",
+    "cancellation_failed", "modification_failed", "refund_incomplete", "late_payment_refund"];
+  const ids: string[] = [];
+  for (const kind of kinds) {
+    const key = `inbox-test:${randomUUID()}`;
+    await Promise.all([1, 2, 3].map(() => database.transaction(manager => enqueueBookingNotification(manager, key, event(owned, kind)))));
+    ids.push((await database.query("SELECT id FROM public.customer_notifications WHERE event_key=$1", [key]))[0].id);
+    await enqueue(guest, kind);
+  }
+  const before = await listOwnNotifications({}, owner.client);
+  expect(before.notices).toHaveLength(8);
+  expect(await readOwnUnreadNotifications(owner.client)).toBe(true);
+  expect(await readOwnUnreadNotifications(other.client)).toBe(false);
+  expect((await readOwnNotification(ids[0], owner.client))?.subject).toBe(before.notices.find(n => n.id === ids[0])?.subject);
+  expect(await readOwnNotification(ids[0], other.client)).toBeNull();
+  expect(await readOwnNotification(randomUUID(), owner.client)).toBeNull();
+  expect(before.notices.map(n => n.event_kind).sort()).toEqual([...kinds].sort());
+  expect(before.notices.every(n => n.read_at === null && n.booking_id === owned && n.text.includes(owned))).toBe(true);
+  expect(before.notices.map(n => n.id)).toEqual([...ids].reverse());
+  expect((await listOwnNotifications({}, other.client)).notices).toEqual([]);
+  expect((await owner.client.from("customer_notifications").select("id")).error?.code).toBe("42501");
+  expect(await database.query("SELECT id FROM public.customer_notifications WHERE booking_id=$1", [guest])).toEqual([]);
+  expect(await markOwnNotificationRead(ids[0], other.client)).toMatchObject({ ok: false });
+  brevoStatus = 503;
+  await deliverPendingBookingNotifications({ limit: 30 });
+  expect((await listOwnNotifications({}, owner.client)).notices).toEqual(before.notices);
+  await due(ids); brevoStatus = 201;
+  await deliverPendingBookingNotifications({ limit: 30 });
+  expect((await listOwnNotifications({}, owner.client)).notices).toEqual(before.notices);
+  expect(await markOwnNotificationRead(ids[0], owner.client)).toEqual({ ok: true });
+  expect(await markOwnNotificationRead(ids[0], owner.client)).toEqual({ ok: true });
+  // Financial notices still require explicit OK, never just delivery or generic read.
+  expect(await markOwnNotificationRead(ids[6], owner.client)).toEqual({ ok: true });
+  expect((await listOwnFinancialNotices(owner.client)).some(n => n.id === ids[6])).toBe(true);
+  expect(await acknowledgeOwnFinancialNotice(ids[6], owner.client)).toEqual({ ok: true });
+  const after = (await listOwnNotifications({}, owner.client)).notices;
+  expect(after).toHaveLength(8);
+  expect(after.find(n => n.id === ids[0])?.read_at).toBeTruthy();
+  expect(after.find(n => n.id === ids[6])).toMatchObject({ read_at: expect.any(String), acknowledged_at: expect.any(String) });
+});
+
+test("Admin deletion and subsequent event replay retain one original inbox snapshot", async () => {
+  const owner = await account(), admin = await account();
+  assert.strictEqual((await service.from("user_roles").insert({ user_id: admin.id, role_code: "admin" })).error, null);
+  try {
+    const owned = await booking(owner.id), key = `inbox-test:${randomUUID()}`;
+    await database.transaction(manager => enqueueBookingNotification(manager, key, event(owned, "confirmed")));
+    const original = (await listOwnNotifications({}, owner.client)).notices;
+    const id = original[0].id;
+    await setState(id, stop);
+    expect(await deleteAdminNotifications({ ids: [id] }, admin.client)).toMatchObject({ ok: true, deleted: [id] });
+    expect((await listOwnNotifications({}, owner.client)).notices).toEqual(original);
+    await database.transaction(manager => enqueueBookingNotification(manager, key, event(owned, "confirmed")));
+    expect((await listOwnNotifications({}, owner.client)).notices).toEqual(original);
+    // A failed domain transaction creates neither copy.
+    await expect(database.transaction(async manager => {
+      await enqueueBookingNotification(manager, `${key}:rollback`, event(owned, "confirmed"));
+      throw new Error("rollback");
+    })).rejects.toThrow("rollback");
+    expect((await listOwnNotifications({}, owner.client)).notices).toEqual(original);
+    expect(await manageOwnNotifications({ ids: [id], operation: "delete" }, owner.client)).toEqual({ ok: true });
+    await database.transaction(manager => enqueueBookingNotification(manager, key, event(owned, "confirmed")));
+    expect((await listOwnNotifications({}, owner.client)).notices).toEqual([]);
+    expect(await database.query("SELECT id FROM public.customer_notifications WHERE event_key=$1", [key])).toEqual([{ id }]);
+  } finally {
+    await service.from("user_roles").delete().eq("user_id", admin.id).eq("role_code", "admin");
+  }
+});
+
+
+test("inbox search, filters, pagination and bulk operations use owner-scoped complete history", async () => {
+  const owner = await account(), other = await account();
+  const owned = await booking(owner.id);
+  const ids: string[] = [];
+  for (let i = 0; i < 28; i++) ids.push(await enqueue(owned, i === 0 ? "refund_incomplete" : "confirmed"));
+  const newest = await listOwnNotifications({}, owner.client);
+  expect(newest.notices).toHaveLength(25);
+  expect(newest.total).toBe(28); expect(newest.totalPages).toBe(2);
+  expect(newest.notices.map(n => n.id)).toEqual(ids.slice(3).reverse());
+  expect((await listOwnNotifications({ page: "2" }, owner.client)).notices.map(n => n.id)).toEqual(ids.slice(0, 3).reverse());
+  const oldest = await listOwnNotifications({ sort: "oldest", q: "automatically" }, owner.client);
+  expect(oldest.notices.map(n => n.id)).toEqual([ids[0]]); // Message content, beyond first page.
+  expect((await listOwnNotifications({ q: "Booking confirmed" }, owner.client)).total).toBe(27);
+  expect((await listOwnNotifications({ q: "%" }, owner.client)).total).toBe(0);
+  expect((await listOwnNotifications({ type: "refund_incomplete" }, owner.client)).total).toBe(1);
+  expect(await manageOwnNotifications({ ids: ids.slice(0, 2), operation: "read" }, other.client)).toMatchObject({ ok: false });
+  expect(await manageOwnNotifications({ ids: ids.slice(0, 2), operation: "read" }, owner.client)).toEqual({ ok: true });
+  expect((await listOwnNotifications({ status: "read" }, owner.client)).total).toBe(2);
+  expect((await listOwnNotifications({ status: "unread" }, owner.client)).total).toBe(26);
+  expect(await acknowledgeOwnFinancialNotice(ids[0], owner.client)).toEqual({ ok: true });
+  expect(await manageOwnNotifications({ ids: ids.slice(0, 2), operation: "unread" }, owner.client)).toEqual({ ok: true });
+  expect((await listOwnNotifications({ status: "read" }, owner.client)).total).toBe(0);
+  expect((await listOwnNotifications({ type: "refund_incomplete" }, owner.client)).notices[0].acknowledged_at).toBeTruthy();
+  const paymentNotice = await enqueue(owned, "late_payment_refund");
+  expect(await manageOwnNotifications({ ids: [paymentNotice, ids[0], ids[1]], operation: "delete" }, owner.client)).toEqual({ ok: true });
+  expect((await listOwnNotifications({}, owner.client)).total).toBe(26);
+  expect((await listOwnFinancialNotices(owner.client)).some(n => n.id === paymentNotice)).toBe(true);
+  expect(await exists(paymentNotice)).toBe(true);
+  expect(await readOwnNotification(paymentNotice, owner.client)).toBeNull();
+  await manageOwnNotifications({ ids: ids.slice(2, 27), operation: "read" }, owner.client);
+  await manageOwnNotifications({ ids: [ids[27]], operation: "read" }, owner.client);
+  expect(await readOwnUnreadNotifications(owner.client)).toBe(false);
+  await manageOwnNotifications({ ids: [ids[27]], operation: "unread" }, owner.client);
+  expect(await readOwnUnreadNotifications(owner.client)).toBe(true);
+  await manageOwnNotifications({ ids: [ids[27]], operation: "delete" }, owner.client);
+  expect(await readOwnUnreadNotifications(owner.client)).toBe(false);
+  expect(await acknowledgeOwnFinancialNotice(paymentNotice, owner.client)).toEqual({ ok: true });
+  const [{ acknowledged }]: { acknowledged: boolean }[] = await database.query(
+    "SELECT acknowledged_at IS NOT NULL AS acknowledged FROM public.customer_notifications WHERE id=$1", [paymentNotice]);
+  expect(acknowledged).toBe(true);
+  expect(await manageOwnNotifications({ ids: ids.slice(0, 26), operation: "delete" }, owner.client)).toMatchObject({ ok: false });
 });

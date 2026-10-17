@@ -212,7 +212,7 @@ export async function findLocationCancellationNotice(manager: EntityManager, id:
 // Public projections explicitly enforce the visibility previously supplied by JWT RLS.
 export async function listPublicLocationFacts(manager: EntityManager): Promise<unknown> {
   return manager.query(`SELECT l.id,l.name,l.slug,l.address_line1,l.address_line2,l.city,l.postal_code,
-    l.country_code,l.timezone,l.currency,l.allow_pay_at_club,l.is_active,l.is_public,
+    l.country_code,l.timezone,l.currency,l.allow_pay_at_club,l.customer_cancellation_notice_minutes,l.is_active,l.is_public,
     l.archived_at::text AS archived_at,
     coalesce((SELECT jsonb_agg(jsonb_build_object('id',h.id,'weekday',h.weekday,'opens_at_minute',h.opens_at_minute,'closes_at_minute',h.closes_at_minute,'starts_on',s.starts_on,'ends_on',s.ends_on,'schedule_id',s.id)) FROM public.location_opening_hours h JOIN public.opening_hours_schedules s ON s.id=h.schedule_id
       WHERE h.location_id=l.id),'[]'::jsonb) AS location_opening_hours,

@@ -19,7 +19,7 @@ export function UserWorkspace({ user, currentAdminId }: { user: AdminUserDetails
   const requested = searchParams.getAll("tab");
   const selected = requested.length === 1 && tabs.some(({ id }) => id === requested[0]) ? requested[0] : "account";
   return <>
-    <SegmentedNavigation columns={3} aria-label="User management" className="mb-5">
+    <SegmentedNavigation columns={3} aria-label="User management" className="mb-4 w-fit sm:flex">
       {tabs.map(({ id, label }) => {
         const query = new URLSearchParams(searchParams);
         query.set("tab", id);
@@ -30,11 +30,11 @@ export function UserWorkspace({ user, currentAdminId }: { user: AdminUserDetails
       })}
     </SegmentedNavigation>
     <section aria-label="Account & access" hidden={selected !== "account"}
-      className="rounded-control border border-border bg-surface p-4 sm:p-6">
+      className="rounded-control border border-border bg-surface p-4 sm:p-5">
       <UserAccessControls user={user} currentAdminId={currentAdminId} />
     </section>
     {selected !== "account" && <section aria-label={selected === "personal" ? "Personal profile" : "Tennis profile"}
-      className="rounded-control border border-border bg-surface p-4 sm:p-6">
+      className="rounded-control border border-border bg-surface p-4 sm:p-5">
       <UserProfileDetails user={user} section={selected === "personal" ? "personal" : "tennis"} />
     </section>}
   </>;

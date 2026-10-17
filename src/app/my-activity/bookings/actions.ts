@@ -6,6 +6,7 @@ import { logger } from "@/lib/logger";
 import { revalidateCourtActivity } from "@/lib/reservations/revalidation";
 import { cancelOwnCustomerBooking } from "@/lib/bookings/self-cancellation-service";
 import { listOwnUpcomingActivity } from "@/lib/bookings/activity-service";
+import { getOwnBookingPayment } from "@/lib/bookings/own-payment";
 import { cancelOwnDirectReservation, editOwnDirectReservation, getOwnReservationEditDay } from "@/lib/reservations/personal-service";
 
 export async function loadPersonalActivityAction(input: unknown = {}) {
@@ -69,4 +70,8 @@ export async function dismissOwnBookingAdjustmentAction(id: unknown) {
   const result = await dismissOwnBookingAdjustment(id);
   if (result.ok) revalidateCourtActivity("edit");
   return result;
+}
+
+export async function loadOwnBookingPaymentAction(id: unknown) {
+  return getOwnBookingPayment(id);
 }

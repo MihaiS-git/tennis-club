@@ -5,6 +5,43 @@ import { localMinute, localToday } from "@/lib/courts/local-time";
 import { minuteToTime } from "@/lib/admin/opening-hours-validation";
 import { formatHourlyRate, priceBands } from "@/lib/courts/price-bands";
 
+export type TimelineCellState = "available" | "booked" | "closed" | "unavailable" | "past";
+
+// Shared slot treatments. Unbookable time stays neutral: red is reserved for
+// errors. Closed and unpriced time use textures so they never rely on colour alone.
+export const timelineCellStyles: Record<TimelineCellState, string> = {
+  available: "bg-success-background text-primary",
+  booked: "bg-sand text-muted-foreground",
+  closed: "bg-surface bg-[image:repeating-linear-gradient(135deg,var(--sand)_0_1.5px,transparent_1.5px_6px)]",
+  unavailable: "bg-surface bg-[image:radial-gradient(var(--clay-300)_1px,transparent_1.5px)] bg-size-[6px_6px]",
+  past: "bg-background",
+};
+export const timelineSelectedStyle = "bg-primary text-primary-foreground";
+export const timelineCellLabels: Record<TimelineCellState, string> = {
+  available: "Available", booked: "Booked", closed: "Closed", unavailable: "No pricing", past: "Past",
+};
+const legendOrder: readonly TimelineCellState[] = ["available", "booked", "past", "closed", "unavailable"];
+
+// Lists only states present on the day, sharing a line with the caller's hint.
+export function TimelineLegend({ cells, extras = [], children }: {
+  cells: readonly TimelineCellState[]; extras?: readonly { label: string; className: string }[]; children?: ReactNode;
+}) {
+  const present = new Set(cells);
+  const items = [
+    ...legendOrder.filter((state) => present.has(state)).map((state) => ({ label: timelineCellLabels[state], className: timelineCellStyles[state] })),
+    ...(present.has("available") ? [{ label: "Selected", className: timelineSelectedStyle }] : []),
+    ...extras,
+  ];
+  return <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
+    <ul aria-label="Timetable legend" className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      {items.map((item) => <li key={item.label} className="flex items-center gap-1.5">
+        <span aria-hidden className={`size-3 shrink-0 rounded-[3px] border border-border-strong/60 ${item.className}`} />{item.label}
+      </li>)}
+    </ul>
+    {children && <p>{children}</p>}
+  </div>;
+}
+
 // One geometry for public prices and operational intervals. The header lives
 // outside the horizontal scrollport so it sticks to the page, not a vertical scroller.
 export function CourtTimelineGrid<T extends { court: { id: string; name: string } }>({

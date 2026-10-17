@@ -1,5 +1,7 @@
 "use client";
 
+import { refreshNotificationUnread } from "@/components/notification-unread";
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ReservationEditForm, type ReservationEditDraft } from "@/components/reservation-edit-form";
@@ -51,17 +53,22 @@ function BookingPrice({ id, context, draft, currency, quote, acknowledged, onQuo
     return () => { disposed = true; if (notification !== undefined) toast.dismiss(notification); };
   }, [id, context.updated_at, context.current_revision_id, courtId, draft.date, startMinute, endMinute, key, onQuote, actions]);
   const currentQuote = quote?.key === key ? quote : null;
-  return <section aria-label="Booking price" className="rounded-control border border-border p-3 text-sm">
-    <p>Current total: {formatMoney(context.total_amount_minor, currency)}</p>
-    <p>New total: {currentQuote ? formatMoney(currentQuote.total, currency) : draft.selection ? "Calculating booking total…" : "Choose an interval"}</p>
-    {currentQuote && currentQuote.total !== context.total_amount_minor && context.payment_method === "online" && <p className="mt-2 font-semibold">
-      {currentQuote.total > context.total_amount_minor ? "Additional amount payable: " : "Eligible refund: "}
+  const increase = currentQuote ? currentQuote.total > context.total_amount_minor : false;
+  return <section aria-label="Booking price" className="rounded-control border border-border bg-surface-muted/50 p-3 text-sm">
+    <dl className="grid grid-cols-2 gap-3">
+      <div><dt className="text-xs font-medium text-muted-foreground">Current total</dt>
+        <dd className="mt-0.5 font-semibold tabular-nums text-foreground">{formatMoney(context.total_amount_minor, currency)}</dd></div>
+      <div><dt className="text-xs font-medium text-muted-foreground">New total</dt>
+        <dd className={currentQuote ? "mt-0.5 text-base font-semibold tabular-nums text-primary" : "mt-0.5 text-muted-foreground"}>{currentQuote ? formatMoney(currentQuote.total, currency) : draft.selection ? "Calculating booking total…" : "Choose an interval"}</dd></div>
+    </dl>
+    {currentQuote && currentQuote.total !== context.total_amount_minor && context.payment_method === "online" && <p className={`mt-3 rounded-control px-3 py-2 font-semibold tabular-nums ${increase ? "bg-warning-background text-foreground" : "bg-success-background text-success"}`}>
+      {increase ? "Additional amount payable: " : "Eligible refund: "}
       {formatMoney(Math.abs(currentQuote.total - context.total_amount_minor), currency)}
     </p>}
-    {context.refunds.map(refund => <p key={refund.id} className="mt-2">
+    {context.refunds.map(refund => <p key={refund.id} className="mt-2 text-muted-foreground">
       Refund {formatMoney(refund.amount, currency)}: {refund.status === "succeeded" ? "completed" : refund.status === "failed" ? "could not be completed; the club will contact you" : refund.status === "voided" ? "not made; the change was abandoned" : "requested, awaiting confirmation"}
     </p>)}
-    {currentQuote && (currentQuote.total !== context.total_amount_minor || currentQuote.requiresConfirmation) && <label className="mt-2 flex items-center gap-2">
+    {currentQuote && (currentQuote.total !== context.total_amount_minor || currentQuote.requiresConfirmation) && <label className="mt-3 flex items-center gap-2 font-medium">
       <input type="checkbox" checked={acknowledged} disabled={pending} onChange={(event) => onAcknowledge(event.target.checked)} />
       I confirm the new total of {formatMoney(currentQuote.total, currency)}.
     </label>}
@@ -154,6 +161,7 @@ export function BookingEditForm({ booking, location, onCancel, onSaved, onPendin
       if (request.current?.key !== key) request.current = { key, id: crypto.randomUUID() };
       const result = await actions.save({ requestId: request.current.id, ...editInput(booking.id, context, draft),
         save: true, expectedTotal: quote.total, priceAcknowledged: acknowledged });
+      if (result.ok) refreshNotificationUnread();
       if (result.ok && result.adjustmentId) {
         setAdjustment(result);
         // Only a payment-backed proposal can be dismissed; a refund-backed one resolves automatically.

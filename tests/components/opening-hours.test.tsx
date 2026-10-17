@@ -175,22 +175,24 @@ it("retains a dirty revision on refresh, then loads latest persisted hours on ca
   expect(screen.getByLabelText("Opening time")).toHaveProperty("value", "09:00");
 });
 
-it("protects dirty drafts when selecting scheduled policies or History; expired hours are read-only", () => {
+it("protects dirty drafts when selecting scheduled or expired policies; expired hours are read-only", () => {
   const expired = { ...schedule, id: "c6000000-0000-4000-8000-000000000097", starts_on: "2025-01-01", ends_on: "2025-12-31" };
   render(<ProfileUnsavedChanges onDeparture={() => {}}><OpeningHours locationId={locationId} schedules={[expired, schedule, future]}
     today="2026-10-10" intervals={[row(0), { ...row(0, 540), schedule_id: expired.id }]} onUpdated={onUpdated} /></ProfileUnsavedChanges>);
-  expect(screen.getByLabelText("Current/Scheduled schedule")).toHaveProperty("value", schedule.id);
+  expect(screen.getByLabelText("Schedule")).toHaveProperty("value", schedule.id);
   time("Opening time", 0, "08:00");
-  fireEvent.change(screen.getByLabelText("Current/Scheduled schedule"), { target: { value: future.id } });
+  fireEvent.change(screen.getByLabelText("Schedule"), { target: { value: future.id } });
   expect(screen.getByRole("dialog")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
   expect(screen.getByLabelText("Valid from")).toHaveProperty("value", future.starts_on);
   fireEvent.change(screen.getByLabelText("Valid until (optional)"), { target: { value: "2027-12-31" } });
-  fireEvent.click(screen.getByRole("button", { name: "History" }));
+  fireEvent.click(screen.getByRole("button", { name: "Expired" }));
   expect(screen.getByRole("dialog")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
   expect(screen.getByLabelText("Opening time")).toHaveProperty("disabled", true);
   expect(screen.queryByRole("button", { name: "Save changes" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Expired" }).getAttribute("aria-pressed")).toBe("true");
+  expect(screen.getByLabelText("Schedule").textContent).toContain("Expired · 2025-01-01 → 2025-12-31");
   expect(mutateOpeningHoursAction).not.toHaveBeenCalled();
 });
 

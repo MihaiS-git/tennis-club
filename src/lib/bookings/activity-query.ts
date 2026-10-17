@@ -21,6 +21,8 @@ export function parseActivityQuery(params: ActivitySearchParams, scope: Activity
     filters.status = "all";
     if (filters.sort === "status") filters.sort = "datetime";
   }
+  // Court names repeat across locations, so a court filter only applies within a chosen location.
+  if (!filters.location) filters.court = undefined;
   if (filters.from && filters.to && filters.from > filters.to) {
     filters.from = undefined;
     filters.to = undefined;

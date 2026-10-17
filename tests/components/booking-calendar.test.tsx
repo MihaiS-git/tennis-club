@@ -128,7 +128,7 @@ it("opens guest details, validates without clearing values, and submits only int
   const dialog = screen.getByRole("dialog");
   expect(within(dialog).getByText("Club")).toBeTruthy();
   expect(within(dialog).getByText("Court 1")).toBeTruthy();
-  expect(within(dialog).getByText("1 Oct 2026")).toBeTruthy();
+  expect(within(dialog).getByText("Thu, 1 Oct 2026")).toBeTruthy();
   expect(within(dialog).getByText("16:00–17:00")).toBeTruthy();
   expect(within(dialog).getByText("60 min")).toBeTruthy();
   expect(within(dialog).getByText(/2 hours' notice/)).toBeTruthy();
@@ -345,4 +345,18 @@ it("splits price bands at half-hour rate changes and keeps the rate visible on b
   // The selected-interval quote stays authoritative.
   fireEvent.click(screen.getByRole("button", { name: /Court 1 2026-10-01 16:00–16:30/ }));
   expect(screen.getByText(/Total:/).textContent).toMatch(/RON\s*13\.50/);
+});
+
+it("gives every unavailable state its own non-danger treatment and a matching legend entry", () => {
+  const row: CourtDay = { ...courts[0], cells: ["past", "booked", "closed", "unavailable", "available", "available"],
+    hourlyPrices: [null, null, null, null, 1200, 1200], rates: [1200, 1200, null, null, 1200, 1200] };
+  render(<BookingCalendar day={{ times: [960, 990, 1020, 1050, 1080, 1110], courts: [row] }} date="2099-10-15" locationName="Club"
+    currency="RON" cancellationNoticeMinutes={120} timezone="UTC" />);
+  const legend = screen.getByRole("list", { name: "Timetable legend" });
+  expect(Array.from(legend.querySelectorAll("li"), (item) => item.textContent)).toEqual(["Available", "Booked", "Past", "Closed", "No pricing", "Selected"]);
+  const classes = ["Past", "Booked", "Closed", "No pricing"].map((label) => screen.getByLabelText(new RegExp(`Court 1 .*, ${label}$`)).className);
+  for (const className of classes) expect(className).not.toMatch(/danger/);
+  expect(new Set(classes).size).toBe(4);
+  fireEvent.click(screen.getByRole("button", { name: /18:00–18:30/ }));
+  expect(screen.getByRole("button", { name: /18:00–18:30.*selected/ }).className).toContain("bg-primary");
 });

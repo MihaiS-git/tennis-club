@@ -3,9 +3,11 @@ import "server-only";
 import { z } from "zod";
 import { readCurrentAccount } from "@/lib/auth/account";
 import { getDataSource } from "@/lib/db/data-source";
-import { acknowledgeBookingNotice, listUnacknowledgedBookingNotices } from "@/lib/db/repositories/booking-notifications.repository";
+import { acknowledgeBookingNotice, listUnacknowledgedBookingNotices, listCustomerNotifications, manageCustomerNotifications, findCustomerNotification, hasUnreadCustomerNotifications } from "@/lib/db/repositories/booking-notifications.repository";
 import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
+
+import { inboxPageSize, parseInboxQuery } from "./inbox-query";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
 
@@ -40,4 +42,46 @@ export async function acknowledgeOwnFinancialNotice(id: unknown, client?: Client
     return { ok: false, message: "Unable to save. Try again." };
   }
   return { ok: true };
+}
+
+export async function listOwnNotifications(input: Record<string, unknown> = {}, client?: Client) {
+  const query = parseInboxQuery(input);
+  const account = await readCurrentAccount(client ?? await createClient());
+  if (account.state !== "active") return { notices: [], total: 0, totalPages: 1, query };
+  const result = await listCustomerNotifications((await getDataSource()).manager, account.userId, query);
+  return { ...result, notices: result.notices.map(notice => ({ ...notice, text: notice.text.replace(/^Hello [^\n]*\n\n/, "") })) };
+}
+
+export async function manageOwnNotifications(input: unknown, client?: Client): Promise<{ ok: true } | { ok: false; message: string }> {
+  const parsed = z.object({ ids: z.array(z.uuid()).min(1).max(inboxPageSize).refine(ids => new Set(ids).size === ids.length),
+    operation: z.enum(["read", "unread", "delete"]) }).safeParse(input);
+  if (!parsed.success) return { ok: false, message: "Choose valid notifications and an action." };
+  const account = await readCurrentAccount(client ?? await createClient());
+  if (account.state !== "active") return { ok: false, message: "An active account is required." };
+  try {
+    const changed = await manageCustomerNotifications((await getDataSource()).manager, { ...parsed.data, accountUserId: account.userId });
+    if (!changed.length) return { ok: false, message: "These notifications are no longer available." };
+    return { ok: true };
+  } catch {
+    logger.error({ event: "notifications.inbox_change_failed", actorId: account.userId }, "Failed to update notification inbox");
+    return { ok: false, message: "Unable to save. Try again." };
+  }
+}
+
+export async function markOwnNotificationRead(id: unknown, client?: Client) {
+  return manageOwnNotifications({ ids: [id], operation: "read" }, client);
+}
+
+export async function readOwnNotification(id: unknown, client?: Client) {
+  const parsed = z.uuid().safeParse(id);
+  if (!parsed.success) return null;
+  const account = await readCurrentAccount(client ?? await createClient());
+  if (account.state !== "active") return null;
+  return findCustomerNotification((await getDataSource()).manager, account.userId, parsed.data);
+}
+
+export async function readOwnUnreadNotifications(client?: Client) {
+  const account = await readCurrentAccount(client ?? await createClient());
+  if (account.state !== "active") return false;
+  return hasUnreadCustomerNotifications((await getDataSource()).manager, account.userId);
 }

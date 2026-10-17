@@ -1,5 +1,7 @@
 "use client";
 
+import { refreshNotificationUnread } from "@/components/notification-unread";
+
 import { toast } from "sonner";
 
 import { useId, useRef, useState, useTransition } from "react";
@@ -110,6 +112,7 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
     try {
       const result = await cancelAdminCustomerBookingAction({ id: selectedBooking.id });
       if (!result.ok) { toast.error(result.message, { id: notification }); return; }
+      refreshNotificationUnread();
       setConfirming(false);
       dialogRef.current?.close();
       setSelectedOccupancyId(null);
@@ -155,7 +158,7 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
       </label>
       <div className="mt-3 flex gap-2"><button type="button" disabled={pending || !reason.trim()} onClick={submit}
         className="min-h-10 rounded-control bg-primary px-5 text-sm font-semibold text-primary-foreground disabled:opacity-50">{pending ? "Reserving…" : "Reserve court"}</button>
-        <button type="button" onClick={() => { setSelection(null); }} className="min-h-10 rounded-control border border-border-strong px-3 text-sm font-semibold text-primary">Clear selection</button></div>
+        <button type="button" disabled={pending} onClick={() => { setSelection(null); }} className="min-h-10 rounded-control border border-border-strong px-3 text-sm font-semibold text-primary disabled:opacity-50">Clear selection</button></div>
     </section>}
     {(selectedOccupancy || selectedGenericOccupancy) && typeof document !== "undefined" && createPortal(
       <ModalDialog ref={dialogRef} active aria-labelledby={titleId}

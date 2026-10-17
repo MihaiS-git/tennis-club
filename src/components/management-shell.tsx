@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { AdminNavigation } from "./admin-navigation";
 import { UserNavigation } from "./user-navigation";
 
@@ -16,5 +17,7 @@ export function ManagementShell({ isAdmin, children }: { isAdmin: boolean; child
 
 // Shared by the /my-activity and /profile layouts. Each page authorizes its own account.
 export function UserAreaShell({ children }: { children: React.ReactNode }) {
-  return <SidebarShell navigation={<UserNavigation />}>{children}</SidebarShell>;
+  return <SidebarShell navigation={<Suspense fallback={<p role="status" className="mb-5 text-sm text-muted-foreground">Loading account navigation…</p>}>
+    <UserNavigation />
+  </Suspense>}>{children}</SidebarShell>;
 }

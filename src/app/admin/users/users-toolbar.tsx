@@ -45,10 +45,10 @@ export function UsersToolbar() {
     router.replace(`${pathname}${params.size ? `?${params}` : ""}`, { scroll: false });
   }
 
-  const controlClass = "rounded-control border border-border-strong bg-surface px-3 py-2 text-foreground";
+  const controlClass = "min-h-11 rounded-control border border-border-strong bg-surface px-3 py-2 text-base text-foreground sm:text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus";
   const hasFilters = Boolean(filters.search || filters.status || filters.role);
   return (
-    <AdminToolbar primary={<label className="flex w-full flex-col gap-1.5 text-sm font-medium text-primary sm:max-w-md">
+    <AdminToolbar primary={<label className="flex w-full flex-col gap-1.5 text-sm font-medium text-primary sm:w-64 lg:w-80">
         Email search
         <input name="q" type="search" value={text} placeholder="Search by email" className={controlClass}
           onChange={(event) => {
@@ -73,7 +73,7 @@ export function UsersToolbar() {
           <option value="">All roles</option><option value="coach">Coach</option><option value="admin">Admin</option>
         </select>
       </label>
-      {hasFilters && <Link href={pathname} onClick={cancelSearch} className="whitespace-nowrap px-3 py-2 text-sm font-medium text-primary underline">Clear filters</Link>}
+      {hasFilters && <Link href={pathname} onClick={cancelSearch} className="inline-flex min-h-11 items-center whitespace-nowrap rounded-control px-2 text-sm font-medium text-primary underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">Clear filters</Link>}
     </>} />
   );
 }

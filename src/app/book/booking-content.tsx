@@ -1,4 +1,5 @@
 import { connection } from "next/server";
+import { AlertCircle } from "lucide-react";
 
 import { supportsOnlineCheckout } from "@/lib/payments/providers";
 import { readPublicBookingCancellationNotice } from "@/lib/bookings/confirmation-policy";
@@ -16,7 +17,7 @@ import { BookingCalendar } from "./booking-calendar";
 export async function BookingContent({ searchParams }: { searchParams: Promise<{ location?: string; date?: string }> }) {
   await connection();
   const locations = await listPublicLocationsWithCourts();
-  if (!locations.length) return <p className="rounded-card border border-border bg-surface p-6">No locations are currently open for public booking. Please check back soon.</p>;
+  if (!locations.length) return <p className="mt-5 rounded-card border border-border bg-surface p-6 text-muted-foreground">No locations are currently open for public booking. Please check back soon.</p>;
   const params = await searchParams;
   const location = locations.find((item) => item.id === params.location) ?? locations[0];
   const now = new Date();
@@ -24,10 +25,11 @@ export async function BookingContent({ searchParams }: { searchParams: Promise<{
   const validDate = z.iso.date().safeParse(params.date).success && params.date! >= today;
   const date = !params.date ? today : validDate ? params.date! : null;
   return <>
-    <CalendarControls locations={locations} locationId={location.id} date={date} today={today} />
-    <p className="mt-2 text-xs text-muted-foreground">Times shown in {location.timezone}.</p>
-    {params.date && !validDate && <p role="alert" className="mt-2 text-sm text-danger">Choose a valid date from today onward.</p>}
-    {!date ? <p className="mt-5 text-sm text-muted-foreground">Choose a date to see available courts.</p> :
+    <CalendarControls locations={locations} locationId={location.id} date={date} today={today} timezone={location.timezone} />
+    {params.date && !validDate && <p role="alert" className="mt-3 flex items-center gap-2 rounded-control border border-danger/30 bg-danger-background px-3 py-2 text-sm font-medium text-danger">
+      <AlertCircle aria-hidden className="size-4 shrink-0" />Choose a valid date from today onward.
+    </p>}
+    {!date ? <p className="mt-4 rounded-card border border-dashed border-border-strong bg-surface p-5 text-sm text-muted-foreground">Choose a date to see available courts.</p> :
       <BookingDay location={location} date={date} today={today} now={now} />}
   </>;
 }

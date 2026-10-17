@@ -30,7 +30,7 @@ test("location rows navigate to the shared workspace form and edits stay in plac
     await page.goto(new URL("/admin/locations", appUrl).toString());
     await expect(page.getByRole("link", { name: "Create location", exact: true })).toHaveAttribute("href", "/admin/locations/new");
     const table = page.getByRole("table", { name: "Locations" });
-    await expect(table.getByRole("columnheader")).toHaveCount(10);
+    await expect(table.getByRole("columnheader")).toHaveCount(5);
     const row = table.getByRole("row", { name: `Manage location ${locationName}` });
     await row.getByText("Cluj", { exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/admin/locations/${locationId}$`));

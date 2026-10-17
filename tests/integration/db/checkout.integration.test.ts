@@ -165,7 +165,10 @@ test("Pay at club commits contact/policy snapshots and due payment plus exact co
   expect(events).toEqual([renderBookingEmail({ event_kind: "confirmed", recipient: "Guest@Example.test", payload: {
     booking_id: rows[0].id, customer_name: "Guest Name", location_name: "Checkout fixture", timezone: "UTC", court_name: "Court",
     booking_date: date, starts_at_minute: 600, ends_at_minute: 660, total_amount_minor: 5000, currency: "RON", previous: null,
+    guest_cancellation_notice_minutes: 1440,
   } })]);
+  expect(events[0].text).toContain("Cancellation terms\nThis booking requires 24 hours' notice.");
+  expect(events[0].text).toContain("To request cancellation, please contact the club before the cancellation deadline. Club staff will handle your request and any applicable refund.");
 });
 
 test("online creation shares the full-precision DB deadline and initialization attaches only ID/capability", async () => {

@@ -176,8 +176,35 @@ it.each([
   const mobileSignOut = within(drawer).getByRole("button", { name: "Sign out" });
   expect(items[items.length - 1]).toBe(mobileSignOut);
   expect(mobileSignOut.className).toContain("flex min-h-12");
-  expect(mobileSignOut.className).toContain("text-sm font-medium text-primary hover:text-accent");
+  expect(mobileSignOut.className).toContain("text-sm font-medium text-primary enabled:hover:text-accent");
   await act(async () => { fireEvent.click(mobileSignOut); });
   expect(signOut).toHaveBeenCalledOnce();
   expect(screen.getByRole("button", { name: "Open menu" }).getAttribute("aria-expanded")).toBe("false");
+});
+
+it("keeps the authenticated mobile bell beside the hamburger and outside the drawer", () => {
+  render(<MobileNavbarMenu isAuthenticated canReserve={false} />);
+  const bell = screen.getByRole("link", { name: /^Notifications/ });
+  const trigger = screen.getByRole("button", { name: "Open menu" });
+  expect(bell.nextElementSibling).toBe(trigger);
+  expect(bell.getAttribute("href")).toBe("/my-activity/notifications");
+  expect(bell.className).toContain("size-10");
+  fireEvent.click(trigger);
+  expect(within(screen.getByRole("dialog")).queryByRole("link", { name: /^Notifications/ })).toBeNull();
+  expect(screen.getAllByRole("link", { name: /^Notifications/ })).toHaveLength(1);
+});
+
+it("omits the mobile bell when signed out", () => {
+  render(<MobileNavbarMenu isAuthenticated={false} canReserve={false} />);
+  expect(screen.queryByRole("link", { name: /^Notifications/ })).toBeNull();
+});
+
+it("places the desktop bell immediately beside the profile control for authenticated users", async () => {
+  readCurrentAccount.mockResolvedValue({ state: "active", roles: [], userId: "owner" });
+  const markup = await new Response(await renderToReadableStream(<DesktopNavbar />)).text();
+  const container = document.createElement("div");
+  container.innerHTML = markup;
+  const bell = container.querySelector('a[href="/my-activity/notifications"]');
+  expect(bell).not.toBeNull();
+  expect(bell?.nextElementSibling?.getAttribute("href")).toBe("/profile");
 });

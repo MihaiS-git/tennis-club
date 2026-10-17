@@ -35,3 +35,15 @@ it("renders one duration-spanning reservation block without invoking creation", 
   fireEvent.click(screen.getByRole("button", { name: /Court 1 2099-10-15 14:00–14:30, Available/ }));
   expect(onChoose).toHaveBeenCalledOnce();
 });
+
+it("lists only present states in the legend and keeps unavailable time out of danger styling", () => {
+  render(<ReservationTimetable date="2099-10-15" selection={null} onChoose={vi.fn()} onOccupiedClick={vi.fn()}
+    day={{ times: [600, 630, 660, 690, 720], courts: [{ court: { id: "court", name: "Court 1" },
+      cells: ["past", "booked", "booked", "available", "available"] }] }}
+    occupiedIntervals={[{ id: "reservation", courtId: "court", startsAtMinute: 630, endsAtMinute: 690, label: "Reservation · Staff", kind: "reservation" }]} />);
+  const legend = screen.getByRole("list", { name: "Timetable legend" });
+  // Booked time is fully drawn as a staff reservation block, so only that entry describes it.
+  expect(Array.from(legend.querySelectorAll("li"), item => item.textContent)).toEqual(["Available", "Past", "Selected", "Reservation"]);
+  expect(screen.getByLabelText(/10:00–10:30, Past/).className).not.toMatch(/danger/);
+  expect(screen.getByRole("button", { name: /Reservation · Staff/ }).className).toContain("bg-clay-300");
+});

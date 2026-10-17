@@ -778,7 +778,7 @@ AI-based partner matching is not required initially.
 
 Personal and tennis forms independently compare editable values against their last successful save. Explicit shared navigation links and sign-out submissions warn through Sonner when leaving a dirty Profile visit; moving between Profile pages is such a departure. Reload/close/document departures use native `beforeunload` protection while dirty. Same-document browser back/forward has no supported App Router blocker and retains the existing fresh-visit behavior without a warning. See [Profile visit protection and browser limitations](docs/profiles.md#unsaved-changes-and-visit-lifecycle).
 
-`/my-activity` redirects to `/my-activity/bookings`, which contains current and upcoming personal court activity. `/my-activity/history` contains completed/cancelled owned bookings and staff-owned direct reservations. The retired `/my-activity/bookings/history` URL redirects with its search parameters. `/my-activity/notifications` lists important financial notices awaiting acknowledgement. My Activity and Profile pages share the user sidebar, built from the same component, layout and mobile drawer as the Admin sidebar; Sign out is in its footer and the navbar avatar links directly to `/profile`. See [User area navigation](docs/profiles.md#user-area-navigation).
+`/my-activity` redirects to `/my-activity/bookings`, which contains current and upcoming personal court activity. `/my-activity/history` contains completed/cancelled owned bookings and staff-owned direct reservations. The retired `/my-activity/bookings/history` URL redirects with its search parameters. `/my-activity/notifications` is the account’s persistent booking-email inbox, with search, read/type filters, sorting, selection and 25-row server pagination. Unresolved financial alerts remain separately visible until explicit acknowledgement, including after inbox deletion. My Activity and Profile pages share the user sidebar, built from the same component, layout and mobile drawer as the Admin sidebar; Sign out is in its footer and the navbar avatar links directly to `/profile`. See [User area navigation](docs/profiles.md#user-area-navigation).
 
 Both lists authorize the active account before bounded, owner-filtered TypeORM projections. TypeScript combines owned bookings and Admin/Coach-owned direct reservations, applies type/location/court/date filters (plus History status), sorts globally, and then returns 20 rows per page. Date/time defaults to ascending for Bookings and descending for History; kind/ID tie-breakers make ordering deterministic. Location, court, type, duration and History status are also sortable. URL controls reset page 1 when changed; pagination preserves the query. Controls derive location/court choices from the full owner-scoped eligible dataset, with courts narrowed to the selected location. Bookings require an active physical interval that has not ended in the location's timezone. Details preserve contact and price snapshots; guest and other users' bookings remain excluded without granting booking-table SELECT. Customer cancellation/rescheduling use the Phase 6 TypeORM commands; direct reservations use the TypeORM transactions described below.
 
@@ -1619,7 +1619,10 @@ commits atomically in `booking_notification_deliveries`; the request that commit
 sends it through Brevo after commit, using short leases, bounded retry backoff (later
 requests plus a five-minute Supabase Cron call to `POST /api/notifications/deliver`,
 authenticated by `NOTIFICATION_CRON_SECRET`) and a stable provider idempotency key. Important financial exceptions are
-also shown in My activity until the booking owner acknowledges them. Ambiguous delivery is retried: duplicates remain possible after Brevo's
+also shown in My activity until the booking owner acknowledges them. Every booking email event also
+creates a durable `customer_notifications` snapshot for the authoritative booking account
+in the same transaction, independently of delivery. Guests remain email-only. Inbox
+read/unread and soft deletion never change email delivery or financial obligations. Ambiguous delivery is retried: duplicates remain possible after Brevo's
 bounded key retention expires. Provider acceptance does not guarantee inbox delivery.
 Email failure cannot change committed booking/payment state. Server-only
 `BREVO_API_KEY` and a Brevo-verified `BOOKING_MAIL_FROM` are required.
@@ -1735,4 +1738,5 @@ Stripe webhooks (subscribe to the payment and `refund.*` events listed in
 [payments](docs/payments-memberships.md#recovery-without-a-scheduler)) and the Admin
 "Check with Stripe" action, so the app runs on serverless hosting. Apply migrations
 `1791462257928-DurableBookingNotifications`, `1791462257929-RequestDrivenPaymentRecovery`
-and `1791462257930-SurchargeCaptureAcceptance` before deploying, and configure Brevo. See [durable booking email guarantees](docs/booking-notifications.md).
+`1791462257930-SurchargeCaptureAcceptance` and
+`1791462257931-CustomerNotificationHistory` before deploying, and configure Brevo. See [durable booking email guarantees](docs/booking-notifications.md).

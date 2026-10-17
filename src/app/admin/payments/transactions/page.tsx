@@ -21,15 +21,15 @@ export default async function AdminPaymentsPage({ searchParams }: {
     <p className="mb-3 text-sm text-muted-foreground">{result.total} transactions{result.rows.length > 0 && (sharedTimezone
       ? ` · Times in ${sharedTimezone}` : " · Times in each booking location’s timezone (shown per row)")}</p>
     {result.rows.length ? <div className="overflow-x-auto rounded-card border border-border bg-surface">
-      <table aria-label="Payment transactions" className="w-full text-left text-sm">
+      <table aria-label="Payment transactions" className="w-full min-w-[880px] text-left text-sm">
         <thead className="border-b border-border bg-surface-muted text-xs font-semibold text-muted-foreground">
           <tr>{([
             ["Date","date"], ["Customer",null], ["Booking",null], ["Transaction",null], ["Amount","amount"], ["Method",null],
-            ["Provider",null], ["Status","payment"], ["Attention",null],
+            ["Status","payment"],
           ] as const).map(([label,sort]) => {
             const active = query.sort === sort;
             const Icon = active ? query.dir === "asc" ? ArrowUp : ArrowDown : ArrowUpDown;
-            return <th key={label} scope="col" className="px-3 py-3" aria-sort={sort ? active ? query.dir === "asc" ? "ascending" : "descending" : "none" : undefined}>
+            return <th key={label} scope="col" className={`whitespace-nowrap px-3 py-2.5 ${label === "Amount" ? "text-right" : ""}`} aria-sort={sort ? active ? query.dir === "asc" ? "ascending" : "descending" : "none" : undefined}>
               {sort ? <Link scroll={false} href={adminPaymentHref({ ...query,sort,dir: active && query.dir === "desc" ? "asc" : "desc" },1)}
                 className="inline-flex items-center gap-1.5 hover:text-primary">{label}<Icon size={14} aria-hidden /></Link> : label}
             </th>;

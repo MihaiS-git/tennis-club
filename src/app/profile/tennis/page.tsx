@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Trophy } from "lucide-react";
 import { readOwnProfile } from "../own-profile";
 import { TennisProfileForm } from "../profile-forms";
 import { ProfileSection } from "../profile-section";
@@ -10,7 +11,7 @@ export default async function TennisProfilePage() {
   const result = await readOwnProfile();
   if ("unavailable" in result) return result.unavailable;
   const { profile } = result;
-  return <ProfileSection id="tennis" title="Tennis profile" description="Introduce yourself to the club. Tennis information is visible to active signed-in users.">
+  return <ProfileSection id="tennis" icon={Trophy} title="Tennis profile" description="Introduce yourself to the club. Tennis information is visible to active signed-in users.">
     <ProfileSettings path="/profile/tennis">
       <TennisProfileForm profile={profile.player ? {
         display_name: profile.player.display_name,

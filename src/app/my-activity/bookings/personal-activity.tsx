@@ -1,5 +1,7 @@
 "use client";
 
+import { refreshNotificationUnread } from "@/components/notification-unread";
+
 import { toast } from "sonner";
 
 import { useEffect, useId, useRef, useState } from "react";
@@ -11,15 +13,17 @@ import { ReservationDetailsView } from "@/components/reservation-details";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { parseActivityQuery, type ActivitySearchParams } from "@/lib/bookings/activity-query";
 import type { UpcomingActivity as Activity, UpcomingCourtActivity as CourtActivity } from "@/lib/bookings/activity-service";
-import type { PersonalCustomerBooking } from "@/lib/bookings/personal";
+import { upcomingBookingStatus, type PersonalCustomerBooking } from "@/lib/bookings/personal";
+import { StatusBadge } from "@/components/status-badge";
 import { formatMoney } from "@/lib/pricing/money";
 import { isReservationInProgress, isReservationUpcoming, type PersonalReservation } from "@/lib/reservations/personal";
 import { BookingEditForm, type BookingEditActions } from "@/components/booking-edit-form";
 import { cancelOwnReservationAction, dismissOwnBookingAdjustmentAction, loadPersonalActivityAction, loadOwnBookingEditDayAction, quoteOwnBookingAction, rescheduleOwnBookingAction } from "./actions";
 import { ActivityControls } from "../activity-controls";
-import { ActivityTable } from "../activity-table";
+import { ActivityRow, ActivityTable } from "../activity-table";
 import { ActivityPagination } from "../activity-pagination";
 import { CustomerBookingCancellation } from "./customer-booking-cancellation";
+import { BookingPayment } from "../booking-payment";
 import { ReservationEditForm } from "./reservation-edit-form";
 
 const ownBookingActions: BookingEditActions = { load: loadOwnBookingEditDayAction, quote: quoteOwnBookingAction, save: rescheduleOwnBookingAction };
@@ -154,25 +158,20 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
     if (item.kind === "booking") setSelectedBooking(item.row); else setSelected(item.row);
   }
 
-  const list = (rows: CourtActivity[]) => <section aria-label="Upcoming" className="space-y-2">
-    <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Upcoming</h2>
+  const list = (rows: CourtActivity[]) => <section aria-label="Upcoming">
     {rows.length ? <ActivityTable scope="upcoming" query={query} staff={staff}>
-      {rows.map((item) => <tr key={`${item.kind}:${item.row.id}`} tabIndex={0}
-        aria-label={`Details for ${item.row.court_name} on ${dateLabel(item.row.booking_date)}`}
-        onClick={(event) => openDetails(item, event.currentTarget)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openDetails(item, event.currentTarget); }
-        }}
-        className="cursor-pointer hover:bg-surface-muted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary">
-        {staff && <td className="whitespace-nowrap px-3 py-3">{item.kind === "booking" ? "Booking" : "Reservation"}</td>}
-        <td className="px-3 py-3 font-semibold text-primary">{item.row.location_name}</td>
-        <td className="px-3 py-3">{item.row.court_name}</td>
-        <td className="whitespace-nowrap px-3 py-3">{dateLabel(item.row.booking_date)}</td>
-        <td className="whitespace-nowrap px-3 py-3 tabular-nums">{timeLabel(item.row.starts_at_minute)}–{timeLabel(item.row.ends_at_minute)}</td>
-        <td className="whitespace-nowrap px-3 py-3 tabular-nums">{item.row.ends_at_minute - item.row.starts_at_minute} min</td>
-        <td className="whitespace-nowrap px-3 py-3 tabular-nums">{item.kind === "booking" ? formatMoney(item.row.total_amount_minor, item.row.currency) : "—"}</td>
-      </tr>)}
-    </ActivityTable> : <p className="text-sm text-muted-foreground">No upcoming bookings or reservations match your filters.</p>}
+      {rows.map((item) => <ActivityRow key={`${item.kind}:${item.row.id}`} staff={staff}
+        label={`Details for ${item.row.court_name} on ${dateLabel(item.row.booking_date)}`}
+        onOpen={(row) => openDetails(item, row)}
+        type={item.kind === "booking" ? "Booking" : "Reservation"}
+        location={item.row.location_name} court={item.row.court_name} date={dateLabel(item.row.booking_date)}
+        time={`${timeLabel(item.row.starts_at_minute)}–${timeLabel(item.row.ends_at_minute)}`}
+        duration={`${item.row.ends_at_minute - item.row.starts_at_minute} min`}
+        total={item.kind === "booking" ? formatMoney(item.row.total_amount_minor, item.row.currency) : "—"}
+        status={item.kind === "booking"
+          ? <StatusBadge tone={upcomingBookingStatus(item.row).tone}>{upcomingBookingStatus(item.row).label}</StatusBadge>
+          : <StatusBadge tone="neutral">Active</StatusBadge>} />)}
+    </ActivityTable> : <p className="rounded-card border border-border bg-surface p-5 text-sm text-muted-foreground">No upcoming bookings or reservations match your filters.</p>}
   </section>;
 
   const query = parseActivityQuery(listQuery ?? {}, "upcoming", staff);
@@ -192,7 +191,7 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
             // X discards an unpaid modification; a processing payment is left to the webhook.
             const adjustmentId = adjustmentRef.current;
             adjustmentRef.current = null;
-            void (adjustmentId ? dismissOwnBookingAdjustmentAction(adjustmentId) : Promise.resolve())
+            void (adjustmentId ? dismissOwnBookingAdjustmentAction(adjustmentId).then(result => { if (result.ok) refreshNotificationUnread(); }) : Promise.resolve())
               .catch(() => { /* The hold still ends at its deadline. */ })
               .then(() => loadPersonalActivityAction(listQuery)).then(setActivity).catch(() => {
                 setActivity(null); setError("Unable to load your court activity. Try again.");
@@ -201,7 +200,8 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
           returnFocusRef.current?.focus();
         }}
         className={`fixed inset-0 m-auto max-h-[90vh] w-[calc(100%-2rem)] overflow-y-auto rounded-card border border-border bg-surface p-5 text-foreground shadow-floating backdrop:bg-foreground/50 has-[[data-booking-modification]]:max-w-lg ${editing ? "max-w-6xl" : "max-w-md"}`}>
-        <DialogHeader titleId={`${titleId}-booking`} title={editing ? "Edit booking" : "Booking"} status={editing ? undefined : "Confirmed"} disabled={pending} onClose={() => bookingDialogRef.current?.close()} />
+        <DialogHeader titleId={`${titleId}-booking`} title={editing ? "Edit booking" : "Booking"} status={editing ? undefined : upcomingBookingStatus(selectedBooking).label}
+          statusTone={upcomingBookingStatus(selectedBooking).tone} disabled={pending} onClose={() => bookingDialogRef.current?.close()} />
         {editing ? <BookingEditForm booking={selectedBooking}
           actions={ownBookingActions} onCancel={() => setEditing(false)} onPendingChange={setPending}
           onAdjustment={(id) => { adjustmentRef.current = id; }}
@@ -218,6 +218,8 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
             }
           }} /> : <>
         <BookingDetails booking={selectedBooking} />
+        {/* Re-read when polling reports a resolved payment, change or new total. */}
+        <BookingPayment key={`${selectedBooking.id}:${selectedBooking.total_amount_minor}:${selectedBooking.payment_pending}:${selectedBooking.pending_change}`} bookingId={selectedBooking.id} />
         <DialogFooter>
           <CustomerBookingCancellation booking={selectedBooking} staff={staff}
             onCancelled={refreshCancelledBooking} onPendingChange={setPending} onEdit={() => setEditing(true)} />

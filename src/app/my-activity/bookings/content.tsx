@@ -24,7 +24,7 @@ export async function MyBookingsContent({ searchParams = Promise.resolve({}) }: 
     initialError = "Unable to load your court activity. Try again.";
   }
 
-  return <section aria-label="Your bookings and reservations" className="rounded-card border border-border bg-surface p-5">
+  return <section aria-label="Your bookings and reservations">
     <PersonalActivity staff={staff} userId={account.userId}
       initialActivity={initialActivity} initialError={initialError} listQuery={params} />
   </section>;

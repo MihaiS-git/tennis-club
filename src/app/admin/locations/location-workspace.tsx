@@ -57,12 +57,12 @@ function LocationWorkspaceContent({ panels }: { panels: WorkspacePanels }) {
         const hasDraft = dirty.some((section) => section === label || section.startsWith(`${label} `));
         return <Link key={id} href={href} aria-current={selected === id ? "page" : undefined}
           className={segmentedNavigationItemClass(selected === id)}>
-          {label}{hasDraft && <span className="ml-1" role="img" aria-label="Unsaved changes">•</span>}
+          {label}{hasDraft && <span className="ml-1.5 inline-block size-2 shrink-0 rounded-full bg-accent" role="img" aria-label="Unsaved changes" />}
         </Link>;
       })}
     </SegmentedNavigation>
     {tabs.map(({ id, label }) => <section key={id} hidden={selected !== id} aria-label={label}
-      className="min-w-0 rounded-control border border-border bg-surface p-4 sm:p-6">
+      className="min-w-0 rounded-card border border-border bg-surface p-4 sm:p-5">
       <ActiveLocationPanelContext value={selected === id}>{panels[id]}</ActiveLocationPanelContext>
     </section>)}
   </div>;

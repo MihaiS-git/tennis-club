@@ -147,6 +147,11 @@ export async function listOwnCourtActivity(scope: ActivityScope, query: Activity
       }
     }
   }
+  // A direct URL may pair a court with another location (or name an unknown court);
+  // ignore that court rather than silently returning an empty list.
+  if (query.court && courts.get(query.court)?.location_id !== query.location) {
+    return listOwnCourtActivity(scope, { ...query, court: undefined }, supabase, now);
+  }
   const compareOption = (a: { name: string; id: string }, b: { name: string; id: string }) =>
     compareValue(a.name, b.name) || compareValue(a.id, b.id);
   const offset = (query.page - 1) * ACTIVITY_PAGE_SIZE;

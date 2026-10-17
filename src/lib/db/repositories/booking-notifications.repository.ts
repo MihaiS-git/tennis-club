@@ -2,17 +2,24 @@ import "server-only";
 
 import type { EntityManager } from "typeorm";
 import { z } from "zod";
+import { inboxPageSize, type InboxQuery } from "@/lib/notifications/inbox-query";
 
 const messageSchema = z.object({ to: z.email(), subject: z.string(), text: z.string() });
 type NotificationMessage = z.infer<typeof messageSchema>;
 
 // Written inside the caller's state-change transaction; an event key is sent once.
 export async function insertBookingNotification(manager: EntityManager, input: {
-  key: string; message: NotificationMessage; bookingId: string; requiresAcknowledgement: boolean;
+  key: string; message: NotificationMessage; bookingId: string; requiresAcknowledgement: boolean; eventKind: string;
 }) {
-  await manager.query(`INSERT INTO public.booking_notification_deliveries (event_key,message,booking_id,requires_acknowledgement)
-    VALUES ($1,$2::jsonb,$3,$4) ON CONFLICT (event_key) DO NOTHING`,
-  [input.key, JSON.stringify(input.message), input.bookingId, input.requiresAcknowledgement]);
+  await manager.query(`WITH delivery AS (
+    INSERT INTO public.booking_notification_deliveries (event_key,message,booking_id,requires_acknowledgement)
+    VALUES ($1,$2::jsonb,$3,$4) ON CONFLICT (event_key) DO NOTHING RETURNING *)
+    INSERT INTO public.customer_notifications
+      (id,event_key,account_user_id,booking_id,event_kind,subject,text,created_at,requires_acknowledgement)
+    SELECT d.id,d.event_key,b.account_user_id,b.id,$5,d.message->>'subject',d.message->>'text',d.created_at,d.requires_acknowledgement
+    FROM delivery d JOIN public.bookings b ON b.id=d.booking_id WHERE b.account_user_id IS NOT NULL
+    ON CONFLICT (event_key) DO NOTHING`,
+  [input.key, JSON.stringify(input.message), input.bookingId, input.requiresAcknowledgement, input.eventKind]);
 }
 
 // A short lease keeps concurrent deliveries from sending one row twice. With an
@@ -51,17 +58,54 @@ const iso = (column: string) => `CASE WHEN isfinite(${column}) THEN replace((${c
 // number of ordinary failed emails can push one off the first page or list.
 const priority = "(requires_acknowledgement AND acknowledged_at IS NULL)";
 
-// Admin visibility: every message not yet accepted by Brevo, one page at a time.
-// Exceptions first, then newest first; the unique id makes page order stable.
-export async function listUndeliveredBookingNotifications(manager: EntityManager, input: { limit: number; offset: number }) {
+// Delivery state, derived from the outbox columns (see notificationStates).
+const state = `CASE WHEN lease_until > clock_timestamp() THEN 'sending' WHEN NOT isfinite(next_attempt_at) THEN 'stopped'
+  WHEN last_error IS NOT NULL THEN 'retrying' ELSE 'queued' END`;
+const sortColumns = { created: "created_at", attempts: "attempts", next_retry: "next_attempt_at",
+  status: `array_position(ARRAY['queued','sending','retrying','stopped'],${state})` } as const;
+
+export type AdminNotificationFilters = {
+  search: string; state: string | null; subject: string | null; from: string | null; to: string | null; timezone: string;
+  sort: keyof typeof sortColumns; direction: "asc" | "desc"; limit: number; offset: number;
+};
+
+// Admin visibility: every message not yet accepted by Brevo, filtered, sorted and
+// paginated in the database. Unacknowledged exceptions stay first in every order;
+// the unique id makes page order stable.
+export async function listAdminBookingNotifications(manager: EntityManager, input: AdminNotificationFilters) {
+  const pattern = input.search ? `%${input.search.replace(/[\\%_]/g, (match) => `\\${match}`)}%` : "";
+  const where = `delivered_at IS NULL
+    AND ($1::text = '' OR message->>'to' ILIKE $1 OR message->>'subject' ILIKE $1 OR booking_id::text ILIKE $1)
+    AND ($2::text IS NULL OR ${state} = $2) AND ($3::text IS NULL OR message->>'subject' = $3)
+    AND ($4::date IS NULL OR created_at >= ($4::date)::timestamp AT TIME ZONE $6)
+    AND ($5::date IS NULL OR created_at < ($5::date + 1)::timestamp AT TIME ZONE $6)`;
+  const filters = [pattern, input.state, input.subject, input.from, input.to, input.timezone];
+  const direction = input.direction === "asc" ? "ASC" : "DESC";
   const rows: unknown = await manager.query(`SELECT id,booking_id,message->>'to' AS recipient,message->>'subject' AS subject,
-      attempts,last_error,requires_acknowledgement AS important,${iso("created_at")} AS created_at,${iso("next_attempt_at")} AS next_attempt_at
-    FROM public.booking_notification_deliveries WHERE delivered_at IS NULL
-    ORDER BY ${priority} DESC,created_at DESC,id DESC LIMIT $1 OFFSET $2`, [input.limit, input.offset]);
-  const [counts]: unknown[] = await manager.query(`SELECT count(*)::int AS total,count(*) FILTER (WHERE ${priority})::int AS unacknowledged_exceptions
-    FROM public.booking_notification_deliveries WHERE delivered_at IS NULL`);
-  return { rows: z.array(deliveryStateSchema).parse(rows),
+      (SELECT u.id FROM public.bookings b JOIN public.users u ON u.id=b.account_user_id
+        WHERE b.id=booking_notification_deliveries.booking_id) AS account_user_id,
+      attempts,last_error,requires_acknowledgement AS important,${state} AS state,
+      ${iso("created_at")} AS created_at,${iso("next_attempt_at")} AS next_attempt_at
+    FROM public.booking_notification_deliveries WHERE ${where}
+    ORDER BY ${priority} DESC,${sortColumns[input.sort]} ${direction},created_at DESC,id DESC LIMIT $7 OFFSET $8`,
+  [...filters, input.limit, input.offset]);
+  const [counts]: unknown[] = await manager.query(`SELECT count(*) FILTER (WHERE ${where})::int AS total,
+      count(*) FILTER (WHERE delivered_at IS NULL AND ${priority})::int AS unacknowledged_exceptions
+    FROM public.booking_notification_deliveries`, filters);
+  return { rows: z.array(deliveryStateSchema.extend({ account_user_id: z.uuid().nullable(), state: z.enum(["queued", "sending", "retrying", "stopped"]) })).parse(rows),
     ...z.object({ total: z.number().int(), unacknowledged_exceptions: z.number().int() }).parse(counts) };
+}
+
+// Deletes only rows that are still undelivered, not financial notices, and whose
+// automatic retries have stopped with no live lease. The conditions are evaluated
+// by the DELETE itself, so a row claimed, retried or delivered after the Admin
+// selected it is left untouched. Nothing references these rows.
+export async function deleteStoppedBookingNotifications(manager: EntityManager, ids: readonly string[]) {
+  const rows: unknown = await manager.query(`WITH deleted AS (DELETE FROM public.booking_notification_deliveries
+    WHERE id = ANY($1::uuid[]) AND delivered_at IS NULL AND NOT requires_acknowledgement
+      AND NOT isfinite(next_attempt_at) AND (lease_until IS NULL OR lease_until <= clock_timestamp())
+    RETURNING id) SELECT id FROM deleted`, [ids]);
+  return z.array(z.object({ id: z.uuid() })).parse(rows).map(({ id }) => id);
 }
 
 export async function findBookingNotificationState(manager: EntityManager, id: string) {
@@ -89,6 +133,57 @@ export async function listUnacknowledgedBookingNotices(manager: EntityManager, a
 export async function acknowledgeBookingNotice(manager: EntityManager, input: { id: string; accountUserId: string }) {
   const rows: unknown = await manager.query(`WITH changed AS (UPDATE public.booking_notification_deliveries d SET acknowledged_at=clock_timestamp()
     FROM public.bookings b WHERE d.id=$1 AND b.id=d.booking_id AND b.account_user_id=$2
-      AND d.requires_acknowledgement AND d.acknowledged_at IS NULL RETURNING d.id) SELECT id FROM changed`, [input.id, input.accountUserId]);
+      AND d.requires_acknowledgement AND d.acknowledged_at IS NULL RETURNING d.id), inbox AS (
+      UPDATE public.customer_notifications n SET read_at=COALESCE(n.read_at,clock_timestamp()),acknowledged_at=clock_timestamp()
+      FROM changed WHERE n.id=changed.id AND n.account_user_id=$2 RETURNING n.id)
+    SELECT id FROM changed`, [input.id, input.accountUserId]);
   return z.array(z.object({ id: z.uuid() })).parse(rows).length === 1;
+}
+
+// Customer history has its own lifetime and never exposes delivery diagnostics.
+const customerNoticeSchema = z.object({ id: z.uuid(), booking_id: z.uuid(), event_kind: z.string(), subject: z.string(), text: z.string(),
+  important: z.boolean(), created_at: z.iso.datetime({ offset: true }), read_at: z.iso.datetime({ offset: true }).nullable(),
+  acknowledged_at: z.iso.datetime({ offset: true }).nullable() });
+export async function listCustomerNotifications(manager: EntityManager, accountUserId: string, query: InboxQuery) {
+  const pattern = query.q ? `%${query.q.replace(/[\\%_]/g, match => `\\${match}`)}%` : "";
+  const where = `account_user_id=$1 AND deleted_at IS NULL
+    AND ($2::text='' OR subject ILIKE $2 OR text ILIKE $2)
+    AND ($3='all' OR $3='read' AND read_at IS NOT NULL OR $3='unread' AND read_at IS NULL)
+    AND ($4='all' OR event_kind=$4)`;
+  const filters = [accountUserId, pattern, query.status, query.type];
+  const [count]: unknown[] = await manager.query(`SELECT count(*)::int AS total FROM public.customer_notifications WHERE ${where}`, filters);
+  const { total } = z.object({ total: z.number().int().nonnegative() }).parse(count);
+  const totalPages = Math.max(1, Math.ceil(total / inboxPageSize));
+  const page = Math.min(query.page, totalPages);
+  const direction = query.sort === "oldest" ? "ASC" : "DESC";
+  const rows: unknown = await manager.query(`SELECT id,booking_id,event_kind,subject,text,requires_acknowledgement AS important,
+      ${iso("created_at")} AS created_at,${iso("read_at")} AS read_at,${iso("acknowledged_at")} AS acknowledged_at
+    FROM public.customer_notifications WHERE ${where}
+    ORDER BY created_at ${direction},id ${direction} LIMIT $5 OFFSET $6`, [...filters, inboxPageSize, (page - 1) * inboxPageSize]);
+  return { notices: z.array(customerNoticeSchema).parse(rows), total, totalPages, query: { ...query, page } };
+}
+
+export async function findCustomerNotification(manager: EntityManager, accountUserId: string, id: string) {
+  const rows: unknown = await manager.query(`SELECT id,booking_id,event_kind,subject,text,requires_acknowledgement AS important,
+      ${iso("created_at")} AS created_at,${iso("read_at")} AS read_at,${iso("acknowledged_at")} AS acknowledged_at
+    FROM public.customer_notifications WHERE id=$1 AND account_user_id=$2 AND deleted_at IS NULL`, [id, accountUserId]);
+  return z.array(customerNoticeSchema).max(1).parse(rows)[0] ?? null;
+}
+
+export async function hasUnreadCustomerNotifications(manager: EntityManager, accountUserId: string) {
+  const rows: unknown = await manager.query(`SELECT EXISTS(SELECT 1 FROM public.customer_notifications
+    WHERE account_user_id=$1 AND deleted_at IS NULL AND read_at IS NULL) AS unread`, [accountUserId]);
+  return z.array(z.object({ unread: z.boolean() })).length(1).parse(rows)[0].unread;
+}
+
+export type InboxOperation = "read" | "unread" | "delete";
+export async function manageCustomerNotifications(manager: EntityManager, input: {
+  ids: string[]; accountUserId: string; operation: InboxOperation;
+}) {
+  // Only an inbox column changes. Financial acknowledgement remains an explicit separate command.
+  const assignment = input.operation === "delete" ? "deleted_at=clock_timestamp()"
+    : input.operation === "unread" ? "read_at=NULL" : "read_at=COALESCE(read_at,clock_timestamp())";
+  const rows: unknown = await manager.query(`WITH changed AS (UPDATE public.customer_notifications SET ${assignment}
+    WHERE id=ANY($1::uuid[]) AND account_user_id=$2 AND deleted_at IS NULL RETURNING id) SELECT id FROM changed`, [input.ids, input.accountUserId]);
+  return z.array(z.object({ id: z.uuid() })).parse(rows).map(row => row.id);
 }

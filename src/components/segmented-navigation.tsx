@@ -7,7 +7,7 @@ export function SegmentedNavigation({ columns, className = "", ...props }: Compo
 }
 
 export function segmentedNavigationItemClass(active: boolean) {
-  return `inline-flex min-h-12 shrink-0 items-center justify-center whitespace-nowrap rounded-control px-2 py-2 text-center text-xs font-medium leading-5 transition sm:min-h-14 sm:whitespace-normal sm:text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${active
+  return `inline-flex min-h-11 shrink-0 items-center justify-center whitespace-nowrap rounded-control px-3 py-2 text-center text-xs font-semibold leading-5 transition sm:whitespace-normal sm:text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${active
     ? "bg-primary text-primary-foreground"
     : "text-muted-foreground hover:bg-surface-muted hover:text-primary"}`;
 }
