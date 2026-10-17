@@ -1,5 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { renderBookingEmail, type BookingEmailEvent } from "@/lib/notifications/booking-email";
+import { bookingNotification, renderBookingEmail, type BookingEmailEvent } from "@/lib/notifications/booking-email";
+import type { RevisionSnapshot } from "@/lib/bookings/revision";
 import { deliverMail } from "@/lib/mail/brevo";
 const logError = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/logger", () => ({ logger: { error: logError } }));
@@ -30,6 +31,25 @@ test("cancellation mail snapshots refund request without claiming completion", (
     payload: { ...event.payload, refund_status: "requested" } });
   expect(rendered.text).toContain("Your full payment refund has been requested.");
   expect(rendered.text).not.toContain("has been refunded");
+});
+
+test("guest confirmation mail adds snapshotted cancellation terms and staff contact instruction", () => {
+  const guest = renderBookingEmail({ ...event, event_kind: "confirmed",
+    payload: { ...event.payload, previous: null, guest_cancellation_notice_minutes: 240 } });
+  expect(guest.text).toContain("Cancellation terms\nThis booking requires 4 hours' notice.\n"
+    + "To request cancellation, please contact the club before the cancellation deadline. Club staff will handle your request and any applicable refund.");
+  const account = renderBookingEmail({ ...event, event_kind: "confirmed", payload: { ...event.payload, previous: null } });
+  expect(account.text).not.toContain("Cancellation terms");
+  expect(account.text).not.toContain("To request cancellation");
+  const revision = { bookingId: event.payload.booking_id, customerEmail: "guest@example.test", customerName: "Ana", locationName: "Club",
+    timezone: "UTC", courtName: "Court 1", bookingDate: "2099-10-16", startMinute: 600, endMinute: 660,
+    totalAmountMinor: 9001, currency: "RON", cancellationNoticeMinutes: 90, actorScope: "customer" } as RevisionSnapshot;
+  const notice = (event: BookingEmailEvent) => event.payload.guest_cancellation_notice_minutes;
+  expect(notice(bookingNotification("confirmed", { ...revision, actorScope: "guest" }))).toBe(90);
+  expect(notice(bookingNotification("confirmed", revision))).toBeUndefined();
+  expect(notice(bookingNotification("confirmed", { ...revision, actorScope: "provider" }, { guest: true }))).toBe(90);
+  expect(notice(bookingNotification("confirmed", { ...revision, actorScope: "provider" }, { guest: false }))).toBeUndefined();
+  expect(notice(bookingNotification("admin_cancelled", { ...revision, actorScope: "guest" }))).toBeUndefined();
 });
 
 const message = { to: "customer@example.test", subject: "Booking confirmed", text: "Booking details" };

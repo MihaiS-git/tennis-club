@@ -166,7 +166,7 @@ async function commitSettlement(value: Settlement, event: OnlinePaymentEvent | n
               actorScope: "provider", recordedAt: new Date(await reservations.readReservationClockTime(manager)),
               adjustmentId: null, cancellationCause: null }, b.revision);
             await advanceRevision(manager, { revision, previousId: b.current_revision_id, status: "confirmed" });
-            notification = bookingNotification("confirmed", revision);
+            notification = bookingNotification("confirmed", revision, { guest: b.account_user_id === null });
             await enqueueBookingNotification(manager, `revision:${revision.id}`, notification);
           } else {
             await bookings.updateSettlementBookingStatus(manager, b.id,

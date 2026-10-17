@@ -44,8 +44,8 @@ export function BookingSummary({ details }: { details: BookingSummaryDetails }) 
   </div></div>;
 }
 
-export function BookingConfirmation({ selection, details, contact, onContactChange, onBack, onCommitted, onUnavailable, onAbandoned, cancellationNoticeMinutes, timezone, allowPayAtClub = false, onlinePaymentAvailable = false }: {
-  onlinePaymentAvailable?: boolean; allowPayAtClub?: boolean; cancellationNoticeMinutes: number; timezone: string; selection: CalendarSelection; details: BookingSummaryDetails; contact: BookingContact;
+export function BookingConfirmation({ selection, details, contact, onContactChange, onBack, onCommitted, onUnavailable, onAbandoned, cancellationNoticeMinutes, timezone, allowPayAtClub = false, onlinePaymentAvailable = false, authenticated = false }: {
+  authenticated?: boolean; onlinePaymentAvailable?: boolean; allowPayAtClub?: boolean; cancellationNoticeMinutes: number; timezone: string; selection: CalendarSelection; details: BookingSummaryDetails; contact: BookingContact;
   onContactChange: (contact: BookingContact) => void; onBack: () => void;
   onCommitted: (totalAmountMinor: number, currency: LocationCurrency, cancellationPolicy: ConfirmedCancellationPolicy | null, paymentMethod: PaymentMethod) => void;
   onUnavailable: (message: string) => void;
@@ -192,7 +192,7 @@ export function BookingConfirmation({ selection, details, contact, onContactChan
       </dl>
     </div>}
     <div className="mt-4"><BookingSummary details={{ ...details, priceMinor: reviewedPrice.totalAmountMinor, currency: reviewedPrice.currency }} /></div>
-    <BookingCancellationTerms noticeMinutes={cancellationNoticeMinutes} timezone={timezone} />
+    <BookingCancellationTerms noticeMinutes={cancellationNoticeMinutes} timezone={timezone} guest={!authenticated} />
     {checkout ? <>
       {!checkoutStopped && <OnlinePayment checkout={checkout.payment} holdExpiresAt={checkout.expiresAt} disabled={confirmAbandonment || pending}
         onPaymentStatus={setPaymentState}

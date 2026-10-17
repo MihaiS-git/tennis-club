@@ -27,3 +27,6 @@ export function customerCancellationNoticeLabel(minutes: number) {
   if (minutes === 60) return "1 hour's notice";
   return minutes % 60 === 0 ? `${minutes / 60} hours' notice` : `${minutes} minutes' notice`;
 }
+
+// Locations store no contact phone, so guests receive the generic club contact instruction.
+export const guestCancellationInstruction = "To request cancellation, please contact the club before the cancellation deadline. Club staff will handle your request and any applicable refund.";

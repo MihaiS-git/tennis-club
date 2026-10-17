@@ -2,6 +2,7 @@ import "server-only";
 
 import type { MailMessage } from "../mail/brevo";
 import type { RevisionSnapshot } from "../bookings/revision";
+import { customerCancellationNoticeLabel, guestCancellationInstruction } from "../bookings/self-cancellation";
 
 type BookingEmailSchedule = {
   booking_date: string;
@@ -27,12 +28,14 @@ export type BookingEmailEvent = {
     // requested: legacy/compensation wording that promises no completion.
     refund_status?: "requested" | "completed" | "incomplete";
     refund_amount_minor?: number;
+    // Guest bookings only: snapshotted notice for staff-handled cancellation instructions.
+    guest_cancellation_notice_minutes?: number;
   };
 };
 
 export function bookingNotification(kind: BookingEmailEvent["event_kind"], revision: RevisionSnapshot,
   options: { previous?: RevisionSnapshot; refundRequested?: boolean; refundStatus?: "completed" | "incomplete";
-    refund?: { amountMinor: number; currency: string } } = {}): BookingEmailEvent {
+    refund?: { amountMinor: number; currency: string }; guest?: boolean } = {}): BookingEmailEvent {
   const previous = options.previous;
   const refundStatus = options.refundStatus ?? (options.refundRequested ? "requested" as const : undefined);
   return { event_kind: kind, recipient: revision.customerEmail, payload: {
@@ -44,6 +47,9 @@ export function bookingNotification(kind: BookingEmailEvent["event_kind"], revis
       starts_at_minute: previous.startMinute, ends_at_minute: previous.endMinute } : null,
     ...(refundStatus ? { refund_status: refundStatus } : {}),
     ...(options.refund ? { refund_amount_minor: options.refund.amountMinor } : {}),
+    // Provider confirmations carry no guest scope; their caller supplies booking ownership.
+    ...(kind === "confirmed" && (options.guest ?? revision.actorScope === "guest")
+      ? { guest_cancellation_notice_minutes: revision.cancellationNoticeMinutes } : {}),
   } };
 }
 const time = (minute: number) => `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
@@ -82,5 +88,7 @@ export function renderBookingEmail(event: BookingEmailEvent): MailMessage {
     lines.push("Part of your refund could not be completed automatically. The club will contact you to resolve it.");
   if (kind === "modification_failed" && p.refund_status === "requested")
     lines.push("The additional payment you made for this change is being refunded.");
+  if (p.guest_cancellation_notice_minutes !== undefined)
+    lines.push("", "Cancellation terms", `This booking requires ${customerCancellationNoticeLabel(p.guest_cancellation_notice_minutes)}.`, guestCancellationInstruction);
   return { to: event.recipient, subject: subjects[kind], text: lines.join("\n") };
 }

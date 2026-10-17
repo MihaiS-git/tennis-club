@@ -83,7 +83,7 @@ export function BookingCalendar({ day, date, locationName, currency, initialCont
     <h2 className="font-heading text-2xl font-semibold text-primary">Booking confirmed</h2>
     <p className="mt-2 text-sm text-muted-foreground">Your court is booked. A confirmation email will be sent to {contact?.customerEmail}. {committed.paymentMethod === "pay_at_club" ? "Payment is due at the club." : "Online payment received."}</p>
     <div className="mt-4"><BookingSummary details={committed} /></div>
-    <div>{committed.cancellationPolicy && <BookingCancellationTerms noticeMinutes={committed.cancellationPolicy.noticeMinutes} cutoff={committed.cancellationPolicy.cutoff} timezone={timezone} />}</div>
+    <div>{committed.cancellationPolicy && <BookingCancellationTerms noticeMinutes={committed.cancellationPolicy.noticeMinutes} cutoff={committed.cancellationPolicy.cutoff} timezone={timezone} guest={!authenticated} />}</div>
     <div className="mt-5 flex flex-wrap gap-2">
       {authenticated && <Link href="/my-activity/bookings" className="inline-flex min-h-10 items-center rounded-control bg-primary px-4 text-sm font-semibold text-primary-foreground">View my bookings</Link>}
       <button type="button" onClick={() => setCommitted(null)} className={`min-h-10 rounded-control border px-4 text-sm font-semibold ${authenticated ? "border-border-strong text-primary" : "border-primary bg-primary text-primary-foreground"}`}>Book another court</button>
@@ -116,7 +116,7 @@ export function BookingCalendar({ day, date, locationName, currency, initialCont
           <button type="button" onClick={() => { setContact((current) => current ?? initialContact); setConfirming(true); }} className="min-h-10 rounded-control bg-primary px-5 text-sm font-semibold text-primary-foreground">Continue</button></div>
       </div>
     </section>}
-    {confirming && selection && details && contact && <BookingConfirmation onlinePaymentAvailable={onlinePaymentAvailable} allowPayAtClub={allowPayAtClub} cancellationNoticeMinutes={cancellationNoticeMinutes} timezone={timezone} selection={selection} details={details} contact={contact}
+    {confirming && selection && details && contact && <BookingConfirmation authenticated={authenticated} onlinePaymentAvailable={onlinePaymentAvailable} allowPayAtClub={allowPayAtClub} cancellationNoticeMinutes={cancellationNoticeMinutes} timezone={timezone} selection={selection} details={details} contact={contact}
       onContactChange={setContact} onBack={() => setConfirming(false)}
       onAbandoned={() => { setConfirming(false); setSelection(null); router.refresh(); }}
       onCommitted={(totalAmountMinor, confirmedCurrency, cancellationPolicy, paymentMethod) => {

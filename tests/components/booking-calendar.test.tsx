@@ -295,6 +295,26 @@ it("can leave while the cancellation action is unavailable and ignores its late 
 });
 
 
+it.each([false, true])("shows staff-handled cancellation instructions only for guest bookings (authenticated=%s)", async (authenticated) => {
+  const instruction = "To request cancellation, please contact the club before the cancellation deadline. Club staff will handle your request and any applicable refund.";
+  confirm.mockResolvedValue({ ok: true, status: "confirmed", holdExpiresAt: null, totalAmountMinor: 1200, currency: "RON", cancellationPolicy: { noticeMinutes: 60, cutoff: "2026-10-01T12:00:00Z" } });
+  render(<BookingCalendar onlinePaymentAvailable allowPayAtClub authenticated={authenticated} initialContact={{ customerName: "Player", customerEmail: "player@example.test", customerPhone: "+40 123" }}
+    day={{ times: [960, 990, 1020, 1050], courts }} date="2026-10-01" locationName="Club" currency="RON" cancellationNoticeMinutes={120} timezone="UTC" />);
+  fireEvent.click(screen.getByRole("button", { name: /Court 1 2026-10-01 16:00–16:30/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  const dialogTerms = within(screen.getByRole("dialog")).getByRole("region", { name: "Cancellation terms" });
+  expect(within(dialogTerms).getByText(/2 hours' notice/)).toBeTruthy();
+  expect(within(dialogTerms).queryByText(instruction) !== null).toBe(!authenticated);
+  if (!authenticated) for (const [label, value] of [["Name", "Player"], ["Email", "player@example.test"], ["Phone", "+40 123"]])
+    fireEvent.change(screen.getByLabelText(label), { target: { value } });
+  fireEvent.click(screen.getByLabelText("Pay at club"));
+  fireEvent.click(screen.getByRole("button", { name: "Confirm booking" }));
+  const confirmed = await screen.findByRole("region", { name: "Booking confirmed" });
+  const confirmedTerms = within(confirmed).getByRole("region", { name: "Cancellation terms" });
+  expect(within(confirmedTerms).getByText(/1 hour's notice/)).toBeTruthy();
+  expect(within(confirmedTerms).queryByText(instruction) !== null).toBe(!authenticated);
+});
+
 it("discards completed confirmation when Next.js hides and restores the route, while active refresh preserves it", async () => {
   confirm.mockResolvedValue({ ok: true, status: "confirmed", totalAmountMinor: 1200, currency: "RON", cancellationPolicy: null });
   const calendar = <BookingCalendar onlinePaymentAvailable allowPayAtClub authenticated initialContact={{ customerName: "Member", customerEmail: "member@example.test", customerPhone: "+40 123" }}

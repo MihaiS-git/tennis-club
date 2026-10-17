@@ -1,5 +1,6 @@
 import { Pagination } from "@/components/pagination";
 import { listAdminUndeliveredNotifications } from "@/lib/notifications/admin-notifications";
+import { transactionTimestamp } from "@/lib/payments/admin-query";
 import { NotificationRetryButton } from "../notification-retry-button";
 
 export const instant = false;
@@ -10,7 +11,8 @@ const statusLabels: Record<string, string> = {
   unconfirmed: "No response from Brevo (may have been sent)",
   not_configured: "Email is not configured",
 };
-const utc = (value: string) => new Date(value).toLocaleString("en-GB", { timeZone: "UTC", dateStyle: "medium", timeStyle: "short" });
+const timezone = "Europe/Bucharest";
+const timestamp = (value: string) => transactionTimestamp(value, timezone);
 const pageHref = (page: number) => page > 1 ? `/admin/payments/notifications?page=${page}` : "/admin/payments/notifications";
 
 export default async function AdminNotificationsPage({ searchParams }: {
@@ -24,7 +26,7 @@ export default async function AdminNotificationsPage({ searchParams }: {
       Booking emails Brevo has not accepted. Temporary failures are retried automatically every few minutes with
       increasing delays; a permanent rejection or a message that keeps failing stops retrying and waits for you here.
       Unacknowledged financial exceptions are listed first. Important financial notices are also shown to signed-in
-      customers in My activity. Times in UTC.
+      customers in My activity. Times in {timezone}.
     </p>
     {result.total > 0 && <p className="mb-3 text-sm text-muted-foreground">{result.total} undelivered
       {result.unacknowledgedExceptions > 0 && <> · <span className="font-semibold text-danger">{result.unacknowledgedExceptions} financial
@@ -36,13 +38,13 @@ export default async function AdminNotificationsPage({ searchParams }: {
             <th key={label} scope="col" className="px-3 py-3">{label}</th>)}</tr>
         </thead>
         <tbody className="divide-y divide-border">{result.rows.map(row => <tr key={row.id} className="[&_td]:px-3 [&_td]:py-3">
-          <td className="whitespace-nowrap"><time dateTime={row.created_at}>{utc(row.created_at)}</time></td>
+          <td className="whitespace-nowrap"><time dateTime={row.created_at}>{timestamp(row.created_at)}</time></td>
           <td className="break-all">{row.recipient}</td>
           <td>{row.subject}{row.important && <span className="block text-xs font-semibold text-danger">Financial exception</span>}</td>
           <td className="break-all font-mono text-xs">{row.booking_id ?? "—"}</td>
           <td>{row.last_error ? statusLabels[row.last_error] ?? "Not delivered" : "Not attempted yet"}</td>
           <td className="tabular-nums">{row.attempts}</td>
-          <td className="whitespace-nowrap">{row.next_attempt_at ? <time dateTime={row.next_attempt_at}>{utc(row.next_attempt_at)}</time>
+          <td className="whitespace-nowrap">{row.next_attempt_at ? <time dateTime={row.next_attempt_at}>{timestamp(row.next_attempt_at)}</time>
             : <span className="font-semibold text-danger">Stopped; retry manually</span>}</td>
           <td><NotificationRetryButton id={row.id} /></td>
         </tr>)}</tbody>
