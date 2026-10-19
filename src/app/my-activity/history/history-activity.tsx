@@ -7,6 +7,7 @@ import { BookingDetails } from "@/components/booking-details";
 import { ModalDialog } from "@/components/modal-dialog";
 import { historyStatus, type CourtHistoryItem } from "@/lib/bookings/history";
 import { parseActivityQuery, type ActivityQuery } from "@/lib/bookings/activity-query";
+import { bookingTypeDetail, bookingTypeLabel } from "@/lib/bookings/booking-type";
 import { ActivityRow, ActivityTable } from "../activity-table";
 import { StatusBadge } from "@/components/status-badge";
 import { BookingPayment } from "../booking-payment";
@@ -32,11 +33,12 @@ export function HistoryActivity({ rows, page = 1, staff = false, query = parseAc
   }
 
   return <>
-    {rows.length ? <ActivityTable scope="history" query={query} staff={staff}>
-      {rows.map((row) => <ActivityRow key={`${row.kind}:${row.id}`} staff={staff}
+    {rows.length ? <ActivityTable scope="history" query={query}>
+      {rows.map((row) => <ActivityRow key={`${row.kind}:${row.id}`}
         label={`Details for ${row.court_name} on ${dateLabel(row.booking_date)}`}
         onOpen={(element) => openDetails(row, element)}
-        type={row.kind === "booking" ? "Booking" : "Reservation"}
+        type={row.kind === "booking" ? bookingTypeLabel(row) : "Reservation"}
+        typeDetail={row.kind === "booking" ? bookingTypeDetail(row) : undefined}
         location={row.location_name} court={row.court_name} date={dateLabel(row.booking_date)}
         time={`${timeLabel(row.starts_at_minute)}–${timeLabel(row.ends_at_minute)}`}
         duration={`${row.ends_at_minute - row.starts_at_minute} min`}

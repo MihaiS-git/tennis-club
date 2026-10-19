@@ -57,6 +57,9 @@ export async function cleanupBookingEvidence(manager: EntityManager, selection: 
       : "b.reservation_id IN (SELECT id FROM public.court_reservations WHERE court_id = ANY($1::uuid[]))";
   const values = "bookingIds" in selection ? selection.bookingIds : "reservationIds" in selection ? selection.reservationIds : selection.courtIds;
   const ids = z.array(z.object({ id: z.uuid() })).parse(await manager.query(`SELECT b.id FROM public.bookings b WHERE ${predicate}`, [values])).map(row => row.id);
+  await manager.query("ALTER TABLE public.booking_financial_exceptions DISABLE TRIGGER booking_financial_exceptions_immutable");
+  await manager.query("DELETE FROM public.booking_financial_exceptions WHERE booking_id=ANY($1::uuid[])", [ids]);
+  await manager.query("ALTER TABLE public.booking_financial_exceptions ENABLE TRIGGER booking_financial_exceptions_immutable");
   await manager.query(`DELETE FROM public.booking_notification_deliveries d
     WHERE EXISTS (SELECT 1 FROM unnest($1::uuid[]) id
       WHERE position('Booking reference: ' || id::text || chr(10) in d.message->>'text') > 0)`, [ids]);
@@ -115,7 +118,7 @@ export async function insertBookingRecords(manager: EntityManager, input: unknow
       await manager.query(`INSERT INTO public.booking_revisions SELECT $1,booking_id,2,id,'cancellation','fixture','cancelled',
         'cancelled',location_id,court_id,location_name,court_name,timezone,booking_date,starts_at_minute,ends_at_minute,
         customer_name,customer_email,customer_phone,total_amount_minor,currency,payment_method,cancellation_notice_minutes,
-        $3,'admin',now(),NULL,'admin_cancelled',pricing_evidence FROM public.booking_revisions WHERE id=$2`, [finalId,revisionId,resource.cancelled_by_user_id]);
+        $3,'admin',now(),NULL,'admin_cancelled',pricing_evidence,NULL FROM public.booking_revisions WHERE id=$2`, [finalId,revisionId,resource.cancelled_by_user_id]);
       await manager.query("UPDATE public.bookings SET current_revision_id=$1 WHERE id=$2",[finalId,id]);
     }
   }

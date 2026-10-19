@@ -4,10 +4,11 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/button";
+import { refreshNotificationUnread } from "@/components/notification-unread";
 import { retryNotificationAction } from "./actions";
 
 const results: Record<string, string> = {
-  accepted: "Email accepted by Brevo.", already_delivered: "This email was already delivered.",
+  accepted: "Email accepted by Brevo; awaiting delivery confirmation.", already_delivered: "This email was already accepted by Brevo.",
   rejected: "Brevo rejected the email again.", unavailable: "Brevo is temporarily unavailable; the email will be retried.",
   unconfirmed: "Brevo did not respond; the email may have been sent.",
   not_configured: "Email is not configured on the server.",
@@ -25,6 +26,7 @@ export function NotificationRetryButton({ id }: { id: string }) {
       else if (outcome.result === "accepted" || outcome.result === "already_delivered") toast.success(results[outcome.result]);
       else toast.error(results[outcome.result]);
       router.refresh();
+      refreshNotificationUnread();
     } catch { toast.error("Unable to retry this email. Try again."); }
     finally { setPending(false); }
   }

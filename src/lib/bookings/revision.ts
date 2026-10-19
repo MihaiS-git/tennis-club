@@ -5,11 +5,24 @@ import { resolvePricingRule } from "@/lib/pricing/resolution";
 
 type RevisionKind = "created" | "confirmed" | "rescheduled" | "cancelled";
 type RevisionScope = "guest" | "customer" | "coach_owner" | "admin_owner" | "admin" | "provider";
+const currencySchema = z.enum(["EUR", "USD", "GBP", "RON", "CHF"]);
+// The coaching price agreed for a lesson: the resolved coach override or club
+// default, and the court rental it adds (zero when the program includes it).
+// The slots still explain the court's rental value, charged or not.
+const coachingEvidenceSchema = z.strictObject({
+  // Older private contracts predate this snapshot.
+  participantCount: z.union([z.literal(1), z.literal(2)]).optional(),
+  programId: z.uuid(), coachUserId: z.uuid(), locationId: z.uuid(), durationMinutes: z.number().int().min(60).max(1440),
+  source: z.enum(["coach", "club"]), amountMinor: z.number().int().positive().max(2147483647), currency: currencySchema,
+  courtRentalIncluded: z.boolean(), courtRentalMinor: z.number().int().positive().max(2147483647),
+  courtAmountMinor: z.number().int().min(0).max(2147483647),
+});
 export const pricingEvidenceSchema = z.strictObject({
   version: z.literal(1), rounding: z.literal("half-hour-sum-round"),
   courtState: z.enum(["outdoor", "covered", "indoor"]),
   slots: z.array(z.strictObject({ minute: z.number().int().min(0).max(1410), ruleId: z.uuid(),
     ruleSetId: z.uuid(), hourlyMinor: z.number().int().positive(), startsOn: z.iso.date().nullable(), endsOn: z.iso.date().nullable() })).min(2).max(48),
+  coaching: coachingEvidenceSchema.optional(),
 });
 export type PricingEvidence = z.infer<typeof pricingEvidenceSchema>;
 const revisionTermsSchema = z.object({
@@ -17,10 +30,24 @@ const revisionTermsSchema = z.object({
   timezone: z.string().min(1).max(100), bookingDate: z.iso.date(), startMinute: z.number().int().min(0).max(1439),
   endMinute: z.number().int().min(1).max(1440), customerName: z.string().trim().min(1).max(200),
   customerEmail: z.string().trim().min(1).max(320), customerPhone: z.string().trim().min(1).max(50),
-  totalAmountMinor: z.number().int().positive().max(2147483647), currency: z.enum(["EUR", "USD", "GBP", "RON", "CHF"]),
+  totalAmountMinor: z.number().int().positive().max(2147483647), currency: currencySchema,
   paymentMethod: z.enum(["online", "pay_at_club"]), cancellationNoticeMinutes: z.number().int().min(0).max(43200),
   pricingEvidence: pricingEvidenceSchema,
-}).refine(t => t.startMinute % 30 === 0 && t.endMinute % 30 === 0 && t.endMinute - t.startMinute >= 60);
+  // A coaching contract names its coach and program with historical names; a court booking names neither.
+  coachUserId: z.uuid().nullable().optional(), coachingProgramId: z.uuid().nullable().optional(),
+  coachName: z.string().trim().min(1).max(100).nullable().optional(),
+  coachingProgramName: z.string().trim().min(1).max(100).nullable().optional(),
+}).refine(t => t.startMinute % 30 === 0 && t.endMinute % 30 === 0 && t.endMinute - t.startMinute >= 60)
+  .refine(t => {
+    const coaching = t.pricingEvidence.coaching;
+    const named = [t.coachUserId, t.coachingProgramId, t.coachName, t.coachingProgramName];
+    if (!coaching) return named.every(value => value == null);
+    return named.every(value => value != null) && t.coachUserId === coaching.coachUserId
+      && t.coachingProgramId === coaching.programId && t.locationId === coaching.locationId
+      && t.endMinute - t.startMinute === coaching.durationMinutes && t.currency === coaching.currency
+      && coaching.courtAmountMinor === (coaching.courtRentalIncluded ? 0 : coaching.courtRentalMinor)
+      && t.totalAmountMinor === coaching.amountMinor + coaching.courtAmountMinor;
+  }, "Coaching terms must match their pricing evidence");
 export type RevisionTerms = z.infer<typeof revisionTermsSchema>;
 export type RevisionSnapshot = RevisionTerms & {
   id: string; bookingId: string; revisionNumber: number; previousRevisionId: string | null;

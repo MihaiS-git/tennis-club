@@ -6,5 +6,5 @@ export const instant = false;
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const account = await requireReservationRole(await createClient());
-  return <ManagementShell isAdmin={account.roles.includes("admin")}>{children}</ManagementShell>;
+  return <ManagementShell isAdmin={account.roles.includes("admin")} isCoach={account.roles.includes("coach")}>{children}</ManagementShell>;
 }

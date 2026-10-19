@@ -11,8 +11,9 @@ import * as captures from "@/lib/db/repositories/payment-capture-receipts.reposi
 import type { RefundExecutionEntity } from "@/lib/db/entities/refund-execution.entity";
 import { findBookingCancellationNotice, findBookingForUpdate } from "@/lib/db/repositories/bookings.repository";
 import { findReservationForUpdate } from "@/lib/db/repositories/reservations.repository";
-import { enqueueBookingNotification } from "@/lib/notifications/booking-delivery";
-import { bookingNotification, type BookingEmailEvent } from "@/lib/notifications/booking-email";
+import { findAdjustment, listAdjustmentRefunds } from "@/lib/db/repositories/booking-adjustments.repository";
+import { refundBackedOutcome } from "@/lib/bookings/domain";
+import { recordBookingFinancialException } from "@/lib/db/repositories/booking-financial-exceptions.repository";
 import { refundObligationTotal, reservingObligations } from "./refund-allocation";
 import { refundFinancialSnapshotMatches, paymentHasCapturedEvidence, sameRefundSnapshot } from "./refund-integrity";
 import { resolvableRefundEvents } from "./providers/stripe/refund-policy";
@@ -23,7 +24,7 @@ export type RefundExecutionClaim = {
   token: string; actorId: string | null; bookingId: string; refund: payments.ProcessingRefund; execution: RefundExecutionEntity;
 };
 type ClaimResult = { outcome: "ready"; claim: RefundExecutionClaim }
-  | { outcome: "busy"; status: RefundStatus } | { outcome: "terminal"; status: RefundStatus; notice: BookingEmailEvent | null };
+  | { outcome: "busy"; status: RefundStatus } | { outcome: "terminal"; status: RefundStatus; notice: boolean };
 export type RefundObservation = { kind: "verified"; status: "pending" | "succeeded" | "failed"; providerRefundId: string; retryable?: boolean; failureReason?: string }
   | { kind: "error"; evidence: RefundProviderFailure };
 type RefundDispatchOperation = "create" | "recover" | "replay";
@@ -37,22 +38,36 @@ const refundReplayWindowMilliseconds = 23 * 60 * 60 * 1000;
 // refund is recorded on the writable check fields and decides the current status.
 const reversedRefund = "provider_refund_reversed";
 
-// Exceptional obligations notify once through the same durable financial transaction.
+// Record exceptional financial outcomes atomically. Scheduled projection later
+// creates the customer notice; no notification work belongs in this transaction.
 // failed: definitive provider failure; unresolved: evidence missing beyond the safe
 // replay window; reversed: Stripe failed a refund it had reported succeeded.
-async function refundFailureNotice(manager: EntityManager, refund: payments.ProcessingRefund,
-  cause: "failed" | "unresolved" | "reversed" | null): Promise<BookingEmailEvent | null> {
-  if (!cause) return null;
-  // A definitively failed obligation of a pending refund-backed change is reported
-  // when that change is decided (abandoned, or kept pending as an exception).
-  // Unresolved and reversed refunds are never decided there, so notify now.
-  if (cause === "failed" && refund.adjustment_id
-    && (refund.reason === "booking_cancellation" || refund.reason === "booking_price_reduction")) return null;
+async function recordRefundException(manager: EntityManager, refund: payments.ProcessingRefund,
+  cause: "failed" | "unresolved" | "reversed" | null): Promise<boolean> {
+  if (!cause) return false;
   const revision = await findBookingCancellationNotice(manager, refund.booking_id);
-  const notice = revision ? bookingNotification("refund_incomplete", revision,
-    { refund: { amountMinor: refund.amount_minor, currency: refund.currency } }) : null;
-  if (notice) await enqueueBookingNotification(manager, `refund:${refund.id}:${cause === "reversed" ? "reversed" : "exception"}`, notice);
-  return notice;
+  if (!revision) throw new Error("Refund exception revision missing");
+  // The last definitive failure also commits the rejection evidence. Resolution
+  // may run later or crash; it reuses this exact adjustment event identity.
+  if (cause === "failed" && refund.adjustment_id
+    && (refund.reason === "booking_cancellation" || refund.reason === "booking_price_reduction")) {
+    const obligations = await listAdjustmentRefunds(manager, refund.adjustment_id);
+    const outcome = refundBackedOutcome(obligations.map(obligation => obligation.status));
+    if (outcome === "abandon") {
+      const adjustment = await findAdjustment(manager, refund.adjustment_id);
+      if (!adjustment) throw new Error("Refund adjustment missing");
+      await recordBookingFinancialException(manager, { key: `adjustment:${adjustment.id}:abandoned`,
+        bookingId: refund.booking_id, revisionId: revision.id, adjustmentId: adjustment.id,
+        kind: adjustment.kind === "cancellation" ? "cancellation_rejected" : "modification_rejected" });
+      // Rejection evidence is durable, but there is no outstanding refund alert.
+      return false;
+    }
+    if (outcome !== "waiting") return false;
+  }
+  await recordBookingFinancialException(manager, { key: `refund:${refund.id}:${cause === "reversed" ? "reversed" : "exception"}`,
+    bookingId: refund.booking_id, revisionId: revision.id, refundId: refund.id,
+    kind: cause === "reversed" ? "refund_reversed" : cause === "unresolved" ? "refund_unresolved" : "refund_failed" });
+  return true;
 }
 
 // Refund-only commands do not change occupancy. All paths use the same order:
@@ -99,7 +114,7 @@ function summary(execution: RefundExecutionEntity): RefundStatus {
 async function claimExecution(manager: EntityManager, refund: payments.ProcessingRefund, actorId: string | null,
   retryRejected: boolean): Promise<ClaimResult> {
   // An abandoned change released this obligation; it is never processed again.
-  if (refund.status === "voided") return { outcome: "terminal", status: "voided", notice: null };
+  if (refund.status === "voided") return { outcome: "terminal", status: "voided", notice: false };
   const history = await executions.listRefundExecutions(manager, refund.id);
   let execution = await executions.findUnresolvedRefundExecution(manager, refund.id) ?? history.at(-1);
   if (execution) verifyExecution(refund, execution);
@@ -109,7 +124,9 @@ async function claimExecution(manager: EntityManager, refund: payments.Processin
   if (execution?.terminalResult && !(retryable && retryRejected)) {
     const status = summary(execution);
     await payments.writeRefundStatus(manager, refund.id, status);
-    return { outcome: "terminal", status, notice: await refundFailureNotice(manager, refund, failureCause(execution, status)) };
+    // Terminal replay is not a new occurrence. In particular do not recreate
+    // historical exceptions whose delivery may have been deleted before cutover.
+    return { outcome: "terminal", status, notice: false };
   }
   if (!execution || execution.terminalResult) {
     const id = randomUUID();
@@ -173,7 +190,7 @@ export async function initiateRefundExecution(claim: RefundExecutionClaim) {
 }
 
 export async function commitRefundExecution(claim: RefundExecutionClaim, observation: RefundObservation): Promise<{
-  status: RefundStatus; notice: BookingEmailEvent | null }> {
+  status: RefundStatus; notice: boolean }> {
   return inTransaction(async manager => {
     const { context, refund, identity, execution } = await lockedClaim(manager, claim);
     const current = execution.leaseToken === claim.token;
@@ -217,10 +234,11 @@ export async function commitRefundExecution(claim: RefundExecutionClaim, observa
       // Missing evidence after the safe replay window is explicitly unresolved;
       // preserve the obligation and execution and continue evidence-only checks.
       const unresolved = observation.kind === "error" && ["not_found", "evidence_mismatch"].includes(observation.evidence.kind);
-      const notice = await refundFailureNotice(manager, refund, unresolved ? "unresolved" : failureCause(latest, status));
+      const cause = unresolved ? "unresolved" : !execution.terminalResult ? failureCause(latest, status) : null;
+      const notice = await recordRefundException(manager, refund, cause);
       return { status, notice };
     }
-    return { status: refund.status, notice: null };
+    return { status: refund.status, notice: false };
   });
 }
 
@@ -229,7 +247,7 @@ export async function commitRefundExecution(claim: RefundExecutionClaim, observa
 // Historical success evidence is preserved; the obligation becomes failed, the
 // customer is notified and Admin attention lists it. No replacement is created.
 export async function recordProviderRefundReversal(refundId: string, providerRefundId: string): Promise<{
-  status: RefundStatus; notice: BookingEmailEvent | null }> {
+  status: RefundStatus; notice: boolean }> {
   return inTransaction(async manager => {
     const source = await payments.discoverRefundBooking(manager, refundId);
     const context = source ? await lockAggregate(manager, source.booking_id, source.payment_attempt_id, refundId) : null;
@@ -238,11 +256,11 @@ export async function recordProviderRefundReversal(refundId: string, providerRef
     const latest = (await executions.listRefundExecutions(manager, refund.id)).at(-1);
     if (!latest || latest.terminalResult !== "succeeded" || latest.providerRefundId !== providerRefundId)
       throw new Error("Refund reversal evidence does not match the recorded refund");
-    if (latest.lastError === reversedRefund) return { status: "failed" as const, notice: null };
+    if (latest.lastError === reversedRefund) return { status: "failed" as const, notice: false };
     await executions.recordRefundReversal(manager, { refundId: refund.id, executionId: latest.id,
       lastError: reversedRefund, checkedAt: new Date() });
     await payments.writeRefundStatus(manager, refund.id, "failed");
-    return { status: "failed" as const, notice: await refundFailureNotice(manager, refund, "reversed") };
+    return { status: "failed" as const, notice: await recordRefundException(manager, refund, "reversed") };
   });
 }
 

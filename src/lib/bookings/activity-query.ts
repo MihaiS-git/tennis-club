@@ -5,7 +5,7 @@ export type ActivityScope = "upcoming" | "history";
 export const ACTIVITY_PAGE_SIZE = 20;
 
 const fields = {
-  type: z.enum(["all", "booking", "reservation"]).catch("all"),
+  type: z.enum(["all", "court", "coaching", "booking", "reservation"]).catch("all"),
   status: z.enum(["all", "completed", "cancelled"]).catch("all"),
   location: z.uuid().catch("").transform((value) => value || undefined),
   court: z.uuid().catch("").transform((value) => value || undefined),
@@ -16,7 +16,7 @@ const fields = {
 
 export function parseActivityQuery(params: ActivitySearchParams, scope: ActivityScope, staff = true) {
   const filters = z.object(fields).parse(params);
-  if (!staff) filters.type = "booking";
+  if (!staff && filters.type === "reservation") filters.type = "all";
   if (scope === "upcoming") {
     filters.status = "all";
     if (filters.sort === "status") filters.sort = "datetime";

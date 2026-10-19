@@ -61,7 +61,7 @@ export function CustomerBookingCancellation({ booking, staff, onCancelled, onPen
       : "Your booking change is waiting for its refund to be confirmed. The current booking stays unchanged until then."}
   </p>;
   return <>
-    {eligibility === "eligible" && onEdit && !booking.payment_pending && <button type="button" disabled={pending}
+    {eligibility === "eligible" && onEdit && !booking.includes_coaching && !booking.payment_pending && <button type="button" disabled={pending}
       onClick={onEdit} className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold text-primary">Edit booking</button>}
     {eligibility === "eligible" ? <button ref={triggerRef} type="button" disabled={pending}
       onClick={() => { setNow(new Date()); setConfirming(true); }}

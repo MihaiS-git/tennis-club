@@ -1,6 +1,7 @@
+import type { BookingTypeSnapshot } from "./booking-type";
 import type { LocationCurrency } from "@/lib/pricing/money";
 
-export type PersonalCustomerBooking = {
+export type PersonalCustomerBooking = BookingTypeSnapshot & {
   id: string;
   starts_at_instant: string;
   booking_date: string;

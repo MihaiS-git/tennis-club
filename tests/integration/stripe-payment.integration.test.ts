@@ -156,11 +156,12 @@ test("verified webhook settles original hold once, keeps retryable failure, rele
     // A delayed decline must not downgrade success.
     expect((await POST(webhook(failureCheckout.attemptId, "payment_intent.payment_failed"))).status).toBe(200);
     expect(await readOnlineCheckout({ attemptId: failureCheckout.attemptId, token: failureCheckout.token })).toMatchObject({ status: "confirmed" });
-    expect(await abandonOnlineCheckout({ attemptId: failureCheckout.attemptId, token: failureCheckout.token })).toMatchObject({ released: true, paymentStatus: "refunded" });
-    expect((await db.from("bookings").select("status").eq("id", failed.booking_id).single()).data?.status).toBe("cancelled");
+    await expect(abandonOnlineCheckout({ attemptId: failureCheckout.attemptId, token: failureCheckout.token })).rejects.toThrow("already confirmed");
+    expect((await db.from("bookings").select("status").eq("id", failed.booking_id).single()).data?.status).toBe("confirmed");
+    expect((await db.from("court_reservations").select("status").eq("id", failed.reservation_id).single()).data?.status).toBe("active");
     expect((await db.from("payment_attempts").select("status").eq("id", failed.payment_attempt_id).single()).data?.status).toBe("succeeded");
     expect((await db.from("payment_refunds").select("status,amount_minor").eq("booking_id", failed.booking_id)).data)
-      .toEqual([{ status: "succeeded", amount_minor: 5000 }]);
+      .toEqual([]);
     const cancelled = await hold(780), cancelledCheckout = await begin(cancelled.payment_attempt_id);
     vi.mocked(revalidateCourtActivity).mockClear();
     retrieve.mockResolvedValue({ status: "requires_payment_method" }); cancel.mockResolvedValue({ status: "canceled" });

@@ -17,8 +17,7 @@ import * as payments from "@/lib/db/repositories/payments.repository";
 import * as captures from "@/lib/db/repositories/payment-capture-receipts.repository";
 import * as bookings from "@/lib/db/repositories/bookings.repository";
 import * as reservations from "@/lib/db/repositories/reservations.repository";
-import { deliverPendingBookingNotifications, enqueueBookingNotification } from "@/lib/notifications/booking-delivery";
-import { bookingNotification, type BookingEmailEvent } from "@/lib/notifications/booking-email";
+import { recordBookingFinancialException } from "@/lib/db/repositories/booking-financial-exceptions.repository";
 import { logger } from "@/lib/logger";
 import { paymentProviderSchema, paymentTransition } from "./domain";
 import type { OnlinePaymentEvent } from "./providers/types";
@@ -49,7 +48,6 @@ class ReceiptRaceReplay extends Error {
 class SettlementParentChanged extends Error {}
 
 async function commitSettlement(value: Settlement, event: OnlinePaymentEvent | null, parentAttempt = 0): Promise<string> {
-  let notification: BookingEmailEvent | null = null;
   let refundId: string | null = null;
   let adjustmentRefundIds: string[] = [];
   const abandon: { attempt: { id: string; provider: "stripe" | "netopia"; providerPaymentId: string } | null } = { attempt: null };
@@ -88,9 +86,6 @@ async function commitSettlement(value: Settlement, event: OnlinePaymentEvent | n
       if (attempt.adjustment_id) {
         const adjusted = await settleAdjustment(manager, { attempt, event, outcome: value.outcome,
           providerPaymentId: value.providerPaymentId, mismatch: Boolean(mismatch) });
-        notification = adjusted.notification;
-        if (notification && notification.event_kind !== "customer_rescheduled")
-          await enqueueBookingNotification(manager, `payment:${attempt.id}:${notification.event_kind}`, notification);
         adjustmentRefundIds = adjusted.refundIds;
         if (adjusted.abandonProviderPayment && attempt.provider)
           abandon.attempt = { id: attempt.id, provider: attempt.provider, providerPaymentId: value.providerPaymentId };
@@ -112,7 +107,25 @@ async function commitSettlement(value: Settlement, event: OnlinePaymentEvent | n
         const transition = paymentTransition({ attemptStatus: attempt.status, bookingStatus: b.status, reservationStatus: r.status,
           reservationExpiry: r.hold_expires_at, attemptExpiry: attempt.expires_at,
           now: await reservations.readReservationClockTime(manager), outcome: value.outcome });
-        if (transition.targets?.reservation === "active") {
+        if (transition.targets?.reservation === "active" && (b.revision.coachUserId || r.coach_user_id)) {
+          // The protected lesson hold and immutable revision are the agreed
+          // contract. Never reprice a combined lesson as a court rental or
+          // recheck the coach's subsequently edited weekly schedule.
+          const v = b.revision;
+          const now = new Date(await reservations.readReservationClockTime(manager));
+          const today = localToday(v.timezone, now);
+          if (!v.coachUserId || r.coach_user_id !== v.coachUserId || r.court_id !== v.courtId
+            || v.bookingDate < today || v.bookingDate === today && v.startMinute < localMinute(v.timezone, now)
+            || location.id !== v.locationId || r.booking_date !== v.bookingDate
+            || r.starts_at_minute !== v.startMinute || r.ends_at_minute !== v.endMinute
+            || v.paymentMethod !== "online" || attempt.amount_minor !== v.totalAmountMinor
+            || attempt.currency !== v.currency || !resourceFacts?.court_active
+            || !location.isActive || location.archivedAt || !location.isPublic
+            || location.currency !== v.currency || location.timezone !== v.timezone
+            || location.customerCancellationNoticeMinutes !== v.cancellationNoticeMinutes) {
+            return { result: "expired", targets: { attempt: "expired", booking: "expired", reservation: "released" }, deadline: null };
+          }
+        } else if (transition.targets?.reservation === "active") {
           // Pending holds are quotes, not confirmed contracts. Revalidate the
           // playing-date policy under the shared configuration fence before capture settlement.
           const courts = await clubs.listCheckoutLocationCourts(manager, location.id);
@@ -166,8 +179,6 @@ async function commitSettlement(value: Settlement, event: OnlinePaymentEvent | n
               actorScope: "provider", recordedAt: new Date(await reservations.readReservationClockTime(manager)),
               adjustmentId: null, cancellationCause: null }, b.revision);
             await advanceRevision(manager, { revision, previousId: b.current_revision_id, status: "confirmed" });
-            notification = bookingNotification("confirmed", revision, { guest: b.account_user_id === null });
-            await enqueueBookingNotification(manager, `revision:${revision.id}`, notification);
           } else {
             await bookings.updateSettlementBookingStatus(manager, b.id,
               z.enum(["confirmed", "cancelled", "pending_payment", "failed", "expired"]).parse(decision.targets.booking));
@@ -212,8 +223,8 @@ async function commitSettlement(value: Settlement, event: OnlinePaymentEvent | n
           refundId = (await allocateBookingRefund(manager, { bookingId: b.id, actorId: null,
             operationKey: "cancellation", amount: amountMinor, onlyAttemptId: attempt.id,
             reason: "late_capture_compensation", contextRevisionId: (await findInitialRevision(manager, b.id)).id }))[0] ?? null;
-          if (refundId) await enqueueBookingNotification(manager, `refund:${refundId}:late_payment`,
-            bookingNotification("late_payment_refund", b.revision, { refund: { amountMinor, currency: attempt.currency } }));
+          if (refundId) await recordBookingFinancialException(manager, { key: `refund:${refundId}:late_payment`,
+            bookingId: b.id, revisionId: b.current_revision_id, kind: "late_capture", refundId, paymentAttemptId: attempt.id });
         }
       }
       return { result: decision.result, reconciliation };
@@ -229,7 +240,6 @@ async function commitSettlement(value: Settlement, event: OnlinePaymentEvent | n
     }
     if (committed.reconciliation) logger.error({ event: "payments.reconciliation_required", attemptId: value.attemptId,
       eventId: event?.eventId, result: committed.result }, "Successful payment requires reconciliation");
-    await deliverPendingBookingNotifications();
     return committed.result;
   } catch (error) {
     if (error instanceof SettlementParentChanged && parentAttempt < 2) return commitSettlement(value, event, parentAttempt + 1);

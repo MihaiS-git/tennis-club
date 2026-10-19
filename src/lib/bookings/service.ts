@@ -24,8 +24,6 @@ import { insertCheckoutBooking } from "@/lib/db/repositories/bookings.repository
 import { findSelectedPaymentProvider, insertCheckoutAttempt } from "@/lib/db/repositories/payments.repository";
 import { readCreatedBookingCancellationPolicy, type ConfirmedCancellationPolicy } from "./confirmation-policy";
 import { customerBookingInputSchema } from "./domain";
-import { enqueueBookingNotification } from "@/lib/notifications/booking-delivery";
-import { bookingNotification, type BookingEmailEvent } from "@/lib/notifications/booking-email";
 import { buildBookingRevision, capturePricingEvidence } from "./revision";
 import { getCourtStateForDate } from "@/lib/courts/state";
 import { customerMutationDeadline } from "./self-cancellation";
@@ -48,13 +46,11 @@ export async function createCustomerBooking(input: unknown, reader?: Reader,
     return { ok: false, message: "This account cannot create a booking." };
   const { courtId, date, startMinute, endMinute, customerName, customerEmail, customerPhone,
     expectedTotalAmountMinor, expectedCurrency, paymentMethod } = parsed.data;
-  let notification: BookingEmailEvent | null = null;
   let failureMessage = "That court is not available for booking.";
   let created: CustomerBookingResult & { startsAtInstant?: string };
   for (let attempt = 0; ; attempt++) {
     try {
       created = await inTransaction(async (manager): Promise<CustomerBookingResult & { startsAtInstant?: string }> => {
-        notification = null;
         await lockConfigurationForRead(manager);
         const parent = await findCourtConfiguration(manager, courtId);
         if (!parent) return { ok: false, message: "That court is not available for booking." };
@@ -140,10 +136,6 @@ export async function createCustomerBooking(input: unknown, reader?: Reader,
           status: lifecycle.booking_status, revision });
         await insertCheckoutAttempt(manager, { id: attemptId, bookingId, method: paymentMethod, provider,
           amountMinor: selection.priceMinor, currency: location.currency, status: lifecycle.attempt_status, expiresAt: clock.expiry });
-        if (paymentMethod === "pay_at_club") {
-          notification = bookingNotification("confirmed", revision);
-          await enqueueBookingNotification(manager, `revision:${revision.id}`, notification);
-        }
         if (paymentMethod === "online" && clock.expiry === null) throw new Error("Missing payment hold deadline.");
         return { ok: true, bookingId, reservationId, paymentAttemptId: attemptId,
           ...(clock.expiry === null ? { status: "confirmed", holdExpiresAt: null } as const

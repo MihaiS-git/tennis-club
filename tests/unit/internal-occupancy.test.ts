@@ -16,7 +16,7 @@ const row = { court_id: id(2), starts_at_minute: 600, ends_at_minute: 660, statu
 const hours = { id: id(4), location_id: id(1), weekday: 3, opens_at_minute: 600, closes_at_minute: 840,
   created_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-01T00:00:00Z" };
 let detailRows: unknown[] = [];
-const common = { court_id: id(2), booking_date: date, starts_at_minute: 600, ends_at_minute: 660,
+const common = { includes_coaching: false, coach_name: null, coaching_program_name: null, coaching: null, location_name: null, court_name: null, location_timezone: null, court_id: id(2), booking_date: date, starts_at_minute: 600, ends_at_minute: 660,
   cancellation_notice_minutes: null, total_amount_minor: null, currency: null, payment_facts: [], creator_email: null, creator_phone: null, account_user_id: null, payment_method: null };
 const direct = { ...common, kind: "reservation", id: id(5), reason: "Practice", created_by_user_id: id(6),
   creator_name: "Own Name", customer_name: null, customer_email: null, customer_phone: null };
@@ -72,4 +72,22 @@ test("includes live held rows with microseconds, excludes equal/expired/null dea
     { court_id: id(2), starts_at_minute: 660, ends_at_minute: 720 },
   ]);
   expect(query.mock.calls.every(([sql]) => !/UPDATE|DELETE|INSERT/.test(sql))).toBe(true);
+});
+
+test.each(["admin", "coach"])("projects historical coaching terms in one staff details query for %s", async role => {
+  account.mockResolvedValue({ state: "active", userId: id(6), roles: [role] });
+  const coaching = { programId: id(10), coachUserId: id(11), locationId: id(1), participantCount: 2,
+    durationMinutes: 60, source: "club", amountMinor: 6000, currency: "RON", courtRentalIncluded: false,
+    courtRentalMinor: 3000, courtAmountMinor: 3000 };
+  detailRows = [direct, { ...booking, includes_coaching: true, coach_name: "Historical coach",
+    coaching_program_name: "Historical program", coaching, location_name: "Historical club", court_name: "Historical court", location_timezone: "UTC" }];
+  const result = await getReservationDay(location, date, now, client);
+  expect(result.adminOccupancy[1]).toMatchObject({ includes_coaching: true, coach_name: "Historical coach",
+    coaching_program_name: "Historical program", coaching, total_amount_minor: 9000, currency: "RON" });
+  const details = query.mock.calls.filter(([sql]) => sql.includes(" AS kind"));
+  expect(details).toHaveLength(1);
+  expect(details[0][0]).toContain("v.pricing_evidence->'coaching'");
+  expect(details[0][0]).toContain("v.coach_name");
+  expect(details[0][0]).not.toContain("coach_profiles");
+  expect(details[0][0]).not.toContain("coaching_programs");
 });

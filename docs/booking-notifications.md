@@ -1,32 +1,53 @@
 # Booking email notifications
 
-Booking confirmations, cancellations, rescheduling and financial exceptions persist
-rendered email work in `public.booking_notification_deliveries` in the same TypeORM
-transaction as the corresponding state change or verified financial observation.
-The immutable revision supplies the booking contact, schedule, price and historical
-names. The current account email is never substituted. Direct reservations and
-Supabase Auth email remain separate.
+Booking confirmations, cancellations and rescheduling retain their immutable booking
+revisions. Financial exceptions additionally retain a focused immutable
+`booking_financial_exceptions` fact: stable identity, occurrence time, original revision
+and relevant payment/refund/adjustment references. Those references supply historical
+contact, schedule, amount and currency; no current account email is substituted.
+Financial transactions never render email, write notification projections or contact
+Brevo. Failure to persist financial evidence still fails its financial transaction;
+email construction and projection failures cannot affect financial state.
 
 A unique event key identifies each revision notification, failed-modification payment,
 late-payment refund or refund exception. Insert-on-conflict prevents duplicate records
-during retries, webhook replay and concurrent requests. A rollback also removes its
-provisional email. A successful paid modification queues its revision email in the shared
-command only; settlement does not queue it a second time.
+during recovery retries and concurrent scheduler calls. A rolled-back financial
+transition has no committed source to reconstruct. A paid modification's accepted
+revision is its single successful-reschedule source.
 
-The request that committed the state change delivers after commit: payment settlement
-(signed webhook, checkout status poll, checkout cancellation), refund processing (request
-thread, signed Stripe refund webhook, Admin "Check with Stripe"), customer/Admin
-cancellation, rescheduling and Pay-at-club booking all call
-`deliverPendingBookingNotifications()` once their transaction has committed. Each call
-claims up to 10 due rows within an eight-second budget, using five-minute leases and row
-locks with SKIP LOCKED, so concurrent requests never submit one row twice; it also drains
-earlier rows that are due. Brevo HTTP delivery happens outside all database transactions,
-with a five-second timeout. Accepted submissions are acknowledged using the lease token.
-No customer message can be sent before its financial transaction commits, and delivery
-never throws into the committed operation.
+The existing scheduler first reconstructs missing projections, then delivers due rows.
+Each event is projected in its own transaction, serialized by event key. Rendering or
+persistence failure is logged and leaves the immutable source eligible for a later
+pass; other events continue. Migration `1791462257936-FairNotificationRecovery` adds
+a single persisted circular scan position: selection advances before projection, so
+failed events stay retryable without holding every later event behind the oldest batch.
+Existing rendered snapshots are never overwritten. Missing
+inbox copies are repaired from the retained delivery snapshot, including its financial
+acknowledgment. Repair and acknowledgment lock delivery before inbox, with fresh
+READ COMMITTED statements after lock acquisition. Existing inbox read/deletion/
+acknowledgment timestamps remain unchanged.
+Brevo HTTP calls run outside database transactions with a five-second timeout, using
+five-minute leases, SKIP LOCKED claims and stable submission keys. Booking, payment,
+webhook, cancellation, rescheduling and refund requests never deliver mail. Explicit
+Admin Retry remains available for undismissed rows.
+
+## Forward-only cutover
+
+Apply additive migration `1791462257935-IndependentNotificationEvidence` before deploying
+the new writers and scheduler. Only revisions/adjustment requests explicitly written
+with `recovery_version=1`, and exceptions recorded by the new mechanism, participate.
+Existing rows have NULL versions; there is no historical backfill or timestamp-based
+inference. Legacy deliveries/inbox entries remain untouched, and physically deleted
+legacy emails are not reconstructed. New financial outcomes on old bookings can opt in
+through a new revision or new exception fact.
+
+All future Admin email deletion is permanent soft dismissal using `dismissed_at`, for
+ordinary as well as financial mail. The retained event key prevents recreation and
+resending; projection repair can still restore a missing customer inbox copy. Dismissal
+does not acknowledge or delete the customer's notice. No new queue or scheduler is used.
 
 Every attempt records its exact outcome in `last_error`: `null` with `delivered_at` when
-Brevo accepted it (not proof of inbox delivery), `rejected` when Brevo refused it
+Brevo accepted it (not proof of inbox delivery; see [Brevo delivery webhook](#brevo-delivery-webhook)), `rejected` when Brevo refused it
 permanently (HTTP 4xx other than 408/429), `unavailable` for a temporary Brevo error
 (408, 429 or 5xx; not sent), `unconfirmed` when Brevo did not answer (it may have been
 sent), and `not_configured` when `BREVO_API_KEY`/`BOOKING_MAIL_FROM` are missing. Nothing
@@ -38,15 +59,19 @@ For a quiet club, a failed guest confirmation must not wait for the next booking
 Cron (`pg_cron`) runs every five minutes and `pg_net` POSTs to
 `/api/notifications/deliver`, authenticated with `Authorization: Bearer
 <NOTIFICATION_CRON_SECRET>`, a dedicated server-to-server secret (32+ characters,
-compared in constant time). The Route Handler only calls the same
-`deliverPendingBookingNotifications()` with one bounded batch (10 emails, 25-second
-budget, `maxDuration` 60 s), so concurrent cron runs and request-driven delivery share
-the same leases and SKIP LOCKED claims and never send one row at the same time. It
+compared in constant time). The Route Handler calls `recoverBookingNotifications()`
+(up to 100 missing projections/repairs), then `deliverPendingBookingNotifications()`
+(up to 10 emails). Recovery gets eight seconds of the 25-second invocation budget,
+reserving time for delivery even when discovery fails. Recovery uses a separate
+one-connection TypeORM pool with 500 ms connection/statement timeouts and a 250 ms
+lock timeout; it cannot occupy the delivery pool. `maxDuration` remains 60 s. Concurrent cron
+runs and explicit Admin retries share leases and SKIP LOCKED claims. It
 returns 200 with `{ checked, failed }`, 401 for a missing/wrong secret, and 503 when the
-secret is not configured or delivery was interrupted (pg_net simply tries again five
+secret is not configured, reconstruction failed, or delivery was interrupted (delivery
+is still attempted after recovery failure; pg_net simply tries again five
 minutes later). Logs contain counts only, never recipients, content or credentials.
-The endpoint is for notification delivery only: it never touches payments, refunds,
-reconciliation or booking expiry. All business logic stays in TypeScript; PostgreSQL
+The endpoint reads committed financial evidence but never mutates payments, refunds,
+booking lifecycle or expiry. All business logic stays in TypeScript; PostgreSQL
 only schedules the HTTP call.
 
 Retry policy: a temporary failure (`unavailable`, `unconfirmed`, `not_configured`) is
@@ -109,9 +134,83 @@ script. If you prefer the SQL editor, use `vault.create_secret(...)` for both na
 `cron.schedule('booking-notification-delivery', '*/5 * * * *', …)` with the same command
 the script uses. Recent results: `cron.job_run_details` and `net._http_response`.
 
+## Brevo delivery webhook
+
+API acceptance (`delivered_at`) is not delivery. `POST /api/notifications/brevo` receives
+Brevo's transactional email webhook and records, per delivery row, Brevo's evidence for the
+**current submission** (migration `1791462257932-BrevoDeliveryEvents`): `provider_message_id`
+(the `messageId` Brevo returned on acceptance), `provider_status` (`deferred`, `delivered` or
+`failed`), `provider_event`, `provider_reason` and `provider_event_at`. `submission_key`
+(NULL = the row id) is the Brevo idempotency key and is also sent as `X-Mailin-custom:
+booking-notification:<key>`, which Brevo echoes in every event.
+
+Delivery states: accepted, awaiting confirmation (`delivered_at` set, no provider status, or
+`deferred`); confirmed delivered (`delivered`); delivery failed (`soft_bounce`, `hard_bounce`,
+`invalid_email`, `blocked`, `error`); queued/sending/retrying/stopped as before for API-level
+outcomes. `deferred` is a temporary delay Brevo keeps retrying and never raises an alert.
+
+- **Correlation**: by recorded `message-id`; before the API answer is recorded, by the
+  current submission key from `X-Mailin-custom`. Never by recipient or booking. Anything
+  else (earlier submissions, dismissed rows, other senders) is "unknown", acknowledged with
+  200 and ignored; webhooks never create or restore a row.
+- **Ordering** (TypeScript, `brevo-events.ts`): a final outcome (delivered/failed) replaces a
+  deferral; between final outcomes only a strictly later event time (`ts_epoch`, else
+  `ts_event`/`ts`) wins; a deferral never replaces a final outcome. Duplicates change nothing.
+  Each event runs in its own short transaction with the row locked; no network I/O inside.
+- **Failure**: the row becomes undelivered with `last_error` = the Brevo event,
+  `next_attempt_at = 'infinity'` (never resent automatically), state `failed` ("Delivery
+  failed") in Admin → Payments → Notifications with the failure type, Brevo reason and time.
+  It activates the Admin bell like a stopped row. Customer inbox copies are unaffected.
+- **Retry now** claims the row with the existing lease and gives the new submission a new
+  key, so Brevo cannot deduplicate it into the bounced message and the old message's late
+  events no longer match. Accepted again, it returns to "awaiting confirmation" (not listed,
+  no alert) until Brevo confirms; another failure reactivates the alert.
+- **Delete** (dismiss) is allowed for `failed` rows exactly like stopped rows; later events
+  for the dismissed message are unknown. Every email row is only marked
+  `dismissed_at` (hidden from the Admin list and bell, never sent again); the customer's
+  banner, inbox copy and **OK** acknowledgement are unchanged. Deleting never acknowledges
+  an exception or changes bookings, payments or refunds.
+- An event that arrives while the submission is still being recorded wins over the API
+  result; only the lease is released.
+
+Authentication: `BREVO_WEBHOOK_SECRET` (32+ characters, constant-time comparison), as
+`Authorization: Bearer <secret>` (webhook `auth` of type `bearer`) or as the basic-auth
+password (`https://brevo:<secret>@<host>/api/notifications/brevo`). Responses: 200 with
+counts, 401 wrong/missing credentials, 400 invalid payload, 413 over 1 MB, 503 not
+configured, 429 when processing failed (Brevo retries only timeouts and 429). Logs contain
+counts only, never recipients, reasons or payloads.
+
+Limitation: when Brevo answers a retry with its idempotency duplicate response it returns no
+`messageId`; such a row stays "awaiting confirmation" unless the event carries the matching
+`X-Mailin-custom` key, which Brevo includes for messages sent with it.
+
+### Configuring the webhook in Brevo
+
+1. Generate a secret (`openssl rand -hex 32`), set `BREVO_WEBHOOK_SECRET` in the server
+   environment (Vercel project settings / `.env.local`) and redeploy. Apply migration
+   `1791462257932-BrevoDeliveryEvents` first.
+2. Create a **transactional** webhook. With the API (bearer token, preferred):
+   `curl -X POST https://api.brevo.com/v3/webhooks -H "api-key: $BREVO_API_KEY"
+   -H 'Content-Type: application/json' -d '{"type":"transactional","description":"Tennis Club
+   delivery","url":"https://<your-domain>/api/notifications/brevo","events":["delivered",
+   "softBounce","hardBounce","invalid","blocked","deferred"],
+   "auth":{"type":"bearer","token":"<BREVO_WEBHOOK_SECRET>"}}'`.
+   In the Brevo UI (Transactional → Settings → Webhook → Add a new webhook) use the URL
+   `https://brevo:<BREVO_WEBHOOK_SECRET>@<your-domain>/api/notifications/brevo` and tick
+   Delivered, Soft bounce, Hard bounce, Invalid email, Blocked and Deferred (and Error where
+   offered; the API has no separate subscription for it, but `error` events are handled).
+3. Check: an unauthenticated `curl -X POST https://<your-domain>/api/notifications/brevo`
+   returns 401; Brevo's webhook test / a real send returns 200 (`{"applied":…}`).
+   For local development expose the dev server through an HTTPS tunnel; Brevo cannot reach
+   `localhost`.
+
+Emails accepted before this change have no recorded `messageId` or `X-Mailin-custom`; their
+events are unknown and ignored.
+
 ## Undelivered email visibility and retry
 
-Admin → Payments → **Notifications** lists every booking email Brevo has not accepted,
+Admin → Payments → **Notifications** lists every booking email Brevo has not accepted, or
+accepted and then reported undeliverable,
 with recipient, subject, booking, status, attempt count and next retry time (or "Stopped;
 retry manually"), and marks financial exceptions. It is paginated on the server (25 per
 page, `?page=N`; invalid or out-of-range pages fall back to valid ones) in a stable order:
@@ -145,8 +244,11 @@ obligation and stays visible for external resolution. A failed surcharge applica
 notifies that the original booking remains and its compensation is being refunded. A
 payment captured after its checkout expired or was cancelled queues one
 `late_payment_refund` message ("Payment received after checkout ended") with the full
-refund request; it says the refund was requested, never that it completed. Refund
-obligations of a pending refund-backed cancellation or price reduction whose provider
+refund request; it says the refund was requested, never that it completed. Changes
+whose every obligation definitively fails retain a rejected cancellation/
+modification fact in the final refund-result transaction, before later change resolution.
+Resolution reuses the same adjustment event key and cannot create a second rejection.
+Refund obligations of a pending refund-backed cancellation or price reduction whose provider
 evidence is unresolved notify `refund_incomplete` at once (the change stays pending); a
 refund Stripe fails after reporting success notifies `refund_incomplete` under its own
 `refund:<id>:reversed` key. That cause is kept for every later check of the reversed refund
@@ -169,7 +271,8 @@ Deployment requires migrations `1791462257928-DurableBookingNotifications` and
 `1791462257929-RequestDrivenPaymentRecovery`, `BREVO_API_KEY`, a verified
 `BOOKING_MAIL_FROM`, `NOTIFICATION_CRON_SECRET` and the Supabase Cron schedule above. No
 Node.js worker or queue runs; this works on serverless hosting such as Vercel. Without the
-schedule, emails are still delivered by later requests and Admin retries, as before.
+schedule, automatic reconstruction and delivery stop; financial requests do not provide
+a fallback. Explicit Admin Retry can submit an existing undismissed delivery.
 Application-table browser grants remain denied.
 
 
@@ -180,8 +283,8 @@ backfills retained deliveries, including existing financial acknowledgments. Alr
 removed email records cannot be recovered. Supabase Auth confirmation/recovery emails
 remain provider-managed and separate from these application-generated customer events.
 
-The existing enqueue operation renders each message once and inserts its email delivery
-and customer copy in the same state-change transaction, before any Brevo request. It
+Scheduled recovery renders each missing message and inserts its email delivery and
+customer copy in a projection transaction, independently of financial processing. It
 covers `confirmed`, `customer_cancelled`, `admin_cancelled`, `customer_rescheduled`,
 `cancellation_failed`, `modification_failed`, `refund_incomplete` and `late_payment_refund`.
 The inbox stores subject, complete text, event kind, booking UUID and generation timestamp.

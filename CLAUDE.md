@@ -46,6 +46,7 @@
 - `docs/payments-memberships.md` — checkout, Stripe, provider selection, captures, refunds, adjustments, reconciliation, and Admin payment actions.
 - `docs/profiles.md` — player profile and avatar/Storage rules.
 - `docs/booking-notifications.md` — Brevo booking email lifecycle and post-commit delivery.
+- `docs/coaching.md` — coaching programs, coach profiles, coaching prices and the public Coaching page.
 - `docs/testing.md` — local database setup and test/verification procedures.
 - `README.md` — current setup and development commands.
 

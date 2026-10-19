@@ -16,12 +16,8 @@ export type BookingCancellationCommandResult =
 
 export type BookingContact = { customerName: string; customerEmail: string; customerPhone: string };
 
-export const customerBookingInputSchema = z.strictObject({
-  paymentMethod: paymentMethodSchema.default("online"),
-  courtId: z.uuid(),
-  date: z.iso.date(),
-  startMinute: z.number().int().min(0).max(1439),
-  endMinute: z.number().int().min(1).max(1440),
+// Customer contact snapshot rules shared by court and coaching bookings.
+export const bookingContactShape = {
   customerName: z.string({ error: "Name is required." }).trim()
     .min(1, "Name is required.").max(200, "Name must be 200 characters or fewer."),
   customerEmail: z.string({ error: "Email address is required." }).trim()
@@ -31,6 +27,15 @@ export const customerBookingInputSchema = z.strictObject({
     .min(1, "Phone number is required.").max(50, "Phone number must be 50 characters or fewer.")
     .refine((value) => !value || (/^\+?[0-9 ()-]+$/.test(value) && /[0-9]/.test(value)),
       "Enter a valid phone number, for example +40 712 345 678."),
+};
+
+export const customerBookingInputSchema = z.strictObject({
+  paymentMethod: paymentMethodSchema.default("online"),
+  courtId: z.uuid(),
+  date: z.iso.date(),
+  startMinute: z.number().int().min(0).max(1439),
+  endMinute: z.number().int().min(1).max(1440),
+  ...bookingContactShape,
   expectedTotalAmountMinor: minorAmountSchema,
   expectedCurrency: z.enum(locationCurrencies),
 }).refine((value) => value.startMinute % 30 === 0 && value.endMinute % 30 === 0

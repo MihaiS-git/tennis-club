@@ -402,3 +402,23 @@ it("shows each upcoming booking's actual status in the table and its details dia
   expect(within(dialog).getByText("Payment processing")).toBeTruthy();
   expect(within(dialog).queryByText("Confirmed")).toBeNull();
 });
+
+it.each([false, true])("withholds coaching Edit while retaining cancellation (coaching=%s)", includes_coaching => {
+  render(<CustomerBookingCancellation booking={{ ...cancellableBooking, includes_coaching }} staff={false}
+    onCancelled={vi.fn()} onPendingChange={vi.fn()} onEdit={vi.fn()} />);
+  expect(screen.queryByRole("button", { name: "Edit booking" }) !== null).toBe(!includes_coaching);
+  expect(screen.getByRole("button", { name: "Cancel booking" })).toBeDefined();
+});
+
+it.each([true, false])("shows historical coaching names alongside court bookings (staff=%s)", (staff) => {
+  render(<PersonalActivity staff={staff} initialActivity={activityFixture([
+    bookingItem(cancellableBooking), bookingItem({ ...cancellableBooking, id: "lesson", includes_coaching: true,
+      coach_name: "Daniel Stoica", coaching_program_name: "Private coaching" }),
+  ])} initialError="" />);
+  const table = screen.getByRole("table");
+  expect(within(table).getByText("Coaching")).toBeDefined();
+  expect(within(table).getByText("Daniel Stoica · Private coaching").closest("td")?.textContent)
+    .toBe("CoachingDaniel Stoica · Private coaching");
+  expect(within(table).getByText("Court", { selector: "td span" })).toBeDefined();
+  expect(within(table).getAllByRole("columnheader")).toHaveLength(8);
+});

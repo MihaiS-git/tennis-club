@@ -20,6 +20,7 @@ import { isReservationInProgress, isReservationUpcoming, type PersonalReservatio
 import { BookingEditForm, type BookingEditActions } from "@/components/booking-edit-form";
 import { cancelOwnReservationAction, dismissOwnBookingAdjustmentAction, loadPersonalActivityAction, loadOwnBookingEditDayAction, quoteOwnBookingAction, rescheduleOwnBookingAction } from "./actions";
 import { ActivityControls } from "../activity-controls";
+import { bookingTypeDetail, bookingTypeLabel } from "@/lib/bookings/booking-type";
 import { ActivityRow, ActivityTable } from "../activity-table";
 import { ActivityPagination } from "../activity-pagination";
 import { CustomerBookingCancellation } from "./customer-booking-cancellation";
@@ -159,11 +160,12 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
   }
 
   const list = (rows: CourtActivity[]) => <section aria-label="Upcoming">
-    {rows.length ? <ActivityTable scope="upcoming" query={query} staff={staff}>
-      {rows.map((item) => <ActivityRow key={`${item.kind}:${item.row.id}`} staff={staff}
+    {rows.length ? <ActivityTable scope="upcoming" query={query}>
+      {rows.map((item) => <ActivityRow key={`${item.kind}:${item.row.id}`}
         label={`Details for ${item.row.court_name} on ${dateLabel(item.row.booking_date)}`}
         onOpen={(row) => openDetails(item, row)}
-        type={item.kind === "booking" ? "Booking" : "Reservation"}
+        type={item.kind === "booking" ? bookingTypeLabel(item.row) : "Reservation"}
+        typeDetail={item.kind === "booking" ? bookingTypeDetail(item.row) : undefined}
         location={item.row.location_name} court={item.row.court_name} date={dateLabel(item.row.booking_date)}
         time={`${timeLabel(item.row.starts_at_minute)}–${timeLabel(item.row.ends_at_minute)}`}
         duration={`${item.row.ends_at_minute - item.row.starts_at_minute} min`}

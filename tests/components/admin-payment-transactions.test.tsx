@@ -27,7 +27,7 @@ const transaction: AdminPaymentTransaction = {
   customer_phone: "123", booking_total_minor: 5000,
   transaction_kind: "refund", transaction_id: "cd000000-0000-4000-8000-000000000003", payment_attempt_id: "cd000000-0000-4000-8000-000000000004",
   adjustment_id: null, operation_label: "Full refund", transaction_status: "pending_retry", refunded_minor: 0,
-  booking_id: "cd000000-0000-4000-8000-000000000001", reservation_id: "cd000000-0000-4000-8000-000000000002",
+  booking_id: "cd000000-0000-4000-8000-000000000001", reservation_id: "cd000000-0000-4000-8000-000000000002", account_user_id: null,
   customer_name: "Ana Pop", customer_email: "snapshot@example.test", amount_minor: 5000, currency: "RON", method: "online", provider: "stripe",
   payment_status: "succeeded", provider_payment_id: "original-payment", created_at: "2026-10-06T10:00:00Z", updated_at: "2026-10-06T11:00:00Z",
   booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660, court_name: "Court 1", location_name: "Club", location_timezone: "UTC",
@@ -77,6 +77,36 @@ test("rows navigate to the actual operation and retain list filters", () => {
   expect(screen.getByRole("link", { name: "Full refund" }).getAttribute("href")).toBe(href);
   fireEvent.keyDown(screen.getByRole("row", { name: /Full refund/ }), { key: "Enter" });
   expect(push).toHaveBeenCalledWith(href);
+});
+
+test("the booking reference opens Booking Details by full UUID and keeps the row action unambiguous", () => {
+  render(<table><tbody><TransactionRow transaction={transaction} listHref="/admin/payments/transactions?q=Ana&page=2" /></tbody></table>);
+  const link = screen.getByRole("link", { name: `Booking ${transaction.booking_id}` });
+  expect(link.textContent).toContain("#cd000000");
+  const href = link.getAttribute("href")!;
+  expect(href.startsWith(`/admin/bookings/${transaction.booking_id}?`)).toBe(true);
+  expect(new URL(href, "http://x").searchParams.get("back")).toBe("/admin/payments/transactions?q=Ana&page=2");
+  // Clicking a link inside the row follows only that link, never the row's transaction navigation.
+  fireEvent.click(link);
+  expect(push).not.toHaveBeenCalled();
+  expect(screen.getByRole("link", { name: "Full refund" }).getAttribute("href"))
+    .toBe(`/admin/payments/transactions/refund/${transaction.transaction_id}?q=Ana&page=2`);
+});
+
+test("details link to the booking and, only for account bookings, to the authoritative user", () => {
+  const listHref = "/admin/payments/transactions?status=all&q=Ana&page=2";
+  const { rerender } = render(<TransactionRow detail transaction={transaction} listHref={listHref} />);
+  const booking = screen.getByRole("link", { name: `Booking ${transaction.booking_id}` });
+  expect(new URL(booking.getAttribute("href")!, "http://x").searchParams.get("back"))
+    .toBe(`/admin/payments/transactions/refund/${transaction.transaction_id}?status=all&q=Ana&page=2`);
+  expect(screen.queryByRole("link", { name: "View user account" })).toBeNull();
+  expect(screen.getByText("Guest booking · no user account")).toBeDefined();
+  const userId = "cd000000-0000-4000-8000-0000000000f1";
+  rerender(<TransactionRow detail transaction={{ ...transaction, account_user_id: userId }} listHref={listHref} />);
+  expect(screen.getByRole("link", { name: "View user account" }).getAttribute("href")).toBe(`/admin/users/${userId}`);
+  // Existing links and actions stay.
+  expect(screen.getByRole("link", { name: "Back to transactions" }).getAttribute("href")).toBe(listHref);
+  expect(screen.getByRole("link", { name: "All transactions for this booking" })).toBeDefined();
 });
 
 test("a partial refund leaves its original payment partially refunded", () => {

@@ -246,7 +246,7 @@ unchanged (never "cancelled") when its payment fails, expires or is refunded.
 
 X, Close and Escape dismiss the checkout immediately, including during provider calls or cancellation. Dismissal makes no claim that payment was cancelled, clears loading feedback, and ignores late action/Stripe/polling callbacks. An uncertain outcome is shown without encouraging another payment.
 
-Cancel payment has a separate confirmation. Confirmation unmounts the active payment form, preventing submissions and late UI confirmation. The capability-authorized command records booking cancellation intent under location → booking → reservation → attempt locks before contacting Stripe. A completed booking may be undone through this capability only within its original hold deadline; later cancellation uses the normal booking-management authorization and policy. No Auth or provider call occurs inside a transaction.
+Cancel payment has a separate confirmation. Confirmation unmounts the active payment form, preventing submissions and late UI confirmation. The capability-authorized command records booking cancellation intent under location → booking → reservation → attempt locks before contacting Stripe. Once a booking is confirmed, this capability cannot cancel it, even within its original hold deadline. Confirmed bookings use normal booking-management authorization and refund-backed cancellation, preserving occupancy until required refunds succeed. No Auth or provider call occurs inside a transaction.
 
 Checkout abandonment records a cancelled revision and releases occupancy before
 contacting Stripe; the attempt may remain pending while the provider outcome is
@@ -605,7 +605,7 @@ for up to three days on a non-2xx response) is the retry mechanism for missed wo
 | Refund pending at Stripe | `refund.updated`/`refund.failed` webhooks commit the final result and decide any waiting cancellation or price reduction. |
 | Stripe fails a refund it had reported succeeded | The `refund.failed`/`refund.updated` webhook re-reads and verifies that exact refund. The success evidence is kept; the execution records `provider_refund_reversed`, the obligation becomes `failed` (Admin attention, no longer counted as refunded), and the customer gets a `refund_incomplete` email and in-app notice. No replacement refund is ever issued. |
 | Refund-backed change interrupted after the refund committed | Any later check of that refund (webhook redelivery or Admin) re-runs the transition-guarded decision. |
-| Email delivery failed | The row stays queued with backoff; Supabase Cron calls the protected delivery endpoint every five minutes, and the next financial request also retries due rows (see [notifications](booking-notifications.md)). This is the only scheduled work. |
+| Email delivery failed | The row stays queued with backoff. Existing Supabase Cron reconstructs missing post-cutover projections and retries due email every five minutes; financial requests do neither. See [notifications](booking-notifications.md). This is the only scheduled work. |
 
 Webhook refund events are matched only by the `payment_refund_id` metadata this
 application sets; Dashboard-created refunds are ignored. Webhooks run the payment and
@@ -683,7 +683,10 @@ Abandonment retains capability validation and retrieve/cancel/retrieve outside t
 a capability-bound transaction first records cancellation intent. Provider-confirmed cancellation runs the receiptless settlement command; verified captures use the common event transaction and existing full-refund operation. Cancellation intent prevents subsequent booking confirmation.
 Payment/refund persistence uses TypeORM transactions with explicit authoritative locks.
 TypeScript hold expiry runs under location-first TypeORM transactions.
-Booking emails use best-effort Brevo HTTP delivery after commit, without delivery leases or retries.
+Booking emails use forward-only scheduled reconstruction from immutable financial evidence,
+then leased Brevo delivery with retries. Financial requests never render, project or send
+mail. Apply migration `1791462257935-IndependentNotificationEvidence` before deployment;
+legacy events are not reconstructed. See [notifications](booking-notifications.md).
 
 
 ## Paid-booking price adjustments

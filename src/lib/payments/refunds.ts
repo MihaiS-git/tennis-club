@@ -5,12 +5,10 @@ import { resolveRefundBackedAdjustment } from "@/lib/bookings/commands";
 import { getDataSource } from "@/lib/db/data-source";
 import { findAdjustment } from "@/lib/db/repositories/booking-adjustments.repository";
 import { findRefundOperation } from "@/lib/db/repositories/payments.repository";
-import { type BookingEmailEvent } from "@/lib/notifications/booking-email";
 import { summarizeRefunds } from "./domain";
 import { logger } from "@/lib/logger";
 import { RefundProviderError } from "./providers/types";
 import { onlinePaymentAdapter } from "./providers";
-import { deliverPendingBookingNotifications } from "@/lib/notifications/booking-delivery";
 import { completedRefundExecution, prepareRefund, initiateRefundExecution, commitRefundExecution, recordProviderRefundReversal,
   type RefundExecutionClaim, type RefundObservation } from "./refund-commands";
 
@@ -44,9 +42,7 @@ export class RefundInProgressError extends RefundProcessingError {
 }
 
 export async function processBookingRefund(id: string, options: RefundProcessingOptions = {}): Promise<RefundStatus> {
-  try { return await processRefund(id, options); }
-  // Committed notices are delivered even when a strict caller receives an error.
-  finally { await deliverPendingBookingNotifications(); }
+  return processRefund(id, options);
 }
 
 function deferred(options: RefundProcessingOptions, id: string, message: string): RefundStatus {
@@ -135,7 +131,7 @@ async function reverifyCompletedRefund(id: string, options: RefundProcessingOpti
 
 // Post-commit only. A terminal obligation can decide the booking change waiting
 // on it; the change command is transition-guarded, so replays are harmless.
-async function afterRefundOutcome(id: string, status: RefundStatus, notice: BookingEmailEvent | null,
+async function afterRefundOutcome(id: string, status: RefundStatus, notice: boolean,
   options: RefundProcessingOptions): Promise<RefundStatus> {
   if (notice) {
     logger.error({ event: "payments.refund_requires_resolution", refundId: id }, "Outstanding refund requires external resolution");
@@ -157,8 +153,6 @@ async function afterRefundOutcome(id: string, status: RefundStatus, notice: Book
 export async function finishBookingCancellation(result: BookingCancellationCommandResult,
   unavailableMessage = "This booking is no longer available for cancellation."): Promise<BookingCancellationResult> {
   const outcome = await cancellationOutcome(result, unavailableMessage);
-  // A cancellation without a refund committed its email in the command.
-  await deliverPendingBookingNotifications();
   return outcome;
 }
 

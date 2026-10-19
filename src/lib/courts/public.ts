@@ -2,6 +2,7 @@ import { publicationHoursSchema, publicationPricingSchema } from "@/lib/location
 import "server-only";
 
 import { normalizeDatabaseError } from "@/lib/db/errors";
+import type { EntityManager } from "typeorm";
 import { z } from "zod";
 
 import { logger } from "@/lib/logger";
@@ -70,15 +71,16 @@ function addDays(date: string, days: number) {
   return next.toISOString().slice(0, 10);
 }
 
-async function readEligibleLocations<T>(project: (location: z.infer<typeof locationSchema>, today: string) => T): Promise<T[]> {
+async function readEligibleLocations<T>(project: (location: z.infer<typeof locationSchema>, today: string) => T,
+  manager?: EntityManager, now?: Date): Promise<T[]> {
   try {
-    const data = await listPublicLocationFacts((await getDataSource()).manager);
+    const data = await listPublicLocationFacts(manager ?? (await getDataSource()).manager);
     const parsed = z.array(locationSchema).safeParse(data);
     if (!parsed.success) {
       logger.error({ event: "courts.public_read_failed" }, "Failed to load public courts");
       throw new Error("Unable to load courts.");
     }
-    return parsed.data.map((location) => ({ location, today: publicationToday(location.timezone) }))
+    return parsed.data.map((location) => ({ location, today: publicationToday(location.timezone, now) }))
       .filter(({ location, today }) => isPubliclyEligible(location, today))
       .map(({ location, today }) => project(location, today));
   } catch (error: unknown) {
@@ -103,6 +105,12 @@ function toPublicLocation(location: z.infer<typeof locationSchema>, today: strin
 
 export async function listPublicLocationsWithCourts(): Promise<PublicLocation[]> {
   return readEligibleLocations(toPublicLocation);
+}
+
+// One publicly eligible location on the caller's manager, e.g. reread inside a
+// booking transaction after its location lock; null when not publicly bookable.
+export async function findPublicLocationWithCourts(manager: EntityManager, locationId: string, now: Date): Promise<PublicLocation | null> {
+  return (await readEligibleLocations(toPublicLocation, manager, now)).find((location) => location.id === locationId.toLowerCase()) ?? null;
 }
 
 export async function listPublicVisitorLocations(): Promise<PublicVisitorLocation[]> {

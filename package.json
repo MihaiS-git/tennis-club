@@ -10,6 +10,7 @@
     "dev": "next dev",
     "seed:users": "node --conditions=react-server --env-file=.env.local --import=./scripts/ts-loader.mjs scripts/seed-dev-users.ts --users-only",
     "db:dev:seed": "node --conditions=react-server --env-file=.env.local --import=./scripts/ts-loader.mjs scripts/seed-dev-users.ts",
+    "db:dev:seed:coaching": "node --conditions=react-server --env-file=.env.local --import=./scripts/ts-loader.mjs scripts/seed-dev-coaching.ts",
     "notifications:cron": "node --env-file=.env.local --import=./scripts/ts-loader.mjs scripts/configure-notification-cron.ts",
     "db:dev:rebuild": "node --conditions=react-server --env-file=.env.local --import=./scripts/ts-loader.mjs scripts/rebuild-dev-database.ts",
     "build": "next build",

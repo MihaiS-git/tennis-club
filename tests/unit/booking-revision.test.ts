@@ -47,3 +47,30 @@ test("paid extension hold fragments exclude original occupancy and permit a half
   expect(adjustmentHoldFragments(original,original)).toEqual([]);
   const target={...original,courtId:randomUUID()};expect(adjustmentHoldFragments(original,target)).toEqual([target]);
 });
+test("coaching contracts carry coach, program and agreed amounts that must match their evidence",()=>{
+  const coach=randomUUID(), program=randomUUID();
+  const coaching={...terms,totalAmountMinor:15001,coachUserId:coach,coachingProgramId:program,coachName:"Coach",coachingProgramName:"Private",
+    pricingEvidence:{...terms.pricingEvidence,coaching:{programId:program,coachUserId:coach,locationId:id,durationMinutes:60,source:"coach" as const,
+      amountMinor:10000,currency:"RON" as const,courtRentalIncluded:false,courtRentalMinor:5001,courtAmountMinor:5001}}};
+  const original=buildBookingRevision(coaching,operation,null);
+  // Later revisions keep the coaching contract and its evidence, never repricing it.
+  const confirmed=buildBookingRevision(original,{...operation,id:randomUUID(),kind:"confirmed",bookingState:"confirmed",operationKey:"confirmation",actorScope:"provider"},original);
+  expect(confirmed).toMatchObject({coachUserId:coach,coachingProgramId:program,coachName:"Coach",coachingProgramName:"Private",totalAmountMinor:15001,
+    pricingEvidence:{coaching:{amountMinor:10000,courtAmountMinor:5001,source:"coach"}}});
+  const included={...coaching,totalAmountMinor:10000,pricingEvidence:{...coaching.pricingEvidence,
+    coaching:{...coaching.pricingEvidence.coaching,courtRentalIncluded:true,courtAmountMinor:0}}};
+  expect(buildBookingRevision(included,operation,null).totalAmountMinor).toBe(10000);
+  for(const invalid of [{...coaching,totalAmountMinor:15000},{...coaching,coachName:null},{...coaching,currency:"EUR" as const},
+    {...coaching,endMinute:690},{...coaching,coachUserId:randomUUID()},{...terms,coachUserId:coach},
+    {...included,pricingEvidence:{...included.pricingEvidence,coaching:{...included.pricingEvidence.coaching,courtAmountMinor:5001}}}])
+    expect(()=>buildBookingRevision(invalid,operation,null)).toThrow();
+  const semi={...coaching,coachingProgramName:"Semi-private coaching",pricingEvidence:{...coaching.pricingEvidence,
+    coaching:{...coaching.pricingEvidence.coaching,participantCount:2 as const}}};
+  const semiCreated=buildBookingRevision(semi,operation,null);
+  const semiConfirmed=buildBookingRevision(semiCreated,{...operation,id:randomUUID(),kind:"confirmed",bookingState:"confirmed",operationKey:"confirmation",actorScope:"provider"},semiCreated);
+  expect(semiConfirmed.coachingProgramName).toBe("Semi-private coaching");
+  expect(semiConfirmed.pricingEvidence.coaching?.participantCount).toBe(2);
+  expect(semiConfirmed.pricingEvidence).toEqual(semiCreated.pricingEvidence);
+  // Court bookings remain coachless.
+  expect(buildBookingRevision(terms,operation,null)).not.toHaveProperty("pricingEvidence.coaching");
+});

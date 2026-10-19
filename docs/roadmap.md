@@ -52,6 +52,9 @@
 ## V2 — Tennis-specific features
 
 - expanded player-profile features (basic `/profile` and avatars are implemented);
+
+Deferred indefinitely (not planned):
+
 - partner matching;
 - match recording;
 - Elo rating;
@@ -92,9 +95,9 @@ Recommended sequence:
 13. Rescheduling
 14. Membership plans and subscriptions
 15. Admin operational dashboard
-16. Partner matching
-17. Match recording
-18. Elo ranking
+16. Partner matching (deferred indefinitely)
+17. Match recording (deferred indefinitely)
+18. Elo ranking (deferred indefinitely)
 ```
 
 The intent is to prove the difficult security/concurrency/payment constraints before secondary tennis features.
@@ -121,7 +124,7 @@ Do not introduce prematurely:
 - coaches may work across multiple locations;
 - members have one club-wide identity;
 - memberships are club-wide unless explicitly restricted;
-- rankings are club-wide;
+- rankings, if ever introduced, would be club-wide (currently deferred indefinitely);
 - court and coach availability are location-specific;
 - Stripe is the payment provider;
 - Supabase Auth is the authentication provider;

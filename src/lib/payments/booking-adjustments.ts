@@ -8,7 +8,6 @@ import * as bookings from "@/lib/db/repositories/bookings.repository";
 import { lockLocations } from "@/lib/db/repositories/clubs.repository";
 import type { BookingRescheduleResult } from "@/lib/bookings/reschedule";
 import { logger } from "@/lib/logger";
-import { deliverPendingBookingNotifications } from "@/lib/notifications/booking-delivery";
 import { processBookingRefund } from "./refunds";
 import { summarizeRefunds, type PaymentProvider } from "./domain";
 import { onlinePaymentAdapter } from "./providers";
@@ -109,8 +108,6 @@ export async function dismissAdjustment(adjustmentId: string) {
 
 export async function finishBookingAdjustment(result: BookingRescheduleResult & { supersededAttempts?: DismissedAttempt[] }): Promise<BookingRescheduleResult> {
   const outcome = await adjustmentOutcome(result);
-  // Same-price and Pay-at-club saves committed their email in the command.
-  await deliverPendingBookingNotifications();
   return outcome;
 }
 

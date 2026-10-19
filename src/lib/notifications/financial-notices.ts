@@ -3,7 +3,8 @@ import "server-only";
 import { z } from "zod";
 import { readCurrentAccount } from "@/lib/auth/account";
 import { getDataSource } from "@/lib/db/data-source";
-import { acknowledgeBookingNotice, listUnacknowledgedBookingNotices, listCustomerNotifications, manageCustomerNotifications, findCustomerNotification, hasUnreadCustomerNotifications } from "@/lib/db/repositories/booking-notifications.repository";
+import { inTransaction } from "@/lib/db/transaction";
+import { acknowledgeBookingNotice, listUnacknowledgedBookingNotices, listCustomerNotifications, manageCustomerNotifications, findCustomerNotification, hasUnreadCustomerNotifications, hasAdminNotificationAlerts } from "@/lib/db/repositories/booking-notifications.repository";
 import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
 
@@ -35,7 +36,7 @@ export async function acknowledgeOwnFinancialNotice(id: unknown, client?: Client
   if (account.state !== "active") return { ok: false, message: "An active account is required." };
   try {
     // Ownership is enforced in the conditional update: another owner's notice is never changed.
-    if (!await acknowledgeBookingNotice((await getDataSource()).manager, { id: parsed.data, accountUserId: account.userId }))
+    if (!await inTransaction(manager => acknowledgeBookingNotice(manager, { id: parsed.data, accountUserId: account.userId })))
       return { ok: false, message: "This notice is no longer available." };
   } catch {
     logger.error({ event: "notifications.acknowledge_failed", actorId: account.userId }, "Failed to acknowledge financial notice");
@@ -84,4 +85,15 @@ export async function readOwnUnreadNotifications(client?: Client) {
   const account = await readCurrentAccount(client ?? await createClient());
   if (account.state !== "active") return false;
   return hasUnreadCustomerNotifications((await getDataSource()).manager, account.userId);
+}
+
+// Navbar indicators from one authoritative account read. Only an active Admin
+// receives the Admin alert field; every other account gets the personal flag alone.
+export async function readNotificationIndicators(client?: Client): Promise<{ unread: boolean; adminAlerts?: boolean }> {
+  const account = await readCurrentAccount(client ?? await createClient());
+  if (account.state !== "active") return { unread: false };
+  const { manager } = await getDataSource();
+  const unread = await hasUnreadCustomerNotifications(manager, account.userId);
+  if (!account.roles.includes("admin")) return { unread };
+  return { unread, adminAlerts: await hasAdminNotificationAlerts(manager) };
 }

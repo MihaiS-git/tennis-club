@@ -68,7 +68,7 @@ export async function CourtsDiscovery({ locations }: { locations: Promise<Public
                 {numbered && (
                   <p aria-hidden="true" className="font-sans text-xs font-semibold tabular-nums tracking-[0.16em] text-accent">{String(index + 1).padStart(2, "0")}</p>
                 )}
-                <h3 id={`location-${location.id}`} className="mt-2 font-heading text-[clamp(30px,3.6vw,46px)] font-semibold leading-[1.05] tracking-[-0.035em] text-primary">
+                <h3 id={`location-${location.id}`} className="mt-2 scroll-mt-24 font-heading text-[clamp(30px,3.6vw,46px)] font-semibold leading-[1.05] tracking-[-0.035em] text-primary">
                   {location.name}
                 </h3>
                 {addressLines.length > 0 && (

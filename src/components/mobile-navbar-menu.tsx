@@ -10,6 +10,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import { PrimaryNavigationLink } from "./primary-navigation-link";
+import { BookCourtLink } from "./book-court-link";
 import { ProfileNavigationAvatar } from "./profile-navigation-avatar";
 
 export function MobileNavbarShell({ children }: { children: ReactNode }) {
@@ -19,9 +20,7 @@ export function MobileNavbarShell({ children }: { children: ReactNode }) {
         Tennis Club
       </Link>
       <div className="flex items-center gap-2">
-        <Link href="/book" className="inline-flex min-h-10 items-center justify-center whitespace-nowrap rounded-control bg-primary px-3 text-xs font-semibold text-primary-foreground transition hover:bg-primary-hover sm:text-sm">
-          Book a court
-        </Link>
+        <BookCourtLink className="inline-flex min-h-10 items-center justify-center whitespace-nowrap rounded-control bg-primary px-3 text-xs font-semibold text-primary-foreground transition hover:bg-primary-hover sm:text-sm" />
         {children}
       </div>
     </div>
@@ -32,8 +31,8 @@ export function MobileNavbarMenu(props: Parameters<typeof MobileNavbarControls>[
   return <MobileNavbarShell><MobileNavbarControls {...props} /></MobileNavbarShell>;
 }
 
-export function MobileNavbarControls({ isAuthenticated, canReserve, avatarUrl = null }: {
-  isAuthenticated: boolean; canReserve: boolean; avatarUrl?: string | null;
+export function MobileNavbarControls({ isAuthenticated, canReserve, isAdmin = false, avatarUrl = null }: {
+  isAuthenticated: boolean; canReserve: boolean; isAdmin?: boolean; avatarUrl?: string | null;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const menuId = useId();
@@ -93,7 +92,7 @@ export function MobileNavbarControls({ isAuthenticated, canReserve, avatarUrl = 
 
   return (
     <>
-          {isAuthenticated && <NotificationBell />}
+          {isAuthenticated && <NotificationBell admin={isAdmin} />}
           <button
             ref={triggerRef}
             type="button"
@@ -148,14 +147,6 @@ export function MobileNavbarControls({ isAuthenticated, canReserve, avatarUrl = 
           </PrimaryNavigationLink>
           <PrimaryNavigationLink onClick={closeMenu} href="/coaching" className="flex min-h-12 items-center text-sm font-medium">
             Coaching
-          </PrimaryNavigationLink>
-          {isAuthenticated && (
-            <PrimaryNavigationLink onClick={closeMenu} href="/matches" className="flex min-h-12 items-center text-sm font-medium">
-              Matches
-            </PrimaryNavigationLink>
-          )}
-          <PrimaryNavigationLink onClick={closeMenu} href="/rankings" className="flex min-h-12 items-center text-sm font-medium">
-            Rankings
           </PrimaryNavigationLink>
           <PrimaryNavigationLink onClick={closeMenu} href="/club" className="flex min-h-12 items-center text-sm font-medium">
             Club

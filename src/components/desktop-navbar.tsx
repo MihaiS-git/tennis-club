@@ -8,18 +8,17 @@ import { signOutAction } from "@/app/account/actions";
 
 import { readNavigationProfile } from "@/lib/profile/navigation";
 import { PrimaryNavigationLink } from "./primary-navigation-link";
+import { BookCourtLink } from "./book-court-link";
 import { ProfileNavigationAvatar } from "./profile-navigation-avatar";
 
-async function AccountNavigationLink({ admin = false }: { admin?: boolean }) {
+async function AdminNavigationLink() {
   const { account } = await readNavigationProfile();
-  const visible = admin
-    ? account.state === "active" && account.roles.some((role) => role === "admin" || role === "coach")
-    : account.state !== "unauthenticated";
+  const visible = account.state === "active" && account.roles.some((role) => role === "admin" || role === "coach");
   if (!visible) return null;
 
   return (
-    <PrimaryNavigationLink className="inline-flex min-h-10 items-center text-sm font-medium" section={admin ? "/admin" : "/matches"} href={admin ? "/admin" : "/matches"}>
-      {admin ? "Admin" : "Matches"}
+    <PrimaryNavigationLink className="inline-flex min-h-10 items-center text-sm font-medium" section="/admin" href="/admin">
+      Admin
     </PrimaryNavigationLink>
   );
 }
@@ -32,7 +31,7 @@ async function AccountControls({ authenticated }: { authenticated: boolean }) {
   if (!authenticated) return <Link className="text-sm font-medium text-primary hover:text-accent" href="/login">Sign in</Link>;
 
   return <>
-    <NotificationBell />
+    <NotificationBell admin={account.state === "active" && account.roles.includes("admin")} />
     <Link href="/profile" aria-label="Profile"
       className="inline-flex min-h-10 items-center rounded-control border border-border-strong px-1.5 text-primary hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-primary">
       <ProfileNavigationAvatar src={avatarUrl} desktop />
@@ -62,17 +61,11 @@ export function DesktopNavbar() {
           <PrimaryNavigationLink className="inline-flex min-h-10 items-center text-sm font-medium" href="/coaching">
             Coaching
           </PrimaryNavigationLink>
-          <Suspense fallback={<span aria-hidden="true" className="h-5 w-14 rounded-control bg-surface-muted" />}>
-            <AccountNavigationLink />
-          </Suspense>
-          <PrimaryNavigationLink className="inline-flex min-h-10 items-center text-sm font-medium" href="/rankings">
-            Rankings
-          </PrimaryNavigationLink>
           <PrimaryNavigationLink className="inline-flex min-h-10 items-center text-sm font-medium" href="/club">
             Club
           </PrimaryNavigationLink>
           <Suspense fallback={<span aria-hidden="true" className="h-5 w-10 rounded-control bg-surface-muted" />}>
-            <AccountNavigationLink admin />
+            <AdminNavigationLink />
           </Suspense>
         </nav>
 
@@ -80,12 +73,9 @@ export function DesktopNavbar() {
           <Suspense fallback={<span aria-hidden="true" className="h-5 w-12 rounded-control bg-surface-muted" />}>
             <AccountControls authenticated={false} />
           </Suspense>
-          <Link
-            href="/book"
+          <BookCourtLink
             className="inline-flex min-h-10 items-center justify-center whitespace-nowrap rounded-control bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:bg-primary-hover"
-          >
-            Book a court
-          </Link>
+          />
           <Suspense fallback={<span aria-hidden="true" className="h-9 w-24 rounded-control bg-surface-muted" />}>
             <AccountControls authenticated />
           </Suspense>

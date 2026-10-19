@@ -2,24 +2,22 @@ import Link from "next/link";
 import { connection } from "next/server";
 import { Suspense } from "react";
 
-import { listPublicLocationsWithCourts } from "@/lib/courts/public";
+import { readPublicCoaching } from "@/lib/coaching/public";
+import { listPublicLocationsWithCourts, type PublicLocation } from "@/lib/courts/public";
 import { CourtAvailabilityCard, CourtAvailabilityCardShell } from "./home-court-availability";
 import { FacilitiesCourtsFallback, FacilitiesCourtsSummary, HeroCourtSummary, heroSummaryClassName } from "./home-court-summary";
+import { HomeCoachingFallback, HomeCoachingPrograms } from "./home-coaching";
 import { HomeLocations, HomeLocationsShell } from "./home-locations";
 import styles from "./page.module.css";
+import { PageSectionNav, type PageSection } from "./page-section-nav";
 
-const openMatches = [
-  { format: "Singles", level: "Level 5", time: "19:00", playersNeeded: "1 player needed" },
-  { format: "Doubles", level: "Level 4", time: "20:00", playersNeeded: "2 players needed" },
-  { format: "Singles", level: "Level 5.5", time: "20:30", playersNeeded: "1 player needed" },
-  { format: "Doubles", level: "Level 6", time: "21:00", playersNeeded: "1 player needed" },
-];
-
-const coachingSlots = [
-  { name: "Ana Pop", time: "17:30" },
-  { name: "Victor Ionescu", time: "19:00" },
-  { name: "Ana Pop", time: "20:00" },
-  { name: "Victor Ionescu", time: "21:00" },
+const sections: PageSection[] = [
+  { id: "today", label: "Today" },
+  { id: "club", label: "The club" },
+  { id: "facilities", label: "Facilities" },
+  { id: "coaching", label: "Coaching" },
+  { id: "community", label: "Community" },
+  { id: "locations", label: "Locations" },
 ];
 
 // One public locations read per request, shared by every court section.
@@ -28,8 +26,14 @@ async function readPublicLocations() {
   return listPublicLocationsWithCourts();
 }
 
+// Published coaching programs, placed on the same publicly visible locations.
+async function readCoaching(locations: Promise<PublicLocation[]>) {
+  return readPublicCoaching(await locations);
+}
+
 export default function Home({ searchParams }: PageProps<"/">) {
   const locations = readPublicLocations();
+  const coaching = readCoaching(locations);
 
   return (
     <main className="flex-1">
@@ -66,7 +70,7 @@ export default function Home({ searchParams }: PageProps<"/">) {
               Play more tennis.
             </h1>
             <p className="mt-4 max-w-[340px] font-sans text-base leading-6 text-muted-foreground md:mt-6 md:text-lg md:leading-7 lg:mt-5 lg:max-w-[420px] lg:text-ivory xl:mt-6">
-              Book a court, find your next match, or train with a coach.
+              Book a court, train with a coach, or simply enjoy the game.
             </p>
             <div className="mt-6 flex flex-col gap-2.5 md:mt-8 md:flex-row md:items-center md:gap-2 lg:mt-6 lg:gap-3 xl:mt-8">
               <Link
@@ -76,17 +80,17 @@ export default function Home({ searchParams }: PageProps<"/">) {
                 Book a court
               </Link>
               <Link
-                href="/matches"
+                href="/courts"
                 className="inline-flex min-h-12 w-full items-center justify-center rounded-control border border-border-strong bg-surface px-5 font-sans text-sm font-semibold text-primary transition hover:bg-surface-muted hover:text-accent md:w-auto lg:border-ivory/80 lg:bg-forest-900/20 lg:px-6 lg:text-chalk lg:hover:border-accent-on-dark lg:hover:bg-forest-900/40 lg:hover:text-chalk"
               >
-                Find a match
+                Explore courts
               </Link>
             </div>
             <Link
               href="/coaching"
               className={`${styles.editorialLink} mt-2 inline-flex min-h-11 w-fit items-center font-sans text-sm font-semibold text-primary hover:text-accent md:mt-4 lg:mt-3 lg:min-h-10 lg:text-chalk lg:hover:text-chalk xl:mt-4`}
             >
-              <span className={`${styles.editorialLabel} underline decoration-accent underline-offset-4 lg:decoration-accent-on-dark`}>Book coaching</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-1`}>→</span>
+              <span className={`${styles.editorialLabel} underline decoration-accent underline-offset-4 lg:decoration-accent-on-dark`}>Explore coaching</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-1`}>→</span>
             </Link>
           </div>
 
@@ -106,8 +110,9 @@ export default function Home({ searchParams }: PageProps<"/">) {
           </div>
         </div>
       </section>
+      <PageSectionNav sections={sections} />
 
-      <section aria-labelledby="today-title" className="bg-background px-6 py-16 md:px-8 md:py-20 lg:py-24">
+      <section id="today" aria-labelledby="today-title" className="scroll-mt-20 bg-background px-6 py-16 md:px-8 md:py-20 lg:py-24">
         <div className="mx-auto max-w-7xl">
           <div className="mb-9 md:mb-12">
             <h2 id="today-title" className="font-heading text-[clamp(32px,4vw,52px)] font-semibold leading-tight tracking-[-0.035em] text-foreground">
@@ -127,53 +132,16 @@ export default function Home({ searchParams }: PageProps<"/">) {
               <CourtAvailabilityCard locations={locations} searchParams={searchParams} />
             </Suspense>
 
-            <div className="grid gap-4 md:grid-cols-2 md:items-start lg:grid-cols-1 lg:gap-5">
-              <article aria-labelledby="match-title" className="rounded-card bg-primary p-6 text-primary-foreground md:p-7 lg:p-8">
-                <h3 id="match-title" className="mb-3 font-sans text-xs font-semibold uppercase tracking-[0.16em] text-ivory">Open matches</h3>
-                {openMatches.length > 0 ? (
-                  <div>
-                    {openMatches.slice(0, 4).map((match) => (
-                      <Link key={`${match.format}-${match.level}-${match.time}`} href="/matches" className="block border-t border-ivory/20 py-3 transition-colors first:border-t-0 hover:bg-forest-700">
-                        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                          <p className="font-heading text-base font-semibold text-chalk">
-                            {match.format} <span className="font-sans text-sm font-normal text-ivory">· {match.level}</span>
-                          </p>
-                          <span className="font-sans text-sm tabular-nums text-ivory">{match.time}</span>
-                        </div>
-                        <p className="mt-1 font-sans text-xs font-semibold text-tennis">{match.playersNeeded}</p>
-                      </Link>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="py-5 font-sans text-sm leading-6">
-                    <p className="font-semibold text-chalk">No open matches today.</p>
-                    <p className="mt-1 text-ivory">Be the first to start one.</p>
-                  </div>
-                )}
-                <Link href="/matches" className={`${styles.editorialLink} mt-2 inline-flex min-h-11 w-fit items-center font-sans text-sm font-semibold text-chalk transition-colors hover:text-chalk focus-visible:rounded-control`}>
-                  <span className={`${styles.editorialLabel} underline decoration-accent-on-dark underline-offset-8`}>View matches</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
-                </Link>
-              </article>
-
+            <div className="grid gap-4 lg:gap-5">
               <article aria-labelledby="coaching-title" className="rounded-card border border-border bg-surface p-6 md:p-7 lg:p-8">
-                <h3 id="coaching-title" className="mb-5 font-heading text-xl font-semibold tracking-[-0.02em] text-primary">Coaching today</h3>
-                {coachingSlots.length > 0 ? (
-                  <div>
-                    {coachingSlots.slice(0, 4).map((slot) => (
-                      <Link key={`${slot.name}-${slot.time}`} href="/coaching" className="group flex items-center justify-between gap-4 border-t border-border py-3 font-sans text-sm transition-colors first:border-t-0 first:pt-0 hover:bg-background">
-                        <span className="font-medium text-primary transition-colors group-hover:text-accent">{slot.name}</span>
-                        <span className="shrink-0 tabular-nums text-muted-foreground">{slot.time}</span>
-                      </Link>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="py-5 font-sans text-sm leading-6">
-                    <p className="font-semibold text-foreground">No coaching slots today.</p>
-                    <p className="mt-1 text-muted-foreground">Check upcoming availability.</p>
-                  </div>
-                )}
+                <h3 id="coaching-title" className="mb-5 font-heading text-xl font-semibold tracking-[-0.02em] text-primary">Coaching</h3>
+                {/* Coaching lessons are not bookable online yet; no lesson times are shown. */}
+                <div className="py-5 font-sans text-sm leading-6">
+                  <p className="font-semibold text-foreground">Programs, coaches and prices.</p>
+                  <p className="mt-1 text-muted-foreground">See what the club offers. Lessons can’t be booked online yet.</p>
+                </div>
                 <Link href="/coaching" className={`${styles.editorialLink} mt-2 inline-flex min-h-11 w-fit items-center font-sans text-sm font-semibold text-primary transition-colors hover:text-accent focus-visible:rounded-control`}>
-                  <span className={`${styles.editorialLabel} underline decoration-accent underline-offset-8`}>View coaches</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
+                  <span className={`${styles.editorialLabel} underline decoration-accent underline-offset-8`}>Explore coaching</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
                 </Link>
               </article>
             </div>
@@ -181,19 +149,19 @@ export default function Home({ searchParams }: PageProps<"/">) {
         </div>
       </section>
 
-      <section aria-labelledby="club-intro-title" className="bg-forest-900 px-0 py-16 text-chalk md:px-8 md:py-20 xl:py-28">
+      <section id="club" aria-labelledby="club-intro-title" className="scroll-mt-20 bg-forest-900 px-0 py-16 text-chalk md:px-8 md:py-20 xl:py-28">
         <div className={`${styles.stagger} mx-auto max-w-7xl lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:items-center lg:gap-16`}>
           <div className="max-w-2xl px-6 md:px-0 lg:max-w-none">
             <h2 id="club-intro-title" className="max-w-[13ch] font-heading text-[clamp(36px,4vw,56px)] font-semibold leading-[1.08] tracking-[-0.035em]">
               A tennis club built around playing.
             </h2>
             <p className="mt-6 font-sans text-base leading-7 text-ivory md:text-lg md:leading-8">
-              TennisClub brings together tennis courts, coaching, open matches and a community of players across its club locations. Whether you play regularly or are looking for somewhere new to get on court, the club is designed to make tennis easy to join and part of your week.
+              TennisClub brings together tennis courts, coaching, player facilities and a community of players across its club locations. Whether you play regularly or are looking for somewhere new to get on court, the club is designed to make tennis easy to join and part of your week.
             </p>
             <ul className="mt-8 grid grid-cols-2 gap-x-8 font-sans text-sm font-medium text-ivory md:max-w-lg md:text-base">
               <li className="border-t border-ivory/30 py-3">Courts</li>
               <li className="border-t border-ivory/30 py-3">Coaching</li>
-              <li className="border-t border-ivory/30 py-3">Open matches</li>
+              <li className="border-t border-ivory/30 py-3">Facilities</li>
               <li className="border-t border-ivory/30 py-3">Community</li>
             </ul>
             <Link href="/club" className={`${styles.editorialLink} mt-6 inline-flex min-h-11 items-center font-sans text-base font-semibold text-chalk transition-colors hover:text-chalk focus-visible:rounded-control`}>
@@ -219,7 +187,7 @@ export default function Home({ searchParams }: PageProps<"/">) {
         </div>
       </section>
 
-      <section aria-labelledby="facilities-title" className="bg-chalk px-6 py-16 md:px-8 md:py-20 xl:py-28">
+      <section id="facilities" aria-labelledby="facilities-title" className="scroll-mt-20 bg-chalk px-6 py-16 md:px-8 md:py-20 xl:py-28">
         <div className="mx-auto max-w-7xl">
           <div className="lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:gap-x-16">
             <div className={styles.reveal}>
@@ -270,21 +238,18 @@ export default function Home({ searchParams }: PageProps<"/">) {
         </div>
       </section>
 
-      <section aria-labelledby="coaching-section-title" className="bg-forest-900 px-6 py-16 md:px-8 md:py-20 xl:py-28">
+      <section id="coaching" aria-labelledby="coaching-section-title" className="scroll-mt-20 bg-forest-900 px-6 py-16 md:px-8 md:py-20 xl:py-28">
         <div className={`${styles.stagger} mx-auto max-w-7xl lg:grid lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:items-center lg:gap-x-12 xl:gap-x-20`}>
           <div className="lg:col-start-2 lg:row-start-1">
             <h2 id="coaching-section-title" className="max-w-[13ch] font-heading text-[clamp(36px,4vw,56px)] font-semibold leading-[1.08] tracking-[-0.035em] text-chalk">
               Coaching for every stage of your game.
             </h2>
             <p className="mt-6 max-w-xl font-sans text-base leading-7 text-ivory md:text-lg md:leading-8">
-              Train with experienced coaches for individual sessions, structured practice and ongoing development. Coaching is available for players who are just starting out as well as those looking to improve specific parts of their game.
+              Work on your game with the club’s coaches. The Coaching page lists each program with its lesson lengths, group size and prices at every location.
             </p>
-            <ul className="mt-10 grid gap-x-8 font-sans text-base font-medium text-ivory md:grid-cols-2">
-              <li className="border-t border-ivory/30 py-4">Individual coaching</li>
-              <li className="border-t border-ivory/30 py-4">Junior coaching</li>
-              <li className="border-t border-ivory/30 py-4">Group sessions</li>
-              <li className="border-t border-ivory/30 py-4">Performance training</li>
-            </ul>
+            <Suspense fallback={<HomeCoachingFallback />}>
+              <HomeCoachingPrograms coaching={coaching} />
+            </Suspense>
             <Link href="/coaching" className={`${styles.editorialLink} mt-6 inline-flex min-h-11 w-fit items-center font-sans text-base font-semibold text-chalk transition-colors hover:text-chalk focus-visible:rounded-control`}>
               <span className={`${styles.editorialLabel} underline decoration-accent-on-dark underline-offset-8`}>Meet the coaches</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
             </Link>
@@ -306,22 +271,21 @@ export default function Home({ searchParams }: PageProps<"/">) {
         </div>
       </section>
 
-      <section aria-labelledby="matches-community-title" className="bg-background px-6 py-16 md:px-8 md:py-20 xl:py-28">
+      <section id="community" aria-labelledby="community-title" className="scroll-mt-20 bg-background px-6 py-16 md:px-8 md:py-20 xl:py-28">
         <div className={`${styles.stagger} mx-auto max-w-7xl lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:items-center lg:gap-x-12 xl:gap-x-20`}>
           <div>
-            <h2 id="matches-community-title" className="max-w-[13ch] font-heading text-[clamp(36px,4vw,56px)] font-semibold leading-[1.08] tracking-[-0.035em] text-foreground">
-              Find the right people to play with.
+            <h2 id="community-title" className="max-w-[13ch] font-heading text-[clamp(36px,4vw,56px)] font-semibold leading-[1.08] tracking-[-0.035em] text-foreground">
+              Tennis is better with good company.
             </h2>
             <p className="mt-6 max-w-xl font-sans text-base leading-7 text-muted-foreground md:text-lg md:leading-8">
-              Join open matches, find players at a similar level, or organize your own game. TennisClub makes it easier to spend less time searching for partners and more time on court.
+              TennisClub is home to players of every standard. Enjoy tennis with others of a similar playing level, whether you prefer a relaxed rally or a hard-fought set.
             </p>
             <ul className="mt-10 font-sans text-base font-medium text-primary">
-              <li className="border-t border-border py-4">Open matches</li>
               <li className="border-t border-border py-4">Players at a similar level</li>
               <li className="border-t border-border py-4">Singles &amp; doubles</li>
             </ul>
-            <Link href="/matches" className={`${styles.editorialLink} mt-6 inline-flex min-h-11 w-fit items-center font-sans text-base font-semibold text-primary transition-colors hover:text-accent focus-visible:rounded-control`}>
-              <span className={`${styles.editorialLabel} underline decoration-accent underline-offset-8`}>Explore matches</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
+            <Link href="/book" className={`${styles.editorialLink} mt-6 inline-flex min-h-11 w-fit items-center font-sans text-base font-semibold text-primary transition-colors hover:text-accent focus-visible:rounded-control`}>
+              <span className={`${styles.editorialLabel} underline decoration-accent underline-offset-8`}>Book a court</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
             </Link>
           </div>
 

@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { z } from "zod";
 import { requireActiveAdmin } from "@/lib/admin/authorization";
 import { listAdminPaymentTransactions } from "@/lib/payments/admin";
+import { parseTransactionBookingReturn } from "@/lib/bookings/admin-query";
 import { adminPaymentHref, parseAdminPaymentQuery } from "@/lib/payments/admin-query";
 import { TransactionRow } from "../../../transaction-row";
 
@@ -18,5 +19,8 @@ export default async function TransactionPage({ params, searchParams }: {
     { kind: parsed.data.kind, id: parsed.data.transactionId });
   const transaction = result.rows[0];
   if (!transaction) notFound();
-  return <TransactionRow key={`${transaction.transaction_kind}/${transaction.transaction_id}`} transaction={transaction} detail listHref={adminPaymentHref(parseAdminPaymentQuery(await searchParams))} />;
+  const search = await searchParams;
+  // Opened from Booking Details: the booking link restores that exact view.
+  return <TransactionRow key={`${transaction.transaction_kind}/${transaction.transaction_id}`} transaction={transaction} detail
+    listHref={adminPaymentHref(parseAdminPaymentQuery(search))} bookingReturnHref={parseTransactionBookingReturn(search, transaction.booking_id) ?? undefined} />;
 }

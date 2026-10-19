@@ -1,10 +1,10 @@
 import { beforeEach, expect, test, vi } from "vitest";
 const { unread } = vi.hoisted(() => ({ unread: vi.fn() }));
-vi.mock("@/lib/notifications/financial-notices", () => ({ readOwnUnreadNotifications: unread }));
+vi.mock("@/lib/notifications/financial-notices", () => ({ readNotificationIndicators: unread }));
 import { GET } from "@/app/api/notifications/unread/route";
 beforeEach(() => vi.resetAllMocks());
 test("unread endpoint returns only the boolean with private no-store caching", async () => {
-  unread.mockResolvedValue(true);
+  unread.mockResolvedValue({ unread: true });
   const response = await GET();
   expect(await response.json()).toEqual({ unread: true });
   expect(response.headers.get("Cache-Control")).toBe("private, no-store");
@@ -17,8 +17,8 @@ test("unread endpoint hides internal errors", async () => {
 });
 
 test("each unread request reads current state rather than reusing an earlier result", async () => {
-  unread.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+  unread.mockResolvedValueOnce({ unread: false }).mockResolvedValueOnce({ unread: true, adminAlerts: true });
   expect(await (await GET()).json()).toEqual({ unread: false });
-  expect(await (await GET()).json()).toEqual({ unread: true });
+  expect(await (await GET()).json()).toEqual({ unread: true, adminAlerts: true });
   expect(unread).toHaveBeenCalledTimes(2);
 });

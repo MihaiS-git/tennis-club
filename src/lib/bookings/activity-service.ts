@@ -11,7 +11,7 @@ import { localStartInstant } from "@/lib/courts/local-time";
 import { getDataSource } from "@/lib/db/data-source";
 import { listOwnerActivityBatch } from "@/lib/db/repositories/court-activity.repository";
 import { listBookingsWithLivePayment, listBookingsWithPendingChange } from "@/lib/db/repositories/booking-adjustments.repository";
-import type { CourtHistoryItem } from "./history";
+import { courtActivityType, type CourtHistoryItem } from "./history";
 import { minorAmountSchema } from "@/lib/pricing/money";
 import { ACTIVITY_PAGE_SIZE, parseActivityQuery, type ActivityQuery, type ActivityScope, type ActivitySearchParams } from "./activity-query";
 import type { PersonalCustomerBooking } from "./personal";
@@ -34,6 +34,8 @@ const bookingSelectSchema = z.object({
   id: z.uuid(), account_user_id: z.uuid(), status: z.enum(["confirmed", "cancelled"]),
   updated_at: z.iso.datetime({ offset: true }),
   customer_name: z.string(), customer_email: z.string(), customer_phone: z.string(),
+  includes_coaching: z.boolean(),
+  coach_name: z.string().nullable(), coaching_program_name: z.string().nullable(),
   cancellation_notice_minutes: cancellationNoticeMinutesSchema,
   total_amount_minor: minorAmountSchema, currency: z.enum(locationCurrencies),
   payment_method: z.enum(["online", "pay_at_club"]),
@@ -56,7 +58,7 @@ function compareActivity(a: ActivityRow, b: ActivityRow, scope: ActivityScope, q
     switch (query.sort) {
       case "location": return row.location_name.toLowerCase();
       case "court": return row.court_name.toLowerCase();
-      case "type": return row.kind;
+      case "type": return courtActivityType(row);
       case "duration": return row.ends_at_minute - row.starts_at_minute;
       case "status": return row.status === "cancelled" ? "cancelled" : "completed";
       default: return Date.parse(row.starts_at_instant);
@@ -73,7 +75,7 @@ export async function listOwnCourtActivity(scope: ActivityScope, query: Activity
   const account = await readCurrentAccount(supabase);
   if (account.state !== "active") throw new Error("An active account is required.");
   const staff = account.roles.some((role) => role === "admin" || role === "coach");
-  const type = staff ? query.type : "booking";
+  const type = !staff && query.type === "reservation" ? "all" : query.type;
   if (!Number.isInteger(query.page) || query.page < 1 || query.page > 1_000_000
     || !Number.isFinite(now.getTime()) || (scope === "upcoming" && (query.status !== "all" || query.sort === "status"))
     || (query.from && query.to && query.from > query.to)) {
@@ -124,6 +126,8 @@ export async function listOwnCourtActivity(scope: ActivityScope, query: Activity
             row = { ...common, kind: "booking", status: source.status,
               history_at: source.status === "cancelled" ? source.updated_at : end,
               customer_name: source.customer_name, customer_email: source.customer_email, customer_phone: source.customer_phone,
+              includes_coaching: source.includes_coaching,
+              coach_name: source.coach_name, coaching_program_name: source.coaching_program_name,
               cancellation_notice_minutes: source.cancellation_notice_minutes,
               total_amount_minor: source.total_amount_minor, currency: source.currency };
           } else {
@@ -135,7 +139,7 @@ export async function listOwnCourtActivity(scope: ActivityScope, query: Activity
           }
           locations.set(row.location_id, { id: row.location_id, name: row.location_name });
           courts.set(row.court_id, { id: row.court_id, name: row.court_name, location_id: row.location_id });
-          if ((type !== "all" && row.kind !== type)
+          if ((type !== "all" && (type === "booking" ? row.kind !== "booking" : courtActivityType(row) !== type))
             || (query.status !== "all" && (row.status === "cancelled" ? "cancelled" : "completed") !== query.status)
             || (query.location && row.location_id !== query.location) || (query.court && row.court_id !== query.court)
             || (query.from && row.booking_date < query.from) || (query.to && row.booking_date > query.to)) continue;

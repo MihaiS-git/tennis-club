@@ -34,7 +34,7 @@ Architectural rule:
 
 > Next.js is the complete primary application authorization boundary, TypeScript decides business behavior, PostgreSQL guarantees data integrity, application table grants deny direct browser access and Storage RLS protects private objects, and Stripe owns payment processing.
 
-`src/lib/db/data-source.ts` registers all 21 application entities and the
+`src/lib/db/data-source.ts` registers all 28 application entities and the
 additional non-synchronized reference to Supabase-managed `auth.users`, and lazily initializes a module-scoped connection. This preserves constructor identity across Next.js route/action
 bundles; do not move the connection into a process-global registry. `DATABASE_POOL_MAX`
 defaults to 2. Synchronization, dropping schemas and automatic migrations are disabled.
@@ -60,7 +60,8 @@ TypeScript validates publication readiness, coverage/court compatibility, pricin
 and opening-hours containment under these locks. Rule-set replacement preserves its
 parent and atomically replaces children. No coordination tables, aggregate policy triggers,
 pricing-hours bridge or application business functions are installed. PostgreSQL retains
-PK/FK/UNIQUE/CHECK integrity and the five GiST overlap exclusions.
+PK/FK/UNIQUE/CHECK integrity and the five GiST overlap exclusions, plus two for coach availability
+and one for coach occupancy of coaching reservations.
 
 Identity services preserve Admin self-management/final-active-Admin checks in TypeScript,
 serialize authoritative role/account reads, and explicitly persist attribution/timestamps.
@@ -238,7 +239,7 @@ public.user_roles
 public.player_profiles
 ```
 
-`public.users` owns account and personal/contact data; `player_profiles` owns optional tennis data. Future `coach_profiles` is a sibling domain entity. The `/profile` Server Component authorizes through the user-scoped Auth client and reads through `loadProfile` and TypeORM repositories, and route-local Server Actions delegate mutations to TypeScript application functions. The private `profile-avatars` bucket stores uploaded player images; profile rows contain only object paths. Browser-side Supabase access is not introduced. See `profiles.md`.
+`public.users` owns account and personal/contact data; `player_profiles` owns optional tennis data. `coach_profiles` is its implemented sibling for public coaching data (see `coaching.md`). The `/profile` Server Component authorizes through the user-scoped Auth client and reads through `loadProfile` and TypeORM repositories, and route-local Server Actions delegate mutations to TypeScript application functions. The private `profile-avatars` bucket stores uploaded player images; profile rows contain only object paths. Browser-side Supabase access is not introduced. See `profiles.md`.
 
 The three consolidated migrations are `InitialApplicationSchema1791462257924`,
 `ApplicationNativeIntegrity1791462257925` and `SupabaseAuthStorage1791462257926`.
@@ -270,7 +271,8 @@ Likely domains include:
 
 - locations/courts;
 - court availability/exceptions;
-- coaches/coach locations/availability;
+- coaches/coach locations/availability (programs, coach profiles, assignments,
+  prices and coach availability are implemented; see `coaching.md`);
 - bookings/participants/rescheduling history;
 - partner requests;
 - matches/ratings/rating history;
@@ -418,3 +420,17 @@ see [notifications](booking-notifications.md).
 Email failure cannot change committed booking/payment state. Server-only
 `BREVO_API_KEY` and a Brevo-verified `BOOKING_MAIL_FROM` are required.
 Supabase Auth confirmation/recovery emails remain independent.
+
+## Coaching programs and prices
+
+Coaching Phase 1 adds programs, program durations, coach profiles, coach
+location/program assignments and coaching prices; see [coaching](coaching.md).
+Admin services validate, authorize and decide in TypeScript; deterministic price
+resolution (coach override, then club default, never re-denominated after a location
+currency change) is pure TypeScript. PostgreSQL enforces uniqueness and composite FKs
+that require an override's coach to offer the program at that location. Coach saves
+lock their profile, then locations under the shared configuration fence; price saves
+lock location → program → profile, all shared. Coach availability (weekly intervals and
+date exceptions) uses the coach-save lock order, composite assignment FKs and GiST overlap
+exclusions; resolution is pure TypeScript. No booking or payment workflow touches coaching
+tables yet, and availability alone never makes a lesson bookable.

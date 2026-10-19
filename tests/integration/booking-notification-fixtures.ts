@@ -1,11 +1,14 @@
 import type { EntityManager } from "typeorm";
 import { z } from "zod";
 import { assertTestEnvironment } from "../local/environment.mjs";
+import { recoverBookingNotifications } from "@/lib/notifications/booking-recovery";
 
 const messageSchema = z.object({ to: z.email(), subject: z.string(), text: z.string() });
 
 export async function bookingNotifications(manager: EntityManager, bookingId: string) {
   assertTestEnvironment();
+  // Financial tests inspect snapshots after an explicit scheduled projection pass.
+  await recoverBookingNotifications();
   const id = z.uuid().parse(bookingId);
   const rows: unknown = await manager.query(`SELECT message FROM public.booking_notification_deliveries
     WHERE position($1 in message->>'text') > 0 ORDER BY created_at,id`, [`Booking reference: ${id}\n`]);

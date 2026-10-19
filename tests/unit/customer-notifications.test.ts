@@ -4,7 +4,7 @@ const { account, query } = vi.hoisted(() => ({ account: vi.fn(), query: vi.fn() 
 vi.mock("@/lib/auth/account", () => ({ readCurrentAccount: account }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: async () => ({}) }));
 vi.mock("@/lib/db/data-source", () => ({ getDataSource: async () => ({ manager: { query } }) }));
-import { listOwnNotifications, manageOwnNotifications, markOwnNotificationRead, readOwnNotification, readOwnUnreadNotifications } from "@/lib/notifications/financial-notices";
+import { listOwnNotifications, manageOwnNotifications, markOwnNotificationRead, readOwnNotification, readOwnUnreadNotifications, readNotificationIndicators } from "@/lib/notifications/financial-notices";
 const id = "bc000000-0000-4000-8000-000000000001";
 const owner = "bc000000-0000-4000-8000-000000000002";
 beforeEach(() => { vi.resetAllMocks(); account.mockResolvedValue({ state: "active", userId: owner }); });
@@ -85,4 +85,37 @@ test("details and unread reads enforce ownership, exclude deletion, and expose n
   expect(query.mock.calls[1][1]).toEqual([owner]);
   expect(query.mock.calls[1][0]).toContain("SELECT EXISTS");
   expect(query.mock.calls[1][0]).toContain("deleted_at IS NULL AND read_at IS NULL");
+});
+
+test.each([
+  ["member", [], [{ unread: true }], { unread: true }],
+  ["coach", ["coach"], [{ unread: false }], { unread: false }],
+  ["Admin with unread personal notifications", ["admin"], [{ unread: true }, { alerts: false }], { unread: true, adminAlerts: false }],
+  ["Admin with unresolved alerts", ["admin"], [{ unread: false }, { alerts: true }], { unread: false, adminAlerts: true }],
+  ["Admin with both", ["admin"], [{ unread: true }, { alerts: true }], { unread: true, adminAlerts: true }],
+  ["Admin with neither", ["admin"], [{ unread: false }, { alerts: false }], { unread: false, adminAlerts: false }],
+])("navbar indicators for a %s", async (_name, roles, results, expected) => {
+  account.mockResolvedValue({ state: "active", userId: owner, roles });
+  for (const result of results) query.mockResolvedValueOnce([result]);
+  expect(await readNotificationIndicators()).toEqual(expected);
+  expect(query).toHaveBeenCalledTimes(results.length);
+  expect(query.mock.calls[0][1]).toEqual([owner]);
+  if (!roles.includes("admin")) expect(query.mock.calls.flat().join(" ")).not.toContain("booking_notification_deliveries");
+});
+
+test("Admin alerts count only undelivered, undismissed stopped or Brevo-failed rows, or unacknowledged financial exceptions", async () => {
+  account.mockResolvedValue({ state: "active", userId: owner, roles: ["admin"] });
+  query.mockResolvedValueOnce([{ unread: false }]).mockResolvedValueOnce([{ alerts: false }]);
+  await readNotificationIndicators();
+  const sql = String(query.mock.calls[1][0]);
+  expect(sql).toContain("FROM public.booking_notification_deliveries");
+  expect(sql).toContain("WHERE delivered_at IS NULL AND dismissed_at IS NULL AND (");
+  expect(sql).toContain(" IN ('stopped','failed') OR (requires_acknowledgement AND acknowledged_at IS NULL)");
+  expect(query.mock.calls[1]).toHaveLength(1);
+});
+
+test.each(["unauthenticated", "suspended"])("a %s Admin receives no indicator data and no query runs", async state => {
+  account.mockResolvedValue({ state, userId: owner, roles: ["admin"] });
+  expect(await readNotificationIndicators()).toEqual({ unread: false });
+  expect(query).not.toHaveBeenCalled();
 });

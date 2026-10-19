@@ -30,6 +30,15 @@ import { OpeningHoursScheduleEntity } from "./entities/opening-hours-schedule.en
 
 import { BookingAdjustmentEntity } from "./entities/booking-adjustment.entity";
 
+import { CoachLocationEntity } from "./entities/coach-location.entity";
+import { CoachProfileEntity } from "./entities/coach-profile.entity";
+import { CoachProgramEntity } from "./entities/coach-program.entity";
+import { CoachAvailabilityExceptionEntity } from "./entities/coach-availability-exception.entity";
+import { CoachWeeklyAvailabilityEntity } from "./entities/coach-weekly-availability.entity";
+import { CoachingPriceEntity } from "./entities/coaching-price.entity";
+import { CoachingProgramDurationEntity } from "./entities/coaching-program-duration.entity";
+import { CoachingProgramEntity } from "./entities/coaching-program.entity";
+
 const entities = {
   AuthUserEntity,
   RefundExecutionEntity,
@@ -40,6 +49,8 @@ const entities = {
   PaymentProviderSettingEntity, PaymentRefundEntity, CourtReservationEntity,
   UserEntity, RoleEntity, UserRoleEntity, PlayerProfileEntity, LocationEntity, CourtEntity,
   CourtCoveragePeriodEntity, LocationOpeningHoursEntity, LocationPricingRuleEntity, PricingRuleSetEntity,
+  CoachingProgramEntity, CoachingProgramDurationEntity, CoachProfileEntity, CoachLocationEntity, CoachProgramEntity,
+  CoachingPriceEntity, CoachWeeklyAvailabilityEntity, CoachAvailabilityExceptionEntity,
 };
 
 // TypeORM keys its relation dependency graph by constructor name. Production

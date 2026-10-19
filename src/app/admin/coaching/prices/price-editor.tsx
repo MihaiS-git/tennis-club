@@ -1,0 +1,82 @@
+"use client";
+
+import { useId, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+import { Button } from "@/components/button";
+import { ConfirmationDialog } from "@/components/confirmation-dialog";
+import type { AdminCoachingPrice } from "@/lib/coaching/admin";
+import { formatMoney, majorAmountSchema, minorToMajor, type LocationCurrency } from "@/lib/pricing/money";
+import { removeCoachingPriceAction, saveCoachingPriceAction } from "../actions";
+import { coachingFailureMessages } from "../coaching-form";
+
+export type PriceTarget = { program_id: string; duration_minutes: number; location_id: string; coach_user_id: string | null };
+
+// Inline scalar edit of one configured amount. An empty amount means "not set".
+export function PriceEditor({ label, target, price, currency, emptyHint }: {
+  label: string; target: PriceTarget; price?: AdminCoachingPrice; currency: LocationCurrency; emptyHint: string;
+}) {
+  const router = useRouter();
+  const id = useId();
+  const removeRef = useRef<HTMLButtonElement>(null);
+  const pendingRef = useRef(false);
+  const initial = price?.current ? minorToMajor(price.amount_minor) : "";
+  const [value, setValue] = useState(initial);
+  const [baseline, setBaseline] = useState(initial);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  // Follow refreshed server values while the field is untouched.
+  const [serverInitial, setServerInitial] = useState(initial);
+  if (serverInitial !== initial) {
+    setServerInitial(initial);
+    if (value === baseline) { setValue(initial); setBaseline(initial); }
+  }
+  const valid = majorAmountSchema.safeParse(value).success;
+  const dirty = value.trim() !== baseline;
+
+  async function run(remove: boolean) {
+    if (pendingRef.current) return;
+    pendingRef.current = true; setPending(true); setError(null);
+    const notification = toast.loading(remove ? "Removing price…" : "Saving price…");
+    try {
+      const result = remove ? await removeCoachingPriceAction(target) : await saveCoachingPriceAction({ ...target, amount: value });
+      if (result.ok) {
+        toast.success(remove ? "Price removed." : "Price saved.", { id: notification });
+        const next = remove ? "" : value.trim();
+        setValue(next); setBaseline(next); setRemoving(false);
+        router.refresh();
+      } else if (result.reason === "invalid-input") {
+        toast.dismiss(notification); setError(result.fieldErrors.amount ?? "Enter a valid price.");
+      } else {
+        toast.dismiss(notification); setError(coachingFailureMessages[result.reason]);
+      }
+    } catch {
+      toast.error("Unable to change the price. Please try again.", { id: notification });
+    } finally {
+      pendingRef.current = false; setPending(false);
+    }
+  }
+
+  return <form className="min-w-0" onSubmit={(event) => { event.preventDefault(); if (valid && dirty) void run(false); }}>
+    <div className="flex flex-wrap items-center gap-2">
+      <label htmlFor={id} className="sr-only">{label}</label>
+      <div className="flex min-h-9 w-36 items-center rounded-control border border-border bg-surface pr-2 focus-within:border-primary focus-within:ring-2 focus-within:ring-focus/20">
+        <input id={id} value={value} onChange={(event) => setValue(event.target.value)} inputMode="decimal" placeholder={emptyHint}
+          disabled={pending} aria-invalid={Boolean(error)} aria-describedby={error ? `${id}-error` : undefined}
+          className="min-w-0 flex-1 bg-transparent px-2.5 py-1.5 text-sm text-foreground outline-none" />
+        <span className="text-xs font-semibold text-muted-foreground">{currency}</span>
+      </div>
+      {dirty && <Button type="submit" size="small" fullWidth={false} disabled={pending || !valid} aria-busy={pending}>Save</Button>}
+      {dirty && <Button type="button" variant="subtle" size="small" disabled={pending} onClick={() => { setValue(baseline); setError(null); }}>Cancel</Button>}
+      {!dirty && price && <Button ref={removeRef} type="button" variant="subtle" size="small" disabled={pending} onClick={() => setRemoving(true)}>Remove</Button>}
+    </div>
+    {price && !price.current && <p className="mt-1 text-xs text-danger">
+      Entered as {formatMoney(price.amount_minor, price.currency)}; the location now uses {currency}. Enter a new price.
+    </p>}
+    {error && <p id={`${id}-error`} className="mt-1 text-sm text-danger">{error}</p>}
+    <ConfirmationDialog open={removing} title="Remove price?" message={`${label} will no longer have a configured price.`}
+      confirmLabel="Remove price" pending={pending} returnFocusRef={removeRef}
+      onClose={() => { if (!pendingRef.current) setRemoving(false); }} onConfirm={() => void run(true)} />
+  </form>;
+}

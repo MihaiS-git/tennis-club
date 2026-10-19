@@ -18,14 +18,16 @@ export const adminNotificationsPageSize = 25;
 const deleteSchema = z.strictObject({ ids: z.array(z.uuid()).min(1).max(adminNotificationsPageSize)
   .refine((ids) => new Set(ids).size === ids.length) });
 
-// Email delivery records only. A row may be deleted once automatic retries have
-// stopped and no delivery is sending it. Financial notices (requires_acknowledgement)
-// are customer-facing financial records and are never deleted, acknowledged or not.
-export function isDeletableNotification(row: { state: NotificationState; important: boolean }) {
-  return row.state === "stopped" && !row.important;
+// Email delivery records only. A row may be dismissed once automatic
+// retries have stopped or Brevo reported its delivery as failed, and no delivery
+// is sending it. Deleting a financial notice only dismisses its email: the
+// customer's notice and acknowledgement are unchanged. Every email type retains
+// its event key permanently so reconstruction cannot resurrect a dismissal.
+export function isDeletableNotification(row: { state: NotificationState }) {
+  return row.state === "stopped" || row.state === "failed";
 }
 
-// Every booking email Brevo has not accepted, including ones never attempted yet,
+// Every booking email Brevo has not accepted or reported undeliverable, including ones never attempted yet,
 // searched, filtered, sorted and paginated in the database. Unacknowledged
 // financial exceptions always come first.
 export async function listAdminUndeliveredNotifications(input: Record<string, string | string[] | undefined> = {}, reader?: Client) {

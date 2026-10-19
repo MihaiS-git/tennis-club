@@ -8,7 +8,7 @@ import { paymentStatusSchema } from "./admin-query";
 import { paymentFactSchema, providerEventFactSchema } from "./facts";
 import { refundReasons } from "./refund-context";
 import { describeFinancialContext, revisionContext } from "./financial-history-context";
-import { summarizeReportedFinancials } from "./financials";
+import { reportedOutstanding, summarizeReportedFinancials } from "./financials";
 
 const safeRefundErrors = new Set(["provider_request_incomplete", "provider_refund_failed", "provider_request_rejected",
   "uncertain", "lookup_failed", "not_found", "evidence_mismatch", "provider_refund_reversed"]);
@@ -30,6 +30,8 @@ const transactionSchema = z.object({
   adjustment_status: z.enum(["pending", "applied", "cancelled", "expired", "unsuccessful"]).nullable(),
   transaction_status: paymentStatusSchema.nullable(),
   refunded_minor: z.number().int().nonnegative(), booking_id: z.uuid(), reservation_id: z.uuid(),
+  // The booking's own account link; guest bookings have none and are never matched by email.
+  account_user_id: z.uuid().nullable(),
   amount_minor: z.number().int().positive(), currency: z.enum(locationCurrencies), method: paymentMethodSchema.nullable(),
   provider: paymentProviderSchema.nullable(), payment_status: paymentStatusSchema.nullable(), provider_payment_id: z.string().nullable(),
   created_at: timestamp, updated_at: timestamp, refund: refundSchema.nullable(),
@@ -37,8 +39,26 @@ const transactionSchema = z.object({
   reconciliation: z.array(providerEventFactSchema.extend({ provider: paymentProviderSchema, attempt: paymentFactSchema, received_at: timestamp })),
 });
 
-// One read path serves both paginated lists and exact operation details.
-export async function readFinancialHistory(manager: EntityManager, query: Parameters<typeof listAdminTransactionProjection>[1]) {
+type TransactionContext = Awaited<ReturnType<typeof loadAdminTransactionContext>>;
+type ReportedFinancials = ReturnType<typeof summarizeReportedFinancials>;
+
+// The shared reporting summary of one booking's verified captures and refunds.
+export function summarizeBookingFacts(facts: TransactionContext, bookingId: string): ReportedFinancials {
+  const payments = paymentsForBooking(facts.payments, bookingId);
+  const refunds = facts.refunds.filter(refund => refund.bookingId === bookingId);
+  const refundIds = new Set(refunds.map(refund => refund.id));
+  return summarizeReportedFinancials({
+    payments: facts.payments.filter(payment => payment.bookingId === bookingId),
+    captures: facts.captures.filter(capture => payments.has(capture.paymentAttemptId)),
+    refunds, executions: facts.executions.filter(execution => refundIds.has(execution.refundId)),
+  });
+}
+
+// One read path serves both paginated lists and exact operation details. A caller
+// that already read a booking's complete context (in the same snapshot) passes it
+// with its summary, so a history page reloads and re-summarizes nothing.
+export async function readFinancialHistory(manager: EntityManager, query: Parameters<typeof listAdminTransactionProjection>[1],
+  preloaded?: { facts: TransactionContext; financials: ReadonlyMap<string, ReportedFinancials> }) {
   const page = z.object({ rows: z.array(transactionSchema), page: z.number().int().positive(),
     total: z.number().int().nonnegative(), totalPages: z.number().int().positive() })
     .parse(await listAdminTransactionProjection(manager, query));
@@ -46,15 +66,10 @@ export async function readFinancialHistory(manager: EntityManager, query: Parame
   const revisionIds = [...new Set(page.rows.flatMap(row => [row.context_revision_id, row.current_revision_id,
     row.base_revision_id, row.confirmation_revision_id]).filter((id): id is string => id !== null))];
   const adjustmentIds = [...new Set(page.rows.map(row => row.adjustment_id).filter((id): id is string => id !== null))];
-  const facts = await loadAdminTransactionContext(manager, { bookingIds, revisionIds, adjustmentIds });
+  const facts = preloaded?.facts ?? await loadAdminTransactionContext(manager, { bookingIds, revisionIds, adjustmentIds });
   const revisions = new Map(facts.revisions.map(revision => [revision.id, revision]));
   const adjustments = new Map(facts.adjustments.map(adjustment => [adjustment.id, adjustment]));
-  const financials = new Map(bookingIds.map(id => [id, summarizeReportedFinancials({
-    payments: facts.payments.filter(payment => payment.bookingId === id),
-    captures: facts.captures.filter(capture => paymentsForBooking(facts.payments, id).has(capture.paymentAttemptId)),
-    refunds: facts.refunds.filter(refund => refund.bookingId === id),
-    executions: facts.executions.filter(execution => facts.refunds.some(refund => refund.bookingId === id && refund.id === execution.refundId)),
-  })]));
+  const financials = preloaded?.financials ?? new Map(bookingIds.map(id => [id, summarizeBookingFacts(facts, id)]));
   const revisionFor = (id: string, bookingId: string) => {
     const revision = revisions.get(id);
     if (!revision || revision.bookingId !== bookingId) throw new Error("Missing or cross-booking financial context");
@@ -80,9 +95,7 @@ export async function readFinancialHistory(manager: EntityManager, query: Parame
         confirmationRevisionId: confirmation_revision_id, reason: row.refund?.reason ?? null,
         amount: row.amount_minor, capturedAmount: row.refund?.captured_amount_minor ?? null }),
       current_booking: { ...revisionContext(current), status: row.booking_status },
-      financials: { ...financial, outstanding: ["confirmed", "pending_payment"].includes(row.booking_status)
-        ? Math.max(0, current.totalAmountMinor
-          - (financial.totals.find(total => total.currency === current.currency)?.netPaid ?? 0)) : 0 },
+      financials: { ...financial, outstanding: reportedOutstanding(financial.totals, { ...current, status: row.booking_status }) },
     };
   }) };
 }

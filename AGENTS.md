@@ -12,10 +12,10 @@ The platform will manage:
 - court and coaching bookings;
 - memberships and subscriptions;
 - Stripe payments and refunds;
-- partner matching;
-- match results;
-- Elo-style player ratings and rankings;
+- player profiles and ratings;
 - club administration.
+
+Matches, partner matching/matchmaking, match results and rankings are deferred indefinitely; do not add `/matches` or `/rankings` routes, navigation or public claims for them.
 
 Read `README.md` before making architectural or domain-level changes.
 
@@ -812,6 +812,8 @@ If consumable credits are introduced, prefer a ledger/transaction approach over 
 
 ## Rankings
 
+> **Deferred indefinitely.** Matches, partner matching/matchmaking, match results and rankings are not part of the current product. There are no `/matches` or `/rankings` routes and no related tables; the application focuses on court booking, coaching, club facilities and member management. Player profiles, Sportya levels and player ratings remain. The design below is kept only as a reference for possible future work.
+
 Initial player rankings use an Elo-style system.
 
 Elo calculations belong in TypeScript.
@@ -1279,9 +1281,9 @@ same settlement service with stable receipt IDs; webhook delivery remains idempo
 Status polling uses the capability-bound POST Route Handler `/api/payments/checkout/status` with abortable requests, outside the sequential Server Action dispatcher; cancellation stays a Server Action. X/Close/Escape dismiss without claiming cancellation. Explicit checkout cancellation
 records booking cancellation intent under location-first aggregate locks before Stripe.
 Checkout cancellation appends its final intent revision and releases occupancy
-atomically before provider calls; uncertain captures are compensated through existing settlement. A confirmed booking can be undone by this
-capability only within its original checkout deadline; later management retains normal
-owner/Admin authorization. Captures after cancellation cannot confirm the booking and
+atomically before provider calls; uncertain captures are compensated through existing settlement. Confirmation ends checkout-abandonment authority,
+even within the original checkout deadline. Confirmed bookings use normal owner/Admin
+cancellation authorization and refund-backed cancellation. Captures after cancellation cannot confirm the booking and
 use the existing unique full-refund request, with a nullable requester for guests.
 Client cancellation/dismissal ignores late callbacks, expiry prevents further payment,
 and loading feedback has a finite timeout. See docs/payments-memberships.md.
@@ -1395,22 +1397,33 @@ unknown/permanent refusal is exceptional and never voids the obligation. Past th
 idempotency replay window use fully paginated Stripe refund evidence only; missing evidence
 is explicitly unresolved and never authorizes blind resend.
 
-Booking lifecycle and refund-exception email work uses the focused
-`booking_notification_deliveries` table, inserted inside the financial transaction.
-The committing request delivers through Brevo after commit, outside transactions, using
-leases, unique event keys and stable provider idempotency keys. Delivery is at-least-once submission;
+Booking notification recovery is forward-only under migration `1791462257935`:
+new revisions/adjustment requests opt in with `recovery_version=1`; existing records stay
+NULL and must never be backfilled. Lifecycle revisions and immutable
+`booking_financial_exceptions` retain original context and occurrence facts atomically
+with financial state. No rendering, notification projection writes or Brevo calls belong
+in financial transactions or requests. The existing `/api/notifications/deliver` cron
+reconstructs missing delivery/inbox snapshots, then sends through Brevo. All email types
+use permanent soft dismissal; never physically delete an Admin-dismissed event key.
+Recovery must preserve original snapshots, read/deletion state and acknowledgment,
+repair missing inbox copies, and retry failed projections from financial evidence.
+Migration `1791462257936` retains a circular recovery scan cursor so failed sources
+cannot monopolize every batch. Recovery has a bounded separate database pool and
+eight seconds of the scheduled invocation; delivery runs even if recovery fails.
+Explicit Admin Retry remains separate. Delivery is at-least-once submission;
 ambiguous acceptance can duplicate email after provider key expiry. See
 `docs/booking-notifications.md` and migrations `1791462257928`/`1791462257929`.
 
 
 ## Customer notification inbox
 
-Every `enqueueBookingNotification` call atomically snapshots the rendered subject/body,
+Scheduled projection's `enqueueBookingNotification` atomically snapshots the rendered subject/body,
 booking reference, event kind and timestamp into `customer_notifications` for the booking's
 non-null authoritative `account_user_id`. Never associate by email. A unique event key,
 retained after inbox soft deletion, prevents replay duplicates. There is no delivery FK;
 Admin email deletion cannot remove inbox history. Active owners alone may search, read,
 mark unread or soft-delete their copies. Financial OK acknowledgment updates the existing
-operational delivery record and inbox timestamp in one statement; read/unread/deletion
+operational delivery record and inbox timestamp in one transaction, locking delivery
+before inbox with fresh statement snapshots; read/unread/deletion
 never acknowledges financial alerts. Keep unresolved alerts visible outside inbox filters.
 Migration `1791462257931-CustomerNotificationHistory` backfills retained delivery records.

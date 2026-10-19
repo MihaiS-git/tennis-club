@@ -28,12 +28,6 @@ export function SiteFooter() {
               Book a court
             </Link>
             <Link
-              href="/matches"
-              className="inline-flex min-h-11 w-fit items-center font-sans text-sm font-medium text-ivory hover:text-clay-300"
-            >
-              Matches
-            </Link>
-            <Link
               href="/coaching"
               className="inline-flex min-h-11 w-fit items-center font-sans text-sm font-medium text-ivory hover:text-clay-300"
             >
@@ -44,12 +38,6 @@ export function SiteFooter() {
               className="inline-flex min-h-11 w-fit items-center font-sans text-sm font-medium text-ivory hover:text-clay-300"
             >
               Courts
-            </Link>
-            <Link
-              href="/rankings"
-              className="inline-flex min-h-11 w-fit items-center font-sans text-sm font-medium text-ivory hover:text-clay-300"
-            >
-              Rankings
             </Link>
             <Link
               href="/club"

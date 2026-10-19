@@ -4,7 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getDataSource } from "../src/lib/db/data-source.ts";
 import { UserEntity } from "../src/lib/db/entities/user.entity.ts";
 import { UserRoleEntity } from "../src/lib/db/entities/user-role.entity.ts";
-import { assertLocalDatabase, localAuthClient } from "./local-dev.ts";
+import { assertLocalDatabase, ensureLocalAuthAccounts, localAuthClient } from "./local-dev.ts";
 import { seedDevData } from "./seed-dev-data.ts";
 
 const DEV_USER_PASSWORD = "Local-Tennis-Dev-2026!";
@@ -23,36 +23,8 @@ const devUsers = [
 async function seedDevUsers(service: SupabaseClient) {
   assertLocalDatabase();
   const database = await getDataSource();
-  // Read Auth once (paginated), including accounts without an application row.
-  const existing = new Set<string>();
-  for (let page = 1; ; page += 1) {
-    const result = await service.auth.admin.listUsers({ page, perPage: 1000 });
-    if (result.error) throw new Error("Unable to list local Auth accounts.");
-    for (const user of result.data.users) {
-      if (user.email) existing.add(user.email.toLowerCase());
-    }
-    if (result.data.users.length < 1000) break;
-  }
-
-  const created: string[] = [];
-  let reused = 0;
-  for (const fixture of devUsers) {
-    if (existing.has(fixture.email)) {
-      // Existing accounts are never updated, even if their fixture data differs.
-      reused += 1;
-      continue;
-    }
-    const result = await service.auth.admin.createUser({
-      email: fixture.email,
-      password: DEV_USER_PASSWORD,
-      email_confirm: true,
-    });
-    if (result.error || !result.data.user) {
-      throw new Error(`Unable to create ${fixture.email}. Earlier fixtures may already exist; rerunning skips them.`);
-    }
-    const id = result.data.user.id;
-    created.push(id);
-  }
+  // Existing accounts are never updated, even if their fixture data differs.
+  const { created, reused } = await ensureLocalAuthAccounts(service, devUsers.map((user) => user.email), DEV_USER_PASSWORD);
 
   // Repair an interrupted role assignment on rerun, without changing existing accounts.
   await database.transaction("READ COMMITTED", async (manager) => {
@@ -73,7 +45,7 @@ async function seedDevUsers(service: SupabaseClient) {
     }
   });
   console.log(JSON.stringify({
-    created: created.length, reused, verified: devUsers.length,
+    created, reused, verified: devUsers.length,
     roles: {
       noRoles: devUsers.filter((user) => user.roles.length === 0).length,
       coach: devUsers.filter((user) => user.roles.includes("coach")).length,

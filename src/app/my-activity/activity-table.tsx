@@ -6,11 +6,11 @@ import { activityHref, type ActivityQuery, type ActivityScope } from "@/lib/book
 // Below md the table becomes a stacked list: the header turns into sort chips and
 // each row wraps into three lines (when · status / where · total / duration · type).
 // Line breaks are the row's ::before/::after pseudo-elements, so cells stay single-sourced.
-export function ActivityTable({ scope, query, staff, children }: {
-  scope: ActivityScope; query: ActivityQuery; staff: boolean; children: ReactNode;
+export function ActivityTable({ scope, query, children }: {
+  scope: ActivityScope; query: ActivityQuery; children: ReactNode;
 }) {
   const columns: { label: string; sort?: ActivityQuery["sort"]; align?: "right" }[] = [
-    ...(staff ? [{ label: "Type", sort: "type" as const }] : []),
+    { label: "Type", sort: "type" },
     { label: "Location", sort: "location" },
     { label: "Court", sort: "court" },
     { label: "Date", sort: "datetime" },
@@ -47,8 +47,8 @@ export function ActivityTable({ scope, query, staff, children }: {
 const cell = "px-3 py-3 max-md:p-0";
 const separated = "max-md:before:mr-1.5 max-md:before:content-['·']";
 
-export function ActivityRow({ label, staff, type, location, court, date, time, duration, total, status, onOpen }: {
-  label: string; staff: boolean; type: string; location: string; court: string; date: string; time: string;
+export function ActivityRow({ label, type, typeDetail, location, court, date, time, duration, total, status, onOpen }: {
+  label: string; type: string; typeDetail?: string; location: string; court: string; date: string; time: string;
   duration: string; total: string; status: ReactNode; onOpen: (row: HTMLTableRowElement) => void;
 }) {
   return <tr tabIndex={0} aria-label={label}
@@ -57,7 +57,10 @@ export function ActivityRow({ label, staff, type, location, court, date, time, d
       if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(event.currentTarget); }
     }}
     className="cursor-pointer hover:bg-surface-muted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary max-md:flex max-md:flex-wrap max-md:items-center max-md:gap-y-1 max-md:px-4 max-md:py-3 max-md:before:order-4 max-md:before:basis-full max-md:before:content-[''] max-md:after:order-8 max-md:after:basis-full max-md:after:content-['']">
-    {staff && <td className={`whitespace-nowrap ${cell} max-md:order-10 max-md:ml-1.5 max-md:text-xs max-md:text-muted-foreground ${separated}`}>{type}</td>}
+    <td className={`${cell} md:w-56 md:min-w-48 md:max-w-56 max-md:order-10 max-md:min-w-0 max-md:flex-1 max-md:pl-1.5 max-md:text-xs max-md:text-muted-foreground`}>
+      <span className={separated}>{type}</span>
+      {typeDetail && <span className="block [overflow-wrap:anywhere] text-xs font-normal text-muted-foreground md:mt-0.5">{typeDetail}</span>}
+    </td>
     <td className={`${cell} font-semibold text-primary max-md:order-5 max-md:min-w-0 max-md:truncate max-md:font-normal max-md:text-foreground`}>{location}</td>
     <td className={`${cell} max-md:order-6 max-md:ml-1.5 max-md:text-foreground ${separated}`}>{court}</td>
     <td className={`whitespace-nowrap ${cell} max-md:order-1 max-md:font-semibold max-md:text-primary`}>{date}</td>

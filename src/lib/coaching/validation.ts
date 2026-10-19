@@ -1,0 +1,106 @@
+import { z } from "zod";
+import { majorAmountSchema } from "@/lib/pricing/money";
+
+export const coachingProgramTypes = ["private", "semi_private", "group", "junior"] as const;
+export type CoachingProgramType = typeof coachingProgramTypes[number];
+export function isOnlineCoachingProgramType(type: CoachingProgramType): type is "private" | "semi_private" {
+  return type === "private" || type === "semi_private";
+}
+export const coachingProgramTypeLabels: Record<CoachingProgramType, string> = {
+  private: "Private", semi_private: "Semi-private", group: "Group", junior: "Junior",
+};
+
+export const coachingDurationLimits = { min: 15, max: 480, step: 5, count: 8 } as const;
+
+export function formatCoachingDuration(minutes: number) {
+  return `${minutes} min`;
+}
+
+export function formatParticipants(min: number | null, max: number | null) {
+  if (min === null && max === null) return null;
+  if (min !== null && max !== null) {
+    if (min === max) return `${min} ${min === 1 ? "player" : "players"}`;
+    return `${min}–${max} players`;
+  }
+  if (max !== null) return `Up to ${max} ${max === 1 ? "player" : "players"}`;
+  return `At least ${min} ${min === 1 ? "player" : "players"}`;
+}
+
+// Free text lists (specialties, languages) are entered comma-separated.
+export function parseTextList(value: string) {
+  const seen = new Set<string>();
+  const items: string[] = [];
+  for (const raw of value.split(",")) {
+    const item = raw.trim().replace(/\s+/g, " ");
+    if (item && !seen.has(item.toLowerCase())) { seen.add(item.toLowerCase()); items.push(item); }
+  }
+  return items;
+}
+
+const optionalCount = z.union([z.null(), z.number().int().min(1, "Use at least 1.").max(100, "Use at most 100.")]);
+
+export const coachingProgramFieldsSchema = z.strictObject({
+  name: z.string().trim().min(1, "Enter a program name.").max(100, "Use at most 100 characters."),
+  description: z.string().trim().max(2000, "Use at most 2,000 characters."),
+  program_type: z.enum(coachingProgramTypes, "Select a program type."),
+  durations: z.array(z.number().int()
+    .min(coachingDurationLimits.min, `Durations must be at least ${coachingDurationLimits.min} minutes.`)
+    .max(coachingDurationLimits.max, `Durations must be at most ${coachingDurationLimits.max} minutes.`)
+    .refine((minutes) => minutes % coachingDurationLimits.step === 0, `Use durations in ${coachingDurationLimits.step}-minute steps.`))
+    .min(1, "Add at least one duration.").max(coachingDurationLimits.count, `Use at most ${coachingDurationLimits.count} durations.`)
+    .refine((durations) => new Set(durations).size === durations.length, "Each duration can be listed only once."),
+  min_participants: optionalCount,
+  max_participants: optionalCount,
+  court_rental_included: z.boolean(),
+  is_active: z.boolean(),
+}).superRefine((fields, context) => {
+  if (fields.min_participants !== null && fields.max_participants !== null && fields.min_participants > fields.max_participants) {
+    context.addIssue({ code: "custom", path: ["max_participants"], message: "Maximum must be at least the minimum." });
+  }
+});
+export type CoachingProgramFields = z.output<typeof coachingProgramFieldsSchema>;
+
+export const coachingProgramMutationSchema = z.strictObject({ id: z.uuid().optional(), fields: coachingProgramFieldsSchema });
+export const coachingProgramStatusSchema = z.strictObject({ id: z.uuid(), is_active: z.boolean() });
+
+const textList = (label: string) => z.array(z.string().trim().min(1).max(60, `Each ${label} must use at most 60 characters.`))
+  .max(12, `Use at most 12 ${label}s.`);
+
+export const coachProfileFieldsSchema = z.strictObject({
+  display_name: z.string().trim().min(1, "Enter the public name.").max(100, "Use at most 100 characters."),
+  bio: z.string().trim().max(2000, "Use at most 2,000 characters."),
+  qualifications: z.string().trim().max(1000, "Use at most 1,000 characters."),
+  specialties: textList("specialty"),
+  languages: textList("language"),
+  location_ids: z.array(z.uuid()).max(50).refine((ids) => new Set(ids.map((id) => id.toLowerCase())).size === ids.length, "Select each location once."),
+  program_ids: z.array(z.uuid()).max(100).refine((ids) => new Set(ids.map((id) => id.toLowerCase())).size === ids.length, "Select each program once."),
+  is_public: z.boolean(),
+});
+export type CoachProfileFields = z.output<typeof coachProfileFieldsSchema>;
+
+// Creation names the coach account; edits address the existing profile.
+export const coachProfileMutationSchema = z.strictObject({
+  user_id: z.uuid("Select a coach account."), create: z.boolean(), fields: coachProfileFieldsSchema,
+});
+export const coachVisibilitySchema = z.strictObject({ user_id: z.uuid(), is_public: z.boolean() });
+
+// A null coach is the club default; a coach is that coach's override.
+export const coachingPriceMutationSchema = z.strictObject({
+  program_id: z.uuid(), duration_minutes: z.number().int().min(coachingDurationLimits.min).max(coachingDurationLimits.max),
+  location_id: z.uuid(), coach_user_id: z.uuid().nullable(), amount: majorAmountSchema,
+});
+export const coachingPriceRemovalSchema = coachingPriceMutationSchema.omit({ amount: true });
+
+export type CoachingMutationResult =
+  | { ok: true; id: string; archived?: boolean }
+  | { ok: false; reason: "invalid-input"; fieldErrors: Record<string, string> }
+  | { ok: false; reason: "has-bookings" | "active-lessons" | "not-found" | "has-prices" | "has-availability" | "not-eligible" | "already-exists" | "invalid-location" | "invalid-program" | "not-offered" };
+
+export function coachingFieldErrors(issues: readonly z.core.$ZodIssue[]) {
+  const fieldErrors: Record<string, string> = {};
+  for (const issue of issues) {
+    const field = issue.path.find((part) => typeof part === "string" && part !== "fields");
+    fieldErrors[String(field ?? "form")] ??= issue.message;
+  }
+  return fieldErrors;
+}

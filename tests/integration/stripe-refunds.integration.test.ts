@@ -1,5 +1,12 @@
 import { getDataSource } from "@/lib/db/data-source";
-import { deliverPendingBookingNotifications } from "@/lib/notifications/booking-delivery";
+import { deliverPendingBookingNotifications as deliverPending } from "@/lib/notifications/booking-delivery";
+import { recoverBookingNotifications } from "@/lib/notifications/booking-recovery";
+
+// Explicitly simulate the scheduled recovery and delivery pass.
+async function deliverPendingBookingNotifications(options: Parameters<typeof deliverPending>[0]) {
+  await recoverBookingNotifications();
+  return deliverPending({ ...options, limit: 100 }); // Drain this bounded fixture batch explicitly.
+}
 import { bookingNotifications, isolateNotificationQueue } from "./booking-notification-fixtures";
 import { appendBookingContractFixture } from "./checkout-fixtures";
 import { configureCheckoutPolicyFixture } from "./opening-hours-fixtures";

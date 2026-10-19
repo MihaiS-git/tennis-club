@@ -281,3 +281,14 @@ The initializer applies pending additive migrations only to the verified isolate
 project. Surcharge tests cover the capture deadline, acceptance with and without extra
 court holds, and capture racing expiry, dismissal, supersession and delayed provider
 signals. Cron guard tests do not connect, schedule jobs or contact external services.
+
+## Coaching coverage
+
+`tests/unit/coaching/` covers price resolution (override, default, missing, currency
+change), validation, the public and coach-profile projections, Admin authorization before
+any database access, and the development seed's local-only guard. Component tests cover the public `/coaching` page, Admin coaching tables and
+dialogs, homepage coaching programs, coach profile pages, and the shared public hero and
+section menu (`public-page-layout.test.tsx`). `coaching-seed.integration.test.ts` covers seed
+idempotency, preserved Admin edits, duplicate-free prices, coach eligibility and public coach reads. `tests/integration/admin/coaching.integration.test.ts`
+exercises real Admin saves, coach eligibility, dependency rejection, unique/composite FK
+constraints, public visibility, currency handling and denied browser grants.

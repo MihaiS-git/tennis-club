@@ -18,7 +18,7 @@ const now = new Date("2026-10-15T09:00:00Z"), date = "2026-10-15";
 const token = "2026-10-01T12:00:00.123456+00:00";
 const location = { id: id(1), name: "Club", timezone: "UTC", is_active: true, archived_at: null,
   courts: [{ id: id(3), name: "Court B", is_active: true }, { id: id(2), name: "Court A", is_active: true }] };
-const target = { id: id(5), court_id: id(2), booking_date: date, starts_at_minute: 600, ends_at_minute: 660,
+const target = { coach_user_id: null, id: id(5), court_id: id(2), booking_date: date, starts_at_minute: 600, ends_at_minute: 660,
   reason: "Practice", status: "active", updated_at: token, created_at: token, created_by_user_id: id(6),
   cancelled_at: null, cancelled_by_user_id: null, hold_expires_at: null,
   court_name: "Court A", court_active: true, location_id: id(1), location_name: "Club",
@@ -115,7 +115,7 @@ test("invalid input is rejected before persistence", async () => {
 });
 
 test.each(["online", "pay_at_club", null])("staff projection requires a contractual payment method for bookings: %j", async paymentMethod => {
-  const direct = { ...target, kind: "reservation", creator_name: null, creator_email: null, creator_phone: null,
+  const direct = { ...target, includes_coaching: false, coach_name: null, coaching_program_name: null, coaching: null, location_name: null, court_name: null, location_timezone: null, kind: "reservation", creator_name: null, creator_email: null, creator_phone: null,
     account_user_id: null, payment_method: null, customer_name: null, customer_email: null, customer_phone: null,
     cancellation_notice_minutes: null, total_amount_minor: null, currency: null, payment_facts: [] };
   const booking = { ...direct, id: id(7), kind: "booking", payment_method: paymentMethod,
@@ -144,7 +144,7 @@ test("staff DTOs require identity, contacts, payments and refund state", () => {
 });
 
 test.each([false, true])("projects complete nullable staff details (captured Stripe payment=%s)", async captured => {
-  const direct = { ...target, kind: "reservation", creator_name: captured ? "Coach" : null,
+  const direct = { ...target, includes_coaching: false, coach_name: null, coaching_program_name: null, coaching: null, location_name: null, court_name: null, location_timezone: null, kind: "reservation", creator_name: captured ? "Coach" : null,
     creator_email: captured ? "coach@example.test" : null, creator_phone: captured ? "123" : null,
     account_user_id: null, payment_method: null, customer_name: null, customer_email: null, customer_phone: null,
     cancellation_notice_minutes: null, total_amount_minor: null, currency: null, payment_facts: [] };
@@ -164,7 +164,7 @@ test.each([false, true])("projects complete nullable staff details (captured Str
     { kind: "reservation", id: target.id, court_id: target.court_id, booking_date: date,
       starts_at_minute: 600, ends_at_minute: 660, reason: target.reason, created_by_user_id: target.created_by_user_id,
       creator_name: direct.creator_name, creator_email: direct.creator_email, creator_phone: direct.creator_phone, payment_method: null },
-    { kind: "booking", id: booking.id, court_id: booking.court_id, booking_date: date,
+    { kind: "booking", includes_coaching: false, coach_name: null, coaching_program_name: null, coaching: null, location_name: null, court_name: null, location_timezone: null, id: booking.id, court_id: booking.court_id, booking_date: date,
       starts_at_minute: 600, ends_at_minute: 660, account_user_id: booking.account_user_id, payment_method: booking.payment_method,
       payments: captured ? [{ id: payment.id, method: payment.method, provider: payment.provider, status: payment.status }] : [],
       stripe_refund_available: captured, customer_name: booking.customer_name, customer_email: booking.customer_email,

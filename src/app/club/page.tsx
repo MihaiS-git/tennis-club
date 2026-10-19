@@ -6,7 +6,9 @@ import { Suspense } from "react";
 
 import { guestCancellationInstruction } from "@/lib/bookings/self-cancellation";
 import { listPublicVisitorLocations } from "@/lib/courts/public";
+import { EditorialHero } from "../editorial-hero";
 import styles from "../page.module.css";
+import { PageSectionNav } from "../page-section-nav";
 import { ClubBookingTerms, ClubLocations } from "./club-locations";
 
 export const metadata: Metadata = {
@@ -33,7 +35,7 @@ const milestones = [
 
 const memberships = [
   { numeral: "I", title: "Playing", audience: "For players who are on court most weeks.",
-    benefits: ["A place on the club ladder", "Sunday doubles mornings", "A vote at the annual meeting"] },
+    benefits: ["Weekday evening social play", "Sunday doubles mornings", "A vote at the annual meeting"] },
   { numeral: "II", title: "Family & junior", audience: "For households who play together, whatever their level.",
     benefits: ["Junior Saturdays for under-18s", "Family doubles afternoons", "One membership for the household"] },
   { numeral: "III", title: "Competition", audience: "For players who want a fixture list as well as a game.",
@@ -55,7 +57,7 @@ const people = [
 ];
 
 const facilities = [
-  { title: "Clubhouse & terrace", text: "The social heart of the club: somewhere to wait for a court, watch the end of a match or settle the argument about that line call. Ladder results and club notices go up here first." },
+  { title: "Clubhouse & terrace", text: "The social heart of the club: somewhere to wait for a court, watch the end of a match or settle the argument about that line call. Club notices go up here first." },
   { title: "Changing & showers", text: "Come straight from work and leave ready for dinner. Allow ten minutes before your booking to change, so the court is yours from the first minute." },
   { title: "Kit & small rescues", text: "Forgotten your racket, run out of balls or snapped a string mid-set? Ask at reception. Between the staff and the members, there is usually a spare." },
   { title: "Getting here", text: "Addresses, directions and opening hours for every location are below. Weekday evenings are the busiest time at the club, so allow a little extra time to arrive." },
@@ -86,43 +88,19 @@ export default function ClubPage() {
 
   return (
     <main className="flex-1">
-      <section aria-labelledby="club-hero-title" className="relative isolate h-[clamp(540px,86svh,860px)] overflow-hidden bg-forest-900">
-        <Image
-          src="/images/tennis-club-aerial.webp"
-          alt="The stone clubhouse and its terrace above clay courts, surrounded by olive trees and cypresses in late-afternoon light"
-          fill
-          sizes="100vw"
-          loading="eager"
-          fetchPriority="high"
-          className={`${styles.heroImage} -z-10 object-cover object-[18%_center] md:object-[center_35%]`}
-        />
-        <div aria-hidden="true" className="absolute inset-0 -z-10 bg-linear-to-t from-forest-900 from-5% via-forest-900/60 via-45% to-forest-900/5 lg:bg-linear-to-tr lg:from-forest-900/95 lg:via-forest-900/45 lg:to-transparent" />
-        <div className="mx-auto flex h-full max-w-7xl items-end px-6 pb-10 md:px-8 md:pb-16 lg:pb-20">
-          <div className={`${styles.heroEntrance} max-w-2xl text-chalk`}>
-            <p className={`${eyebrowClassName} flex items-center gap-3 text-chalk [text-shadow:0_1px_8px_rgb(0_0_0/0.45)]`}>
-              <span aria-hidden="true" className="h-0.5 w-8 bg-accent-on-dark" />The Club
-            </p>
-            <h1 id="club-hero-title" className="mt-4 max-w-[13ch] font-heading text-[clamp(44px,6.4vw,88px)] font-semibold leading-[1] tracking-[-0.045em]">
-              Built slowly, kept with care.
-            </h1>
-            <p className="mt-5 max-w-[46ch] text-pretty font-sans text-base leading-7 text-ivory md:mt-6 md:text-lg md:leading-8">
-              Since 1978, two courts on an old olive grove have grown into a club with habits of its own: courts brushed after every match, Sunday doubles that never quite finish on time, and a terrace where the last point is argued over long after it was played.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <nav aria-label="On this page" className="border-b border-border bg-background">
-        <ul className="mx-auto flex max-w-7xl gap-x-6 overflow-x-auto px-6 md:flex-wrap md:px-8">
-          {sections.map((section) => (
-            <li key={section.id} className="shrink-0">
-              <a href={`#${section.id}`} className="inline-flex min-h-12 items-center whitespace-nowrap font-sans text-sm font-medium text-primary transition-colors hover:text-accent focus-visible:rounded-control">
-                {section.label}
-              </a>
-            </li>
-          ))}
-        </ul>
-      </nav>
+      <EditorialHero
+        titleId="club-hero-title"
+        eyebrow="The Club"
+        title="Built slowly, kept with care."
+        titleClassName="max-w-[13ch]"
+        intro="Since 1978, two courts on an old olive grove have grown into a club with habits of its own: courts brushed after every match, Sunday doubles that never quite finish on time, and a terrace where the last point is argued over long after it was played."
+        image={{
+          src: "/images/tennis-club-aerial.webp",
+          alt: "The stone clubhouse and its terrace above clay courts, surrounded by olive trees and cypresses in late-afternoon light",
+          className: "object-[18%_center] md:object-[center_35%]",
+        }}
+      />
+      <PageSectionNav sections={sections} />
 
       <section id="story" aria-labelledby="club-story-title" className={`${sectionClassName} bg-background`}>
         <div className="mx-auto max-w-7xl">
@@ -176,7 +154,7 @@ export default function ClubPage() {
             <p className={`${eyebrowClassName} text-accent-on-dark`}>Membership</p>
             <h2 id="club-membership-title" className={`${headingClassName} mt-4 max-w-[13ch]`}>Belonging, at your own pace.</h2>
             <p className={`${bodyClassName} mt-6 max-w-xl text-ivory`}>
-              Most people’s first visit is a booked court with a friend. Membership is for those who want to keep coming back: a regular game, a place on the ladder and a say in how the club is run.
+              Most people’s first visit is a booked court with a friend. Membership is for those who want to keep coming back: a regular game, familiar faces on court and a say in how the club is run.
             </p>
             <aside aria-label="About these membership types" className="mt-8 max-w-xl rounded-card border border-ivory/30 p-5 font-sans text-sm leading-6 text-ivory">
               <p className="font-semibold text-chalk">Illustrative membership</p>

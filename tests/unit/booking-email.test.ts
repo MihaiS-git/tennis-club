@@ -62,7 +62,7 @@ function configuredFetch() {
 }
 test("Brevo accepts the preserved text template with server credentials and a bounded request", async () => {
   const request = configuredFetch();
-  expect(await deliverMail(message)).toBe("accepted");
+  expect(await deliverMail(message)).toEqual({ result: "accepted", messageId: null });
   const [url, options] = request.mock.calls[0];
   expect(url).toBe("https://api.brevo.com/v3/smtp/email");
   expect(options.headers["api-key"]).toBe("private-test-key");
@@ -70,16 +70,26 @@ test("Brevo accepts the preserved text template with server credentials and a bo
   expect(options.signal).toBeInstanceOf(AbortSignal);
   expect(logError).not.toHaveBeenCalled();
 });
+test("an accepted submission returns Brevo's messageId and echoes the submission key for webhook correlation", async () => {
+  const key = "7f000000-0000-4000-8000-000000000001";
+  const request = configuredFetch().mockResolvedValue(Response.json({ messageId: "<202610181200.123@smtp-relay.mailin.fr>" }, { status: 201 }));
+  expect(await deliverMail(message, key)).toEqual({ result: "accepted", messageId: "<202610181200.123@smtp-relay.mailin.fr>" });
+  expect(JSON.parse(request.mock.calls[0][1].body).headers).toEqual({ idempotencyKey: key, "X-Mailin-custom": `booking-notification:${key}` });
+});
+test("a Brevo idempotency duplicate is accepted without a new messageId", async () => {
+  configuredFetch().mockResolvedValue(Response.json({ code: "duplicate_parameter", message: "Duplicate idempotency key" }, { status: 400 }));
+  expect(await deliverMail(message, "7f000000-0000-4000-8000-000000000001")).toEqual({ result: "accepted", messageId: null });
+});
 test("provider rejection logs only the HTTP status and resolves without retries", async () => {
   const request = configuredFetch().mockResolvedValue(new Response("sensitive provider body", { status: 400 }));
-  await expect(deliverMail(message)).resolves.toBe("rejected");
+  await expect(deliverMail(message)).resolves.toEqual({ result: "rejected", messageId: null });
   expect(request).toHaveBeenCalledTimes(1);
   expect(logError.mock.calls).toEqual([[{ event: "booking_email.provider_rejected", status: 400 }, "Brevo rejected booking email"]]);
 });
 test.each([[408, "unavailable"], [429, "unavailable"], [500, "unavailable"], [503, "unavailable"], [401, "rejected"], [422, "rejected"]] as const)(
   "Brevo HTTP %i is classified as %s", async (status, result) => {
     configuredFetch().mockResolvedValue(new Response("sensitive provider body", { status }));
-    await expect(deliverMail(message)).resolves.toBe(result);
+    await expect(deliverMail(message)).resolves.toEqual({ result, messageId: null });
     expect(JSON.stringify(logError.mock.calls)).not.toContain("sensitive");
   });
 test("timeout aborts the request and resolves without retries or transport details", async () => {
@@ -91,14 +101,14 @@ test("timeout aborts the request and resolves without retries or transport detai
   }));
   const sending = deliverMail(message);
   controller.abort();
-  await expect(sending).resolves.toBe("unconfirmed");
+  await expect(sending).resolves.toEqual({ result: "unconfirmed", messageId: null });
   expect(timeout).toHaveBeenCalledWith(5_000);
   expect(request).toHaveBeenCalledTimes(1);
   expect(logError.mock.calls).toEqual([[{ event: "booking_email.delivery_failed" }, "Brevo request failed or timed out"]]);
 });
 test("missing configuration skips HTTP and reports required variables safely", async () => {
   const request = configuredFetch(); vi.stubEnv("BREVO_API_KEY", "");
-  await expect(deliverMail(message)).resolves.toBe("not_configured");
+  await expect(deliverMail(message)).resolves.toEqual({ result: "not_configured", messageId: null });
   expect(request).not.toHaveBeenCalled();
   expect(logError).toHaveBeenCalled();
 });

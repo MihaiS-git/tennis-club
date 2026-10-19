@@ -21,7 +21,8 @@ export async function listOwnerActivityBatch(manager: EntityManager, input: {
     'starts_at_minute',${schedule}.starts_at_minute,'ends_at_minute',${schedule}.ends_at_minute,'status',r.status,'court',${court})`;
   const projection = booking ? `jsonb_build_object('id',b.id,'account_user_id',b.account_user_id,
     'status',b.status,'updated_at',b.updated_at,'customer_name',v.customer_name,'customer_email',v.customer_email,
-    'customer_phone',v.customer_phone,'cancellation_notice_minutes',v.cancellation_notice_minutes,
+    'coach_name',v.coach_name,'coaching_program_name',v.coaching_program_name,
+    'customer_phone',v.customer_phone,'includes_coaching',v.coach_user_id IS NOT NULL,'cancellation_notice_minutes',v.cancellation_notice_minutes,
     'total_amount_minor',v.total_amount_minor,'currency',v.currency,'payment_method',v.payment_method,
     'payments',coalesce((SELECT jsonb_agg(jsonb_build_object('status',p.status))
       FROM public.payment_attempts p WHERE p.booking_id=b.id AND p.status='succeeded'),'[]'::jsonb),

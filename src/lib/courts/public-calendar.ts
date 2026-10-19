@@ -4,6 +4,7 @@ import { normalizeDatabaseError } from "@/lib/db/errors";
 import { z } from "zod";
 import type { EntityManager } from "typeorm";
 import { getDataSource } from "@/lib/db/data-source";
+import { readIndependently } from "@/lib/db/transaction";
 import { listPublicDayOpeningHours, listPublicDayCoverage } from "@/lib/db/repositories/clubs.repository";
 import { listPublicDayPricing } from "@/lib/db/repositories/pricing.repository";
 import { listPublicDayOccupancy } from "@/lib/db/repositories/reservations.repository";
@@ -22,12 +23,12 @@ const calendarReservationSchema = z.object({
 });
 
 // Effective opening hours, court coverage and pricing of one public location date.
-async function readPublicDayConfiguration(manager: EntityManager, location: PublicLocation, date: string) {
+export async function readPublicDayConfiguration(manager: EntityManager, location: PublicLocation, date: string) {
   const courtIds = location.courts.map((court) => court.id);
-  const [hoursResult, coverageResult, pricingResult] = await Promise.all([
-    listPublicDayOpeningHours(manager, location.id, mondayWeekday(date), date),
-    listPublicDayCoverage(manager, location.id, courtIds, date),
-    listPublicDayPricing(manager, location.id, courtIds, mondayWeekday(date), date),
+  const [hoursResult, coverageResult, pricingResult] = await readIndependently(manager, [
+    () => listPublicDayOpeningHours(manager, location.id, mondayWeekday(date), date),
+    () => listPublicDayCoverage(manager, location.id, courtIds, date),
+    () => listPublicDayPricing(manager, location.id, courtIds, mondayWeekday(date), date),
   ]);
   const hours = z.array(openingIntervalSchema).safeParse(hoursResult);
   const coverage = z.array(coveragePeriodSchema).safeParse(coverageResult);
@@ -36,21 +37,26 @@ async function readPublicDayConfiguration(manager: EntityManager, location: Publ
   return { hours: hours.data, coverage: coverage.data, pricing: pricing.data };
 }
 
+// Live court occupancy of one public location date; null when a row is malformed.
+export async function readPublicDayReservations(manager: EntityManager, location: PublicLocation, date: string) {
+  const reservations = z.array(calendarReservationSchema)
+    .safeParse(await listPublicDayOccupancy(manager, location.id, location.courts.map((court) => court.id), date));
+  return reservations.success ? reservations.data : null;
+}
+
 export async function getPublicCourtDay(location: PublicLocation, date: string, today: string, now: Date) {
   try {
     const manager = (await getDataSource()).manager;
-    const courtIds = location.courts.map((court) => court.id);
-    const [configuration, reservationResult] = await Promise.all([
+    const [configuration, reservations] = await Promise.all([
       readPublicDayConfiguration(manager, location, date),
-      listPublicDayOccupancy(manager, location.id, courtIds, date),
+      readPublicDayReservations(manager, location, date),
     ]);
-    const reservations = z.array(calendarReservationSchema).safeParse(reservationResult);
-    if (!configuration || !reservations.success) {
+    if (!configuration || !reservations) {
       logger.error({ event: "courts.public_calendar_read_failed" }, "Failed to load court day");
       throw new Error("Unable to load court availability.");
     }
     return buildCourtDay({ date, today, currentMinute: localMinute(location.timezone, now), courts: location.courts,
-      ...configuration, reservations: reservations.data });
+      ...configuration, reservations });
   } catch (error: unknown) {
     logger.error({ event: "courts.public_calendar_read_failed", code: normalizeDatabaseError(error).sqlState }, "Database projection failed");
     throw new Error("Unable to load court availability.");

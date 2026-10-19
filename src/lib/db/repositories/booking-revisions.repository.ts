@@ -16,7 +16,7 @@ export function findRevisionOperation(manager: EntityManager, bookingId: string,
   return manager.getRepository(BookingRevisionEntity).findOneBy({ bookingId, operationKey });
 }
 export async function insertRevision(manager: EntityManager, revision: RevisionSnapshot) {
-  await manager.getRepository(BookingRevisionEntity).insert(revision);
+  await manager.getRepository(BookingRevisionEntity).insert({ ...revision, recoveryVersion: 1 });
 }
 // Caller owns aggregate locks and the transaction. A failed pointer/deadline fence
 // throws so provisional revision and occupancy writes cannot commit.
@@ -29,4 +29,8 @@ export async function advanceRevision(manager: EntityManager, input: {
     .where("id=:id AND current_revision_id=:previous", { id: input.revision.bookingId, previous: input.previousId })
     .andWhere("(:deadline::timestamptz IS NULL OR clock_timestamp()<:deadline::timestamptz)", { deadline: input.deadline ?? null }).execute();
   if (result.affected !== 1) throw new BookingRevisionFenceError("Booking revision pointer or deadline changed");
+}
+// Immutable revision chain for read-only history; ordered by revision number.
+export function listBookingRevisions(manager: EntityManager, bookingId: string) {
+  return manager.getRepository(BookingRevisionEntity).find({ where: { bookingId }, order: { revisionNumber: "ASC" } });
 }

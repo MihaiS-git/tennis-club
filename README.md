@@ -2,7 +2,7 @@
 
 A web platform for operating a **single tennis club with multiple physical locations**.
 
-The application manages courts, coaches, members, bookings, memberships, payments, partner matching, match results, and player rankings across all club locations.
+The application manages courts, coaching, club facilities, members, bookings, memberships and payments across all club locations. Matches, partner matching and rankings are deferred indefinitely (see [Partner matching](#partner-matching)).
 
 ## Product scope
 
@@ -10,9 +10,7 @@ The club operates one shared system for:
 
 - members;
 - memberships;
-- payments;
-- player rankings;
-- match history.
+- payments.
 
 Individual locations manage their own:
 
@@ -174,10 +172,7 @@ Every authenticated application account is a normal user and needs no RBAC role.
 - reschedule eligible bookings;
 - cancel eligible bookings;
 - manage membership information;
-- manage payment-related information;
-- create and join partner requests;
-- record eligible match results;
-- view rankings and match history.
+- manage payment-related information.
 
 The RBAC roles are `admin` and `coach`; both are optional and may be combined. Normal users have `roles = []`. Future club membership/subscription is a separate business concept.
 
@@ -195,7 +190,7 @@ Typical authorization rules include:
 - coaches can manage their own availability;
 - coaches can view sessions assigned to them;
 - admins can manage club resources;
-- public player/ranking information can be visible to members;
+- public player information can be visible to members;
 - private account and payment information remains restricted.
 
 Role checks must use authoritative database data.
@@ -459,6 +454,17 @@ Choose location
 ```
 
 The court and coach must both remain available for the entire interval.
+
+Private and Semi-private coaching use an internal server-side checkout entry point using the existing
+Stripe authorization, capture, settlement, expiry and refund lifecycle. Coaching honors
+its historical combined-price contract and protected coach/court hold; court-only
+rescheduling explicitly rejects lessons. `/book?mode=coaching` now reuses the existing
+single-day timetable, customer dialog and Payment Element for both lesson types. One customer
+books and pays for the complete session (one player for Private, two for Semi-private).
+Configured coach overrides take precedence over club defaults; excluded court rental is
+added once to the session price. Group and Junior online booking remain deferred.
+The existing court-only notification reconstruction conflicts with lessons and needs a
+separate review before exposure. See [coaching booking](docs/coaching.md#step-6-coaching-mode-on-book).
 
 ---
 
@@ -731,6 +737,8 @@ Consumable credits should preferably use a ledger/transaction model instead of o
 
 ## Partner matching
 
+> **Deferred indefinitely.** Matches, partner matching/matchmaking, match results and rankings are not part of the current product. There are no `/matches` or `/rankings` routes and no related tables; the application focuses on court booking, coaching, club facilities and member management. Player profiles, Sportya levels and player ratings remain. The design below is kept only as a reference for possible future work.
+
 Members can create partner requests.
 
 Example:
@@ -811,6 +819,8 @@ This separation is important because PostgreSQL RLS primarily protects rows rath
 ---
 
 ## Rankings
+
+> **Deferred indefinitely.** Matches, partner matching/matchmaking, match results and rankings are not part of the current product. There are no `/matches` or `/rankings` routes and no related tables; the application focuses on court booking, coaching, club facilities and member management. Player profiles, Sportya levels and player ratings remain. The design below is kept only as a reference for possible future work.
 
 The initial ranking system uses Elo-style ratings.
 
@@ -1054,6 +1064,11 @@ is enabled at both locations so local checkout works without Stripe credentials;
 the cancellation notice is 1,440 minutes. No reservations, bookings, payment attempts,
 refunds, email events or Storage objects are seeded. The migrations provide the
 Admin/Coach roles and the payment-settings singleton with no online provider selected.
+
+Coaching demo data is separate and explicit: `npm run db:dev:seed:coaching` creates four
+`demo-coach-*@example.test` Coach accounts (password `StrongPassword123!`), four
+programs, public coach profiles on the existing locations and RON prices. It inserts
+only missing records and never changes existing ones; see [Coaching](docs/coaching.md#development-seed).
 
 Seeds require non-production mode, a loopback Supabase API on port 54321 and the
 trusted local `postgres` database on port 54322. Auth uses the local service credential
@@ -1360,6 +1375,9 @@ Administrative resource screens manage:
 ### V2 — Tennis-specific features
 
 - expanded player-profile features (basic `/profile` is implemented);
+
+Deferred indefinitely (not planned):
+
 - partner matching;
 - match recording;
 - Elo rating;
@@ -1503,9 +1521,9 @@ Recommended sequence:
 13. Rescheduling
 14. Membership plans and subscriptions
 15. Admin operational dashboard
-16. Partner matching
-17. Match recording
-18. Elo ranking
+16. Partner matching (deferred indefinitely)
+17. Match recording (deferred indefinitely)
+18. Elo ranking (deferred indefinitely)
 ```
 
 The goal is to prove the difficult architectural constraints before adding secondary tennis features.
@@ -1575,7 +1593,7 @@ Before expanding the platform, prove the following cases locally:
 - Coaches may work across multiple locations.
 - Members have one club-wide identity.
 - Memberships are club-wide unless explicitly restricted.
-- Rankings are club-wide.
+- Rankings, if ever introduced, would be club-wide (currently deferred indefinitely).
 - Court and coach availability are location-specific.
 - Stripe is the payment provider.
 - Supabase Auth is the authentication provider.
@@ -1610,18 +1628,25 @@ Before expanding the platform, prove the following cases locally:
 
 Booking confirmation, customer/Admin cancellation and owner rescheduling
 capture the booking contact and schedule within the successful transaction, then
-send the preserved text template through Brevo's transactional HTTP API after commit.
+retain immutable financial evidence for the existing scheduled notification recovery.
 Use only the snapshotted the current revision’s `customer_email`, never the current account email.
 Quote, stale, failed and unchanged-schedule saves send no rescheduling email;
 pending/failed/expired checkout sends no confirmation. Transition and webhook receipt
-checks and unique event keys prevent duplicate notification records. Booking email work
-commits atomically in `booking_notification_deliveries`; the request that committed it
-sends it through Brevo after commit, using short leases, bounded retry backoff (later
-requests plus a five-minute Supabase Cron call to `POST /api/notifications/deliver`,
-authenticated by `NOTIFICATION_CRON_SECRET`) and a stable provider idempotency key. Important financial exceptions are
+checks and unique event keys prevent duplicate notification records. Migration
+`1791462257935-IndependentNotificationEvidence` establishes an explicit forward-only
+cutover: new marked revisions and immutable financial exception facts are reconstructed
+into delivery/inbox snapshots by the five-minute Supabase Cron call to
+`POST /api/notifications/deliver`, authenticated by `NOTIFICATION_CRON_SECRET`.
+Financial requests never render, project or deliver mail. Additive migration
+`1791462257936-FairNotificationRecovery` adds a circular scan cursor so failed sources
+do not starve later events. Recovery uses bounded database waits and an eight-second
+budget; queued delivery still runs after recovery failure. The scheduler uses short
+leases, bounded retry backoff and stable provider idempotency keys. All Admin email
+deletions retain permanent soft-dismissal markers. No historical events are reconstructed.
+Important financial exceptions are
 also shown in My activity until the booking owner acknowledges them. Every booking email event also
 creates a durable `customer_notifications` snapshot for the authoritative booking account
-in the same transaction, independently of delivery. Guests remain email-only. Inbox
+in a separate recoverable projection transaction, independently of delivery. Guests remain email-only. Inbox
 read/unread and soft deletion never change email delivery or financial obligations. Ambiguous delivery is retried: duplicates remain possible after Brevo's
 bounded key retention expires. Provider acceptance does not guarantee inbox delivery.
 Email failure cannot change committed booking/payment state. Server-only
@@ -1739,4 +1764,5 @@ Stripe webhooks (subscribe to the payment and `refund.*` events listed in
 "Check with Stripe" action, so the app runs on serverless hosting. Apply migrations
 `1791462257928-DurableBookingNotifications`, `1791462257929-RequestDrivenPaymentRecovery`
 `1791462257930-SurchargeCaptureAcceptance` and
-`1791462257931-CustomerNotificationHistory` before deploying, and configure Brevo. See [durable booking email guarantees](docs/booking-notifications.md).
+`1791462257931-CustomerNotificationHistory` and `1791462257932-BrevoDeliveryEvents` before deploying, and configure Brevo,
+including its delivery webhook (`BREVO_WEBHOOK_SECRET`, [setup](docs/booking-notifications.md#configuring-the-webhook-in-brevo)). See [durable booking email guarantees](docs/booking-notifications.md).

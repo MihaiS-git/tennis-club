@@ -9,10 +9,12 @@ export const notificationTimezone = "Europe/Bucharest";
 // queued: not attempted yet (or an attempt was interrupted before its outcome was recorded).
 // retrying: the last attempt failed and an automatic retry is scheduled.
 // stopped: automatic retries ended (permanent rejection or attempts exhausted); only a manual retry sends it.
-export const notificationStates = ["queued", "sending", "retrying", "stopped"] as const;
+// failed: Brevo accepted it but then reported it undeliverable (bounce, block, error); never resent automatically.
+// Accepted rows awaiting Brevo's confirmation and confirmed deliveries are not listed.
+export const notificationStates = ["queued", "sending", "retrying", "stopped", "failed"] as const;
 export type NotificationState = typeof notificationStates[number];
 export const notificationStateLabels: Record<NotificationState, string> = {
-  queued: "Queued", sending: "Sending", retrying: "Retry scheduled", stopped: "Needs manual retry",
+  queued: "Queued", sending: "Sending", retrying: "Retry scheduled", stopped: "Needs manual retry", failed: "Delivery failed",
 };
 
 // Notification types are the booking email events; events sharing a subject form one type.

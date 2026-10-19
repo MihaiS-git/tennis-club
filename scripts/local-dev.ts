@@ -1,6 +1,6 @@
 // Shared guard for development initialization; never imported by application code.
 import { execFileSync } from "node:child_process";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 
 function localSupabaseUrl(value: string | undefined, environment: string | undefined) {
@@ -34,6 +34,35 @@ export function localStatus() {
   } catch {
     throw new Error("Cannot read local Supabase status. Start this project's local Supabase stack.");
   }
+}
+
+// Creates missing confirmed local Auth accounts through the Auth Admin API; the
+// provisioning hook creates their application rows. Existing accounts, including
+// their passwords, are never updated.
+export async function ensureLocalAuthAccounts(service: SupabaseClient, emails: readonly string[], password: string) {
+  const existing = new Set<string>();
+  for (let page = 1; ; page += 1) {
+    const result = await service.auth.admin.listUsers({ page, perPage: 1000 });
+    if (result.error) throw new Error("Unable to list local Auth accounts.");
+    for (const user of result.data.users) {
+      if (user.email) existing.add(user.email.toLowerCase());
+    }
+    if (result.data.users.length < 1000) break;
+  }
+  let created = 0;
+  let reused = 0;
+  for (const email of emails) {
+    if (existing.has(email.toLowerCase())) {
+      reused += 1;
+      continue;
+    }
+    const result = await service.auth.admin.createUser({ email, password, email_confirm: true });
+    if (result.error || !result.data.user) {
+      throw new Error(`Unable to create ${email}. Earlier fixtures may already exist; rerunning skips them.`);
+    }
+    created += 1;
+  }
+  return { created, reused };
 }
 
 export function localAuthClient() {

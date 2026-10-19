@@ -5,10 +5,11 @@ import { expectToast } from "../helpers/notifications";
 import { installDialogMock } from "../helpers/dialog";
 import { parseAdminNotificationQuery } from "@/lib/notifications/admin-notification-query";
 
-const { list, remove, replace, refresh, loadBooking } = vi.hoisted(() => ({ list: vi.fn(), remove: vi.fn(), replace: vi.fn(), refresh: vi.fn(), loadBooking: vi.fn() }));
+const { list, remove, replace, refresh, refreshIndicators } = vi.hoisted(() => ({ list: vi.fn(), remove: vi.fn(), replace: vi.fn(), refresh: vi.fn(), refreshIndicators: vi.fn() }));
+vi.mock("@/components/notification-unread", () => ({ refreshNotificationUnread: refreshIndicators }));
 vi.mock("@/lib/notifications/admin-notifications", () => ({ listAdminUndeliveredNotifications: list }));
 vi.mock("@/app/admin/payments/notification-retry-button", () => ({ NotificationRetryButton: () => <button type="button">Retry now</button> }));
-vi.mock("@/app/admin/payments/actions", () => ({ deleteNotificationsAction: remove, loadAdminBookingDetailsAction: loadBooking }));
+vi.mock("@/app/admin/payments/actions", () => ({ deleteNotificationsAction: remove }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ replace, refresh }) }));
 
 import AdminNotificationsPage from "@/app/admin/payments/notifications/page";
@@ -18,10 +19,10 @@ import { NotificationsToolbar } from "@/app/admin/payments/notifications-toolbar
 const id = (n: number) => `0a000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const booking = "b0000000-0000-4000-8000-000000000001";
 const base = { account_user_id: null, recipient: "ana@example.test", subject: "Booking confirmed", important: false, booking_id: booking, last_error: "unavailable",
-  attempts: 8, created_at: "2026-07-15T09:00:00.000Z", next_attempt_at: null };
+  attempts: 8, created_at: "2026-07-15T09:00:00.000Z", next_attempt_at: null, failure_reason: null, failed_at: null };
 const stopped = (n: number) => ({ ...base, id: id(n), state: "stopped" as const, deletable: true, recipient: `user${n}@example.test` });
 const retrying = { ...base, id: id(10), state: "retrying" as const, deletable: false, attempts: 2, next_attempt_at: "2026-12-15T09:00:00.000Z" };
-const financial = { ...base, id: id(11), state: "stopped" as const, deletable: false, important: true, subject: "Refund requires attention" };
+const financial = { ...base, id: id(11), state: "stopped" as const, deletable: true, important: true, subject: "Refund requires attention" };
 const query = parseAdminNotificationQuery({});
 const page = (rows: unknown[], params = {}) => ({ rows, total: rows.length, unacknowledgedExceptions: 0, page: 1, totalPages: 1,
   query: parseAdminNotificationQuery(params) });
@@ -31,59 +32,37 @@ test("links only authoritative customer accounts and leaves guests and missing b
   expect(screen.getByRole("link", { name: "user1@example.test" }).getAttribute("href")).toBe(`/admin/users/${id(50)}`);
   expect(screen.queryByRole("link", { name: "user2@example.test" })).toBeNull();
   expect(screen.queryByRole("link", { name: "user3@example.test" })).toBeNull();
-  expect(screen.getAllByRole("button", { name: `Booking ${booking}` })).toHaveLength(2);
+  expect(screen.getAllByRole("link", { name: `Booking ${booking}` })).toHaveLength(2);
 });
 
-test.each(["confirmed", "cancelled"])("opens %s historical booking details with the full UUID and preserves filters and selection", async (status) => {
-  loadBooking.mockResolvedValue({ id: booking, status, booking_date: "2025-01-01", starts_at_minute: 600, ends_at_minute: 660,
-    location_name: "Historical club", location_timezone: "Europe/Bucharest", court_name: "Court 1",
-    customer_name: "Guest customer", customer_email: "guest@example.test", customer_phone: "123456789",
-    cancellation_notice_minutes: 1440, total_amount_minor: 5000, currency: "RON", payment_method: "online", account_user_id: null });
+test("a Brevo-reported failure shows recipient, type, booking, failure type, reason and time with retry and delete", () => {
+  const bounced = { ...base, id: id(20), state: "failed" as const, deletable: true, subject: "Booking cancelled", recipient: "guest@example.test",
+    last_error: "soft_bounce", attempts: 1, failure_reason: "Mailbox full", failed_at: "2026-07-15T09:05:00+00:00" };
+  render(<NotificationsTable rows={[bounced]} query={query} />);
+  const row = screen.getByText("guest@example.test").closest("tr")!;
+  for (const text of ["Booking cancelled", "Delivery failed", "Soft bounce", "Mailbox full", "Stopped"]) expect(within(row).getByText(text)).toBeTruthy();
+  expect(within(row).getByRole("link", { name: `Booking ${booking}` })).toBeTruthy();
+  expect(row.querySelector('time[datetime="2026-07-15T09:05:00+00:00"]')?.closest("span")?.textContent).toMatch(/^Failed /);
+  expect(within(row).getByRole("button", { name: "Retry now" })).toBeTruthy();
+  expect(within(row).getByRole("button", { name: "Delete “Booking cancelled” to guest@example.test" })).toBeTruthy();
+  expect((within(row).getByRole("checkbox") as HTMLInputElement).disabled).toBe(false);
+});
+
+test("booking references open Booking Details by full UUID, returning to the same filters, without touching selection", () => {
   render(<NotificationsTable rows={[stopped(1)]} query={parseAdminNotificationQuery({ q: "guest", status: "stopped", page: "3" })} />);
   fireEvent.click(screen.getByRole("checkbox", { name: "Select all deletable notifications on this page" }));
-  const trigger = screen.getByRole("button", { name: `Booking ${booking}` });
-  fireEvent.click(trigger);
-  expect(loadBooking).toHaveBeenCalledExactlyOnceWith(booking);
-  const dialog = await screen.findByRole("dialog", { name: "Booking details" });
-  await within(dialog).findByText("Guest customer");
-  expect(within(dialog).getByText(status === "cancelled" ? "Cancelled" : "Confirmed")).toBeTruthy();
-  expect(within(dialog).getByText("guest@example.test")).toBeTruthy();
-  expect(within(dialog).getByText("Historical club")).toBeTruthy();
-  fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
-  expect(screen.queryByRole("dialog")).toBeNull();
-  expect(document.activeElement).toBe(trigger);
+  const link = screen.getByRole("link", { name: `Booking ${booking}` });
+  const href = new URL(link.getAttribute("href")!, "http://x");
+  expect(href.pathname).toBe(`/admin/bookings/${booking}`);
+  expect(href.searchParams.get("back")).toBe("/admin/payments/notifications?q=guest&status=stopped&page=3");
+  fireEvent.click(link);
   expect(screen.getByText("1 selected")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Retry now" })).toBeTruthy();
   expect(screen.getByRole("link", { name: "Created" }).getAttribute("href")).toContain("q=guest&status=stopped");
   expect(replace).not.toHaveBeenCalled(); expect(refresh).not.toHaveBeenCalled();
 });
 
-test("handles missing bookings and load failures with a retryable dialog", async () => {
-  loadBooking.mockResolvedValueOnce(null).mockRejectedValueOnce(new Error("unavailable"));
-  render(<NotificationsTable rows={[stopped(1)]} query={query} />);
-  fireEvent.click(screen.getByRole("button", { name: `Booking ${booking}` }));
-  expect(await screen.findByRole("alert")).toHaveProperty("textContent", "This booking is no longer available.");
-  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-  await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("Unable to load booking details. Try again."));
-  fireEvent.click(screen.getByRole("button", { name: "Close dialog" }));
-  expect(screen.queryByRole("dialog")).toBeNull();
-});
-
-test("closing while loading ignores a late response and allows reopening", async () => {
-  let finish: (value: null) => void = () => {};
-  loadBooking.mockReturnValueOnce(new Promise<null>((resolve) => { finish = resolve; })).mockResolvedValueOnce(null);
-  render(<NotificationsTable rows={[stopped(1)]} query={query} />);
-  const trigger = screen.getByRole("button", { name: `Booking ${booking}` });
-  fireEvent.click(trigger);
-  expect(screen.getByRole("status").textContent).toBe("Loading booking details…");
-  fireEvent.click(screen.getByRole("button", { name: "Close" }));
-  await act(async () => { finish(null); });
-  expect(screen.queryByRole("dialog")).toBeNull();
-  fireEvent.click(trigger);
-  expect(await screen.findByRole("alert")).toHaveProperty("textContent", "This booking is no longer available.");
-  expect(loadBooking).toHaveBeenCalledTimes(2);
-});
-
-beforeEach(() => { installDialogMock(); loadBooking.mockReset(); remove.mockReset(); replace.mockReset(); refresh.mockReset(); });
+beforeEach(() => { installDialogMock(); remove.mockReset(); replace.mockReset(); refresh.mockReset(); });
 afterEach(() => { cleanup(); list.mockReset(); vi.useRealTimers(); });
 
 test("shows notification times in Europe/Bucharest across daylight-saving changes", async () => {
@@ -99,7 +78,9 @@ test("shows notification times in Europe/Bucharest across daylight-saving change
 test("passes URL parameters to the server list and distinguishes empty results", async () => {
   list.mockResolvedValue(page([]));
   render(await AdminNotificationsPage({ searchParams: Promise.resolve({}) }));
-  expect(screen.getByText("All booking emails have been accepted by Brevo.")).toBeTruthy();
+  expect(screen.getByText("No booking email needs attention.")).toBeTruthy();
+  expect(screen.getByText("Emails that could not be delivered. Retry sending or delete the notification after handling it manually.")).toBeTruthy();
+  expect(screen.queryByText(/cannot be deleted/)).toBeNull();
   cleanup();
   list.mockResolvedValue(page([], { q: "ana", status: "stopped" }));
   const params = { q: "ana", status: "stopped", page: "2" };
@@ -119,13 +100,14 @@ test("distinguishes scheduled retries from manual intervention and keeps the ful
   expect(within(third).getByText("Financial exception")).toBeTruthy();
   expect(within(first).getByText(`Booking ${booking}`)).toBeTruthy();
   expect(within(first).getByTitle(booking).textContent).toContain("#b0000000");
-  // Only eligible rows offer selection and deletion; Retry stays on every row.
-  expect(within(first).getByRole("checkbox")).toHaveProperty("disabled", false);
-  for (const row of [second, third]) {
-    expect(within(row).getByRole("checkbox")).toHaveProperty("disabled", true);
-    expect(within(row).queryByRole("button", { name: /^Delete/ })).toBeNull();
-    expect(within(row).getByRole("button", { name: "Retry now" })).toBeTruthy();
+  // Only eligible rows offer selection and deletion, financial emails included; Retry stays on every row.
+  for (const row of [first, third]) {
+    expect(within(row).getByRole("checkbox")).toHaveProperty("disabled", false);
+    expect(within(row).getByRole("button", { name: /^Delete/ })).toBeTruthy();
   }
+  expect(within(second).getByRole("checkbox")).toHaveProperty("disabled", true);
+  expect(within(second).queryByRole("button", { name: /^Delete/ })).toBeNull();
+  for (const row of [first, second, third]) expect(within(row).getByRole("button", { name: "Retry now" })).toBeTruthy();
 });
 
 test("selects deletable rows on the current page with an indeterminate header and a contextual toolbar", () => {
@@ -153,12 +135,13 @@ test("bulk deletion confirms the count, reports records not deleted and clears t
   fireEvent.click(screen.getByRole("checkbox", { name: "Select all deletable notifications on this page" }));
   fireEvent.click(screen.getByRole("button", { name: "Delete selected" }));
   const dialog = screen.getByRole("dialog", { name: "Delete 2 notifications?" });
-  expect(dialog.textContent).toContain("Booking, payment and refund records are not changed.");
+  expect(dialog.textContent).toContain("Booking, payment and refund records are not changed, and payment notices stay visible to the customer until they confirm them.");
   await act(async () => { fireEvent.click(within(dialog).getByRole("button", { name: "Delete" })); });
   expect(remove).toHaveBeenCalledExactlyOnceWith({ ids: [id(1), id(2)] });
   await expectToast("Notification deleted.", "success");
   await expectToast(/1 notification was not deleted/, "warning");
   expect(refresh).toHaveBeenCalled();
+  expect(refreshIndicators).toHaveBeenCalledOnce();
   await waitFor(() => expect(screen.queryByRole("toolbar")).toBeNull());
   expect(screen.queryByRole("dialog")).toBeNull();
 });

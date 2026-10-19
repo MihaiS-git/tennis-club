@@ -13,11 +13,11 @@ const acknowledgedKinds: ReadonlySet<BookingEmailEvent["event_kind"]> = new Set(
   "cancellation_failed", "modification_failed", "refund_incomplete", "late_payment_refund",
 ]);
 
-// A focused booking-email outbox. The caller owns the financial transaction.
-export async function enqueueBookingNotification(manager: EntityManager, key: string, event: BookingEmailEvent) {
-  if (!manager.queryRunner?.isTransactionActive) throw new Error("Booking notification requires the state-change transaction");
+// Projection transaction only; financial commands never call this function.
+export async function enqueueBookingNotification(manager: EntityManager, key: string, event: BookingEmailEvent, occurredAt?: Date | string) {
+  if (!manager.queryRunner?.isTransactionActive) throw new Error("Booking notification requires a projection transaction");
   await notifications.insertBookingNotification(manager, { key, message: renderBookingEmail(event),
-    bookingId: event.payload.booking_id, eventKind: event.event_kind, requiresAcknowledgement: acknowledgedKinds.has(event.event_kind) });
+    bookingId: event.payload.booking_id, eventKind: event.event_kind, requiresAcknowledgement: acknowledgedKinds.has(event.event_kind), occurredAt });
 }
 
 // Automatic retry policy. A temporary failure is retried with exponential backoff
@@ -30,9 +30,8 @@ function nextDeliveryRetrySeconds(result: Exclude<MailDeliveryResult, "accepted"
   return Math.min(3600, 60 * 2 ** Math.min(attempts, 6));
 }
 
-// Called after commit by the request that changed state (customer, Admin or
-// signed webhook), and every five minutes by Supabase Cron through
-// POST /api/notifications/deliver; both also drain earlier due rows. Never
+// Called only by the scheduled POST /api/notifications/deliver endpoint.
+// Explicit Admin retries use deliverBookingNotification for a selected row. Never
 // throws: a row that is not accepted stays queued with its exact failure recorded.
 // interrupted: the database or delivery loop failed; due rows stay queued.
 export async function deliverPendingBookingNotifications(options: { limit?: number; deadline?: number } = {}) {
@@ -64,12 +63,13 @@ async function deliverOne(id?: string): Promise<MailDeliveryResult | null> {
   const token = randomUUID();
   const item = await inTransaction(manager => notifications.claimDueBookingNotification(manager, token, id));
   if (!item) return null;
-  // Stable provider key limits duplicates within Brevo's retention window.
+  // A stable submission key limits duplicates within Brevo's retention window.
   // Ambiguous outcomes are retried: durable at-least-once submission, not exactly-once email.
-  const result = await deliverMail(item.message, item.id);
+  // Acceptance is not delivery: Brevo's webhook later confirms or reports a failure (brevo-events.ts).
+  const { result, messageId } = await deliverMail(item.message, item.submission_key);
   const retrySeconds = result === "accepted" ? 0 : nextDeliveryRetrySeconds(result, item.attempts);
   await inTransaction(manager => notifications.recordBookingNotificationDelivery(manager, { id: item.id, token,
-    lastError: result === "accepted" ? null : result, retrySeconds }));
+    lastError: result === "accepted" ? null : result, retrySeconds, messageId }));
   if (result !== "accepted") logger.warn({ event: retrySeconds === null ? "booking_email.delivery_stopped" : "booking_email.delivery_deferred",
     deliveryId: item.id, result, attempts: item.attempts },
   retrySeconds === null ? "Booking notification not delivered; automatic retries stopped, visible to Admins"

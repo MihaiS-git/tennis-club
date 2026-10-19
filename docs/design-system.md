@@ -134,6 +134,19 @@ These rules apply across the application, including future screens.
 - Keep application and section navigation visually stable during navigation. Restrict loading feedback to the smallest data-dependent content region.
 - Prefer server-first rendering, existing Tailwind conventions, and existing design tokens. Introduce a UI framework or generalized abstraction only for a concrete need.
 
+## Public page heroes and section menus
+
+The Club, Courts and Coaching pages use `EditorialHero` (`src/app/editorial-hero.tsx`): one
+full-width photograph, height `clamp(540px, 86svh, 860px)`, the shared forest overlay, and
+the same eyebrow, title scale and bottom-left text column. Each page passes only its content,
+image crop and title measure. The homepage keeps its own hero and Play today widget.
+
+`PageSectionNav` (`src/app/page-section-nav.tsx`) is the "On this page" menu placed directly
+below the hero on the homepage, The Club, Courts, Coaching and coach profiles. It scrolls
+horizontally on narrow screens. Each link must target an element on the same page carrying
+`scroll-mt-20` (clearing the sticky navbar). Use it for in-page sections only, not to repeat
+main-navigation links.
+
 ## Photography assets
 
 Photography under `public/` is user-provided product material.

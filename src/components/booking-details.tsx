@@ -1,13 +1,32 @@
+import { bookingType, bookingTypeLabel, type BookingTypeSnapshot } from "@/lib/bookings/booking-type";
+import type { PricingEvidence } from "@/lib/bookings/revision";
 import { DetailSection } from "@/components/dialog-layout";
 import { ReservationScheduleFieldsView } from "@/components/reservation-details";
 import type { PersonalCustomerBooking } from "@/lib/bookings/personal";
 import { customerCancellationNoticeLabel, customerMutationDeadline } from "@/lib/bookings/self-cancellation";
 import { formatMoney } from "@/lib/pricing/money";
 
-export function BookingDetails({ booking }: { booking: Omit<PersonalCustomerBooking, "id" | "starts_at_instant"> & { starts_at_instant?: string } }) {
+type CoachingDetailsSnapshot = BookingTypeSnapshot & { coaching?: PricingEvidence["coaching"] | null };
+
+export function CoachingBookingDetails({ booking, title = "Coaching details" }: { booking: CoachingDetailsSnapshot; title?: string }) {
+  const coaching = bookingType(booking) === "coaching" ? booking.coaching : null;
+  if (!coaching) return null;
+  return <DetailSection title={title}>
+    <dt className="text-muted-foreground">Coach</dt><dd>{booking.coach_name}</dd>
+    <dt className="text-muted-foreground">Program</dt><dd>{booking.coaching_program_name}</dd>
+    <dt className="text-muted-foreground">Participants</dt><dd>{coaching.participantCount ?? "Not recorded"}</dd>
+    <dt className="text-muted-foreground">Lesson duration</dt><dd>{coaching.durationMinutes} min</dd>
+    <dt className="text-muted-foreground">Coaching fee</dt><dd className="tabular-nums">{formatMoney(coaching.amountMinor, coaching.currency)}</dd>
+    <dt className="text-muted-foreground">Court rental</dt><dd>{coaching.courtRentalIncluded ? "Included" : <>Charged separately · {formatMoney(coaching.courtAmountMinor, coaching.currency)}</>}</dd>
+  </DetailSection>;
+}
+
+export function BookingDetails({ booking }: { booking: Omit<PersonalCustomerBooking, "id" | "starts_at_instant"> & CoachingDetailsSnapshot & { starts_at_instant?: string } }) {
   const cutoff = booking.starts_at_instant
     ? new Date(customerMutationDeadline({ ...booking, starts_at_instant: booking.starts_at_instant }, false).deadline) : null;
   return <>
+    {bookingType(booking) === "coaching" && <DetailSection title="Booking type"><dt className="text-muted-foreground">Type</dt><dd>{bookingTypeLabel(booking)}</dd></DetailSection>}
+    <CoachingBookingDetails booking={booking} />
     <DetailSection title="Court and time"><ReservationScheduleFieldsView reservation={booking} /></DetailSection>
     <DetailSection title="Customer contact">
       <dt className="text-muted-foreground">Name</dt><dd>{booking.customer_name}</dd>

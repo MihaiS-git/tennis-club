@@ -3,6 +3,7 @@ import "server-only";
 import { Check, Column, Entity, Exclusion, ForeignKey, Index, PrimaryGeneratedColumn } from "typeorm";
 
 import { BookingAdjustmentEntity } from "./booking-adjustment.entity";
+import { CoachProfileEntity } from "./coach-profile.entity";
 import { UserEntity } from "./user.entity";
 import { CourtEntity } from "./court.entity";
 
@@ -24,6 +25,11 @@ import { CourtEntity } from "./court.entity";
 // Initial migration configures btree_gist before this entity-generated exclusion.
 @Exclusion("court_reservation_no_overlap", "USING gist (court_id WITH =, booking_date WITH =, int4range(starts_at_minute, ends_at_minute, '[)') WITH &&) WHERE (status IN ('active', 'held'))")
 @ForeignKey(() => BookingAdjustmentEntity, ["adjustmentId"], ["id"], { name: "court_reservations_adjustment_id_fkey", onDelete: "RESTRICT" })
+// A coaching lesson is ordinary court occupancy that also occupies its coach. One coach
+// teaches one lesson at a time across courts and locations (local wall time, like coach
+// availability); the court exclusion above still applies to the same row.
+@ForeignKey(() => CoachProfileEntity, ["coachUserId"], ["userId"], { name: "court_reservations_coach_user_id_fkey", onDelete: "RESTRICT" })
+@Exclusion("court_reservation_coach_no_overlap", "USING gist (coach_user_id WITH =, booking_date WITH =, int4range(starts_at_minute, ends_at_minute, '[)') WITH &&) WHERE (coach_user_id IS NOT NULL AND status IN ('active', 'held'))")
 export class CourtReservationEntity {
   @Column({ name: "adjustment_id", type: "uuid", nullable: true })
   adjustmentId!: string | null;
@@ -66,4 +72,7 @@ export class CourtReservationEntity {
 
   @Column({ name: "hold_expires_at", type: "timestamptz", nullable: true })
   holdExpiresAt!: Date | null;
+
+  @Column({ name: "coach_user_id", type: "uuid", nullable: true })
+  coachUserId!: string | null;
 }

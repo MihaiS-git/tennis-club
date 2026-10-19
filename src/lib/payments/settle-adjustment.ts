@@ -7,7 +7,7 @@ import { applyCapturedBookingAdjustment } from "@/lib/bookings/commands";
 import { BookingRevisionFenceError } from "@/lib/db/repositories/booking-revisions.repository";
 import { normalizeDatabaseError } from "@/lib/db/errors";
 import { allocateBookingRefund } from "./financials";
-import { bookingNotification, type BookingEmailEvent } from "@/lib/notifications/booking-email";
+import { recordBookingFinancialException } from "@/lib/db/repositories/booking-financial-exceptions.repository";
 import { findBookingCancellationNotice } from "@/lib/db/repositories/bookings.repository";
 import type { OnlinePaymentEvent } from "./providers/types";
 
@@ -16,10 +16,10 @@ export async function settleAdjustment(manager: EntityManager, input: {
   attempt: NonNullable<Awaited<ReturnType<typeof payments.lockSettlementAttempt>>>;
   event: OnlinePaymentEvent | null; outcome: "succeeded" | "failed" | "retryable_failed" | "cancelled";
   providerPaymentId: string; mismatch: boolean | null;
-}): Promise<{ result: payments.ProviderReceipt["settlement_result"]; refundIds: string[]; notification: BookingEmailEvent | null;
+}): Promise<{ result: payments.ProviderReceipt["settlement_result"]; refundIds: string[];
   abandonProviderPayment: boolean }> {
   const { attempt } = input;
-  const ended = { refundIds: [] as string[], notification: null, abandonProviderPayment: false };
+  const ended = { refundIds: [] as string[], abandonProviderPayment: false };
   const adjustment = attempt.adjustment_id ? await adjustments.findAdjustment(manager, attempt.adjustment_id) : null;
   if (!adjustment || adjustment.bookingId !== attempt.booking_id || input.mismatch)
     return { ...ended, result: "amount_mismatch" as const };
@@ -72,7 +72,7 @@ export async function settleAdjustment(manager: EntityManager, input: {
     await manager.query("RELEASE SAVEPOINT booking_adjustment_apply");
     if (applied?.result.ok) {
       await adjustments.updateAdjustment(manager, adjustment.id, "applied");
-      return { ...ended, result: "succeeded" as const, notification: applied.notification };
+      return { ...ended, result: "succeeded" as const };
     }
     await adjustments.updateAdjustment(manager, adjustment.id, "unsuccessful");
   } else if (adjustment.status === "pending") await adjustments.updateAdjustment(manager, adjustment.id, "expired");
@@ -83,8 +83,10 @@ export async function settleAdjustment(manager: EntityManager, input: {
   // The customer paid but the change could not be applied: tell them once, on
   // the first verified capture. The compensation refund proceeds automatically.
   const revision = firstCapture ? await findBookingCancellationNotice(manager, adjustment.bookingId) : null;
-  return { ...ended, result: "expired" as const, refundIds,
-    notification: revision ? bookingNotification("modification_failed", revision, { refundRequested: true }) : null };
+  if (revision) await recordBookingFinancialException(manager, { key: `payment:${attempt.id}:modification_failed`,
+    bookingId: attempt.booking_id, revisionId: revision.id, kind: "surcharge_unapplied",
+    adjustmentId: adjustment.id, paymentAttemptId: attempt.id });
+  return { ...ended, result: "expired" as const, refundIds };
 }
 
 // Resuming retrieves the registered intent, never creates another one. The

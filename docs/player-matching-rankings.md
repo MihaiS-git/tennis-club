@@ -1,5 +1,7 @@
 # Player Matching and Rankings
 
+> **Deferred indefinitely.** Matches, partner matching/matchmaking, match results and rankings are not part of the current product. There are no `/matches` or `/rankings` routes and no related tables; the application focuses on court booking, coaching, club facilities and member management. Player profiles, Sportya levels and player ratings remain. The design below is kept only as a reference for possible future work.
+
 ## Partner matching
 
 Members can create requests to find a tennis partner.

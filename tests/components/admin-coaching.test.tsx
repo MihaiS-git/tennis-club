@@ -1,0 +1,249 @@
+// @vitest-environment jsdom
+import { expectToast } from "../helpers/notifications";
+import { installDialogMock } from "../helpers/dialog";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { AdminCoach, AdminCoachingLocation, AdminCoachingPrice, AdminCoachingProgram } from "@/lib/coaching/admin";
+
+const actions = vi.hoisted(() => ({
+  deleteCoachingProgramAction: vi.fn(), deleteCoachProfileAction: vi.fn(),
+  saveCoachingProgramAction: vi.fn(), setCoachingProgramStatusAction: vi.fn(), saveCoachProfileAction: vi.fn(),
+  setCoachVisibilityAction: vi.fn(), saveCoachingPriceAction: vi.fn(), removeCoachingPriceAction: vi.fn(),
+}));
+const router = vi.hoisted(() => ({ refresh: vi.fn(), push: vi.fn() }));
+vi.mock("next/navigation", () => ({ useRouter: () => router, usePathname: () => "/admin/coaching/prices" }));
+vi.mock("@/app/admin/coaching/actions", () => actions);
+
+import { ProgramDialog } from "@/app/admin/coaching/programs/program-dialog";
+import { ProgramsTable } from "@/app/admin/coaching/programs/programs-table";
+import { CoachesTable } from "@/app/admin/coaching/coaches/coaches-table";
+import { CoachDialog } from "@/app/admin/coaching/coaches/coach-dialog";
+import { PriceEditor } from "@/app/admin/coaching/prices/price-editor";
+import { PricesTable } from "@/app/admin/coaching/prices/prices-table";
+
+const location: AdminCoachingLocation = { id: "b1000000-0000-4000-8000-000000000001", name: "East Club", currency: "RON", is_active: true };
+const program: AdminCoachingProgram = { id: "a1000000-0000-4000-8000-000000000001", name: "Private lesson", description: "",
+  program_type: "private", durations: [60], min_participants: 1, max_participants: 1, court_rental_included: true, is_active: true };
+const coach: AdminCoach = { user_id: "c1000000-0000-4000-8000-00000000000a", display_name: "Ana Pop", bio: "", qualifications: "",
+  specialties: [], languages: [], is_public: false, email: "ana@example.test", location_ids: [location.id], program_ids: [program.id], ineligibility: null };
+const target = { program_id: program.id, duration_minutes: 60, location_id: location.id, coach_user_id: null };
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  installDialogMock();
+});
+afterEach(cleanup);
+
+it("creates a program with the explicit fields and selected durations", async () => {
+  actions.saveCoachingProgramAction.mockResolvedValue({ ok: true, id: program.id });
+  render(<ProgramDialog />);
+  fireEvent.click(screen.getByRole("button", { name: "Create program" }));
+  const dialog = screen.getByRole("dialog", { name: "Create program" });
+  fireEvent.input(within(dialog).getByLabelText("Name"), { target: { value: "Junior squad" } });
+  fireEvent.change(within(dialog).getByLabelText("Program type"), { target: { value: "junior" } });
+  fireEvent.click(within(dialog).getByLabelText("90 min"));
+  fireEvent.input(within(dialog).getByLabelText("Other durations (minutes, comma-separated)"), { target: { value: "105" } });
+  fireEvent.input(within(dialog).getByLabelText("Maximum players"), { target: { value: "8" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save program" }));
+  await waitFor(() => expect(actions.saveCoachingProgramAction).toHaveBeenCalledOnce());
+  expect(actions.saveCoachingProgramAction).toHaveBeenCalledWith({ fields: { name: "Junior squad", description: "", program_type: "junior",
+    durations: [60, 90, 105], min_participants: null, max_participants: 8, court_rental_included: false, is_active: true } });
+  await expectToast("Program created.", "success");
+  expect(router.refresh).toHaveBeenCalled();
+});
+
+it("keeps the draft and shows the server's field error beside the control", async () => {
+  actions.saveCoachingProgramAction.mockResolvedValue({ ok: false, reason: "invalid-input", fieldErrors: { durations: "Choose a valid duration." } });
+  render(<ProgramDialog program={{ ...program, durations: [60, 90] }} open onOpenChange={() => undefined} />);
+  const dialog = screen.getByRole("dialog", { name: "Edit program" });
+  fireEvent.click(within(dialog).getByLabelText("90 min"));
+  fireEvent.input(within(dialog).getByLabelText("Name"), { target: { value: "Private coaching" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save program" }));
+  expect(await within(dialog).findByText("Choose a valid duration.")).toBeTruthy();
+  expect((within(dialog).getByLabelText("Name") as HTMLInputElement).value).toBe("Private coaching");
+  expect(screen.getByRole("dialog", { name: "Edit program" })).toBeTruthy();
+});
+
+it("edits program status inline, confirming deactivation", async () => {
+  actions.setCoachingProgramStatusAction.mockResolvedValue({ ok: true, id: program.id });
+  render(<ProgramsTable programs={[program]} />);
+  const [status] = screen.getAllByRole("combobox", { name: "Status of Private lesson" });
+  fireEvent.change(status, { target: { value: "false" } });
+  expect(actions.setCoachingProgramStatusAction).not.toHaveBeenCalled();
+  fireEvent.click(within(screen.getByRole("dialog", { name: "Deactivate Private lesson?" })).getByRole("button", { name: "Deactivate program" }));
+  await waitFor(() => expect(actions.setCoachingProgramStatusAction).toHaveBeenCalledWith({ id: program.id, is_active: false }));
+  // Inline control does not open the row's edit dialog.
+  expect(screen.queryByRole("dialog", { name: "Edit program" })).toBeNull();
+});
+
+it("shows an empty state when no programs exist", () => {
+  render(<ProgramsTable programs={[]} />);
+  expect(screen.getByText(/No coaching programs yet/)).toBeTruthy();
+});
+
+it("prevents showing a coach without an eligible coach account", () => {
+  render(<CoachesTable coaches={[{ ...coach, ineligibility: "no-coach-role" }]} locations={[location]} programs={[program]} />);
+  const [visibility] = screen.getAllByRole("combobox", { name: "Visibility of Ana Pop" });
+  expect((within(visibility).getByRole("option", { name: "Public" }) as HTMLOptionElement).disabled).toBe(true);
+  expect(screen.getAllByText("No Coach role").length).toBeGreaterThan(0);
+});
+
+it("adds a coach for a selected coach account with public profile fields only", async () => {
+  actions.saveCoachProfileAction.mockResolvedValue({ ok: false, reason: "not-eligible" });
+  render(<CoachDialog accounts={[{ id: coach.user_id, email: coach.email, suggested_name: "Ana Pop" }]} locations={[location]} programs={[program]} />);
+  fireEvent.click(screen.getByRole("button", { name: "Add coach" }));
+  const dialog = screen.getByRole("dialog", { name: "Add coach" });
+  fireEvent.change(within(dialog).getByLabelText("Coach account"), { target: { value: coach.user_id } });
+  expect((within(dialog).getByLabelText("Public name") as HTMLInputElement).value).toBe("Ana Pop");
+  fireEvent.input(within(dialog).getByLabelText("Specialties"), { target: { value: "Serve, footwork" } });
+  fireEvent.click(within(dialog).getByLabelText("East Club"));
+  fireEvent.click(within(dialog).getByLabelText("Private lesson"));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save coach" }));
+  await waitFor(() => expect(actions.saveCoachProfileAction).toHaveBeenCalledWith({ user_id: coach.user_id, create: true, fields: {
+    display_name: "Ana Pop", bio: "", qualifications: "", specialties: ["Serve", "footwork"], languages: [],
+    location_ids: [location.id], program_ids: [program.id], is_public: false } }));
+  expect(await within(dialog).findByText(/Only active accounts with the Coach role/)).toBeTruthy();
+});
+
+it("saves a club price inline in the location currency and keeps rejected input", async () => {
+  actions.saveCoachingPriceAction.mockResolvedValueOnce({ ok: false, reason: "invalid-input", fieldErrors: { amount: "Too large." } })
+    .mockResolvedValueOnce({ ok: true, id: "p1" });
+  render(<PriceEditor label="Club price" target={target} currency="RON" emptyHint="Not set" />);
+  expect(screen.getByText("RON")).toBeTruthy();
+  const input = screen.getByLabelText("Club price") as HTMLInputElement;
+  fireEvent.change(input, { target: { value: "120" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(await screen.findByText("Too large.")).toBeTruthy();
+  expect(input.value).toBe("120");
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(actions.saveCoachingPriceAction).toHaveBeenLastCalledWith({ ...target, amount: "120" }));
+  await expectToast("Price saved.", "success");
+});
+
+it("flags an amount entered before the location currency changed", () => {
+  const stale: AdminCoachingPrice = { id: "p1", ...target, amount_minor: 3000, currency: "EUR", current: false };
+  render(<PriceEditor label="Club price" target={target} price={stale} currency="RON" emptyHint="Not set" />);
+  expect((screen.getByLabelText("Club price") as HTMLInputElement).value).toBe("");
+  expect(screen.getByText(/the location now uses RON/)).toBeTruthy();
+});
+
+it("lists coach prices only for coaches offering the program at the location", () => {
+  const override: AdminCoachingPrice = { id: "p2", ...target, coach_user_id: coach.user_id, amount_minor: 15000, currency: "RON", current: true };
+  const other = { ...coach, user_id: "c1000000-0000-4000-8000-00000000000b", display_name: "Bo", location_ids: [] };
+  render(<PricesTable location={location} programs={[program]} coaches={[coach, other]} prices={[override]} />);
+  expect(screen.getByRole("table", { name: "Coaching prices at East Club" }).textContent).toContain("Ana Pop:");
+  fireEvent.click(screen.getByRole("button", { name: "Coach prices for Private lesson, 60 min" }));
+  const dialog = screen.getByRole("dialog", { name: "Coach prices" });
+  expect(within(dialog).getByText("Ana Pop")).toBeTruthy();
+  expect(within(dialog).queryByText("Bo")).toBeNull();
+  expect((within(dialog).getByLabelText("Ana Pop price for Private lesson, 60 min") as HTMLInputElement).value).toBe("150.00");
+});
+
+it("edits an existing coach's public profile, specialties, qualifications, languages and assignments from the table", async () => {
+  actions.saveCoachProfileAction.mockResolvedValueOnce({ ok: false, reason: "has-prices" }).mockResolvedValueOnce({ ok: true, id: coach.user_id });
+  const west: AdminCoachingLocation = { id: "b1000000-0000-4000-8000-000000000002", name: "West Club", currency: "EUR", is_active: true };
+  const group: AdminCoachingProgram = { ...program, id: "a1000000-0000-4000-8000-000000000002", name: "Group drills", is_active: false };
+  render(<CoachesTable coaches={[{ ...coach, specialties: ["Serve"], languages: ["English"], qualifications: "Level 1" }]}
+    locations={[location, west]} programs={[program, group]} />);
+  fireEvent.click(screen.getByRole("row", { name: "Edit coach Ana Pop" }));
+  const dialog = screen.getByRole("dialog", { name: "Edit coach" });
+  expect(dialog.textContent).toContain("ana@example.test");
+  expect(within(dialog).queryByLabelText("Coach account")).toBeNull();
+  expect((within(dialog).getByLabelText("Specialties") as HTMLInputElement).value).toBe("Serve");
+  fireEvent.input(within(dialog).getByLabelText("Public name"), { target: { value: "Ana Popescu" } });
+  fireEvent.input(within(dialog).getByLabelText("Biography"), { target: { value: "Coaching since 2010." } });
+  fireEvent.input(within(dialog).getByLabelText("Qualifications"), { target: { value: "Level 3" } });
+  fireEvent.input(within(dialog).getByLabelText("Specialties"), { target: { value: "Serve, Volleys" } });
+  fireEvent.input(within(dialog).getByLabelText("Languages"), { target: { value: "English, Romanian" } });
+  fireEvent.click(within(dialog).getByLabelText("East Club"));
+  fireEvent.click(within(dialog).getByLabelText("West Club"));
+  fireEvent.click(within(dialog).getByLabelText("Group drills (inactive)"));
+  fireEvent.change(within(dialog).getByLabelText("Public visibility"), { target: { value: "true" } });
+  const expected = { user_id: coach.user_id, create: false, fields: { display_name: "Ana Popescu", bio: "Coaching since 2010.",
+    qualifications: "Level 3", specialties: ["Serve", "Volleys"], languages: ["English", "Romanian"],
+    location_ids: [west.id], program_ids: [program.id, group.id], is_public: true } };
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save coach" }));
+  await waitFor(() => expect(actions.saveCoachProfileAction).toHaveBeenCalledWith(expected));
+  // A dependency failure keeps the draft open beside the form.
+  expect(await within(dialog).findByText(/Individual prices exist for a removed location or program/)).toBeTruthy();
+  expect((within(dialog).getByLabelText("Public name") as HTMLInputElement).value).toBe("Ana Popescu");
+  fireEvent.click(within(dialog).getByLabelText("East Club"));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save coach" }));
+  await expectToast("Coach updated.", "success");
+  expect(actions.saveCoachProfileAction).toHaveBeenLastCalledWith({ ...expected, fields: { ...expected.fields, location_ids: [location.id, west.id] } });
+});
+
+it("shows Pencil and Trash2 program actions and offers explicit deactivation for history", async () => {
+  actions.deleteCoachingProgramAction.mockResolvedValue({ ok: false, reason: "has-bookings" });
+  actions.setCoachingProgramStatusAction.mockResolvedValue({ ok: true, id: program.id });
+  render(<ProgramsTable programs={[program]} />);
+  const row = screen.getByRole("row", { name: "Edit program Private lesson" });
+  expect(within(row).getByRole("button", { name: "Edit program" }).querySelector(".lucide-pencil")).toBeTruthy();
+  const button = within(row).getByRole("button", { name: "Delete program" });
+  expect(button.querySelector(".lucide-trash-2")).toBeTruthy();
+  fireEvent.click(button);
+  expect(screen.queryByRole("dialog", { name: "Edit program" })).toBeNull();
+  const dialog = screen.getByRole("dialog", { name: "Delete Private lesson?" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Delete program" }));
+  expect(await within(dialog).findByRole("alert")).toHaveProperty("textContent", expect.stringContaining("Deactivate"));
+  expect(actions.deleteCoachingProgramAction).toHaveBeenCalledWith({ id: program.id });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Deactivate program" }));
+  await expectToast("Program deactivated.", "success");
+});
+
+it.each([false, true])("confirms coach removal and reports physical deletion versus archiving (archive=%s)", async archived => {
+  actions.deleteCoachProfileAction.mockResolvedValue({ ok: true, id: coach.user_id, archived });
+  render(<CoachesTable coaches={[coach]} locations={[location]} programs={[program]} />);
+  const row = screen.getByRole("row", { name: "Edit coach Ana Pop" });
+  expect(within(row).getByRole("button", { name: "Edit coach" }).querySelector(".lucide-pencil")).toBeTruthy();
+  const button = within(row).getByRole("button", { name: "Delete coach" });
+  expect(button.querySelector(".lucide-trash-2")).toBeTruthy();
+  fireEvent.click(button);
+  expect(actions.deleteCoachProfileAction).not.toHaveBeenCalled();
+  const dialog = screen.getByRole("dialog", { name: "Remove Ana Pop?" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Remove coach" }));
+  await waitFor(() => expect(actions.deleteCoachProfileAction).toHaveBeenCalledWith({ user_id: coach.user_id }));
+  await expectToast(archived ? "Coach archived and removed from the roster." : "Coach profile deleted.", "success");
+});
+
+it("removes Junior's 45 minute duration with one save and no cleanup confirmation", async () => {
+  actions.saveCoachingProgramAction.mockResolvedValue({ ok: true, id: program.id });
+  render(<ProgramDialog program={{ ...program, name: "Junior coaching", program_type: "junior", durations: [45, 60] }} open />);
+  fireEvent.click(screen.getByLabelText("45 min"));
+  fireEvent.click(screen.getByRole("button", { name: "Save program" }));
+  await waitFor(() => expect(actions.saveCoachingProgramAction).toHaveBeenCalledWith({ id: program.id,
+    fields: expect.objectContaining({ name: "Junior coaching", durations: [60] }) }));
+  await expectToast("Program updated.", "success");
+});
+
+it("edits every program field in the existing dialog from the Pencil action", async () => {
+  actions.saveCoachingProgramAction.mockResolvedValue({ ok: true, id: program.id });
+  render(<ProgramsTable programs={[program]} />);
+  fireEvent.click(within(screen.getByRole("row", { name: "Edit program Private lesson" })).getByRole("button", { name: "Edit program" }));
+  const dialog = screen.getByRole("dialog", { name: "Edit program" });
+  expect((within(dialog).getByLabelText("Name") as HTMLInputElement).value).toBe(program.name);
+  fireEvent.input(within(dialog).getByLabelText("Name"), { target: { value: "Partner lesson" } });
+  fireEvent.input(within(dialog).getByLabelText("Description"), { target: { value: "Two players together" } });
+  fireEvent.change(within(dialog).getByLabelText("Program type"), { target: { value: "semi_private" } });
+  fireEvent.click(within(dialog).getByLabelText("60 min"));
+  fireEvent.click(within(dialog).getByLabelText("90 min"));
+  fireEvent.input(within(dialog).getByLabelText("Minimum players"), { target: { value: "2" } });
+  fireEvent.input(within(dialog).getByLabelText("Maximum players"), { target: { value: "2" } });
+  fireEvent.change(within(dialog).getByLabelText("Court rental"), { target: { value: "false" } });
+  fireEvent.change(within(dialog).getByLabelText("Status"), { target: { value: "false" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save program" }));
+  await waitFor(() => expect(actions.saveCoachingProgramAction).toHaveBeenCalledWith({ id: program.id, fields: {
+    name: "Partner lesson", description: "Two players together", program_type: "semi_private", durations: [90],
+    min_participants: 2, max_participants: 2, court_rental_included: false, is_active: false,
+  } }));
+});
+
+it("keeps coach removal open with a clear active-lesson explanation", async () => {
+  actions.deleteCoachProfileAction.mockResolvedValue({ ok: false, reason: "active-lessons" });
+  render(<CoachesTable coaches={[coach]} locations={[location]} programs={[program]} />);
+  fireEvent.click(within(screen.getByRole("row", { name: "Edit coach Ana Pop" })).getByRole("button", { name: "Delete coach" }));
+  const dialog = screen.getByRole("dialog", { name: "Remove Ana Pop?" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Remove coach" }));
+  expect((await within(dialog).findByRole("alert")).textContent).toContain("Handle those lessons first");
+  expect(screen.getByRole("dialog", { name: "Remove Ana Pop?" })).toBeTruthy();
+});

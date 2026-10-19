@@ -358,7 +358,7 @@ const setState = (id: string, sql: string) => database.query(`UPDATE public.book
 const exists = async (id: string) => (await database.query("SELECT 1 FROM public.booking_notification_deliveries WHERE id=$1", [id])).length === 1;
 const stop = "attempts=8,last_error='unavailable',next_attempt_at='infinity'";
 
-test("Admins delete only stopped, non-financial email records; active, retrying and financial rows are protected", async () => {
+test("Admins permanently dismiss stopped emails of every type; active and retrying rows are protected", async () => {
   const member = await account(), admin = await account();
   assert.strictEqual((await service.from("user_roles").insert({ user_id: admin.id, role_code: "admin" })).error, null);
   try {
@@ -374,7 +374,7 @@ test("Admins delete only stopped, non-financial email records; active, retrying 
     const listed = (await listAdminUndeliveredNotifications({ q: owned }, admin.client)).rows;
     expect(Object.fromEntries(listed.map((item) => [item.id, [item.state, item.deletable]]))).toEqual({
       [stopped]: ["stopped", true], [rejected]: ["stopped", true], [retrying]: ["retrying", false],
-      [queued]: ["queued", false], [sending]: ["sending", false], [financial]: ["stopped", false] });
+      [queued]: ["queued", false], [sending]: ["sending", false], [financial]: ["stopped", true] });
     const bookingBefore = await database.query("SELECT to_jsonb(b) AS booking FROM public.bookings b WHERE b.id=$1", [owned]);
 
     // Only an active Admin may delete, and the input is validated before any database work.
@@ -384,14 +384,28 @@ test("Admins delete only stopped, non-financial email records; active, retrying 
 
     // Individual deletion.
     expect(await deleteAdminNotifications({ ids: [stopped] }, admin.client)).toEqual({ ok: true, deleted: [stopped], skipped: 0 });
-    expect(await exists(stopped)).toBe(false);
+    expect(await exists(stopped)).toBe(true);
+    expect(await database.query("SELECT dismissed_at IS NOT NULL AS dismissed FROM public.booking_notification_deliveries WHERE id=$1",
+      [stopped])).toEqual([{ dismissed: true }]);
+    expect(await retryAdminNotification({ id: stopped }, admin.client)).toEqual({ ok: false, message: "This notification no longer exists." });
+    expect(await database.transaction(manager => claimDueBookingNotification(manager, randomUUID(), stopped))).toBeUndefined();
     // Bulk deletion skips every protected row, including ones selected by a stale page.
     const bulk = await deleteAdminNotifications({ ids: [rejected, retrying, queued, sending, financial, randomUUID()] }, admin.client);
-    expect(bulk).toEqual({ ok: true, deleted: [rejected], skipped: 5 });
-    for (const id of [retrying, queued, sending, financial]) expect(await exists(id)).toBe(true);
-    // Booking records and the customer's financial notice are untouched.
+    expect(bulk).toEqual({ ok: true, deleted: [rejected, financial], skipped: 4 });
+    for (const id of [retrying, queued, sending]) expect(await exists(id)).toBe(true);
+    // The financial row is only dismissed: hidden from Admins, never sent again, still unacknowledged.
+    expect(await database.query("SELECT dismissed_at IS NOT NULL AS dismissed,acknowledged_at FROM public.booking_notification_deliveries WHERE id=$1",
+      [financial])).toEqual([{ dismissed: true, acknowledged_at: null }]);
+    expect((await listAdminUndeliveredNotifications({ q: owned }, admin.client)).rows.map((item) => item.id)).not.toContain(financial);
+    expect(await database.transaction((manager) => claimDueBookingNotification(manager, randomUUID(), financial))).toBeUndefined();
+    expect(await retryAdminNotification({ id: financial }, admin.client)).toEqual({ ok: false, message: "This notification no longer exists." });
+    expect(await deleteAdminNotifications({ ids: [financial] }, admin.client)).toEqual({ ok: true, deleted: [], skipped: 1 });
+    // Booking records and the customer's financial notice are untouched, and the customer can still acknowledge it.
     expect(await database.query("SELECT to_jsonb(b) AS booking FROM public.bookings b WHERE b.id=$1", [owned])).toEqual(bookingBefore);
     expect((await listOwnFinancialNotices(member.client)).map((notice) => notice.id)).toContain(financial);
+    expect(await acknowledgeOwnFinancialNotice(financial, member.client)).toEqual({ ok: true });
+    expect(await database.query("SELECT acknowledged_at IS NOT NULL AS acknowledged FROM public.customer_notifications WHERE id=$1",
+      [financial])).toEqual([{ acknowledged: true }]);
   } finally {
     await service.from("user_roles").delete().eq("user_id", admin.id).eq("role_code", "admin");
   }

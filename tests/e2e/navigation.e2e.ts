@@ -82,7 +82,8 @@ test("navigation follows the current account and protected routes enforce access
     await expect(page).toHaveURL(/\/my-activity\/history$/);
     await userNavigation.getByRole("link", { name: "Bookings", exact: true }).click();
     await expect(page).toHaveURL(/\/my-activity\/bookings$/);
-    await expect(navigation.getByRole("link", { name: "Matches" })).toBeVisible();
+    await expect(navigation.getByRole("link", { name: "Matches" })).toHaveCount(0);
+    await expect(navigation.getByRole("link", { name: "Rankings" })).toHaveCount(0);
     await expect(navigation.getByRole("link", { name: "Admin" })).toHaveCount(0);
     for (const route of ["/admin", "/admin/users", "/admin/reservations", "/admin/payments/transactions", "/admin/payments/settings"]) {
       await page.goto(route);
@@ -191,7 +192,7 @@ test("navigation follows the current account and protected routes enforce access
     await userNavigation.getByRole("link", { name: "Personal information", exact: true }).click();
     await expect(page.getByLabel("First name", { exact: true })).toHaveValue("");
     // All shared link entry points guard the active Profile visit.
-    for (const destination of ["/book", "/matches", "/coaching", "/courts", "/rankings", "/club"]) {
+    for (const destination of ["/book", "/coaching", "/courts", "/club"]) {
       await page.getByLabel("First name", { exact: true }).fill("Footer draft");
       await page.getByRole("navigation", { name: "Footer", exact: true }).locator(`a[href="${destination}"]`).click();
       await expect(page.getByText("You have unsaved changes in Personal information.", { exact: true })).toBeVisible();

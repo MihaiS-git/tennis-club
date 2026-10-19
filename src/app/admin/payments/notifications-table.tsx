@@ -7,28 +7,32 @@ import { toast } from "sonner";
 import { ArrowDown, ArrowUp, ArrowUpDown, Trash2 } from "lucide-react";
 import { Button } from "@/components/button";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
+import { refreshNotificationUnread } from "@/components/notification-unread";
 import { StatusBadge, type StatusTone } from "@/components/status-badge";
 import type { AdminNotificationRow } from "@/lib/notifications/admin-notifications";
 import { adminNotificationHref, notificationStateLabels, notificationTimezone, type AdminNotificationQuery,
   type NotificationState } from "@/lib/notifications/admin-notification-query";
+import { adminBookingLinkFrom } from "@/lib/bookings/admin-query";
 import { transactionTimestamp } from "@/lib/payments/admin-query";
 import { deleteNotificationsAction } from "./actions";
 import { NotificationRetryButton } from "./notification-retry-button";
-import { NotificationBookingDetails } from "./notification-booking-details";
 
 const errorLabels: Record<string, string> = {
   rejected: "Rejected by Brevo",
   unavailable: "Brevo temporarily unavailable",
   unconfirmed: "No response from Brevo (may have been sent)",
   not_configured: "Email is not configured",
+  // Reported by Brevo's delivery webhook after it accepted the email.
+  soft_bounce: "Soft bounce", hard_bounce: "Hard bounce", invalid_email: "Invalid email address",
+  blocked: "Blocked by Brevo", error: "Brevo sending error",
 };
-const stateTones: Record<NotificationState, StatusTone> = { queued: "neutral", sending: "neutral", retrying: "warning", stopped: "danger" };
+const stateTones: Record<NotificationState, StatusTone> = { queued: "neutral", sending: "neutral", retrying: "warning", stopped: "danger", failed: "danger" };
 const timestamp = (value: string) => transactionTimestamp(value, notificationTimezone);
 const sortable: [string, AdminNotificationQuery["sort"], AdminNotificationQuery["dir"]][] = [
   ["Created", "created", "desc"], ["Status", "status", "asc"], ["Attempts", "attempts", "desc"], ["Next retry", "next_retry", "asc"],
 ];
 const describe = (row: AdminNotificationRow) => `“${row.subject}” to ${row.recipient}`;
-const consequences = "It will not be sent again, and any in-app notice about this failed email is removed. Booking, payment and refund records are not changed.";
+const consequences = "It will not be sent again. Booking, payment and refund records are not changed, and payment notices stay visible to the customer until they confirm them.";
 
 // The page is remounted for every query (filters, sort, page), which clears the selection.
 // Selection is limited to this page and to rows the server reports as deletable.
@@ -59,6 +63,7 @@ export function NotificationsTable({ rows, query }: { rows: AdminNotificationRow
         + "it is being sent, was retried or delivered, or no longer exists. The list has been refreshed.");
       setChosen(new Set()); setConfirming(null);
       router.refresh();
+      refreshNotificationUnread();
     } catch { toast.error("Unable to delete notifications. Try again."); }
     finally { setPending(false); }
   }
@@ -102,7 +107,7 @@ export function NotificationsTable({ rows, query }: { rows: AdminNotificationRow
           <td className="pr-1! pl-3! max-md:col-start-1! max-md:row-span-6 max-md:p-0!">
             <input type="checkbox" className="mt-0.5 size-4 accent-primary disabled:opacity-40" checked={row.deletable && chosen.has(row.id)}
               disabled={!row.deletable || pending} aria-label={`Select ${describe(row)}`}
-              title={row.deletable ? undefined : row.important ? "Financial notices cannot be deleted" : "Only notifications whose automatic retries have stopped can be deleted"}
+              title={row.deletable ? undefined : "Only failed notifications or ones whose automatic retries have stopped can be deleted"}
               onChange={(event) => toggle(row.id, event.target.checked)} />
           </td>
           <td className="whitespace-nowrap max-md:order-3 max-md:text-xs max-md:text-muted-foreground"><time dateTime={row.created_at}>{timestamp(row.created_at)}</time></td>
@@ -114,15 +119,20 @@ export function NotificationsTable({ rows, query }: { rows: AdminNotificationRow
             {row.important && <span className="mt-1 inline-flex"><StatusBadge tone="danger">Financial exception</StatusBadge></span>}
           </td>
           <td className="max-md:order-4 max-md:text-xs">{row.booking_id
-            ? <NotificationBookingDetails bookingId={row.booking_id} />
+            ? <Link href={adminBookingLinkFrom(row.booking_id, adminNotificationHref(query))} title={row.booking_id}
+              className="font-mono text-xs text-primary underline focus-visible:outline-2 focus-visible:outline-focus">
+              <span aria-hidden="true">#{row.booking_id.slice(0, 8)}</span><span className="sr-only">Booking {row.booking_id}</span></Link>
             : <span className="text-muted-foreground">—</span>}</td>
           <td className="max-md:order-2">
             <StatusBadge tone={stateTones[row.state]}>{notificationStateLabels[row.state]}</StatusBadge>
             {row.last_error && <span className="mt-0.5 block text-xs text-muted-foreground">{errorLabels[row.last_error] ?? "Not delivered"}</span>}
+            {row.failure_reason && <span title={row.failure_reason} className="mt-0.5 block max-w-56 truncate text-xs text-muted-foreground max-md:max-w-none max-md:whitespace-normal max-md:break-words">
+              <span className="sr-only">Brevo reason: </span>{row.failure_reason}</span>}
+            {row.failed_at && <span className="mt-0.5 block text-xs text-muted-foreground">Failed <time dateTime={row.failed_at}>{timestamp(row.failed_at)}</time></span>}
           </td>
           <td className="text-right tabular-nums max-md:order-5 max-md:text-left max-md:text-xs max-md:text-muted-foreground max-md:before:content-['Attempts:_']">{row.attempts}</td>
-          <td className="whitespace-nowrap max-md:order-6 max-md:text-xs">{row.state === "stopped"
-            ? <span className="font-semibold text-danger" title="Automatic retries have stopped; retry manually">Stopped<span className="sr-only">: manual retry required</span></span>
+          <td className="whitespace-nowrap max-md:order-6 max-md:text-xs">{row.state === "stopped" || row.state === "failed"
+            ? <span className="font-semibold text-danger" title="Not retried automatically; retry manually or dismiss">Stopped<span className="sr-only">: manual retry required</span></span>
             : row.state === "sending" ? <span className="text-muted-foreground">Sending now</span>
               : row.next_attempt_at && <span className="max-md:text-muted-foreground max-md:before:content-['Next_retry:_']"><time dateTime={row.next_attempt_at}>{timestamp(row.next_attempt_at)}</time></span>}</td>
           <td className="max-md:order-7 max-md:pt-1">

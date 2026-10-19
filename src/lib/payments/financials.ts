@@ -96,6 +96,14 @@ export function summarizeReportedFinancials(input: {
       createdAt: payment.createdAt?.toISOString() ?? null })) };
 }
 
+// Remaining contractual debt in the booking's own currency. Only an active
+// booking can owe money; ended bookings report none.
+export function reportedOutstanding(totals: ReturnType<typeof summarizeReportedFinancials>["totals"],
+  booking: { status: string; totalAmountMinor: number; currency: string }) {
+  if (booking.status !== "confirmed" && booking.status !== "pending_payment") return 0;
+  return Math.max(0, booking.totalAmountMinor - (totals.find(total => total.currency === booking.currency)?.netPaid ?? 0));
+}
+
 // Caller owns the booking lock (and the existing location lock for occupancy
 // commands). Never start a second transaction or acquire a parent lock here.
 export async function allocateBookingRefund(manager: EntityManager, input: {

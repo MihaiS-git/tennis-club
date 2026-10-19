@@ -30,8 +30,7 @@ import { getCourtStateForDate } from "@/lib/courts/state";
 import { mondayWeekday, resolvePricingRule } from "@/lib/pricing/resolution";
 import { getCalendarSelection } from "@/lib/courts/interval-selection";
 import { fitsOpeningHours } from "@/lib/reservations/domain";
-import { enqueueBookingNotification } from "@/lib/notifications/booking-delivery";
-import { bookingNotification, type BookingEmailEvent } from "@/lib/notifications/booking-email";
+import { recordBookingFinancialException } from "@/lib/db/repositories/booking-financial-exceptions.repository";
 import { customerBookingNoticeBypass, customerMutationDeadline } from "./self-cancellation";
 import type { BookingRescheduleResult } from "./reschedule";
 
@@ -99,9 +98,7 @@ async function blockingPendingChange(manager: EntityManager, bookingId: string) 
 
 export async function cancelCustomerBookingCommand(id: string, actorId: string, scope: Scope): Promise<BookingCancellationCommandResult> {
   const unavailable: BookingCancellationCommandResult = { outcome: "unavailable" };
-  let notification: BookingEmailEvent | null = null;
   const result = await withBooking<BookingCancellationCommandResult>(id, false, unavailable, async (manager, a) => {
-    notification = null;
     const b = a.booking, r = a.reservation;
     const financial = await bookingFinancials(manager, b.id, true);
     const actor = await lockReservationActorFacts(manager, actorId);
@@ -155,8 +152,6 @@ export async function cancelCustomerBookingCommand(id: string, actorId: string, 
       cancellationCause: scope === "admin" ? "admin_cancelled" : "owner_cancelled" }, b.revision);
     await revisions.advanceRevision(manager, { revision, previousId: b.current_revision_id, status: "cancelled" });
     await reservations.updateCustomerReservationCancellation(manager, r.id, actorId, checkedAt);
-    notification = bookingNotification(scope === "owner" ? "customer_cancelled" : "admin_cancelled", revision);
-    await enqueueBookingNotification(manager, `revision:${revision.id}`, notification);
     return { outcome: "cancelled", refundIds: [] };
   });
   return result;
@@ -169,9 +164,7 @@ export async function cancelCustomerBookingCommand(id: string, actorId: string, 
 export async function resolveRefundBackedAdjustment(adjustmentId: string): Promise<BookingAdjustmentEntity["status"] | null> {
   const found = await adjustments.findAdjustment((await getDataSource()).manager, adjustmentId);
   if (!found || found.status !== "pending" || !refundBackedAdjustment(found)) return found?.status ?? null;
-  let notification: BookingEmailEvent | null = null;
   const status = await withBooking<BookingAdjustmentEntity["status"] | null>(found.bookingId, true, null, async (manager, a) => {
-    notification = null;
     const adjustment = await adjustments.findAdjustment(manager, adjustmentId);
     if (!adjustment || adjustment.bookingId !== a.booking.id) return null;
     if (adjustment.status !== "pending") return adjustment.status;
@@ -180,9 +173,9 @@ export async function resolveRefundBackedAdjustment(adjustmentId: string): Promi
     const outcome = refundBackedOutcome(own.map(refund => refund.status));
     if (outcome === "waiting") {
       for (const refund of own.filter(refund => refund.status === "failed")) {
-        await enqueueBookingNotification(manager, `refund:${refund.id}:exception`,
-          bookingNotification("refund_incomplete", a.booking.revision,
-            { refund: { amountMinor: refund.amountMinor, currency: refund.currency } }));
+        if (adjustment.recoveryVersion === 1) await recordBookingFinancialException(manager, {
+          key: `refund:${refund.id}:exception`, bookingId: a.booking.id, revisionId: a.booking.current_revision_id,
+          kind: "refund_failed", refundId: refund.id });
       }
       if (own.some(refund => refund.status === "failed")) {
         logger.error({ event: "bookings.refund_obligation_unresolved", adjustmentId }, "Booking preserved pending external refund resolution");
@@ -195,14 +188,15 @@ export async function resolveRefundBackedAdjustment(adjustmentId: string): Promi
       for (const refund of own) await payments.writeRefundStatus(manager, refund.id, "voided");
       await adjustments.releaseAdjustmentHolds(manager, adjustment.id);
       await adjustments.updateAdjustment(manager, adjustment.id, "unsuccessful");
-      notification = bookingNotification(adjustment.kind === "cancellation" ? "cancellation_failed" : "modification_failed",
-        a.booking.revision);
-      await enqueueBookingNotification(manager, `adjustment:${adjustment.id}:abandoned`, notification);
+      // The final definitive refund failure already records this identity. Keep
+      // this idempotent fallback for pending changes created before that writer.
+      await recordBookingFinancialException(manager, { key: `adjustment:${adjustment.id}:abandoned`,
+        bookingId: a.booking.id, revisionId: a.booking.current_revision_id, adjustmentId: adjustment.id,
+        kind: adjustment.kind === "cancellation" ? "cancellation_rejected" : "modification_rejected" });
       return "unsuccessful";
     }
     const b = a.booking, r = a.reservation;
     const now = await reservations.readReservationClockTime(manager);
-    const refundStatus = "completed" as const;
     if (b.current_revision_id !== adjustment.baseRevisionId)
       throw new revisions.BookingRevisionFenceError("Booking changed while a refund-backed change was pending");
     const actorScope = adjustment.target.actorScope ?? (adjustment.scope === "admin" ? "admin" : "customer");
@@ -215,9 +209,6 @@ export async function resolveRefundBackedAdjustment(adjustmentId: string): Promi
       await revisions.advanceRevision(manager, { revision, previousId: b.current_revision_id, status: "cancelled" });
       await reservations.updateCustomerReservationCancellation(manager, r.id, adjustment.actorId, now);
       await adjustments.updateAdjustment(manager, adjustment.id, "applied");
-      notification = bookingNotification(adjustment.scope === "admin" ? "admin_cancelled" : "customer_cancelled", revision,
-        { refundStatus });
-      await enqueueBookingNotification(manager, `revision:${revision.id}`, notification);
       return "applied";
     }
     // Reduction: the accepted quote is applied as refunded, never repriced. Its
@@ -238,8 +229,8 @@ export async function resolveRefundBackedAdjustment(adjustmentId: string): Promi
       logger.error({ event: "bookings.refunded_change_unapplied", adjustmentId: adjustment.id, bookingId: b.id },
         "Refund completed but the booking change could not be applied");
       await adjustments.updateAdjustment(manager, adjustment.id, "unsuccessful");
-      notification = bookingNotification("modification_failed", b.revision);
-      await enqueueBookingNotification(manager, `adjustment:${adjustment.id}:unapplied`, notification);
+      await recordBookingFinancialException(manager, { key: `adjustment:${adjustment.id}:unapplied`,
+        bookingId: b.id, revisionId: b.current_revision_id, adjustmentId: adjustment.id, kind: "refunded_modification_unapplied" });
       return "unsuccessful";
     }
     const terms = { ...b.revision, courtId: target.courtId, courtName: target.courtName, locationName: target.locationName,
@@ -251,8 +242,6 @@ export async function resolveRefundBackedAdjustment(adjustmentId: string): Promi
       cancellationCause: null }, b.revision);
     await revisions.advanceRevision(manager, { revision, previousId: b.current_revision_id, status: "confirmed" });
     await adjustments.updateAdjustment(manager, adjustment.id, "applied");
-    notification = bookingNotification("customer_rescheduled", revision, { previous: b.revision, refundStatus });
-    await enqueueBookingNotification(manager, `revision:${revision.id}`, notification);
     return "applied";
   });
   return status;
@@ -273,6 +262,8 @@ async function editEligibility(manager: EntityManager, a: Aggregate, actorId: st
   if (actor?.status !== "active") return { ok: false as const, message: "An active account is required to edit a booking." };
   if (a.booking.account_user_id !== actorId)
     return { ok: false as const, message: "This booking is no longer available to edit." };
+  if (a.booking.revision.coachUserId || a.reservation.coach_user_id)
+    return { ok: false as const, message: "Coaching bookings cannot be rescheduled yet." };
   if (a.booking.status !== "confirmed" || a.reservation.status !== "active" || !activeOriginal(a)
     || a.location.currency !== a.booking.currency) return { ok: false as const,
       message: "This booking is no longer available to edit." };
@@ -284,7 +275,7 @@ async function editEligibility(manager: EntityManager, a: Aggregate, actorId: st
 }
 
 async function executeReschedule(manager: EntityManager, a: Aggregate, edit: Edit, actorId: string,
-  notification: { value: BookingEmailEvent | null }, funded?: { id: string; adjustment: BookingAdjustmentEntity; deadline: Date | null },
+  funded?: { id: string; adjustment: BookingAdjustmentEntity; deadline: Date | null },
   superseded?: SupersededAttempt[]): Promise<BookingRescheduleResult> {
     const lockedFinancials = edit.save && !funded && a.booking.payment_method === "online"
       ? await bookingFinancials(manager,a.booking.id,true) : null;
@@ -413,8 +404,6 @@ async function executeReschedule(manager: EntityManager, a: Aggregate, edit: Edi
         return { ok: true, totalAmountMinor: total, adjustmentId: adjustment.id, adjustmentStatus: "pending", target: adjustment.target };
       }
     }
-    const changed = r.court_id !== court.id || r.booking_date !== edit.date
-      || r.starts_at_minute !== edit.startMinute || r.ends_at_minute !== edit.endMinute;
     const now = await reservations.readReservationClockTime(manager);
     if (timing(a, eligible.bypass, now) !== "eligible") return { ok: false,
       message: "The rescheduling window for this booking has closed." };
@@ -435,17 +424,14 @@ async function executeReschedule(manager: EntityManager, a: Aggregate, edit: Edi
       intentHash, actorUserId: actorId, actorScope: eligible.actorScope, recordedAt: new Date(now),
       adjustmentId: funded?.adjustment.id ?? null, cancellationCause: null }, b.revision);
     await revisions.advanceRevision(manager, { revision, previousId: b.current_revision_id, status: "confirmed", deadline: writeDeadline });
-    notification.value = changed ? bookingNotification("customer_rescheduled", revision, { previous: b.revision }) : null;
-    if (notification.value) await enqueueBookingNotification(manager, `revision:${revision.id}`, notification.value);
     return { ok: true, totalAmountMinor: total };
 }
 
 type SupersededAttempt = { id: string; provider: PaymentProvider; providerPaymentId: string };
 export async function rescheduleCustomerBookingCommand(edit: Edit, actorId: string): Promise<BookingRescheduleResult & { supersededAttempts?: SupersededAttempt[] }> {
-  const notification: { value: BookingEmailEvent | null } = { value: null };
   let superseded: SupersededAttempt[] = [];
   const result = await withBooking<BookingRescheduleResult>(edit.id, true, { ok: false, message: "This booking is no longer available to edit." },
-    (manager, a) => { superseded = []; return executeReschedule(manager, a, edit, actorId, notification, undefined, superseded); },
+    (manager, a) => { superseded = []; return executeReschedule(manager, a, edit, actorId, undefined, superseded); },
     { booking: edit.expectedRevisionId, reservation: edit.expectedUpdatedAt });
   return superseded.length ? { ...result, supersededAttempts: superseded } : result;
 }
@@ -458,12 +444,11 @@ export async function applyCapturedBookingAdjustment(manager: EntityManager, adj
   const reservation = booking && await reservations.findReservationForUpdate(manager, booking.reservation_id, adjustment.target.expectedUpdatedAt);
   const resource = reservation && await reservations.findReservationResourceFacts(manager, reservation.court_id);
   const [location] = resource ? await clubs.lockLocations(manager, [resource.location_id]) : [];
-  if (!booking || !reservation || !resource || !location) return { result: unavailableEdit, notification: null };
-  const notification: { value: BookingEmailEvent | null } = { value: null };
+  if (!booking || !reservation || !resource || !location) return { result: unavailableEdit };
   const result = await executeReschedule(manager, { booking, reservation, resource, location }, {
     ...adjustment.target, id: adjustment.bookingId, expectedRevisionId: adjustment.baseRevisionId, expectedTotal: adjustment.newTotal, save: true, priceAcknowledged: true,
-  }, adjustment.actorId, notification, { id: attemptId, adjustment, deadline });
-  return { result, notification: notification.value };
+  }, adjustment.actorId, { id: attemptId, adjustment, deadline });
+  return { result };
 }
 export async function readCustomerBookingEditContext(id: string, date: string, actorId: string) {
   return withBooking(id, true, null, async (manager, a) => {

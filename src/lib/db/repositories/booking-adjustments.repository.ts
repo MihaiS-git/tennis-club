@@ -78,7 +78,7 @@ export async function insertAdjustment(manager: EntityManager, input: {
   bookingId: string; baseRevisionId: string; actorId: string; scope: "owner" | "admin"; requestKey: string; target: AdjustmentTarget;
   originalTotal: number; newTotal: number; currency: string; expiresAt: Date; kind?: AdjustmentKind; createdAt?: Date;
 }) {
-  const value = manager.getRepository(BookingAdjustmentEntity).create({ ...input, id: randomUUID(), status: "pending" });
+  const value = manager.getRepository(BookingAdjustmentEntity).create({ ...input, id: randomUUID(), status: "pending", recoveryVersion: 1 });
   await manager.getRepository(BookingAdjustmentEntity).insert(value);
   return value;
 }
@@ -135,4 +135,8 @@ export async function listBookingsWithPendingChange(manager: EntityManager, book
 }
 export async function listAdjustmentRefunds(manager: EntityManager, id: string) {
   return manager.getRepository(PaymentRefundEntity).find({ where: { adjustmentId: id }, order: { createdAt: "ASC", id: "ASC" } });
+}
+// Every recorded change request for read-only history, including unapplied ones.
+export async function listBookingAdjustments(manager: EntityManager, bookingId: string) {
+  return manager.getRepository(BookingAdjustmentEntity).find({ where: { bookingId }, order: { createdAt: "ASC", id: "ASC" } });
 }

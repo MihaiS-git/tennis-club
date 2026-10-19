@@ -38,7 +38,7 @@ it("shows signed-out links and closes on link selection or Escape", () => {
   expect(document.body.style.overflow).toBe("hidden");
   expect(document.activeElement).toBe(within(drawer).getByRole("button", { name: "Close menu" }));
   expect(within(navigation).getAllByRole("link").map((link) => link.textContent)).toEqual([
-    "Courts", "Coaching", "Rankings", "Club", "Sign in",
+    "Courts", "Coaching", "Club", "Sign in",
   ]);
   expect(within(navigation).queryByRole("button", { name: "Sign out" })).toBeNull();
   expect(within(navigation).queryByText("Book a court")).toBeNull();
@@ -102,7 +102,7 @@ it.each([
   const adminLink = within(navigation).queryByRole("link", { name: "Admin" });
   if (showsAdmin) {
     expect(links.map((link) => link.textContent)).toEqual([
-      "Courts", "Coaching", "Matches", "Rankings", "Club", "Admin", "Profile",
+      "Courts", "Coaching", "Club", "Admin", "Profile",
     ]);
     expect(navigation.lastElementChild?.lastElementChild?.textContent).toBe("Sign out");
     expect(within(navigation).getByRole("link", { name: "Profile" }).getAttribute("href")).toBe("/profile");
@@ -126,8 +126,8 @@ it.each([
 it.each([
   ["/admin", "Admin"], ["/admin/payments/transactions", "Admin"], ["/admin/payments/settings", "Admin"], ["/admin/locations/location-id", "Admin"],
   ["/admin/reservations", "Admin"], ["/admin/reservations/day", "Admin"],
-  ["/courts", "Courts"], ["/coaching/session", "Coaching"], ["/matches", "Matches"],
-  ["/rankings", "Rankings"], ["/club/about", "Club"],
+  ["/courts", "Courts"], ["/coaching/session", "Coaching"], ["/club/about", "Club"],
+  ["/matches", null], ["/rankings", null],
   ["/administrator", null], ["/admin/reservations-extra", "Admin"], ["/courts-extra", null],
 ])("highlights a single segment-aware primary section on %s", async (pathname, active) => {
   route.pathname = pathname;
@@ -207,4 +207,38 @@ it("places the desktop bell immediately beside the profile control for authentic
   const bell = container.querySelector('a[href="/my-activity/notifications"]');
   expect(bell).not.toBeNull();
   expect(bell?.nextElementSibling?.getAttribute("href")).toBe("/profile");
+});
+
+it("gives only an active Admin the mobile two-destination bell beside the hamburger", async () => {
+  readCurrentAccount.mockResolvedValue({ state: "active", userId: "admin-1", email: "admin@example.com", roles: ["admin"] });
+  render(await MobileNavbar());
+  const bell = screen.getByRole("button", { name: /^Notifications/ });
+  expect(bell.parentElement?.nextElementSibling).toBe(screen.getByRole("button", { name: "Open menu" }));
+  expect(bell.className).toContain("size-10");
+  fireEvent.click(bell);
+  const panel = screen.getByRole("navigation", { name: "Notifications" });
+  expect(within(panel).getAllByRole("link").map((link) => [link.textContent, link.getAttribute("href")])).toEqual([
+    ["My notifications", "/my-activity/notifications"], ["Admin notifications", "/admin/payments/notifications"],
+  ]);
+  cleanup();
+  for (const account of [
+    { state: "active", userId: "coach-1", email: "coach@example.com", roles: ["coach"] },
+    { state: "suspended", userId: "admin-1", email: "admin@example.com", roles: ["admin"] },
+  ] satisfies CurrentAccount[]) {
+    readCurrentAccount.mockResolvedValue(account);
+    render(await MobileNavbar());
+    expect(screen.queryByRole("button", { name: /^Notifications/ })).toBeNull();
+    cleanup();
+  }
+});
+
+it("renders the desktop Admin bell as a closed disclosure beside the profile control", async () => {
+  readCurrentAccount.mockResolvedValue({ state: "active", roles: ["admin"], userId: "admin-1", email: "admin@example.com" });
+  const markup = await new Response(await renderToReadableStream(<DesktopNavbar />)).text();
+  const container = document.createElement("div");
+  container.innerHTML = markup;
+  const bell = container.querySelector('button[aria-label^="Notifications"]');
+  expect(bell?.getAttribute("aria-expanded")).toBe("false");
+  expect(bell?.parentElement?.nextElementSibling?.getAttribute("href")).toBe("/profile");
+  expect(container.querySelector('a[href="/admin/payments/notifications"]')).toBeNull();
 });

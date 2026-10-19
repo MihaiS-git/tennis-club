@@ -2,7 +2,9 @@
 
 import { useSyncExternalStore } from "react";
 
-let unread = false;
+type Indicators = { unread: boolean; adminAlerts: boolean };
+const none: Indicators = { unread: false, adminAlerts: false };
+let indicators = none;
 const listeners = new Set<() => void>();
 let stop: (() => void) | undefined;
 let request: AbortController | undefined;
@@ -18,7 +20,10 @@ export function refreshNotificationUnread() {
       if (!response.ok) return;
       const result: unknown = await response.json();
       if (!controller.signal.aborted && typeof result === "object" && result !== null && "unread" in result && typeof result.unread === "boolean") {
-        unread = result.unread;
+        // Only an Admin response carries adminAlerts; any other shape means no Admin alert.
+        const next = { unread: result.unread, adminAlerts: "adminAlerts" in result && result.adminAlerts === true };
+        if (next.unread === indicators.unread && next.adminAlerts === indicators.adminAlerts) return;
+        indicators = next;
         listeners.forEach(listener => listener());
       }
     }).catch(() => { /* Keep the last known state until the next refresh. */ })
@@ -47,11 +52,11 @@ function subscribe(listener: () => void) {
       clearInterval(timer);
       window.removeEventListener("focus", refreshNotificationUnread);
       document.removeEventListener("visibilitychange", visibility);
-      request?.abort(); request = undefined; refreshAgain = false; unread = false;
+      request?.abort(); request = undefined; refreshAgain = false; indicators = none;
     };
   }
   return () => { listeners.delete(listener); if (!listeners.size) { stop?.(); stop = undefined; } };
 }
 export function useNotificationUnread() {
-  return useSyncExternalStore(subscribe, () => unread, () => false);
+  return useSyncExternalStore(subscribe, () => indicators, () => none);
 }

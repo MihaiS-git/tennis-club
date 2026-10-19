@@ -239,7 +239,7 @@ export async function listAdminTransactionProjection(manager: EntityManager, que
             and re.status='succeeded' and re.terminal_result='succeeded' and re.provider_refund_id is not null
             and re.provider=rf.provider and re.provider_payment_id=rf.provider_payment_id
             and re.amount_minor=rf.amount_minor and re.currency=rf.currency)),0) as refunded_minor,
-      b.id as booking_id, b.reservation_id, context.customer_name, context.customer_email, op.amount_minor,
+      b.id as booking_id, b.reservation_id, b.account_user_id, context.customer_name, context.customer_email, op.amount_minor,
       op.currency, op.method, op.provider, p.status as payment_status,
       op.provider_payment_id, op.created_at, op.updated_at,
       b.status::text as booking_status,r.status::text as reservation_status,
@@ -470,19 +470,20 @@ export async function insertAdjustmentAttempt(manager: EntityManager, input: Pic
 
 // Batches are scoped to the already paginated bookings and immutable references.
 // Classification and financial calculation belong to the application read model.
+// Reads run in sequence: a transaction-bound manager has one connection, which
+// must not receive concurrent queries.
 export async function loadAdminTransactionContext(manager: EntityManager, input: {
   bookingIds: string[]; revisionIds: string[]; adjustmentIds: string[];
 }) {
-  const [revisions, adjustments, payments, refunds, captures] = await Promise.all([
-    input.revisionIds.length ? manager.getRepository(BookingRevisionEntity).findBy({ id: In(input.revisionIds) }) : [],
-    input.adjustmentIds.length ? manager.getRepository(BookingAdjustmentEntity).findBy({ id: In(input.adjustmentIds) }) : [],
-    input.bookingIds.length ? manager.getRepository(PaymentAttemptEntity).findBy({ bookingId: In(input.bookingIds) }) : [],
-    input.bookingIds.length ? manager.getRepository(PaymentRefundEntity).findBy({ bookingId: In(input.bookingIds) }) : [],
-    input.bookingIds.length ? manager.getRepository(PaymentCaptureReceiptEntity).createQueryBuilder("capture")
-      .innerJoin(PaymentAttemptEntity, "attempt", "attempt.id=capture.paymentAttemptId")
-      .where("attempt.bookingId IN (:...bookingIds)", { bookingIds: input.bookingIds })
-      .orderBy("capture.firstObservedAt").addOrderBy("capture.id").getMany() : [],
-  ]);
+  const revisions = input.revisionIds.length ? await manager.getRepository(BookingRevisionEntity).findBy({ id: In(input.revisionIds) }) : [];
+  const adjustments = input.adjustmentIds.length
+    ? await manager.getRepository(BookingAdjustmentEntity).findBy({ id: In(input.adjustmentIds) }) : [];
+  const payments = input.bookingIds.length ? await manager.getRepository(PaymentAttemptEntity).findBy({ bookingId: In(input.bookingIds) }) : [];
+  const refunds = input.bookingIds.length ? await manager.getRepository(PaymentRefundEntity).findBy({ bookingId: In(input.bookingIds) }) : [];
+  const captures = input.bookingIds.length ? await manager.getRepository(PaymentCaptureReceiptEntity).createQueryBuilder("capture")
+    .innerJoin(PaymentAttemptEntity, "attempt", "attempt.id=capture.paymentAttemptId")
+    .where("attempt.bookingId IN (:...bookingIds)", { bookingIds: input.bookingIds })
+    .orderBy("capture.firstObservedAt").addOrderBy("capture.id").getMany() : [];
   const executions = refunds.length ? await manager.getRepository(RefundExecutionEntity).createQueryBuilder("execution")
     .where("execution.refundId IN (:...refundIds)", { refundIds: refunds.map(refund => refund.id) })
     .orderBy("execution.refundId").addOrderBy("execution.executionNumber").getMany() : [];

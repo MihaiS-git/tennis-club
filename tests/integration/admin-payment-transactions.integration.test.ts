@@ -32,6 +32,7 @@ test("Admin transaction projection lists every payment and refund, filters befor
       status: index < 4 ? "cancelled" : index === 22 ? "released" : "active",
       cancelled_at: index < 4 ? "2026-10-06T10:00:00Z" : null, cancelled_by_user_id: index < 4 ? users[0] : null })))).error).toBeNull();
     expect((await insertBookingFixture(db, bookingIds.map((id,index) => ({ id, reservation_id: reservationIds[index],
+      account_user_id: index === 4 ? users[0] : null,
       customer_name: `${marker} Customer ${index}`, customer_email: `${marker}-${index}@example.test`, customer_phone: "123",
       status: index < 4 ? "cancelled" : index === 22 ? "failed" : "confirmed", total_amount_minor: 9999, currency: "RON", cancellation_notice_minutes: 1440,
       payment_method: index === 23 ? "pay_at_club" : "online" })))).error).toBeNull();
@@ -70,7 +71,9 @@ test("Admin transaction projection lists every payment and refund, filters befor
     expect(all.find(r => r.booking_id === bookingIds[2])).toMatchObject({ needsAttention: true, refund: null,
       reconciliation: [{ settlement_result: "amount_mismatch" }] });
     expect(all.find(r => r.booking_id === bookingIds[3] && r.transaction_kind === "refund")).toMatchObject({ needsAttention: false, refund: { status: "pending" } });
-    expect(all.find(r => r.booking_id === bookingIds[4])).toMatchObject({ needsAttention: false, refund: null });
+    expect(all.find(r => r.booking_id === bookingIds[4])).toMatchObject({ needsAttention: false, refund: null, account_user_id: users[0] });
+    // Guest bookings carry no account link, even though the Admin's email shares the marker.
+    expect(all.filter(r => r.booking_id !== bookingIds[4]).every(r => r.account_user_id === null)).toBe(true);
     expect(all.find(r => r.booking_id === bookingIds[22])).toMatchObject({ payment_status: "failed", needsAttention: false });
     expect((await listAdminPaymentTransactions(query({ attention: "required" }),admin)).rows.map(row => row.booking_id)).toEqual(expect.arrayContaining([bookingIds[1], bookingIds[2]]));
     expect((await listAdminPaymentTransactions(query({ attention: "required" }),admin)).total).toBe(2);

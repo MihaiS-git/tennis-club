@@ -22,7 +22,7 @@ it("opens a completed booking with stored contact and price, without actions", (
   loadPayment.mockResolvedValue({ ok: true, payment: { method: "pay_at_club", currency: "RON", timezone: "UTC",
     total: 9000, paid: 0, refunded: 0, refundPending: 0, outstanding: 0, dueAtClub: 0, operations: [] } });
   render(<HistoryActivity staff rows={[booking, { ...booking, id: "cancelled", status: "cancelled" }]} />);
-  expect(screen.getAllByText("Booking")).toHaveLength(2);
+  expect(screen.getAllByText("Court", { selector: "td span" })).toHaveLength(2);
   expect(screen.getAllByText(/RON.*90/)).toHaveLength(2);
   expect(screen.getByText("Completed")).toBeDefined();
   expect(screen.queryByText("snapshot@example.test")).toBeNull();
@@ -80,4 +80,15 @@ it("gives Completed and Cancelled distinct badge tones in rows and the dialog", 
   expect(cancelled).toContain("bg-surface-muted");
   fireEvent.click(screen.getAllByRole("row", { name: /Details for/ })[1]);
   expect(within(screen.getByRole("dialog")).getByText("Cancelled").className).toContain("bg-surface-muted");
+});
+
+it.each([true, false])("shows historical coaching names and court types in history (staff=%s)", (staff) => {
+  render(<HistoryActivity staff={staff} rows={[booking, { ...booking, id: "lesson", includes_coaching: true,
+    coach_name: "Daniel Stoica", coaching_program_name: "Private coaching" }]} />);
+  const table = screen.getByRole("table");
+  expect(within(table).getByText("Coaching")).toBeDefined();
+  expect(within(table).getByText("Daniel Stoica · Private coaching").closest("td")?.textContent)
+    .toBe("CoachingDaniel Stoica · Private coaching");
+  expect(within(table).getByText("Court", { selector: "td span" })).toBeDefined();
+  expect(within(table).getAllByRole("columnheader")).toHaveLength(8);
 });

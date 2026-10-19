@@ -15,8 +15,8 @@ import { PricingLocationSelect } from "../../src/app/admin/pricing/location-sele
 
 afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
 
-it("requires an explicit Admin role flag", () => {
-  expectTypeOf<ComponentProps<typeof AdminNavigation>>().toEqualTypeOf<{ isAdmin: boolean }>();
+it("requires an explicit Admin role flag; the Coach area link is opt-in", () => {
+  expectTypeOf<ComponentProps<typeof AdminNavigation>>().toEqualTypeOf<{ isAdmin: boolean; isCoach?: boolean }>();
 });
 
 it.each([
@@ -29,6 +29,12 @@ it.each([
   ["/admin/payments/notifications", "Notifications"],
   ["/admin/reservations", "Reservations"],
   ["/admin/reservations/day", "Reservations"],
+  ["/admin/bookings", "Bookings"],
+  ["/admin/bookings/booking-id", "Bookings"],
+  ["/admin/coaching/programs", "Programs"],
+  ["/admin/coaching/coaches", "Coaches"],
+  ["/admin/coaching/prices", "Prices"],
+  ["/admin/coaching/availability", "Availability"],
   ["/admin/users", "Users"],
   ["/admin/users/user-id", "Users"],
 ])("activates only %s's primary section", (pathname, label) => {
@@ -36,8 +42,8 @@ it.each([
   render(<AdminNavigation isAdmin={true} />);
   const nav = screen.getByRole("navigation", { name: "Management navigation" });
   const links = within(nav).getAllByRole("link");
-  expect(links.map((link) => link.textContent)).toEqual(["Locations", "Reservations", "Transactions", "Notifications", "Settings", "Users"]);
-  expect(links.map((link) => link.getAttribute("href"))).toEqual(["/admin/locations", "/admin/reservations", "/admin/payments/transactions", "/admin/payments/notifications", "/admin/payments/settings", "/admin/users"]);
+  expect(links.map((link) => link.textContent)).toEqual(["Locations", "Reservations", "Bookings", "Programs", "Coaches", "Prices", "Availability", "Transactions", "Notifications", "Settings", "Users"]);
+  expect(links.map((link) => link.getAttribute("href"))).toEqual(["/admin/locations", "/admin/reservations", "/admin/bookings", "/admin/coaching/programs", "/admin/coaching/coaches", "/admin/coaching/prices", "/admin/coaching/availability", "/admin/payments/transactions", "/admin/payments/notifications", "/admin/payments/settings", "/admin/users"]);
   for (const link of links) {
     expect(link.getAttribute("aria-current")).toBe(link.textContent === label ? "page" : null);
     expect(link.className.includes("bg-primary text-primary-foreground")).toBe(link.textContent === label);
@@ -45,7 +51,7 @@ it.each([
   }
 });
 
-it.each(["/admin", "/admin/locations-extra", "/admin/payments-extra", "/admin/users-extra", "/administrator", "/admin/unknown", "/admin/reservations-extra"])(
+it.each(["/admin", "/admin/locations-extra", "/admin/payments-extra", "/admin/users-extra", "/administrator", "/admin/unknown", "/admin/reservations-extra", "/admin/bookings-extra", "/admin/coaching-extra"])(
   "does not activate a section for unrelated pathname %s", (pathname) => {
     navigation.pathname = pathname;
     render(<AdminNavigation isAdmin={true} />);
@@ -104,6 +110,18 @@ it("shows only Reservations to Coaches", () => {
   render(<AdminNavigation isAdmin={false} />);
   const nav = screen.getByRole("navigation", { name: "Management navigation" });
   expect(within(nav).getAllByRole("link").map((link) => link.textContent)).toEqual(["Reservations"]);
+});
+
+it.each([
+  [false, ["Reservations", "My availability"]],
+  [true, ["Locations", "Reservations", "Bookings", "Programs", "Coaches", "Prices", "Availability", "Transactions", "Notifications", "Settings", "Users", "My availability"]],
+] as const)("adds the Coach area for coaches (Admin: %s)", (isAdmin, labels) => {
+  navigation.pathname = "/coach/availability";
+  render(<AdminNavigation isAdmin={isAdmin} isCoach />);
+  const nav = screen.getByRole("navigation", { name: "Management navigation" });
+  expect(within(nav).getAllByRole("link").map((link) => link.textContent)).toEqual(labels);
+  expect(within(nav).getByRole("link", { name: "My availability" })).toMatchObject({ pathname: "/coach/availability" });
+  expect(within(nav).getByRole("link", { name: "My availability" }).getAttribute("aria-current")).toBe("page");
 });
 
 it("closes the drawer with Escape and restores focus", () => {

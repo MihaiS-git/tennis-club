@@ -1,4 +1,5 @@
 import { buildBookingRevision } from "@/lib/bookings/revision";
+import { bookingNotification, renderBookingEmail } from "@/lib/notifications/booking-email";
 import * as revisions from "@/lib/db/repositories/booking-revisions.repository";
 import { DataSource, EntityManager } from "typeorm";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -94,7 +95,7 @@ beforeEach(() => {
   vi.mocked(bookings.findBookingForUpdate).mockResolvedValue({ id, reservation_id: id, status: "pending_payment",
     customer_name: "Customer", customer_email: "snapshot@example.test", cancellation_notice_minutes: 1440, total_amount_minor: 5000, currency: "RON", account_user_id:id,current_revision_id:id,
     revision:revisionFixture("online",1440,"pending_payment"),customer_phone:"123",payment_method:"online",updated_at:"2099-10-14T10:00:00Z",token_matches:null });
-  vi.mocked(reservations.findReservationForUpdate).mockResolvedValue({ id, court_id: id, booking_date: "2099-10-15",
+  vi.mocked(reservations.findReservationForUpdate).mockResolvedValue({ id, court_id: id, coach_user_id: null, booking_date: "2099-10-15",
     starts_at_minute: 600, ends_at_minute: 660, reason: null, created_by_user_id: null, status: "held",
     created_at: "2099-10-14T10:00:00Z", updated_at: "2099-10-14T10:00:00Z", cancelled_at: null,
     cancelled_by_user_id: null, hold_expires_at: "2099-10-14T10:10:00Z", token_matches: null });
@@ -119,14 +120,14 @@ beforeEach(() => {
 });
 afterEach(() => { expect(request).not.toHaveBeenCalled(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
-test("first payment confirmation commits the notification snapshot atomically", async () => {
+test("first payment confirmation commits a reconstructable revision without projecting mail", async () => {
   expect(await processOnlinePaymentEvent(event)).toBe("succeeded");
-  expect(committedNotification).toHaveBeenCalledTimes(1);
-  const message = committedNotification.mock.calls[0][0];
+  expect(committedNotification).not.toHaveBeenCalled();
+  const message = recoveredMessage();
   expect(message.to).toBe("snapshot@example.test");
   expect(message.text).toContain("Your court booking is confirmed.");
 });
-test("outbox is not committed while the state-change transaction awaits commit", async () => {
+test("financial commit does not invoke notification projection before or after its commit gate", async () => {
   let release!: () => void;
   let ready!: () => void;
   const waiting = new Promise<void>(resolve => { ready = resolve; });
@@ -140,7 +141,7 @@ test("outbox is not committed while the state-change transaction awaits commit",
     await Promise.race([waiting, operation.then(() => { throw new Error("Commit gate was bypassed"); })]);
     expect(committedNotification).not.toHaveBeenCalled();
   } finally { release(); }
-  expect(await operation).toBe("succeeded"); expect(committedNotification).toHaveBeenCalledTimes(1);
+  expect(await operation).toBe("succeeded"); expect(committedNotification).not.toHaveBeenCalled();
 });
 test("failed commit sends no confirmation", async () => {
   vi.mocked(inTransaction).mockImplementation(async work => { await work(manager); throw new Error("Commit failed"); });
@@ -157,9 +158,9 @@ test("duplicate webhook receipt returns success without another notification", a
     attempt_id: id, capture_receipt_id:id, provider_capture_id:"pi_test", provider_payment_id: "pi_test", outcome: "succeeded", amount_minor: 5000, currency: "RON",
     settlement_result: "succeeded", reconciliation_required: false });
   expect(await processOnlinePaymentEvent(event)).toBe("succeeded");
-  expect(committedNotification).toHaveBeenCalledTimes(1);
+  expect(committedNotification).not.toHaveBeenCalled();
 });
-test.each(["rejection", "timeout"])("unavailable email transport (%s) does not affect the atomic confirmation outbox", async failure => {
+test.each(["rejection", "timeout"])("unavailable email transport (%s) does not affect confirmation or invoke notification projection", async failure => {
   request.mockImplementation(async () => {
     expect(committed).toBe(true);
     if (failure === "timeout") throw new DOMException("Timed out", "TimeoutError");
@@ -167,9 +168,9 @@ test.each(["rejection", "timeout"])("unavailable email transport (%s) does not a
   });
   expect(await processOnlinePaymentEvent(event)).toBe("succeeded");
   expect(revisions.advanceRevision).toHaveBeenCalledWith(manager, expect.objectContaining({ status:"confirmed",previousId:id }));
-  // The settlement commit, then only the separate post-commit delivery claim.
-  expect(inTransaction).toHaveBeenCalledTimes(2);
-  expect(committedNotification).toHaveBeenCalledTimes(1);
+  // Only the financial transaction runs; delivery belongs to the scheduler.
+  expect(inTransaction).toHaveBeenCalledTimes(1);
+  expect(committedNotification).not.toHaveBeenCalled();
 });
 
 async function confirmedBooking() {
@@ -185,11 +186,11 @@ async function confirmedBooking() {
   vi.mocked(reservations.findReservationForUpdate).mockResolvedValue({ ...reservation, status: "active", hold_expires_at: null, token_matches: true });
   vi.mocked(lockReservationActorFacts).mockResolvedValue({ status: "active", roles: ["admin"] });
 }
-test.each(["owner", "admin"] as const)("%s cancellation preserves the recipient and commits an outbox notification", async scope => {
+test.each(["owner", "admin"] as const)("%s cancellation preserves the recipient in a reconstructable revision", async scope => {
   await confirmedBooking();
   expect(await cancelCustomerBookingCommand(id, id, scope)).toEqual({ outcome: "cancelled", refundIds: [] });
   expect(committed).toBe(true);
-  const message = committedNotification.mock.calls[0][0];
+  const message = recoveredMessage();
   expect(message.subject).toBe("Booking cancelled");
   expect(message.to).toBe("snapshot@example.test");
   expect(message.text).toContain(scope === "admin" ? "administrator has cancelled" : "You have cancelled");
@@ -250,8 +251,8 @@ test.each(["owner"] as const)("%s rescheduling sends old/new schedules after com
     .toEqual({ ok: true, totalAmountMinor: 5000 });
   expect(committedNotification).not.toHaveBeenCalled();
   expect(await rescheduleCustomerBookingCommand({ ...edit, save: true }, id)).toEqual({ ok: true, totalAmountMinor: 5000 });
-  expect(committedNotification).toHaveBeenCalledTimes(1);
-  const message = committedNotification.mock.calls[0][0];
+  expect(committedNotification).not.toHaveBeenCalled();
+  const message = recoveredMessage();
   expect(message.text).toContain("Previous: 2099-10-15, 10:00–11:00, Court");
   expect(message.text).toContain("New schedule: 2099-10-15, 12:00–13:00, Court");
 });
@@ -269,7 +270,19 @@ async function renameResources() {
   const [court] = await listCheckoutLocationCourts(manager, id);
   vi.mocked(listCheckoutLocationCourts).mockResolvedValue([Object.assign(new CourtEntity(), court, { name: "Renamed Court" })]);
 }
-function messageText(): string { return committedNotification.mock.calls.at(-1)![0].text; }
+// Exercise the committed snapshot as a consumer, outside the financial command.
+// Database-backed reconstruction and inbox repair are covered by integration tests.
+function recoveredMessage() {
+  expect(committed).toBe(true);
+  const revision = vi.mocked(revisions.advanceRevision).mock.calls.at(-1)![1].revision;
+  const kind = revision.kind === "rescheduled" ? "customer_rescheduled"
+    : revision.kind === "cancelled" ? revision.cancellationCause === "admin_cancelled" ? "admin_cancelled" : "customer_cancelled"
+    : "confirmed";
+  return renderBookingEmail(bookingNotification(kind, revision, {
+    previous: revision.kind === "rescheduled" ? revisionFixture(revision.paymentMethod, revision.cancellationNoticeMinutes, "confirmed") : undefined,
+  }));
+}
+function messageText(): string { return recoveredMessage().text; }
 
 test("online confirmation preserves revision names after resource renames and needs no live notification lookup", async () => {
   await renameResources();
@@ -307,13 +320,13 @@ test("replayed cancellation and applied reschedule send no duplicate mail", asyn
     cancellationCause: "owner_cancelled" }, booking.revision);
   vi.mocked(bookings.findBookingForUpdate).mockResolvedValue({ ...booking, status: "cancelled", revision });
   await cancelCustomerBookingCommand(id, id, "owner");
-  expect(committedNotification).toHaveBeenCalledTimes(1);
+  expect(committedNotification).not.toHaveBeenCalled();
   await confirmedBooking(); committedNotification.mockClear();
   await rescheduleCustomerBookingCommand(edit, id);
   const applied = vi.mocked(revisions.advanceRevision).mock.calls.at(-1)![1].revision;
   vi.mocked(revisions.findRevisionOperation).mockResolvedValue(applied);
   await rescheduleCustomerBookingCommand(edit, id);
-  expect(committedNotification).toHaveBeenCalledTimes(1);
+  expect(committedNotification).not.toHaveBeenCalled();
 });
 test("duplicate confirmation under a different event ID sends no second mail", async () => {
   await processOnlinePaymentEvent(event);
@@ -325,7 +338,7 @@ test("duplicate confirmation under a different event ID sends no second mail", a
   vi.mocked(reservations.findReservationForUpdate).mockResolvedValue({ ...reservation, status: "active", hold_expires_at: null });
   vi.mocked(payments.lockSettlementAttempt).mockResolvedValue({ ...attempt, status: "succeeded" });
   expect(await processOnlinePaymentEvent({ ...event, eventId: "evt_another" })).toBe("succeeded");
-  expect(committedNotification).toHaveBeenCalledTimes(1);
+  expect(committedNotification).not.toHaveBeenCalled();
 });
 test("rejected cancellation and conflicting reschedule send nothing", async () => {
   await confirmedBooking();
@@ -379,10 +392,10 @@ test.each(["failed", "retryable_failed", "cancelled"] as const)("%s paid adjustm
   await processOnlinePaymentEvent({ ...fixture.event, outcome });
   expect(revisions.advanceRevision).not.toHaveBeenCalled(); expect(committedNotification).not.toHaveBeenCalled();
 });
-test("successful paid adjustment commits the accepted new revision notification and replay sends nothing", async () => {
+test("successful paid adjustment commits the accepted revision without projecting mail; replay sends nothing", async () => {
   const fixture = await paidAdjustment(); await renameResources();
   expect(await processOnlinePaymentEvent(fixture.event)).toBe("succeeded");
-  expect(committedNotification).toHaveBeenCalledTimes(1);
+  expect(committedNotification).not.toHaveBeenCalled();
   expect(messageText()).toContain("Previous: 2099-10-15, 10:00–11:00, Court");
   expect(messageText()).toContain("New schedule: 2099-10-15, 12:00–13:00, Renamed Court");
   expect(messageText()).toContain("Booking total: 75.00 RON");
@@ -391,7 +404,7 @@ test("successful paid adjustment commits the accepted new revision notification 
   }) }));
   vi.mocked(adjustments.findAdjustment).mockResolvedValue(Object.assign(new BookingAdjustmentEntity(), fixture.adjustment, { status: "applied" }));
   expect(await processOnlinePaymentEvent({ ...fixture.event, eventId: "evt_adjustment_replay" })).toBe("succeeded");
-  expect(committedNotification).toHaveBeenCalledTimes(1);
+  expect(committedNotification).not.toHaveBeenCalled();
 });
 test.each(["commit", "occupancy"])("paid adjustment %s failure sends no successful reschedule", async failure => {
   const fixture = await paidAdjustment();
@@ -406,10 +419,10 @@ test.each(["commit", "occupancy"])("paid adjustment %s failure sends no successf
 // the committed outbox retryable, with no financial state-change replay.
 test.each(["accepted", "unavailable", "rejection", "timeout"])("durable worker handles %s delivery after commit", async outcome => {
   await processOnlinePaymentEvent(event);
-  const message = committedNotification.mock.calls[0][0];
+  const message = recoveredMessage();
   expect(request).not.toHaveBeenCalled();
   vi.mocked(manager.query).mockReset();
-  vi.mocked(manager.query).mockResolvedValueOnce([{ id, attempts: 1, message }])
+  vi.mocked(manager.query).mockResolvedValueOnce([{ id, attempts: 1, message, submission_key: id }])
     .mockResolvedValueOnce([]).mockResolvedValueOnce([]);
   request.mockImplementation(async () => {
     expect(committed).toBe(true);
@@ -422,7 +435,7 @@ test.each(["accepted", "unavailable", "rejection", "timeout"])("durable worker h
   const [, parameters] = vi.mocked(manager.query).mock.calls[1];
   // A permanent rejection stops automatic retries (null); temporary failures back off.
   expect(parameters).toEqual([id, expect.any(String), outcome === "accepted" ? null : outcome === "timeout" ? "unconfirmed"
-    : outcome === "rejection" ? "rejected" : "unavailable", outcome === "accepted" ? 0 : outcome === "rejection" ? null : 120]);
+    : outcome === "rejection" ? "rejected" : "unavailable", outcome === "accepted" ? 0 : outcome === "rejection" ? null : 120, null]);
   expect(revisions.advanceRevision).toHaveBeenCalledOnce();
   request.mockClear(); // Worker tests explicitly authorize provider submission.
 });

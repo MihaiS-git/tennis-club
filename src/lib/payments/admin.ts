@@ -19,6 +19,18 @@ export type AdminPaymentTransaction = Omit<FinancialHistoryRow, "reconciliation"
   needsAttention: boolean; refundUnconfirmed: boolean;
 };
 
+// Admin presentation of one projected operation; provider evidence stays server-side.
+export function toAdminPaymentTransaction(row: FinancialHistoryRow): AdminPaymentTransaction {
+  const { booking_status, reservation_status, reconciliation, ...transaction } = row;
+  return { ...transaction, refundUnconfirmed: refundUnconfirmed(row.refund?.status, row.refund?.outstanding_since),
+    reconciliation: reconciliation.map((event) => ({ event_id: event.event_id, provider: event.provider,
+      outcome: event.outcome, settlement_result: event.settlement_result, received_at: event.received_at,
+      resolved_at: event.resolved_at, resolved_by_user_id: event.resolved_by_user_id,
+      reconciliation_required: event.reconciliation_required, auto_refund: event.reconciliation_required
+        && refundableLateCapture(event, event.attempt, booking_status, reservation_status) })),
+    needsAttention: Boolean(row.payment_check_required) || paymentNeedsAttention(row.refund, reconciliation) };
+}
+
 export async function listAdminPaymentTransactions(query: AdminPaymentQuery,
   reader?: Awaited<ReturnType<typeof createClient>>, bookingId?: string,
   transaction?: { kind: "payment" | "refund" | "booking"; id: string }) {
@@ -32,16 +44,7 @@ export async function listAdminPaymentTransactions(query: AdminPaymentQuery,
       transaction: transaction ? { kind: z.enum(["payment", "refund", "booking"]).parse(transaction.kind), id: z.uuid().parse(transaction.id) } : undefined,
       attentionRefundStatuses, unconfirmedRefundMinutes, bookingId: bookingId ? z.uuid().parse(bookingId) : null,
     });
-    return { ...page, rows: page.rows.map((row): AdminPaymentTransaction => {
-      const { booking_status, reservation_status, reconciliation, ...transaction } = row;
-      return { ...transaction, refundUnconfirmed: refundUnconfirmed(row.refund?.status, row.refund?.outstanding_since),
-        reconciliation: reconciliation.map((event) => ({ event_id: event.event_id, provider: event.provider,
-          outcome: event.outcome, settlement_result: event.settlement_result, received_at: event.received_at,
-          resolved_at: event.resolved_at, resolved_by_user_id: event.resolved_by_user_id,
-          reconciliation_required: event.reconciliation_required, auto_refund: event.reconciliation_required
-            && refundableLateCapture(event, event.attempt, booking_status, reservation_status) })),
-        needsAttention: Boolean(row.payment_check_required) || paymentNeedsAttention(row.refund, reconciliation) };
-    }) };
+    return { ...page, rows: page.rows.map(toAdminPaymentTransaction) };
   } catch (error: unknown) {
     logger.error({ event: "payments.admin_read_failed", code: normalizeDatabaseError(error).sqlState }, "Database projection failed");
     throw new Error("Unable to load payment transactions. Try again.");

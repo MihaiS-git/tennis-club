@@ -32,9 +32,9 @@ it("composes filter changes in the URL, clears the old court and resets paginati
   render(<ActivityControls staff scope="upcoming" query={parseActivityQuery({ page: "3", location, court, type: "reservation", from: "2026-10-01" }, "upcoming")} options={options} />);
   expect(screen.queryByRole("option", { name: "West court" })).toBeNull();
   fireEvent.change(screen.getByRole("combobox", { name: "Location" }), { target: { value: otherLocation } });
-  fireEvent.change(screen.getByRole("combobox", { name: "Type" }), { target: { value: "booking" } });
+  fireEvent.change(screen.getByRole("combobox", { name: "Type" }), { target: { value: "court" } });
   const params = new URL(navigation.replace.mock.lastCall![0], "http://localhost").searchParams;
-  expect(Object.fromEntries(params)).toMatchObject({ location: otherLocation, type: "booking", from: "2026-10-01", sort: "datetime", direction: "asc" });
+  expect(Object.fromEntries(params)).toMatchObject({ location: otherLocation, type: "court", from: "2026-10-01", sort: "datetime", direction: "asc" });
   expect(params.has("page")).toBe(false);
   expect(params.has("court")).toBe(false);
 });
@@ -47,23 +47,24 @@ it("clears active History filters while retaining sort and returning to page 1",
     .toEqual({ page: "1", type: "all", status: "all", sort: "duration", direction: "desc" });
 });
 
-it.each(["history"] as const)("hides Type for regular users on %s and retains other URL controls", (scope) => {
-  navigation.pathname = scope === "history" ? "/my-activity/history" : "/my-activity/bookings";
+it.each(["upcoming", "history"] as const)("offers Court and Coaching filters to regular users on %s", (scope) => {
   render(<ActivityControls staff={false} scope={scope}
-    query={parseActivityQuery({ type: "reservation", page: "3", sort: "duration", direction: "desc", from: "2026-10-01" }, scope, false)} options={options} />);
-  expect(screen.queryByRole("combobox", { name: "Type" })).toBeNull();
-  expect(screen.getByRole("combobox", { name: "Location" })).toBeTruthy();
-  fireEvent.change(screen.getByRole("combobox", { name: "Location" }), { target: { value: location } });
+    query={parseActivityQuery({ type: "coaching", page: "3", sort: "duration" }, scope, false)} options={options} />);
+  const select = screen.getByRole("combobox", { name: "Type" }) as HTMLSelectElement;
+  expect([...select.options].map(option => option.textContent)).toEqual(["All", "Court", "Coaching"]);
+  expect(select.value).toBe("coaching");
+  fireEvent.change(select, { target: { value: "court" } });
   const params = new URL(navigation.replace.mock.lastCall![0], "http://localhost").searchParams;
-  expect(Object.fromEntries(params)).toMatchObject({ type: "booking", location, sort: "duration", direction: "desc", from: "2026-10-01" });
+  expect(params.get("type")).toBe("court");
+  expect(params.get("sort")).toBe("duration");
   expect(params.has("page")).toBe(false);
   const cleared = new URL(screen.getByRole("link", { name: "Clear filters" }).getAttribute("href")!, "http://localhost").searchParams;
-  expect(cleared.get("type")).toBe("booking");
+  expect(cleared.get("type")).toBe("all");
 });
 
 it.each(["history"] as const)("uses visible %s headers to toggle server sorts and retain filters", (scope) => {
   const query = parseActivityQuery({ page: "3", location, court, type: "reservation", from: "2026-10-01", status: "cancelled" }, scope);
-  const { rerender } = render(<ActivityTable scope={scope} query={query} staff><tr><td>Activity</td></tr></ActivityTable>);
+  const { rerender } = render(<ActivityTable scope={scope} query={query}><tr><td>Activity</td></tr></ActivityTable>);
   const date = screen.getByRole("link", { name: "Date/time" });
   expect(date.closest("th")?.getAttribute("aria-sort")).toBe(scope === "history" ? "descending" : "ascending");
   const params = new URL(date.getAttribute("href")!, "http://localhost").searchParams;
@@ -73,14 +74,14 @@ it.each(["history"] as const)("uses visible %s headers to toggle server sorts an
   for (const [label, sort] of columns) {
     const href = screen.getByRole("link", { name: label }).getAttribute("href")!;
     expect(Object.fromEntries(new URL(href, "http://localhost").searchParams)).toMatchObject({ sort, direction: "asc", page: "1", location, court });
-    rerender(<ActivityTable scope={scope} query={{ ...query, sort, direction: "asc" }} staff><tr><td>Activity</td></tr></ActivityTable>);
+    rerender(<ActivityTable scope={scope} query={{ ...query, sort, direction: "asc" }}><tr><td>Activity</td></tr></ActivityTable>);
     const active = screen.getByRole("link", { name: label });
     expect(active.closest("th")?.getAttribute("aria-sort")).toBe("ascending");
     expect(new URL(active.getAttribute("href")!, "http://localhost").searchParams.get("direction")).toBe("desc");
-    rerender(<ActivityTable scope={scope} query={query} staff><tr><td>Activity</td></tr></ActivityTable>);
+    rerender(<ActivityTable scope={scope} query={query}><tr><td>Activity</td></tr></ActivityTable>);
   }
-  rerender(<ActivityTable scope={scope} query={parseActivityQuery({}, scope, false)} staff={false}><tr><td>Activity</td></tr></ActivityTable>);
-  expect(screen.queryByRole("columnheader", { name: /Type/ })).toBeNull();
+  rerender(<ActivityTable scope={scope} query={parseActivityQuery({}, scope, false)}><tr><td>Activity</td></tr></ActivityTable>);
+  expect(screen.getByRole("columnheader", { name: /Type/ })).toBeTruthy();
   expect(screen.queryByRole("columnheader", { name: /Status/ }) !== null).toBe(scope === "history");
 });
 

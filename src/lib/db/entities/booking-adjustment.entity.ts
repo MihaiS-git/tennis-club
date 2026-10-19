@@ -17,6 +17,7 @@ export type AdjustmentTarget = { courtId: string; date: string; startMinute: num
   actorScope?: "customer" | "coach_owner" | "admin_owner" | "admin" };
 
 @Entity({ schema: "public", name: "booking_adjustments" })
+@Check("booking_adjustments_recovery_version", "recovery_version=1")
 @Unique("booking_adjustments_identity", ["bookingId", "id"])
 @Unique("booking_adjustments_request", ["bookingId", "requestKey"])
 @Index("booking_adjustments_pending", ["bookingId"], { unique: true, where: "status='pending'" })
@@ -33,6 +34,7 @@ export type AdjustmentTarget = { courtId: string; date: string; startMinute: num
 @Check("booking_adjustments_capture_acceptance_check", "capture_accepted_at IS NULL OR (isfinite(capture_accepted_at) AND capture_accepted_at < expires_at AND kind='reschedule' AND new_total > original_total)")
 @ForeignKey(() => BookingRevisionEntity, ["bookingId", "baseRevisionId"], ["bookingId", "id"], { name: "booking_adjustments_base_revision_fkey", onDelete: "RESTRICT" })
 export class BookingAdjustmentEntity {
+  @Column({ name: "recovery_version", type: "smallint", nullable: true }) recoveryVersion?: number | null;
   @Column({ name: "base_revision_id", type: "uuid" }) baseRevisionId!: string;
   @PrimaryColumn({ type: "uuid", primaryKeyConstraintName: "booking_adjustments_pkey" }) id!: string;
   @Column({ name: "booking_id", type: "uuid" }) bookingId!: string;

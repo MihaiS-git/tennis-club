@@ -503,3 +503,38 @@ it("preserves the selected interval while reservation creation is pending and al
   fireEvent.click(clear);
   expect(screen.queryByLabelText("Selected reservation")).toBeNull();
 });
+
+it.each([
+  { included: true, authenticated: false }, { included: false, authenticated: false },
+  { included: true, authenticated: true }, { included: false, authenticated: true },
+])("shows historical coaching details and Admin navigation (included=$included, authenticated=$authenticated)", ({ included, authenticated }) => {
+  const booking = { ...ownBooking, account_user_id: authenticated ? "another-customer" : null, includes_coaching: true,
+    coach_name: "Historical Coach", coaching_program_name: "Historical Semi-private",
+    location_name: "Historical Club", court_name: "Historical Court", location_timezone: "UTC",
+    total_amount_minor: included ? 12000 : 15000, currency: "EUR" as const,
+    coaching: { programId: coachReservation.id, coachUserId: coachId, locationId: coachLocation.id,
+      participantCount: 2 as const, durationMinutes: 60, source: "coach" as const, amountMinor: 12000,
+      currency: "EUR" as const, courtRentalIncluded: included, courtRentalMinor: 3000, courtAmountMinor: included ? 0 : 3000 } };
+  const props = { actorUserId: coachId, date: booking.booking_date, location: coachLocation,
+    adminOccupancy: [booking] };
+  const day = { times: [600, 630], courts: [{ court: coachCourt, cells: ["booked" as const, "booked" as const] }] };
+  const { rerender } = render(<ReservationCalendar {...props} day={day} canManage />);
+  const block = screen.getByRole("button", { name: /Coaching · Customer/ });
+  expect(within(block).getByText("Coaching")).toBeTruthy();
+  fireEvent.click(block);
+  const dialog = screen.getByRole("dialog", { name: "Booking details" });
+  for (const value of ["Historical Coach", "Historical Semi-private", "Historical Club", "Historical Court", "2", authenticated ? "Authenticated customer" : "Guest", "EUR", "Online"])
+    expect(within(dialog).getByText(value)).toBeTruthy();
+  expect(within(dialog).getByText(included ? "Included" : /Charged separately.*30[.,]00/)).toBeTruthy();
+  const terms = within(dialog).getByRole("heading", { name: "Booking terms" }).closest("section")!;
+  expect(within(terms).getByText(included ? /120[.,]00/ : /150[.,]00/)).toBeTruthy();
+  const coachingSection = within(dialog).getByRole("heading", { name: "Coaching details" }).closest("section")!;
+  expect(within(coachingSection).getByText(/120[.,]00/)).toBeTruthy();
+  expect(within(coachingSection).getByText("60 min")).toBeTruthy();
+  expect(within(dialog).getByRole("link", { name: "View full booking details" }).getAttribute("href")).toBe(`/admin/bookings/${booking.id}`);
+  expect(within(dialog).getByRole("button", { name: "Cancel booking" })).toBeTruthy();
+  expect(within(dialog).queryByRole("button", { name: "Edit booking" })).toBeNull();
+  rerender(<ReservationCalendar {...props} day={day} canManage={false} />);
+  expect(within(dialog).queryByRole("link", { name: "View full booking details" })).toBeNull();
+  expect(within(dialog).queryByRole("button", { name: "Cancel booking" })).toBeNull();
+});

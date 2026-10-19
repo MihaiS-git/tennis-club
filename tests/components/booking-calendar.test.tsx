@@ -5,19 +5,23 @@ import { Activity, type ComponentProps } from "react";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-const { refresh, confirm, abandon, paymentProps } = vi.hoisted(() => ({ refresh: vi.fn(), confirm: vi.fn(), abandon: vi.fn(), paymentProps: vi.fn() }));
+const { refresh, confirm, coachingConfirm, abandon, paymentProps, settled } = vi.hoisted(() => ({ refresh: vi.fn(), confirm: vi.fn(), coachingConfirm: vi.fn(), abandon: vi.fn(), paymentProps: vi.fn(), settled: { amount: 11000, currency: "EUR" as "EUR" | "RON" } }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
-vi.mock("@/app/book/actions", () => ({ commitCustomerBookingAction: confirm, abandonCheckoutAction: abandon }));
+vi.mock("@/app/book/actions", () => ({ commitCustomerBookingAction: confirm, commitCoachingBookingAction: coachingConfirm, abandonCheckoutAction: abandon }));
 vi.mock("@/app/book/online-payment", () => ({ OnlinePayment: (props: ComponentProps<typeof import("@/app/book/online-payment").OnlinePayment>) => {
   paymentProps(props);
-  return <section aria-label="Online payment"><button onClick={() => props.onConfirmed(11000, "EUR", null)}>Simulate confirmed status</button>
+  return <section aria-label="Online payment"><button onClick={() => props.onConfirmed(settled.amount, settled.currency, null)}>Simulate confirmed status</button>
+    <button onClick={() => props.onPaymentStatus?.("processing")}>Simulate processing</button>
+    <button onClick={() => props.onPaymentStatus?.("unknown")}>Simulate unknown</button>
     <button onClick={() => props.onPaymentStatus?.("expired")}>Simulate expiry</button></section>;
 } }));
 import { BookingCalendar } from "@/app/book/booking-calendar";
+import { BookCourtLink } from "@/components/book-court-link";
 import type { CourtDay } from "@/lib/courts/calendar";
 
 beforeEach(() => {
-  refresh.mockReset(); confirm.mockReset(); abandon.mockReset();
+  refresh.mockReset(); confirm.mockReset(); coachingConfirm.mockReset(); abandon.mockReset(); settled.amount = 11000; settled.currency = "EUR";
+  window.history.replaceState(null, "", "/book");
   installDialogMock();
 });
 afterEach(cleanup);
@@ -246,6 +250,55 @@ async function openCheckout() {
   fireEvent.click(screen.getByRole("button", { name: "Continue to payment" }));
   await screen.findByRole("region", { name: "Online payment" });
 }
+
+function renderNavbarBookingLink() {
+  // Prevent jsdom's document navigation after the real link handler runs.
+  return render(<nav onClick={event => event.preventDefault()}><BookCourtLink className="" /></nav>);
+}
+
+it("starts a fresh booking from the navbar after verified online payment on the same route", async () => {
+  renderNavbarBookingLink();
+  await openCheckout();
+  fireEvent.click(screen.getByRole("button", { name: "Simulate confirmed status" }));
+  await screen.findByRole("region", { name: "Booking confirmed" });
+  expect(screen.getByText(/Online payment received/)).toBeTruthy();
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(document.body.style.overflow).toBe("");
+  fireEvent.click(screen.getByRole("link", { name: "Book a court" }));
+  expect(screen.queryByRole("region", { name: "Booking confirmed" })).toBeNull();
+  expect(screen.getByRole("table")).toBeTruthy();
+  expect(screen.queryByRole("region", { name: "Selected interval" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /Court 2 2026-10-01 17:00–17:30/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  expect(screen.getByRole("dialog")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Continue to payment" })).toBeTruthy();
+  expect(confirm).toHaveBeenCalledOnce();
+  expect(abandon).not.toHaveBeenCalled();
+});
+
+it.each(["pending", "processing", "unknown"])("navbar re-selection preserves %s payment and its confirmation callback", async status => {
+  renderNavbarBookingLink();
+  await openCheckout();
+  if (status !== "pending") fireEvent.click(screen.getByRole("button", { name: `Simulate ${status}` }));
+  const payment = screen.getByRole("region", { name: "Online payment" });
+  fireEvent.click(screen.getByRole("link", { name: "Book a court" }));
+  expect(screen.getByRole("region", { name: "Online payment" })).toBe(payment);
+  expect(abandon).not.toHaveBeenCalled();
+  expect(refresh).not.toHaveBeenCalled();
+  expect(confirm).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByRole("button", { name: "Simulate confirmed status" }));
+  await screen.findByRole("region", { name: "Booking confirmed" });
+});
+
+it("preserves an incomplete booking when re-selecting the navbar link", () => {
+  renderNavbarBookingLink();
+  render(<BookingCalendar onlinePaymentAvailable day={{ times: [960, 990, 1020, 1050], courts }}
+    date="2026-10-01" locationName="Club" currency="RON" cancellationNoticeMinutes={120} timezone="UTC" />);
+  fireEvent.click(screen.getByRole("button", { name: /Court 1 2026-10-01 16:00–16:30/ }));
+  fireEvent.click(screen.getByRole("link", { name: "Book a court" }));
+  expect(screen.getByRole("region", { name: "Selected interval" })).toBeTruthy();
+  expect(confirm).not.toHaveBeenCalled();
+});
 it.each(["Close dialog", "Close", "escape"])("%s dismisses an expired checkout without cancellation or late reopening", async trigger => {
   await openCheckout();
   const late = paymentProps.mock.calls.at(-1)![0].onConfirmed;
@@ -359,4 +412,157 @@ it("gives every unavailable state its own non-danger treatment and a matching le
   expect(new Set(classes).size).toBe(4);
   fireEvent.click(screen.getByRole("button", { name: /18:00–18:30/ }));
   expect(screen.getByRole("button", { name: /18:00–18:30.*selected/ }).className).toContain("bg-primary");
+});
+
+
+const coaching = {
+  locationId: "a1111111-1111-4111-8111-111111111111", programId: "b1111111-1111-4111-8111-111111111111",
+  coachId: "c1111111-1111-4111-8111-111111111111", programName: "Private technique", coachName: "Coach Ana",
+  durationMinutes: 90, participantCount: 1 as const, courtRentalIncluded: false,
+  starts: [{ startMinute: 960, endMinute: 1050, startsAt: "2099-10-15T16:00:00Z", endsAt: "2099-10-15T17:30:00Z",
+    courts: courts.map((court, index) => ({ id: court.court.id, name: court.court.name,
+      coachingAmountMinor: 12000, courtAmountMinor: 5000 + index * 1000, totalAmountMinor: 17000 + index * 1000 })) }],
+};
+const coachingProps = { day: { times: [960, 990, 1020, 1050], courts }, date: "2099-10-15", locationName: "Club", currency: "RON" as const,
+  cancellationNoticeMinutes: 120, timezone: "UTC", onlinePaymentAvailable: true, allowPayAtClub: false, coaching };
+
+it("uses the same timetable for every court but only allows complete server-offered lessons", () => {
+  const blocked = { ...courts[0], court: { ...courts[0].court, id: "blocked", name: "Court 3" } };
+  render(<BookingCalendar {...coachingProps} day={{ ...coachingProps.day, courts: [...courts, blocked] }} />);
+  expect(screen.getAllByRole("rowheader")).toHaveLength(3);
+  expect(screen.queryByRole("button", { name: /Court 3/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Court 1 2099-10-15 16:30–/ })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /Court 1 .*90 min lesson/ }));
+  expect(screen.getByRole("region", { name: "Selected interval" }).textContent).toContain("16:00–17:30 · 90 min");
+  expect(screen.getByRole("region", { name: "Selected interval" }).textContent).toMatch(/170[.,]00/);
+  const selectedCells = document.querySelectorAll('[aria-label$=", selected"]');
+  expect(selectedCells).toHaveLength(3);
+  for (const cell of selectedCells) expect(cell.classList.contains("bg-primary")).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: /Court 2 .*90 min lesson/ }));
+  expect(screen.getByRole("region", { name: "Selected interval" }).textContent).toMatch(/180[.,]00/);
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  const details = screen.getByRole("region", { name: "Booking details" });
+  expect(details.textContent).toContain("Private technique");
+  expect(details.textContent).toContain("Coach Ana");
+  expect(details.textContent).toMatch(/120[.,]00/);
+  expect(details.textContent).toMatch(/60[.,]00/);
+  expect(screen.queryByRole("radio", { name: "Pay at club" })).toBeNull();
+});
+
+it("does not offer lessons across an occupied cell even when advisory offers have become stale", () => {
+  render(<BookingCalendar {...coachingProps} day={{ ...coachingProps.day, courts: courts.map(row => ({ ...row, cells: ["available", "booked", "available", "available"] })) }} />);
+  expect(screen.queryByRole("button", { name: /90 min lesson/ })).toBeNull();
+});
+
+it.each([{ authenticated: false, semi: false }, { authenticated: true, semi: false }, { authenticated: false, semi: true }, { authenticated: true, semi: true }])("reuses coaching contact and verified confirmation (authenticated=$authenticated, semi=$semi)", async ({ authenticated, semi }) => {
+  const selectedCoaching = semi ? { ...coaching, programName: "Semi-private coaching", participantCount: 2 as const } : coaching;
+  coachingConfirm.mockResolvedValue({ ok: true, status: "pending_payment", holdExpiresAt: "2099-10-15T10:00:00Z", checkout,
+    totalAmountMinor: 17000, currency: "RON" });
+  settled.amount = 17000; settled.currency = "RON";
+  const view = render(<BookingCalendar {...coachingProps} coaching={selectedCoaching} authenticated={authenticated}
+    initialContact={authenticated ? { customerName: "Account", customerEmail: "account@example.test", customerPhone: "123" } : undefined} />);
+  fireEvent.click(screen.getByRole("button", { name: /Court 1 .*90 min lesson/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  if (!authenticated) {
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Guest" } });
+    fireEvent.change(screen.getByLabelText("Email"), { target: { value: "guest@example.test" } });
+    fireEvent.change(screen.getByLabelText("Phone"), { target: { value: "123" } });
+  }
+  fireEvent.click(screen.getByRole("button", { name: "Continue to payment" }));
+  await screen.findByRole("region", { name: "Online payment" });
+  expect(screen.queryByRole("region", { name: "Booking confirmed" })).toBeNull();
+  expect(coachingConfirm).toHaveBeenCalledExactlyOnceWith({ locationId: coaching.locationId, programId: coaching.programId,
+    coachId: coaching.coachId, courtId: courts[0].court.id, date: "2099-10-15", startMinute: 960, durationMinutes: 90,
+    customerName: authenticated ? "Account" : "Guest", customerEmail: authenticated ? "account@example.test" : "guest@example.test",
+    customerPhone: "123", expectedTotalAmountMinor: 17000, expectedCurrency: "RON" });
+  expect(confirm).not.toHaveBeenCalled();
+  // Server Action revalidation makes our protected hold unavailable publicly.
+  // The mounted checkout must retain the original lesson breakdown and total.
+  view.rerender(<BookingCalendar {...coachingProps} authenticated={authenticated} coaching={{ ...selectedCoaching, starts: [] }} />);
+  const heldDetails = screen.getByRole("region", { name: "Booking details" });
+  expect(heldDetails.textContent).toMatch(/120[.,]00/);
+  expect(heldDetails.textContent).toMatch(/50[.,]00/);
+  expect(heldDetails.textContent).toMatch(/170[.,]00/);
+  fireEvent.click(screen.getByRole("button", { name: "Simulate expiry" }));
+  expect(screen.queryByRole("region", { name: "Booking confirmed" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Simulate confirmed status" }));
+  const success = await screen.findByRole("region", { name: "Booking confirmed" });
+  expect(success.textContent).toContain("Your coach and court are booked");
+  expect(success.textContent).toContain(selectedCoaching.programName);
+  expect(success.textContent).toContain(semi ? "2 players" : "1 player");
+  expect(success.textContent).not.toContain("confirmation email");
+  expect(screen.queryByRole("link", { name: "View my bookings" }) !== null).toBe(authenticated);
+});
+
+it.each(["price", "availability"])("clears stale coaching %s and retains entered contact for a fresh selection", async kind => {
+  coachingConfirm.mockResolvedValue(kind === "price" ? { ok: false, reason: "price_changed", totalAmountMinor: 19000, currency: "RON" }
+    : { ok: false, availabilityChanged: true, message: "The coach is no longer available." });
+  render(<BookingCalendar {...coachingProps} initialContact={{ customerName: "Guest", customerEmail: "guest@example.test", customerPhone: "123" }} />);
+  fireEvent.click(screen.getByRole("button", { name: /Court 1 .*90 min lesson/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Edited guest" } });
+  fireEvent.click(screen.getByRole("button", { name: "Continue to payment" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(screen.queryByRole("region", { name: "Selected interval" })).toBeNull();
+  expect(refresh).toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: /Court 2 .*90 min lesson/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  expect(screen.getByLabelText("Name")).toHaveProperty("value", "Edited guest");
+});
+
+it("shows court rental included and uses the supplied lesson total without adding court-only rates", () => {
+  const included = { ...coaching, courtRentalIncluded: true, starts: coaching.starts.map(start => ({ ...start,
+    courts: start.courts.map(court => ({ ...court, coachingAmountMinor: 12000, courtAmountMinor: 0, totalAmountMinor: 12000 })) })) };
+  render(<BookingCalendar {...coachingProps} coaching={included} />);
+  fireEvent.click(screen.getByRole("button", { name: /Court 1 .*90 min lesson/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  expect(screen.getByRole("region", { name: "Booking details" }).textContent).toContain("Included");
+  expect(screen.getByRole("region", { name: "Booking details" }).textContent).toMatch(/120[.,]00/);
+});
+
+
+it("keeps coaching unconfirmed when checkout initialization fails", async () => {
+  coachingConfirm.mockResolvedValue({ ok: false, message: "Online payment is unavailable." });
+  render(<BookingCalendar {...coachingProps} initialContact={{ customerName: "Guest", customerEmail: "guest@example.test", customerPhone: "123" }} />);
+  fireEvent.click(screen.getByRole("button", { name: /Court 1 .*90 min lesson/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  fireEvent.click(screen.getByRole("button", { name: "Continue to payment" }));
+  await waitFor(() => expect(coachingConfirm).toHaveBeenCalledTimes(1));
+  expect(screen.queryByRole("region", { name: "Online payment" })).toBeNull();
+  expect(screen.queryByRole("region", { name: "Booking confirmed" })).toBeNull();
+  expect(screen.getByLabelText("Name")).toHaveProperty("value", "Guest");
+  expect(confirm).not.toHaveBeenCalled();
+});
+
+
+it("switches programs with fresh selections and retains customer contact", () => {
+  const view = render(<BookingCalendar {...coachingProps} />);
+  fireEvent.click(screen.getByRole("button", { name: /Court 1 .*90 min lesson/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  fireEvent.change(screen.getByRole("textbox", { name: /Name/ }), { target: { value: "Returning Guest" } });
+  const semi = { ...coaching, programId: "semi", programName: "Semi-private coaching", participantCount: 2 as const };
+  view.rerender(<BookingCalendar {...coachingProps} coaching={semi} />);
+  expect(screen.queryByRole("region", { name: "Selected interval" })).toBeNull();
+  expect(screen.queryByRole("textbox", { name: /Name/ })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /Court 1 .*90 min lesson/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  expect(screen.getByRole("textbox", { name: /Name/ })).toHaveProperty("value", "Returning Guest");
+  const details = screen.getByRole("region", { name: "Booking details" });
+  expect(details.textContent).toContain("Semi-private coaching");
+  expect(details.textContent).toContain("Participants2 players");
+  expect(details.textContent).toMatch(/170[.,]00/);
+});
+
+
+it("switches coaches with fresh offers, preserves courts and clears the old lesson", () => {
+  const view = render(<BookingCalendar {...coachingProps} />);
+  fireEvent.click(screen.getByRole("button", { name: /Court 1 .*90 min lesson/ }));
+  expect(screen.getByRole("region", { name: "Selected interval" })).toBeTruthy();
+  view.rerender(<BookingCalendar {...coachingProps} coaching={{ ...coaching, coachId: "other-coach", coachName: "Coach Dan", starts: [] }} />);
+  expect(screen.queryByRole("region", { name: "Selected interval" })).toBeNull();
+  expect(screen.queryByRole("button", { name: /90 min lesson/ })).toBeNull();
+  expect(screen.getAllByRole("rowheader")).toHaveLength(courts.length);
+  expect(screen.getByText("No lesson start")).toBeTruthy();
+  view.rerender(<BookingCalendar {...coachingProps} />);
+  expect(screen.getAllByRole("button", { name: /90 min lesson/ })).toHaveLength(courts.length);
 });

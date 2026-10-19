@@ -2,16 +2,17 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { adminBookingLinkFrom } from "@/lib/bookings/admin-query";
 import { formatMoney } from "@/lib/pricing/money";
 import type { AdminPaymentTransaction } from "@/lib/payments/admin";
 import { StatusBadge } from "@/components/status-badge";
 import { paymentMethodLabels, paymentProviderLabels, adminTransactionHref, transactionStatusLabel, transactionStatusTone, transactionTimestamp } from "@/lib/payments/admin-query";
 import { TransactionDetail } from "./transaction-detail";
 
-export function TransactionRow({ transaction, detail = false, listHref = "/admin/payments/transactions", showTimezone = true }: {
-  transaction: AdminPaymentTransaction; detail?: boolean; listHref?: string; showTimezone?: boolean;
+export function TransactionRow({ transaction, detail = false, listHref = "/admin/payments/transactions", bookingReturnHref, showTimezone = true }: {
+  transaction: AdminPaymentTransaction; detail?: boolean; listHref?: string; bookingReturnHref?: string; showTimezone?: boolean;
 }) {
-  return detail ? <TransactionDetail transaction={transaction} listHref={listHref} />
+  return detail ? <TransactionDetail transaction={transaction} listHref={listHref} bookingReturnHref={bookingReturnHref} />
     : <TransactionListRow transaction={transaction} listHref={listHref} showTimezone={showTimezone} />;
 }
 
@@ -43,7 +44,9 @@ function TransactionListRow({ transaction: t, listHref, showTimezone }: { transa
             {t.customer_email}
           </span>
         </td>
-        <td className="font-mono text-xs">#{t.booking_id.slice(0, 8)}</td>
+        <td><Link href={adminBookingLinkFrom(t.booking_id, listHref)} title={t.booking_id}
+          className="font-mono text-xs text-primary underline focus-visible:outline-2 focus-visible:outline-focus">
+          <span aria-hidden="true">#{t.booking_id.slice(0, 8)}</span><span className="sr-only">Booking {t.booking_id}</span></Link></td>
         <td><Link href={href} className="text-primary underline">{t.operation_label}</Link>
           {t.proposal && !t.proposal.acceptedRevisionId && <span className="block text-xs text-muted-foreground">
             {t.proposal.kind === "cancellation" ? "Cancellation request" : "Proposed modification"} · {t.proposal.status === "pending" ? "Pending" : "Not applied"}

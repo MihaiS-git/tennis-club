@@ -1,10 +1,10 @@
 import { logger } from "@/lib/logger";
-import { readOwnUnreadNotifications } from "@/lib/notifications/financial-notices";
+import { readNotificationIndicators } from "@/lib/notifications/financial-notices";
 
 export async function GET() {
   const headers = { "Cache-Control": "private, no-store" };
   try {
-    return Response.json({ unread: await readOwnUnreadNotifications() }, { headers });
+    return Response.json(await readNotificationIndicators(), { headers });
   } catch {
     logger.error({ event: "notifications.unread_read_failed" }, "Failed to check unread notifications");
     return Response.json({ message: "Unable to check notifications." }, { status: 503, headers });

@@ -2516,6 +2516,7 @@ test("the same refund reversal delivered repeatedly keeps one reversal notice an
     expect(await refundProcessing.processBookingRefund(refund.id, { strict: true, providerChanged: true })).toBe("failed");
   expect(await refundProcessing.processBookingRefund(refund.id, { actorId, retryRejected: true, strict: true })).toBe("failed");
   expect(await refundProcessing.processBookingRefund(refund.id)).toBe("failed");
+  await emails(f.id); // Explicit scheduled projection after financial processing.
   expect((await database.query("SELECT event_key FROM public.booking_notification_deliveries WHERE event_key LIKE $1 ORDER BY event_key",
     [`refund:${refund.id}:%`])).map((row: { event_key: string }) => row.event_key))
     .toEqual([`refund:${refund.id}:late_payment`, `refund:${refund.id}:reversed`]);

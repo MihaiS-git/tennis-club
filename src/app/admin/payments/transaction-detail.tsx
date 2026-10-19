@@ -11,8 +11,9 @@ import { StatusBadge } from "@/components/status-badge";
 import { formatMoney } from "@/lib/pricing/money";
 import { reservationDateLabel } from "@/components/reservation-details";
 import { minuteToTime } from "@/lib/admin/opening-hours-validation";
+import { adminBookingLinkFrom } from "@/lib/bookings/admin-query";
 import type { AdminPaymentTransaction } from "@/lib/payments/admin";
-import { paymentMethodLabels, paymentProviderLabels, adminPaymentHref, parseAdminPaymentQuery, transactionStatusLabel, transactionStatusTone, transactionTimestamp } from "@/lib/payments/admin-query";
+import { paymentMethodLabels, paymentProviderLabels, adminPaymentHref, adminTransactionHref, parseAdminPaymentQuery, transactionStatusLabel, transactionStatusTone, transactionTimestamp } from "@/lib/payments/admin-query";
 import { checkPaymentWithProviderAction, checkRefundWithProviderAction } from "./actions";
 
 const bookingStatusLabels: Record<string, string> = {
@@ -99,8 +100,8 @@ function CheckStripeButton({ refundId, attemptId }: { refundId: string; attemptI
     disabled={pending} aria-busy={pending} onClick={() => { void check(); }}>{pending ? "Checking…" : "Check with Stripe"}</Button>;
 }
 
-export function TransactionDetail({ transaction: t, listHref = "/admin/payments/transactions" }: {
-  transaction: AdminPaymentTransaction; listHref?: string;
+export function TransactionDetail({ transaction: t, listHref = "/admin/payments/transactions", bookingReturnHref }: {
+  transaction: AdminPaymentTransaction; listHref?: string; bookingReturnHref?: string;
 }) {
   const status = transactionStatusLabel(t);
   const refund = t.refund;
@@ -114,6 +115,10 @@ export function TransactionDetail({ transaction: t, listHref = "/admin/payments/
     : t.transaction_kind === "booking" ? "Booking amount" : "Payment amount";
   const providerReference = isRefund ? refund?.provider_refund_id ?? null : t.provider_payment_id;
   const bookingHref = adminPaymentHref({ ...parseAdminPaymentQuery({}), q: t.booking_id });
+  // Opened from Booking Details, the booking link restores that validated view. Otherwise
+  // Booking Details returns here, with this page's list filters, via "Back to Transaction".
+  const bookingDetailsHref = bookingReturnHref ?? adminBookingLinkFrom(t.booking_id,
+    adminTransactionHref(t.transaction_kind, t.transaction_id, listHref.split("?")[1]));
 
   // Attention lists only genuine exceptions: money Stripe could not return, a
   // refund Stripe has not confirmed after a short grace period, or captured evidence.
@@ -190,7 +195,13 @@ export function TransactionDetail({ transaction: t, listHref = "/admin/payments/
         <dl className="grid grid-cols-[5.5rem_minmax(0,1fr)] sm:grid-cols-[7.5rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm">
           <Fields entries={[
             ["Customer", <span key="c" className="block"><span className="block font-medium">{t.customer_name}</span>
-              <span className="block text-muted-foreground">{t.customer_email} · {t.customer_phone}</span></span>],
+              <span className="block text-muted-foreground">{t.customer_email} · {t.customer_phone}</span>
+              {t.account_user_id
+                ? <Link href={`/admin/users/${t.account_user_id}`} className="text-primary underline focus-visible:outline-2 focus-visible:outline-focus">View user account</Link>
+                : <span className="block text-xs text-muted-foreground">Guest booking · no user account</span>}</span>],
+            ["Booking", <Link key="b" href={bookingDetailsHref} title={t.booking_id}
+              className="font-mono text-xs text-primary underline focus-visible:outline-2 focus-visible:outline-focus">
+              <span aria-hidden="true">#{t.booking_id.slice(0, 8)}</span><span className="sr-only">Booking {t.booking_id}</span></Link>],
             ["Payment", `${t.method ? paymentMethodLabels[t.method] : "Unknown"}${t.provider ? ` · ${paymentProviderLabels[t.provider]}` : ""}`],
             ...resolvedEvents.slice(-1).map((event) => ["Reconciled", transactionTimestamp(event.resolved_at ?? event.received_at, t.location_timezone)] satisfies [string, ReactNode]),
           ]} />

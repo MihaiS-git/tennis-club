@@ -26,7 +26,7 @@ function timestamp(column: string) {
 }
 const instant = z.iso.datetime({ offset: true });
 const reservationSchema = z.object({
-  id: z.uuid(), court_id: z.uuid(), booking_date: z.iso.date(),
+  id: z.uuid(), court_id: z.uuid(), coach_user_id: z.uuid().nullable(), booking_date: z.iso.date(),
   starts_at_minute: z.number().int(), ends_at_minute: z.number().int(),
   reason: z.string().nullable(), created_by_user_id: z.uuid().nullable(),
   status: z.enum(["active", "cancelled", "held", "released"]),
@@ -38,7 +38,7 @@ const resourceSchema = z.object({
   location_id: z.uuid(), location_name: z.string(), location_timezone: z.string(),
   location_active: z.boolean(), archived_at: instant.nullable(),
 });
-const projection = `r.id, r.court_id, r.booking_date::text, r.starts_at_minute, r.ends_at_minute,
+const projection = `r.id, r.court_id, r.coach_user_id, r.booking_date::text, r.starts_at_minute, r.ends_at_minute,
   r.reason, r.created_by_user_id, r.status, ${timestamp("r.created_at")} AS created_at,
   ${timestamp("r.updated_at")} AS updated_at, ${timestamp("r.cancelled_at")} AS cancelled_at,
   r.cancelled_by_user_id, ${timestamp("r.hold_expires_at")} AS hold_expires_at`;
@@ -205,16 +205,31 @@ export async function listInternalReservationLocations(manager: EntityManager) {
   })).parse(rows);
 }
 
+// A coaching lesson also names its coach; court_reservation_coach_no_overlap then
+// protects the coach as court_reservation_no_overlap protects the court.
 export async function insertCustomerReservation(manager: EntityManager, input: {
   id: string; courtId: string; date: string; startMinute: number; endMinute: number;
-  status: "active" | "held"; holdExpiresAt: string | null;
+  status: "active" | "held"; holdExpiresAt: string | null; coachUserId?: string | null;
 }) {
   await manager.query(
     `INSERT INTO public.court_reservations
-     (id,court_id,booking_date,starts_at_minute,ends_at_minute,status,hold_expires_at)
-     VALUES($1,$2,$3,$4,$5,$6,$7::timestamptz)`,
-    [input.id, input.courtId, input.date, input.startMinute, input.endMinute, input.status, input.holdExpiresAt],
+     (id,court_id,booking_date,starts_at_minute,ends_at_minute,status,hold_expires_at,coach_user_id)
+     VALUES($1,$2,$3,$4,$5,$6,$7::timestamptz,$8)`,
+    [input.id, input.courtId, input.date, input.startMinute, input.endMinute, input.status, input.holdExpiresAt,
+      input.coachUserId ?? null],
   );
+}
+
+// Courts, at any location, holding expired but unreleased checkout holds of one
+// coach on a date. They no longer occupy the coach for availability, yet still
+// satisfy court_reservation_coach_no_overlap until the existing expiry releases them.
+export async function listExpiredCoachHoldCourts(manager: EntityManager, coachUserId: string, date: string) {
+  const rows: unknown = await manager.query(`SELECT DISTINCT c.location_id,r.court_id
+    FROM public.court_reservations r JOIN public.courts c ON c.id=r.court_id
+    WHERE r.coach_user_id=$1 AND r.booking_date=$2::date AND r.status='held'
+      AND r.hold_expires_at<=clock_timestamp() AND NOT ${acceptedCaptureOccupancy}
+    ORDER BY c.location_id,r.court_id`, [coachUserId.toLowerCase(), date]);
+  return z.array(z.object({ location_id: z.uuid(), court_id: z.uuid() })).parse(rows);
 }
 
 export async function findCheckoutOccupancy(manager: EntityManager, courtId: string, date: string, excludeId?: string, checkedAt?: string) {
@@ -294,7 +309,18 @@ export async function listPublicDayOccupancy(manager: EntityManager, locationId:
     [locationId,courtIds,date]);
 }
 
-// Application service authorizes active Admins before this private projection.
+// Lesson times occupying one coach on a local date at every court and location, as
+// court_reservation_coach_no_overlap compares them; expired holds follow the public
+// occupancy rule. Times only: no court, customer or booking facts.
+export async function listCoachDayOccupancy(manager: EntityManager, coachUserId: string, date: string) {
+  const rows: unknown = await manager.query(`SELECT r.booking_date::text,r.starts_at_minute,r.ends_at_minute
+    FROM public.court_reservations r WHERE r.coach_user_id=$1 AND r.booking_date=$2::date
+      AND (r.status='active' OR (r.status='held' AND (r.hold_expires_at>statement_timestamp() OR ${acceptedCaptureOccupancy})))
+    ORDER BY r.starts_at_minute,r.ends_at_minute`, [coachUserId.toLowerCase(), date]);
+  return z.array(z.object({ booking_date: z.iso.date(), starts_at_minute: z.number().int(), ends_at_minute: z.number().int() })).parse(rows);
+}
+
+// Application service authorizes active Admins/Coaches before this private projection.
 export async function listAdminOperationalProjection(manager: EntityManager, courtIds: string[], date: string): Promise<unknown> {
   return manager.query(`select case when b.id is null then 'reservation' else 'booking' end AS kind,
       coalesce(b.id, r.id) AS id, r.court_id, r.booking_date::text AS booking_date,
@@ -305,8 +331,10 @@ export async function listAdminOperationalProjection(manager: EntityManager, cou
         nullif(btrim(concat_ws(' ', nullif(btrim(u.first_name), ''), nullif(btrim(u.last_name), ''))), ''),
         nullif(btrim(p.display_name), ''), u.email) else null end AS creator_name,
       u.email AS creator_email, u.phone AS creator_phone,
-      b.account_user_id, v.payment_method, v.customer_name, v.customer_email, v.customer_phone,
+      b.account_user_id, v.location_name, v.court_name, v.timezone AS location_timezone, v.payment_method, v.customer_name, v.customer_email, v.customer_phone,
       v.total_amount_minor, v.currency, v.cancellation_notice_minutes,
+      (v.coach_user_id IS NOT NULL) AS includes_coaching, v.coach_name, v.coaching_program_name,
+      v.pricing_evidence->'coaching' AS coaching,
       coalesce((select jsonb_agg(to_jsonb(p) order by p.created_at,p.id) from public.payment_attempts p where p.booking_id=b.id),'[]'::jsonb) AS payment_facts
     from public.court_reservations r
     join public.courts c on c.id = r.court_id and c.is_active

@@ -25,7 +25,7 @@ test.each(summaries)("cancellation uses shared obligation summary $statuses -> $
   expect(summarizeRefunds([...statuses].reverse())).toBe(expected);
   const refundIds = statuses.map((_, i) => `ce000000-0000-4000-8000-${String(i).padStart(12, "0")}`);
   for (const status of statuses) {
-    vi.mocked(prepareRefund).mockResolvedValueOnce({ outcome: "terminal", status, notice: null });
+    vi.mocked(prepareRefund).mockResolvedValueOnce({ outcome: "terminal", status, notice: false });
   }
   expect(await finishBookingCancellation({ outcome: "cancelled", refundIds }))
     .toEqual(expected ? { ok: true, outcome: "cancelled", refundStatus: expected } : { ok: true, outcome: "cancelled" });

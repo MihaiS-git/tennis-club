@@ -1,0 +1,70 @@
+"use client";
+
+import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
+import { AdminToolbar } from "@/components/admin-page-controls";
+import type { AdminBookingFilterCoach, AdminBookingFilterLocation } from "@/lib/bookings/admin-details";
+import { bookingTypeLabels } from "@/lib/bookings/booking-type";
+import { bookingStatusLabels, parseAdminBookingQuery } from "@/lib/bookings/admin-query";
+
+export function BookingsToolbar({ locations, coaches = [] }: { locations: AdminBookingFilterLocation[]; coaches?: AdminBookingFilterCoach[] }) {
+  const router = useRouter(), pathname = usePathname(), searchParams = useSearchParams();
+  const queryString = searchParams.toString();
+  const filters = parseAdminBookingQuery(Object.fromEntries(["q", "type", "coach", "status", "location", "court", "from", "to"].map((key) => {
+    const values = searchParams.getAll(key); return [key, values.length === 1 ? values[0] : undefined];
+  })));
+  const location = locations.find((item) => item.id === filters.location);
+  const [draft, setDraft] = useState({ queryString, text: filters.q });
+  if (draft.queryString !== queryString) setDraft({ queryString, text: filters.q });
+  const text = draft.queryString === queryString ? draft.text : filters.q;
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const currentQuery = useRef(queryString);
+  function cancelSearch() { clearTimeout(timer.current); }
+  useEffect(() => { currentQuery.current = queryString; return () => clearTimeout(timer.current); }, [queryString]);
+  // Every filter change returns to page 1; changing location also clears its court.
+  function navigate(changes: Record<string, string>) {
+    cancelSearch();
+    const params = new URLSearchParams(currentQuery.current);
+    for (const [key, value] of Object.entries(changes)) if (value && value !== "all") params.set(key, value); else params.delete(key);
+    if (changes.type && changes.type !== "coaching") params.delete("coach");
+    params.delete("page"); currentQuery.current = params.toString();
+    router.replace(`${pathname}${params.size ? `?${params}` : ""}`, { scroll: false });
+  }
+  const control = "min-h-10 w-full rounded-control border border-border-strong bg-surface px-3 py-2 text-foreground disabled:bg-surface-muted disabled:text-muted-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus";
+  const field = "flex w-[calc(50%-0.375rem)] flex-col gap-1.5 font-medium text-primary sm:w-40";
+  const hasFilters = Boolean(filters.q || filters.type !== "all" || filters.status !== "all" || filters.location || filters.from || filters.to);
+  return <AdminToolbar primary={<label className="flex w-full flex-col gap-1.5 font-medium text-primary sm:w-72">
+    Search<input type="search" value={text} maxLength={200} placeholder="Booking ID, customer name or email" className={control}
+      onChange={(event) => {
+        const next = event.target.value; setDraft({ queryString, text: next }); cancelSearch();
+        const scheduled = currentQuery.current;
+        timer.current = setTimeout(() => { if (scheduled === currentQuery.current) navigate({ q: next.trim() }); }, 350);
+      }} />
+  </label>} filters={<>
+    <label className={field}>Type<select value={filters.type} className={control} onChange={(event) => navigate({ type: event.target.value })}>
+      <option value="all">All</option>{Object.entries(bookingTypeLabels).map(([value, name]) => <option key={value} value={value}>{name}</option>)}
+    </select></label>
+    {filters.type === "coaching" && <label className={field}>Coach<select
+      value={coaches.some((coach) => coach.id === filters.coach) ? filters.coach : ""} className={control}
+      onChange={(event) => navigate({ coach: event.target.value })}>
+      <option value="">All</option>{coaches.map((coach) => <option key={coach.id} value={coach.id}>{coach.name}</option>)}
+    </select></label>}
+    <label className={field}>Status<select value={filters.status} className={control} onChange={(event) => navigate({ status: event.target.value })}>
+      <option value="all">All</option>{Object.entries(bookingStatusLabels).map(([value, name]) => <option key={value} value={value}>{name}</option>)}
+    </select></label>
+    <label className={field}>Location<select value={location?.id ?? ""} className={control} onChange={(event) => navigate({ location: event.target.value, court: "" })}>
+      <option value="">All</option>{locations.map((item) => <option key={item.id} value={item.id}>{item.name}{item.archived ? " (archived)" : ""}</option>)}
+    </select></label>
+    <label className={field}>Court<select value={location?.courts.some((court) => court.id === filters.court) ? filters.court : ""}
+      disabled={!location} title={location ? undefined : "Select a location first"} className={control} onChange={(event) => navigate({ court: event.target.value })}>
+      <option value="">{location ? "All" : "Select a location"}</option>
+      {location?.courts.map((court) => <option key={court.id} value={court.id}>{court.name}</option>)}
+    </select></label>
+    <label className={field}>From<input type="date" value={filters.from} max={filters.to || undefined} className={control}
+      onChange={(event) => navigate({ from: event.target.value })} /></label>
+    <label className={field}>To<input type="date" value={filters.to} min={filters.from || undefined} className={control}
+      onChange={(event) => navigate({ to: event.target.value })} /></label>
+    {hasFilters && <Link href={pathname} onClick={cancelSearch} className="px-3 py-2 text-primary underline">Clear filters</Link>}
+  </>} />;
+}

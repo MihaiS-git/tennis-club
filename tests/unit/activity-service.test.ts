@@ -22,7 +22,7 @@ const interval = {
 };
 const booking = {
   id: id(4), account_user_id: owner, status: "confirmed", updated_at: "2026-10-01T00:00:00Z",
-  customer_name: "Snapshot", customer_email: "snapshot@example.test", customer_phone: "123",
+  customer_name: "Snapshot", customer_email: "snapshot@example.test", customer_phone: "123", includes_coaching: false, coach_name: null, coaching_program_name: null,
   cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON",
   payment_method: "pay_at_club", payments: [], reservation: interval,
 };
@@ -65,7 +65,7 @@ test.each([["admin"]])("preserves role-specific activity result contracts for ro
     booking_date: interval.booking_date, starts_at_minute: 900, ends_at_minute: 960,
     location_name: "Club A", location_timezone: "Europe/Bucharest", court_name: "Court A",
     starts_at_instant: "2026-10-03T12:00:00.000Z", history_at: "2026-10-03T13:00:00.000Z",
-    customer_name: "Snapshot", customer_email: "snapshot@example.test", customer_phone: "123",
+    customer_name: "Snapshot", customer_email: "snapshot@example.test", customer_phone: "123", includes_coaching: false, coach_name: null, coaching_program_name: null,
     cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON",
   });
 });
@@ -211,4 +211,9 @@ test("upcoming DTO supplies ordered interleaved records, options and pagination 
   const second = await listOwnUpcomingActivity({ page: "2" }, userClient);
   expect(second.hasNext).toBe(false);
   expect(second.ordered).toHaveLength(1);
+});
+
+test("carries coaching classification from the owner-scoped contract into Upcoming", async () => {
+  serve([{ ...booking, includes_coaching: true, reservation: { ...interval, booking_date: "2099-10-15" } }]);
+  expect((await listOwnUpcomingActivity({}, userClient)).bookings[0]).toMatchObject({ id: booking.id, includes_coaching: true });
 });

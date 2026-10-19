@@ -11,8 +11,8 @@ function SidebarShell({ navigation, children }: { navigation: React.ReactNode; c
   </main>;
 }
 
-export function ManagementShell({ isAdmin, children }: { isAdmin: boolean; children: React.ReactNode }) {
-  return <SidebarShell navigation={<AdminNavigation isAdmin={isAdmin} />}>{children}</SidebarShell>;
+export function ManagementShell({ isAdmin, isCoach = false, children }: { isAdmin: boolean; isCoach?: boolean; children: React.ReactNode }) {
+  return <SidebarShell navigation={<AdminNavigation isAdmin={isAdmin} isCoach={isCoach} />}>{children}</SidebarShell>;
 }
 
 // Shared by the /my-activity and /profile layouts. Each page authorizes its own account.

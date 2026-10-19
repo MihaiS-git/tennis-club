@@ -23,12 +23,13 @@ export const timelineCellLabels: Record<TimelineCellState, string> = {
 const legendOrder: readonly TimelineCellState[] = ["available", "booked", "past", "closed", "unavailable"];
 
 // Lists only states present on the day, sharing a line with the caller's hint.
-export function TimelineLegend({ cells, extras = [], children }: {
+export function TimelineLegend({ cells, extras = [], children, labels }: {
+  labels?: Partial<Record<TimelineCellState, string>>;
   cells: readonly TimelineCellState[]; extras?: readonly { label: string; className: string }[]; children?: ReactNode;
 }) {
   const present = new Set(cells);
   const items = [
-    ...legendOrder.filter((state) => present.has(state)).map((state) => ({ label: timelineCellLabels[state], className: timelineCellStyles[state] })),
+    ...legendOrder.filter((state) => present.has(state)).map((state) => ({ label: labels?.[state] ?? timelineCellLabels[state], className: timelineCellStyles[state] })),
     ...(present.has("available") ? [{ label: "Selected", className: timelineSelectedStyle }] : []),
     ...extras,
   ];

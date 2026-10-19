@@ -1,5 +1,6 @@
 "use client";
 
+import type { CoachingSelection } from "./coaching-selection";
 import { refreshNotificationUnread } from "@/components/notification-unread";
 
 import { toast } from "sonner";
@@ -21,13 +22,14 @@ import { DialogHeader, DialogFooter } from "@/components/dialog-layout";
 import { BookingCancellationTerms } from "@/components/booking-cancellation-terms";
 import type { ConfirmedCancellationPolicy } from "@/lib/bookings/confirmation-policy";
 import { ModalDialog } from "@/components/modal-dialog";
-import { abandonCheckoutAction, commitCustomerBookingAction } from "./actions";
+import { abandonCheckoutAction, commitCustomerBookingAction, commitCoachingBookingAction } from "./actions";
 import { OnlinePayment } from "./online-payment";
 import { paymentHoldDurationSeconds, type OnlineCheckout } from "@/lib/payments/domain";
 
 export type BookingSummaryDetails = { locationName: string; courtName: string; date: string;
   startMinute: number; endMinute: number; durationMinutes: number;
-  priceMinor: number; currency: LocationCurrency };
+  priceMinor: number; currency: LocationCurrency;
+  coaching?: { participantCount: 1 | 2; programName: string; coachName: string; coachingAmountMinor: number; courtAmountMinor: number; courtRentalIncluded: boolean } };
 
 export function BookingSummary({ details }: { details: BookingSummaryDetails }) {
   const dateLabel = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })
@@ -36,6 +38,10 @@ export function BookingSummary({ details }: { details: BookingSummaryDetails }) 
     ["Location", details.locationName], ["Court", details.courtName], ["Date", dateLabel],
     ["Time", `${minuteToTime(details.startMinute)}–${minuteToTime(details.endMinute)}`],
     ["Duration", `${details.durationMinutes} min`],
+    ...(details.coaching ? [["Program", details.coaching.programName],
+      ["Participants", `${details.coaching.participantCount} ${details.coaching.participantCount === 1 ? "player" : "players"}`], ["Coach", details.coaching.coachName],
+      ["Coaching price", formatMoney(details.coaching.coachingAmountMinor, details.currency)],
+      ["Court rental", details.coaching.courtRentalIncluded ? "Included" : formatMoney(details.coaching.courtAmountMinor, details.currency)]] : []),
   ];
   return <div className="rounded-control border border-border bg-background"><dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 p-4 text-sm">
     {items.map(([label, value]) => <div key={label} className="contents">
@@ -51,7 +57,8 @@ const sectionHeading = "mb-2 text-xs font-semibold uppercase tracking-[0.12em] t
 const paymentOption = "flex min-h-11 cursor-pointer items-center gap-2.5 rounded-control border border-border bg-surface px-3 font-medium text-foreground transition-colors hover:border-border-strong has-[:checked]:border-primary has-[:checked]:bg-success-background has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60";
 const stickyActions = "sticky bottom-0 z-10 -mx-4 bg-surface px-4 pb-4 sm:-mx-6 sm:px-6 sm:pb-6";
 
-export function BookingConfirmation({ selection, details, contact, onContactChange, onBack, onCommitted, onUnavailable, onAbandoned, cancellationNoticeMinutes, timezone, allowPayAtClub = false, onlinePaymentAvailable = false, authenticated = false }: {
+export function BookingConfirmation({ selection, details, contact, onContactChange, onBack, onCommitted, onUnavailable, onAbandoned, cancellationNoticeMinutes, timezone, allowPayAtClub = false, onlinePaymentAvailable = false, authenticated = false, coaching }: {
+  coaching?: Pick<CoachingSelection, "locationId" | "programId" | "coachId" | "durationMinutes">;
   authenticated?: boolean; onlinePaymentAvailable?: boolean; allowPayAtClub?: boolean; cancellationNoticeMinutes: number; timezone: string; selection: CalendarSelection; details: BookingSummaryDetails; contact: BookingContact;
   onContactChange: (contact: BookingContact) => void; onBack: () => void;
   onCommitted: (totalAmountMinor: number, currency: LocationCurrency, cancellationPolicy: ConfirmedCancellationPolicy | null, paymentMethod: PaymentMethod) => void;
@@ -144,7 +151,12 @@ export function BookingConfirmation({ selection, details, contact, onContactChan
       if (!dismissed.current) toast.warning("Booking submission is taking longer than expected. You may close this window; do not submit again yet.", { id: notification });
     }, 15_000);
     try {
-      const result = await commitCustomerBookingAction(parsed.data);
+      const result = coaching ? await commitCoachingBookingAction({ locationId: coaching.locationId,
+        programId: coaching.programId, coachId: coaching.coachId, courtId: parsed.data.courtId, date: parsed.data.date,
+        startMinute: parsed.data.startMinute, durationMinutes: coaching.durationMinutes,
+        customerName: parsed.data.customerName, customerEmail: parsed.data.customerEmail, customerPhone: parsed.data.customerPhone,
+        expectedTotalAmountMinor: parsed.data.expectedTotalAmountMinor, expectedCurrency: parsed.data.expectedCurrency })
+        : await commitCustomerBookingAction(parsed.data);
       if (result.ok && result.status === "confirmed") refreshNotificationUnread();
       if (dismissed.current) return;
       if (result.ok) {
@@ -157,6 +169,7 @@ export function BookingConfirmation({ selection, details, contact, onContactChan
         }
       } else if ("reason" in result) {
         toast.dismiss(notification);
+        if (coaching) { onUnavailable("The lesson price has changed. Please review the current lesson prices and select your time again."); return; }
         setPreviousPrice(reviewedPrice);
         setReviewedPrice({ totalAmountMinor: result.totalAmountMinor, currency: result.currency });
       } else if (result.availabilityChanged) {
@@ -244,7 +257,7 @@ export function BookingConfirmation({ selection, details, contact, onContactChan
         <legend className={sectionHeading}>Payment method</legend>
         <div className="grid gap-2 sm:grid-cols-2">
           <label className={paymentOption}><input type="radio" name="paymentMethod" value="online" disabled={!onlinePaymentAvailable} checked={paymentMethod === "online"} onChange={() => setPaymentMethod("online")} className="size-4 accent-primary" />Online payment</label>
-          {allowPayAtClub && <label className={paymentOption}><input type="radio" name="paymentMethod" value="pay_at_club" checked={paymentMethod === "pay_at_club"} onChange={() => setPaymentMethod("pay_at_club")} className="size-4 accent-primary" />Pay at club</label>}
+          {!coaching && allowPayAtClub && <label className={paymentOption}><input type="radio" name="paymentMethod" value="pay_at_club" checked={paymentMethod === "pay_at_club"} onChange={() => setPaymentMethod("pay_at_club")} className="size-4 accent-primary" />Pay at club</label>}
         </div>
         {!onlinePaymentAvailable && <p className="mt-2 text-muted-foreground">Online payment is currently unavailable.</p>}
         {paymentMethod === "online" && onlinePaymentAvailable && <p className="mt-2 flex gap-2 text-muted-foreground"><Clock aria-hidden className="mt-0.5 size-4 shrink-0" /><span>Continue to secure payment. Your court is held for {paymentHoldDurationSeconds / 60} minutes while you pay.</span></p>}

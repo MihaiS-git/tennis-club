@@ -2,6 +2,8 @@
 
 import { refreshNotificationUnread } from "@/components/notification-unread";
 
+import Link from "next/link";
+import { bookingType } from "@/lib/bookings/booking-type";
 import { toast } from "sonner";
 
 import { useId, useRef, useState, useTransition } from "react";
@@ -138,8 +140,8 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
     {day.times.length === 0 ? <p className="mt-5 rounded-card border border-border bg-surface p-5 text-muted-foreground">{location.name} is closed on {date}.</p>
       : <ReservationTimetable day={day} date={date} timezone={location.timezone} selection={selection} onChoose={choose} disabled={pending}
           occupiedIntervals={adminOccupancy.length ? adminOccupancy.map((item) => ({ id: item.id, courtId: item.court_id,
-            startsAtMinute: item.starts_at_minute, endsAtMinute: item.ends_at_minute, kind: item.kind,
-            label: item.kind === "booking" ? `Booking · ${item.customer_name}` : `Reservation · ${item.creator_name || "Unknown creator"}` }))
+            startsAtMinute: item.starts_at_minute, endsAtMinute: item.ends_at_minute, kind: item.kind, includesCoaching: item.kind === "booking" && bookingType(item) === "coaching",
+            label: item.kind === "booking" ? `${bookingType(item) === "coaching" ? "Coaching" : "Booking"} · ${item.customer_name}` : `Reservation · ${item.creator_name || "Unknown creator"}` }))
             : occupancy.map((item) => ({ id: `${item.court_id}:${item.starts_at_minute}`, courtId: item.court_id,
               startsAtMinute: item.starts_at_minute, endsAtMinute: item.ends_at_minute, label: "Booked" }))}
           onOccupiedClick={(id) => {
@@ -166,12 +168,12 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
         onClose={() => { setSelectedOccupancyId(null); setEditing(false); setEditToken(null);
           if (dialogRef.current?.querySelector("[data-booking-modification]")) router.refresh();
           setUpdatedReservation(null); setConfirming(false); returnFocusRef.current?.focus(); }}
-        className={`fixed inset-0 m-auto w-[calc(100%-2rem)] rounded-card border border-border bg-surface p-5 text-foreground shadow-floating backdrop:bg-foreground/50 has-[[data-booking-modification]]:max-w-lg ${editing && !editInProgress ? "max-w-6xl" : "max-w-md"}`}>
+        className={`fixed inset-0 m-auto max-h-[calc(100dvh-2rem)] overflow-y-auto w-[calc(100%-2rem)] rounded-card border border-border bg-surface p-5 text-foreground shadow-floating backdrop:bg-foreground/50 has-[[data-booking-modification]]:max-w-lg ${editing && !editInProgress ? "max-w-6xl" : "max-w-md"}`}>
         <DialogHeader titleId={titleId} title={selectedGenericOccupancy ? "Occupied court details" : selectedBooking ? editing ? "Edit booking" : "Booking details" : editing ? "Edit reservation" : "Reservation details"} status={editing || selectedGenericOccupancy ? undefined : selectedBooking ? "Confirmed" : "Active"} disabled={cancelPending} onClose={() => dialogRef.current?.close()} />
         {selectedBooking ? <>
           {!editing && <>
-          <BookingDetails booking={{ ...selectedBooking, location_name: location.name,
-            location_timezone: location.timezone, court_name: selectedCourtName }} />
+          <BookingDetails booking={{ ...selectedBooking, location_name: selectedBooking.location_name ?? location.name,
+            location_timezone: selectedBooking.location_timezone ?? location.timezone, court_name: selectedBooking.court_name ?? selectedCourtName }} />
           <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
             <dt className="text-muted-foreground">Customer type</dt><dd>{selectedBooking.account_user_id === null ? "Guest" : "Authenticated customer"}</dd>
             <dt className="text-muted-foreground">Currency</dt><dd>{selectedBooking.currency}</dd>
@@ -180,6 +182,7 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
               <dt className="text-muted-foreground">Payment{payment.provider ? ` (${payment.provider})` : ""}</dt><dd>{payment.status}</dd>
             </div>)}
           </dl>
+          {canManage && <Link href={`/admin/bookings/${selectedBooking.id}`} className="mt-4 inline-flex min-h-10 items-center text-sm font-semibold text-primary underline focus-visible:outline-2 focus-visible:outline-focus">View full booking details</Link>}
           </>}
           {editing ? <BookingEditForm booking={selectedBooking} location={location}
             actions={ownBookingActions}

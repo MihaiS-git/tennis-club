@@ -18,13 +18,21 @@ function mailConfiguration() {
 // sent, worth retrying. unconfirmed: no answer (timeout or network), so it may or
 // may not have been sent. not_configured: nothing was sent.
 export type MailDeliveryResult = "accepted" | "rejected" | "unavailable" | "unconfirmed" | "not_configured";
+// messageId: Brevo's identifier of an accepted message, which its delivery
+// webhooks report as "message-id"; null when Brevo did not return one.
+export type MailSubmission = { result: MailDeliveryResult; messageId: string | null };
 const temporaryStatus = (status: number) => status === 408 || status === 429 || status >= 500;
+const acceptedSchema = z.object({ messageId: z.string().trim().min(1).max(998) });
 
-export async function deliverMail(message: MailMessage, idempotencyKey?: string): Promise<MailDeliveryResult> {
+// submissionKey identifies one submission: Brevo's idempotency key, and echoed
+// back by delivery webhooks through X-Mailin-custom so events can be correlated
+// even before the returned messageId has been recorded.
+export async function deliverMail(message: MailMessage, submissionKey?: string): Promise<MailSubmission> {
+  const result = (value: MailDeliveryResult, messageId: string | null = null) => ({ result: value, messageId });
   const config = mailConfiguration();
   if (!config) {
     logger.error({ event: "booking_email.configuration_missing" }, "BREVO_API_KEY and a verified BOOKING_MAIL_FROM are required");
-    return "not_configured";
+    return result("not_configured");
   }
   try {
     // Delivery runs inside customer/Admin/webhook/cron requests, so keep it short.
@@ -33,21 +41,32 @@ export async function deliverMail(message: MailMessage, idempotencyKey?: string)
       headers: { "api-key": config.key, "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ sender: { email: config.from }, to: [{ email: message.to }],
         subject: message.subject, textContent: message.text,
-        ...(idempotencyKey ? { headers: { idempotencyKey } } : {}) }),
+        ...(submissionKey ? { headers: { idempotencyKey: submissionKey, "X-Mailin-custom": brevoSubmissionReference(submissionKey) } } : {}) }),
       signal: AbortSignal.timeout(5_000),
     });
     // Brevo's documented idempotency rejection acknowledges an earlier submission.
-    if (!response.ok && idempotencyKey) {
+    if (!response.ok && submissionKey) {
       const body: unknown = await response.json().catch(() => null);
       const duplicate = z.object({ code: z.literal("duplicate_parameter"), message: z.string() }).safeParse(body);
-      if (duplicate.success && /idempotency/i.test(duplicate.data.message)) return "accepted";
+      if (duplicate.success && /idempotency/i.test(duplicate.data.message)) return result("accepted");
+    }
+    if (response.ok) {
+      const accepted = acceptedSchema.safeParse(await response.json().catch(() => null));
+      return result("accepted", accepted.success ? accepted.data.messageId : null);
     }
     // Never log provider bodies, recipients, message content or transport errors.
-    if (!response.ok) logger.error({ event: "booking_email.provider_rejected", status: response.status }, "Brevo rejected booking email");
+    logger.error({ event: "booking_email.provider_rejected", status: response.status }, "Brevo rejected booking email");
     if (!response.bodyUsed) await response.body?.cancel();
-    return response.ok ? "accepted" : temporaryStatus(response.status) ? "unavailable" : "rejected";
+    return result(temporaryStatus(response.status) ? "unavailable" : "rejected");
   } catch {
     logger.error({ event: "booking_email.delivery_failed" }, "Brevo request failed or timed out");
-    return "unconfirmed";
+    return result("unconfirmed");
   }
+}
+
+const referencePrefix = "booking-notification:";
+const brevoSubmissionReference = (submissionKey: string) => `${referencePrefix}${submissionKey}`;
+export function parseBrevoSubmissionReference(value: string | undefined) {
+  const key = value?.startsWith(referencePrefix) ? value.slice(referencePrefix.length) : undefined;
+  return z.uuid().safeParse(key).data ?? null;
 }

@@ -1,15 +1,10 @@
 "use server";
 
-import { getAdminBookingDetails } from "@/lib/bookings/admin-details";
 import { revalidatePath } from "next/cache";
 import { selectActivePaymentProvider, type PaymentSettingsResult } from "@/lib/payments/settings";
 import { checkAdminPaymentWithProvider, checkAdminRefundWithProvider, type AdminRefundCheckResult } from "@/lib/payments/admin";
 import { revalidateCourtActivity } from "@/lib/reservations/revalidation";
 import { deleteAdminNotifications, retryAdminNotification, type AdminNotificationDeleteResult, type AdminNotificationRetryResult } from "@/lib/notifications/admin-notifications";
-
-export async function loadAdminBookingDetailsAction(id: unknown) {
-  return getAdminBookingDetails(id);
-}
 
 export async function selectPaymentProviderAction(input: unknown): Promise<PaymentSettingsResult> {
   const result = await selectActivePaymentProvider(input);

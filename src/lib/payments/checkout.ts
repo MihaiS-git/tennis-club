@@ -1,5 +1,4 @@
 import "server-only";
-import { hasBookingAdjustments } from "@/lib/db/repositories/booking-adjustments.repository";
 import * as adjustments from "@/lib/db/repositories/booking-adjustments.repository";
 import type { EntityManager } from "typeorm";
 import { buildBookingRevision } from "@/lib/bookings/revision";
@@ -23,7 +22,6 @@ import * as payments from "@/lib/db/repositories/payments.repository";
 import * as bookings from "@/lib/db/repositories/bookings.repository";
 import * as reservations from "@/lib/db/repositories/reservations.repository";
 import { lockLocations } from "@/lib/db/repositories/clubs.repository";
-import { allocateBookingRefund } from "./financials";
 import { processBookingRefund } from "./refunds";
 import { revalidateCourtActivity } from "@/lib/reservations/revalidation";
 
@@ -59,31 +57,21 @@ async function requestCheckoutCancellation(access: z.infer<typeof checkoutAccess
       if (booking.status === "pending_payment" && reservation.status === "held" && reservation.hold_expires_at && deadline
         && captureAccepted(reservation.hold_expires_at, deadline))
         throw new Error("This payment is being confirmed. Wait for the result.");
-      // Initial checkout capability cannot undo later management operations or
-      // override an explicit owner/Admin cancellation/refund decision.
-      if (reservation.status === "cancelled" || booking.status === "confirmed" && (booking.revision.revisionNumber > 2 || await hasBookingAdjustments(manager,booking.id)))
-        throw new Error("This checkout is now managed through booking management.");
-      // A checkout capability is not an indefinite guest booking-management
-      // permission. Only a completion racing the original hold may be undone.
-      if (booking.status === "confirmed" && (!attempt.expiresAt
-        || new Date(await reservations.readReservationClockTime(manager)).getTime() >= attempt.expiresAt.getTime()))
+      // Confirmation ends checkout abandonment authority, even before the
+      // original hold deadline. Booking management owns refund-backed cancellation.
+      // This check shares settlement's aggregate locks, so a racing confirmation
+      // cannot be undone by a stale checkout capability.
+      if (booking.status === "confirmed")
         throw new Error("This checkout has already confirmed. Use booking management to cancel it.");
-      let contextRevisionId = booking.current_revision_id;
+      if (reservation.status === "cancelled")
+        throw new Error("This checkout is now managed through booking management.");
       if (booking.status !== "cancelled") {
         const revision = buildBookingRevision(booking.revision, { id: randomUUID(), bookingId: booking.id,
           kind: "cancelled", bookingState: "cancelled", operationKey: "cancellation", intentHash: "checkout_abandoned",
           actorUserId: null, actorScope: "guest", recordedAt: new Date(await reservations.readReservationClockTime(manager)),
           adjustmentId: null, cancellationCause: "checkout_abandoned" }, booking.revision);
         await advanceRevision(manager, { revision, previousId: booking.current_revision_id, status: "cancelled" });
-        contextRevisionId = revision.id;
         await reservations.updateSettlementReservationStatus(manager, reservation.id, "released");
-      }
-      if (attempt.status === "succeeded" && attempt.provider === "stripe" && attempt.providerPaymentId) {
-        if (reservation.status === "active") await reservations.updateSettlementReservationStatus(manager, reservation.id, "released");
-        if (!await payments.findAndLockRefundByBooking(manager, booking.id, attempt.id))
-          await allocateBookingRefund(manager, { bookingId: booking.id, actorId: null,
-            operationKey: "cancellation", amount: attempt.amountMinor, onlyAttemptId: attempt.id,
-            reason: "booking_cancellation", contextRevisionId });
       }
     });
   } catch (error) {

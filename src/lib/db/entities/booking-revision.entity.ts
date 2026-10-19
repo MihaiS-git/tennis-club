@@ -6,8 +6,11 @@ import { BookingAdjustmentEntity } from "./booking-adjustment.entity";
 import { UserEntity } from "./user.entity";
 import { LocationEntity } from "./location.entity";
 import { CourtEntity } from "./court.entity";
+import { CoachProfileEntity } from "./coach-profile.entity";
+import { CoachingProgramEntity } from "./coaching-program.entity";
 
 @Entity({ schema: "public", name: "booking_revisions" })
+@Check("booking_revisions_recovery_version", "recovery_version=1")
 @Unique("booking_revisions_identity", ["bookingId", "id"])
 @Unique("booking_revisions_number", ["bookingId", "revisionNumber"])
 @Unique("booking_revisions_predecessor", ["bookingId", "previousRevisionId"])
@@ -19,6 +22,10 @@ import { CourtEntity } from "./court.entity";
 @ForeignKey(() => UserEntity, ["actorUserId"], ["id"], { name: "booking_revisions_actor_fkey", onDelete: "RESTRICT" })
 @ForeignKey(() => LocationEntity, ["locationId"], ["id"], { name: "booking_revisions_location_fkey", onDelete: "RESTRICT" })
 @ForeignKey(() => CourtEntity, ["courtId"], ["id"], { name: "booking_revisions_court_fkey", onDelete: "RESTRICT" })
+@ForeignKey(() => CoachProfileEntity, ["coachUserId"], ["userId"], { name: "booking_revisions_coach_fkey", onDelete: "RESTRICT" })
+@ForeignKey(() => CoachingProgramEntity, ["coachingProgramId"], ["id"], { name: "booking_revisions_coaching_program_fkey", onDelete: "RESTRICT" })
+// A coaching contract names its coach and program with their historical names; a court booking names neither.
+@Check("booking_revisions_coaching", "(coach_user_id IS NULL AND coaching_program_id IS NULL AND coach_name IS NULL AND coaching_program_name IS NULL) OR (coach_user_id IS NOT NULL AND coaching_program_id IS NOT NULL AND coach_name IS NOT NULL AND coaching_program_name IS NOT NULL AND char_length(btrim(coach_name)) BETWEEN 1 AND 100 AND char_length(btrim(coaching_program_name)) BETWEEN 1 AND 100)")
 @Check("booking_revisions_first", "(revision_number=1 AND previous_revision_id IS NULL AND kind='created') OR (revision_number>1 AND previous_revision_id IS NOT NULL AND kind<>'created')")
 @Check("booking_revisions_state", "(kind='created' AND booking_state IN ('pending_payment','confirmed')) OR (kind IN ('confirmed','rescheduled') AND booking_state='confirmed') OR (kind='cancelled' AND booking_state='cancelled')")
 @Check("booking_revisions_scope", "actor_scope IN ('guest','customer','coach_owner','admin_owner','admin','provider')")
@@ -33,6 +40,7 @@ import { CourtEntity } from "./court.entity";
 @Check("booking_revisions_timestamp", "isfinite(recorded_at)")
 @Check("booking_revisions_operation_key", "char_length(operation_key) BETWEEN 1 AND 128 AND char_length(intent_hash) BETWEEN 1 AND 64")
 export class BookingRevisionEntity implements RevisionSnapshot {
+  @Column({ name: "recovery_version", type: "smallint", nullable: true }) recoveryVersion?: number | null;
   @PrimaryColumn({ type: "uuid", primaryKeyConstraintName: "booking_revisions_pkey" }) id!: string;
   @Column({ name: "booking_id", type: "uuid" }) bookingId!: string;
   @Column({ name: "revision_number", type: "integer" }) revisionNumber!: number;
@@ -62,4 +70,8 @@ export class BookingRevisionEntity implements RevisionSnapshot {
   @Column({ name: "adjustment_id", type: "uuid", nullable: true }) adjustmentId!: string | null;
   @Column({ name: "cancellation_cause", type: "text", nullable: true }) cancellationCause!: RevisionSnapshot["cancellationCause"];
   @Column({ name: "pricing_evidence", type: "jsonb" }) pricingEvidence!: RevisionSnapshot["pricingEvidence"];
+  @Column({ name: "coach_user_id", type: "uuid", nullable: true }) coachUserId?: string | null;
+  @Column({ name: "coaching_program_id", type: "uuid", nullable: true }) coachingProgramId?: string | null;
+  @Column({ name: "coach_name", type: "text", nullable: true }) coachName?: string | null;
+  @Column({ name: "coaching_program_name", type: "text", nullable: true }) coachingProgramName?: string | null;
 }

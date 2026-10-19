@@ -6,6 +6,8 @@ import { successfulRefundPayment } from "@/lib/payments/providers/stripe/refund-
 import { finishBookingCancellation, type BookingCancellationResult } from "@/lib/payments/refunds";
 
 import { z } from "zod";
+import type { BookingTypeSnapshot } from "@/lib/bookings/booking-type";
+import { pricingEvidenceSchema, type PricingEvidence } from "@/lib/bookings/revision";
 import { cancellationNoticeMinutesSchema } from "@/lib/bookings/cancellation-policy";
 import { createClient } from "@/lib/supabase/server";
 import { getDataSource } from "@/lib/db/data-source";
@@ -24,6 +26,9 @@ import { loadReservationEditDayForLocation } from "./edit-availability";
 type Client = Awaited<ReturnType<typeof createClient>>;
 const occupancySchema = z.object({ court_id: z.uuid(), starts_at_minute: z.number().int(), ends_at_minute: z.number().int() });
 const adminOccupancyFields = occupancySchema.extend({ id: z.uuid(),
+  location_name: z.string().nullable(), court_name: z.string().nullable(), location_timezone: z.string().nullable(),
+  includes_coaching: z.boolean(), coach_name: z.string().nullable(), coaching_program_name: z.string().nullable(),
+  coaching: pricingEvidenceSchema.shape.coaching.unwrap().nullable(),
   booking_date: z.iso.date(), reason: z.string().nullable(), created_by_user_id: z.uuid().nullable(),
   creator_name: z.string().nullable(), creator_email: z.string().nullable(), creator_phone: z.string().nullable(),
   account_user_id: z.uuid().nullable(), customer_name: z.string().nullable(), customer_email: z.string().nullable(),
@@ -35,7 +40,9 @@ const adminOccupancyRowSchema = z.discriminatedUnion("kind", [
 export type AdminReservation = Pick<z.infer<typeof adminOccupancyRowSchema>,
   "id" | "court_id" | "booking_date" | "starts_at_minute" | "ends_at_minute" | "reason" | "created_by_user_id" | "creator_name" | "creator_email" | "creator_phone"> & { kind: "reservation"; payment_method: null };
 export type AdminBooking = Pick<z.infer<typeof adminOccupancyRowSchema>,
-  "id" | "court_id" | "booking_date" | "starts_at_minute" | "ends_at_minute"> & {
+  "id" | "court_id" | "booking_date" | "starts_at_minute" | "ends_at_minute"> & BookingTypeSnapshot & {
+    coaching?: PricingEvidence["coaching"] | null;
+    location_name?: string | null; court_name?: string | null; location_timezone?: string | null;
     kind: "booking"; account_user_id: string | null; payment_method: "online" | "pay_at_club";
     payments: Pick<z.infer<typeof paymentFactSchema>, "id" | "method" | "provider" | "status">[]; stripe_refund_available: boolean; customer_name: string; customer_email: string; customer_phone: string;
     cancellation_notice_minutes: number; total_amount_minor: number; currency: LocationCurrency;
@@ -124,6 +131,8 @@ export async function getReservationDay(location: InternalLocation, date: string
       adminOccupancy.push({ kind: "booking", id: row.id, court_id: row.court_id, booking_date: row.booking_date,
         starts_at_minute: row.starts_at_minute, ends_at_minute: row.ends_at_minute,
         account_user_id: row.account_user_id, payment_method: row.payment_method,
+        location_name: row.location_name, court_name: row.court_name, location_timezone: row.location_timezone,
+        includes_coaching: row.includes_coaching, coach_name: row.coach_name, coaching_program_name: row.coaching_program_name, coaching: row.coaching,
         payments: row.payment_facts.map(({ id, method, provider, status }) => ({ id, method, provider, status })),
         customer_name: row.customer_name, customer_email: row.customer_email, customer_phone: row.customer_phone,
         cancellation_notice_minutes: row.cancellation_notice_minutes,
