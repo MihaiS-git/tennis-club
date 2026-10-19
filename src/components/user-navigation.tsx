@@ -7,7 +7,6 @@ const entries: readonly SidebarEntry[] = [
   { label: "My activity", icon: CalendarDays, links: [
     { label: "Bookings", href: "/my-activity/bookings" },
     { label: "Booking history", href: "/my-activity/history" },
-    { label: "Notifications", href: "/my-activity/notifications" },
   ] },
   { label: "Profile & settings", icon: UserRound, links: [
     { label: "Player identity", href: "/profile", exact: true },

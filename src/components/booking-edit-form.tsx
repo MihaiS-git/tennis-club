@@ -1,6 +1,5 @@
 "use client";
 
-import { refreshNotificationUnread } from "@/components/notification-unread";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -135,7 +134,7 @@ export function BookingEditForm({ booking, location, onCancel, onSaved, onPendin
       </dl>}
     </div>
     {adjustment.adjustmentStatus === "pending" && adjustment.refundStatus ? <p role="status" className="text-muted-foreground">
-      Your original booking remains confirmed. The change is applied automatically once the refund is confirmed; you will be emailed if it cannot be completed.</p>
+      Your original booking remains confirmed. The change is applied automatically once the refund is confirmed.</p>
     : adjustment.adjustmentStatus === "pending" ? <>
       <p className="text-muted-foreground">Your original booking remains confirmed until payment and the change are verified.</p>
       {adjustment.checkout && adjustment.holdExpiresAt ? <OnlinePayment checkout={adjustment.checkout}
@@ -161,7 +160,6 @@ export function BookingEditForm({ booking, location, onCancel, onSaved, onPendin
       if (request.current?.key !== key) request.current = { key, id: crypto.randomUUID() };
       const result = await actions.save({ requestId: request.current.id, ...editInput(booking.id, context, draft),
         save: true, expectedTotal: quote.total, priceAcknowledged: acknowledged });
-      if (result.ok) refreshNotificationUnread();
       if (result.ok && result.adjustmentId) {
         setAdjustment(result);
         // Only a payment-backed proposal can be dismissed; a refund-backed one resolves automatically.

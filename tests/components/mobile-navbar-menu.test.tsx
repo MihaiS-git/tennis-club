@@ -182,63 +182,24 @@ it.each([
   expect(screen.getByRole("button", { name: "Open menu" }).getAttribute("aria-expanded")).toBe("false");
 });
 
-it("keeps the authenticated mobile bell beside the hamburger and outside the drawer", () => {
-  render(<MobileNavbarMenu isAuthenticated canReserve={false} />);
-  const bell = screen.getByRole("link", { name: /^Notifications/ });
-  const trigger = screen.getByRole("button", { name: "Open menu" });
-  expect(bell.nextElementSibling).toBe(trigger);
-  expect(bell.getAttribute("href")).toBe("/my-activity/notifications");
-  expect(bell.className).toContain("size-10");
-  fireEvent.click(trigger);
-  expect(within(screen.getByRole("dialog")).queryByRole("link", { name: /^Notifications/ })).toBeNull();
-  expect(screen.getAllByRole("link", { name: /^Notifications/ })).toHaveLength(1);
+it.each([
+  { state: "active", userId: "member-1", email: "member@example.com", roles: [] },
+  { state: "active", userId: "admin-1", email: "admin@example.com", roles: ["admin"] },
+] satisfies CurrentAccount[])("renders no notification control in mobile navigation (%o)", async account => {
+  readCurrentAccount.mockResolvedValue(account);
+  const { container } = render(await MobileNavbar());
+  fireEvent.click(screen.getByRole("button", { name: "Open menu" }));
+  expect(screen.queryByRole("link", { name: /Notifications/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Notifications/ })).toBeNull();
+  expect(container.ownerDocument.querySelector('a[href*="notifications"]')).toBeNull();
 });
 
-it("omits the mobile bell when signed out", () => {
-  render(<MobileNavbarMenu isAuthenticated={false} canReserve={false} />);
-  expect(screen.queryByRole("link", { name: /^Notifications/ })).toBeNull();
-});
-
-it("places the desktop bell immediately beside the profile control for authenticated users", async () => {
-  readCurrentAccount.mockResolvedValue({ state: "active", roles: [], userId: "owner" });
-  const markup = await new Response(await renderToReadableStream(<DesktopNavbar />)).text();
-  const container = document.createElement("div");
-  container.innerHTML = markup;
-  const bell = container.querySelector('a[href="/my-activity/notifications"]');
-  expect(bell).not.toBeNull();
-  expect(bell?.nextElementSibling?.getAttribute("href")).toBe("/profile");
-});
-
-it("gives only an active Admin the mobile two-destination bell beside the hamburger", async () => {
-  readCurrentAccount.mockResolvedValue({ state: "active", userId: "admin-1", email: "admin@example.com", roles: ["admin"] });
-  render(await MobileNavbar());
-  const bell = screen.getByRole("button", { name: /^Notifications/ });
-  expect(bell.parentElement?.nextElementSibling).toBe(screen.getByRole("button", { name: "Open menu" }));
-  expect(bell.className).toContain("size-10");
-  fireEvent.click(bell);
-  const panel = screen.getByRole("navigation", { name: "Notifications" });
-  expect(within(panel).getAllByRole("link").map((link) => [link.textContent, link.getAttribute("href")])).toEqual([
-    ["My notifications", "/my-activity/notifications"], ["Admin notifications", "/admin/payments/notifications"],
-  ]);
-  cleanup();
-  for (const account of [
-    { state: "active", userId: "coach-1", email: "coach@example.com", roles: ["coach"] },
-    { state: "suspended", userId: "admin-1", email: "admin@example.com", roles: ["admin"] },
-  ] satisfies CurrentAccount[]) {
-    readCurrentAccount.mockResolvedValue(account);
-    render(await MobileNavbar());
-    expect(screen.queryByRole("button", { name: /^Notifications/ })).toBeNull();
-    cleanup();
-  }
-});
-
-it("renders the desktop Admin bell as a closed disclosure beside the profile control", async () => {
+it("renders no notification control in desktop navigation", async () => {
   readCurrentAccount.mockResolvedValue({ state: "active", roles: ["admin"], userId: "admin-1", email: "admin@example.com" });
   const markup = await new Response(await renderToReadableStream(<DesktopNavbar />)).text();
   const container = document.createElement("div");
   container.innerHTML = markup;
-  const bell = container.querySelector('button[aria-label^="Notifications"]');
-  expect(bell?.getAttribute("aria-expanded")).toBe("false");
-  expect(bell?.parentElement?.nextElementSibling?.getAttribute("href")).toBe("/profile");
-  expect(container.querySelector('a[href="/admin/payments/notifications"]')).toBeNull();
+  expect(container.querySelector('a[href="/profile"]')).not.toBeNull();
+  expect(container.querySelector('a[href*="notifications"]')).toBeNull();
+  expect(container.querySelector('[aria-label^="Notifications"]')).toBeNull();
 });

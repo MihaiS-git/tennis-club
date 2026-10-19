@@ -14,8 +14,9 @@ vi.mock("@/app/club/club-locations", async (original) => ({
 }));
 
 import ClubPage, { metadata } from "@/app/club/page";
+import { groupOpeningHours } from "@/app/club/club-locations";
 
-const { ClubBookingTerms, ClubLocations, groupOpeningHours } = await vi.importActual<typeof import("@/app/club/club-locations")>("@/app/club/club-locations");
+const { ClubBookingTerms, ClubLocations } = await vi.importActual<typeof import("@/app/club/club-locations")>("@/app/club/club-locations");
 
 const open = (opens: number, closes: number) => [{ opens_at_minute: opens, closes_at_minute: closes }];
 const week = (intervals: (weekday: number) => { opens_at_minute: number; closes_at_minute: number }[]) =>

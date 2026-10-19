@@ -254,7 +254,7 @@ If a future feature has a concrete browser-side requirement, such as Supabase Re
 Supabase secret/service-role credentials are limited to guarded local seed and test
 fixtures. Production application persistence, Stripe webhooks use TypeORM.
 
-`SUPABASE_SECRET_KEY` has no production persistence consumer. Checkout creation and initialization use TypeORM; settlement and Phase 8 refund/reconciliation use TypeORM transactions; booking emails use post-commit Brevo HTTP delivery, without a Supabase secret.
+`SUPABASE_SECRET_KEY` has no production persistence consumer. Checkout creation and initialization use TypeORM; settlement and Phase 8 refund/reconciliation use TypeORM transactions, without a Supabase secret.
 The coupled personal direct-reservation list and edit reads use TypeORM after
 `requireReservationRole`, with verified-owner filters. Live personal activity/history uses bounded joined TypeORM projections after active-account
 authorization, with the verified booking owner or staff direct-reservation creator UUID.
@@ -355,13 +355,12 @@ from their details dialog on `/my-activity/bookings`, after explicit confirmatio
 The server-only cancellation service verifies ownership and uses the shared TypeScript
 cutoff/staff-bypass policy. A TypeORM transaction locks location, booking, reservation,
 selected payment and existing refund, then fences actor roles/account. Post-lock database
-wall time controls eligibility. Without a refund, both lifecycle rows and the notification
-commit atomically. With a refund, a pending cancellation request and its refund obligations
+wall time controls eligibility. Without a refund, both lifecycle rows commit atomically. With a refund, a pending cancellation request and its refund obligations
 commit instead: the booking stays confirmed until the refund is verified, is cancelled
 then. Any incomplete refund preserves the original booking and reservation, including
 when other refunds have succeeded. Known transient provider failures permit new executions;
-permanent or ambiguous failures preserve the outstanding obligation and notify the customer
-for external resolution. Refund execution runs after commit in the same request; an unconfirmed
+permanent or ambiguous failures preserve the outstanding obligation, record a financial
+exception and stay visible to Admin for external resolution. Refund execution runs after commit in the same request; an unconfirmed
 outcome is completed by a signed Stripe refund webhook or the Admin "Check with Stripe" action.
 Repeated requests reuse the existing request and refunds; other duplicate cancellations
 return a safe failure.
@@ -463,8 +462,7 @@ single-day timetable, customer dialog and Payment Element for both lesson types.
 books and pays for the complete session (one player for Private, two for Semi-private).
 Configured coach overrides take precedence over club defaults; excluded court rental is
 added once to the session price. Group and Junior online booking remain deferred.
-The existing court-only notification reconstruction conflicts with lessons and needs a
-separate review before exposure. See [coaching booking](docs/coaching.md#step-6-coaching-mode-on-book).
+See [coaching booking](docs/coaching.md#step-6-coaching-mode-on-book).
 
 ---
 
@@ -599,8 +597,8 @@ opening hours and occupancy for its fixed location, independent of public public
 Focused TypeORM edit reads and commands retain separate owner and Admin authorization
 boundaries, checked against locked actor and aggregate facts. Success calls `revalidateCourtActivity("edit")`
 for `/book`, `/admin/reservations`, and `/my-activity/bookings`. Payment lifecycle/holds, Stripe checkout and full Stripe cancellation refunds are implemented;
-guest self-management is not implemented. Booking lifecycle emails use best-effort
-post-commit delivery described in [Booking notifications](docs/booking-notifications.md).
+guest self-management is not implemented. The application sends no booking lifecycle
+notifications or emails.
 
 ---
 
@@ -614,8 +612,7 @@ before start automatically requests applicable online refunds. Pay-at-club
 cancellation has no refund operation.
 
 The durable `payment_refunds` record retains the original successful attempt, provider,
-amount and currency. Cancellation, occupancy release, refund request and cancellation
-email snapshot commit together. Stripe runs after commit; failures never restore the
+amount and currency. Cancellation, occupancy release and refund request commit together. Stripe runs after commit; failures never restore the
 court. Repeated requests reuse the record and its stable idempotency key. See
 [refund lifecycle and retry handling](docs/payments-memberships.md#stripe-cancellation-refunds).
 Partial refunds for eligible booking reductions are implemented. NETOPIA refunds
@@ -786,7 +783,7 @@ AI-based partner matching is not required initially.
 
 Personal and tennis forms independently compare editable values against their last successful save. Explicit shared navigation links and sign-out submissions warn through Sonner when leaving a dirty Profile visit; moving between Profile pages is such a departure. Reload/close/document departures use native `beforeunload` protection while dirty. Same-document browser back/forward has no supported App Router blocker and retains the existing fresh-visit behavior without a warning. See [Profile visit protection and browser limitations](docs/profiles.md#unsaved-changes-and-visit-lifecycle).
 
-`/my-activity` redirects to `/my-activity/bookings`, which contains current and upcoming personal court activity. `/my-activity/history` contains completed/cancelled owned bookings and staff-owned direct reservations. The retired `/my-activity/bookings/history` URL redirects with its search parameters. `/my-activity/notifications` is the account’s persistent booking-email inbox, with search, read/type filters, sorting, selection and 25-row server pagination. Unresolved financial alerts remain separately visible until explicit acknowledgement, including after inbox deletion. My Activity and Profile pages share the user sidebar, built from the same component, layout and mobile drawer as the Admin sidebar; Sign out is in its footer and the navbar avatar links directly to `/profile`. See [User area navigation](docs/profiles.md#user-area-navigation).
+`/my-activity` redirects to `/my-activity/bookings`, which contains current and upcoming personal court activity. `/my-activity/history` contains completed/cancelled owned bookings and staff-owned direct reservations. The retired `/my-activity/bookings/history` URL redirects with its search parameters. My Activity and Profile pages share the user sidebar, built from the same component, layout and mobile drawer as the Admin sidebar; Sign out is in its footer and the navbar avatar links directly to `/profile`. See [User area navigation](docs/profiles.md#user-area-navigation).
 
 Both lists authorize the active account before bounded, owner-filtered TypeORM projections. TypeScript combines owned bookings and Admin/Coach-owned direct reservations, applies type/location/court/date filters (plus History status), sorts globally, and then returns 20 rows per page. Date/time defaults to ascending for Bookings and descending for History; kind/ID tie-breakers make ordering deterministic. Location, court, type, duration and History status are also sortable. URL controls reset page 1 when changed; pagination preserves the query. Controls derive location/court choices from the full owner-scoped eligible dataset, with courts narrowed to the selected location. Bookings require an active physical interval that has not ended in the location's timezone. Details preserve contact and price snapshots; guest and other users' bookings remain excluded without granting booking-table SELECT. Customer cancellation/rescheduling use the Phase 6 TypeORM commands; direct reservations use the TypeORM transactions described below.
 
@@ -1062,7 +1059,7 @@ expand to 73 court/day rows matching opening intervals: outdoor 50 RON/hour, cov
 applies to Central outdoor courts; only Court 1 currently has coverage. Pay at club
 is enabled at both locations so local checkout works without Stripe credentials;
 the cancellation notice is 1,440 minutes. No reservations, bookings, payment attempts,
-refunds, email events or Storage objects are seeded. The migrations provide the
+refunds or Storage objects are seeded. The migrations provide the
 Admin/Coach roles and the payment-settings singleton with no online provider selected.
 
 Coaching demo data is separate and explicit: `npm run db:dev:seed:coaching` creates four
@@ -1089,6 +1086,7 @@ npm run db:dev:seed
 The explicit discard flag is mandatory. The rebuild checks database/API endpoints
 against this project's Supabase status, empties/removes the avatar bucket through
 Storage, drops obsolete `public` application schema and `supabase_migrations` history,
+recreates `public` with Supabase's stock usage-only schema grants,
 removes Auth users through Auth Admin APIs, then applies all three TypeORM migrations
 without seeding. Run `npm run db:dev:seed` separately. Native Auth, Storage and extension schemas and their infrastructure
 migration ledgers remain. This is local-only; remote/shared/production databases are
@@ -1247,7 +1245,7 @@ hold and a server-created PaymentIntent outside database transactions. TypeORM T
 and attaches the provider reference/capability before exposing payment presentation. Polling/capability and confirmation-policy
 reads use TypeORM; polling invokes the TypeScript hold-expiry service. Customer submissions have no idempotency key.
 Provider success followed by attachment failure has no complete automatic recovery/resume workflow; the hold expires normally.
-Settlement/webhooks use TypeORM transactions (Phase 7); refund execution/reconciliation use TypeORM (Phase 8), and email uses post-commit Brevo HTTP delivery. Public `/book` loaders use bounded TypeORM projections (Phase 11). Verified webhooks settle the same internal
+Settlement/webhooks use TypeORM transactions (Phase 7); refund execution/reconciliation use TypeORM (Phase 8). Public `/book` loaders use bounded TypeORM projections (Phase 11). Verified webhooks settle the same internal
 rows; duplicate events cannot duplicate confirmation, and late success is recorded
 for reconciliation. Existing attempt providers are immutable. Historical bookings retain
 an unknown (NULL) payment method, with no fabricated payment debt. Pay at club defaults OFF per location and is edited in Booking policy.
@@ -1624,36 +1622,15 @@ Before expanding the platform, prove the following cases locally:
 11. **README.md and AGENTS.md are updated when architectural or tooling decisions change.**
 12. **Correctness, security, and maintainability take priority over architectural complexity.**
 
-## Booking email notifications
+## Notifications
 
-Booking confirmation, customer/Admin cancellation and owner rescheduling
-capture the booking contact and schedule within the successful transaction, then
-retain immutable financial evidence for the existing scheduled notification recovery.
-Use only the snapshotted the current revision’s `customer_email`, never the current account email.
-Quote, stale, failed and unchanged-schedule saves send no rescheduling email;
-pending/failed/expired checkout sends no confirmation. Transition and webhook receipt
-checks and unique event keys prevent duplicate notification records. Migration
-`1791462257935-IndependentNotificationEvidence` establishes an explicit forward-only
-cutover: new marked revisions and immutable financial exception facts are reconstructed
-into delivery/inbox snapshots by the five-minute Supabase Cron call to
-`POST /api/notifications/deliver`, authenticated by `NOTIFICATION_CRON_SECRET`.
-Financial requests never render, project or deliver mail. Additive migration
-`1791462257936-FairNotificationRecovery` adds a circular scan cursor so failed sources
-do not starve later events. Recovery uses bounded database waits and an eight-second
-budget; queued delivery still runs after recovery failure. The scheduler uses short
-leases, bounded retry backoff and stable provider idempotency keys. All Admin email
-deletions retain permanent soft-dismissal markers. No historical events are reconstructed.
-Important financial exceptions are
-also shown in My activity until the booking owner acknowledges them. Every booking email event also
-creates a durable `customer_notifications` snapshot for the authoritative booking account
-in a separate recoverable projection transaction, independently of delivery. Guests remain email-only. Inbox
-read/unread and soft deletion never change email delivery or financial obligations. Ambiguous delivery is retried: duplicates remain possible after Brevo's
-bounded key retention expires. Provider acceptance does not guarantee inbox delivery.
-Email failure cannot change committed booking/payment state. Server-only
-`BREVO_API_KEY` and a Brevo-verified `BOOKING_MAIL_FROM` are required.
-Supabase Auth confirmation/recovery emails remain independent.
-
-See [Booking notifications](docs/booking-notifications.md).
+The application has no notification system of its own: it sends no booking,
+cancellation, rescheduling or refund emails and has no in-app inbox, notification bell,
+Admin notification list, delivery queue or scheduled delivery. Booking confirmation and
+payment outcomes are shown immediately in the UI. Failed, unresolved and reversed refunds
+are recorded as immutable `booking_financial_exceptions` atomically with financial state
+and remain visible to Admin through Payments → Transactions and financial history.
+Supabase Auth confirmation and password-recovery emails are unaffected.
 
 The `/book` confirmation UI reads only the selected eligible public location’s cancellation-notice value through a narrow TypeORM projection. After atomic creation, a read bound to the returned booking ID retrieves its stored policy snapshot; authenticated success uses the existing TypeScript timezone utility for start instant and cutoff display. Guest success shows the stored notice without inferring a timezone-resolved cutoff. Failed post-commit display reads are logged and never report the committed booking as a failed submission. No browser database access or public database grants are added.
 
@@ -1677,7 +1654,7 @@ Eligible receipt resolution commits atomically with completion. The Admin "Check
 Stripe" action may allocate a distinct execution only after Stripe affirmatively rejected
 the refund as retryable; definitive failures are never re-sent. PaymentRefund stores
 immutable obligation terms plus status/timestamps; provider references/errors come from
-executions. Refund exceptions notify the customer (`refund_incomplete`); there is no
+executions. Refund exceptions are recorded as immutable financial evidence; there is no
 scheduled worker, dual write or provider history JSON.
 
 ## Application migrations and fresh local setup
@@ -1695,13 +1672,16 @@ For a **fresh, empty** local project:
 4. Run `npm run db:dev:seed` separately if fixtures are needed.
 
 The initial migration is generated from the shared TypeORM metadata and creates all
-21 application tables, including effective opening hours, booking adjustments, immutable booking revisions and refund executions.
-It configures `btree_gist` before the five entity-declared overlap exclusions. The
+31 application tables in their final form, including effective opening hours, booking adjustments,
+immutable booking revisions, refund executions, coaching programs/prices/availability and the
+entity-less `booking_financial_exceptions` evidence table.
+It configures `btree_gist` before the eight entity-declared overlap exclusions. The
 Auth user FK is generated from a non-synchronized reference entity: Supabase alone
 owns `auth.users`. The native integrity migration installs the case-insensitive
-email expression index, permanent-ownership and revision immutability/linear-head guards, `admin`/`coach` roles
+email expression index, payment/capture/refund/financial-exception immutability guards,
+permanent-ownership and revision immutability/linear-head guards, `admin`/`coach` roles
 and the provider-settings singleton. The
-Supabase integration migration installs the two Auth provisioning/email-sync hooks,
+Supabase integration migration installs browser-role restrictions, the two Auth provisioning/email-sync hooks,
 explicit email-change timestamps, private WebP avatar bucket and Storage policies.
 A secured active-account boolean helper keeps Storage working without browser
 SELECT on `public.users`. Ordinary accounts receive no RBAC roles.
@@ -1758,11 +1738,7 @@ It never resends an uncertain request beyond that cutoff. Missing/conflicting ev
 persisted as an explicit unresolved exception, not proof that no money moved; evidence-only
 reconciliation continues. Stripe cannot resolve every crash-before-dispatch ambiguity.
 
-There is no background financial scheduler (Supabase Cron only retries booking emails): payments and refunds resolve through requests, signed
+There is no background scheduler: payments and refunds resolve through requests, signed
 Stripe webhooks (subscribe to the payment and `refund.*` events listed in
 [payments](docs/payments-memberships.md#recovery-without-a-scheduler)) and the Admin
-"Check with Stripe" action, so the app runs on serverless hosting. Apply migrations
-`1791462257928-DurableBookingNotifications`, `1791462257929-RequestDrivenPaymentRecovery`
-`1791462257930-SurchargeCaptureAcceptance` and
-`1791462257931-CustomerNotificationHistory` and `1791462257932-BrevoDeliveryEvents` before deploying, and configure Brevo,
-including its delivery webhook (`BREVO_WEBHOOK_SECRET`, [setup](docs/booking-notifications.md#configuring-the-webhook-in-brevo)). See [durable booking email guarantees](docs/booking-notifications.md).
+"Check with Stripe" action, so the app runs on serverless hosting.

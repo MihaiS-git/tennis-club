@@ -80,8 +80,8 @@ export async function settleAdjustment(manager: EntityManager, input: {
     amount: attempt.amount_minor, operationKey: adjustment.id, adjustmentId: adjustment.id,
     actorId: null, onlyAttemptId: attempt.id, reason: "failed_adjustment_compensation",
     contextRevisionId: adjustment.baseRevisionId });
-  // The customer paid but the change could not be applied: tell them once, on
-  // the first verified capture. The compensation refund proceeds automatically.
+  // The customer paid but the change could not be applied: record the exception
+  // once, on the first verified capture. The compensation refund proceeds automatically.
   const revision = firstCapture ? await findBookingCancellationNotice(manager, adjustment.bookingId) : null;
   if (revision) await recordBookingFinancialException(manager, { key: `payment:${attempt.id}:modification_failed`,
     bookingId: attempt.booking_id, revisionId: revision.id, kind: "surcharge_unapplied",

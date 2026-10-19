@@ -7,7 +7,6 @@ vi.mock("@/lib/db/data-source", () => ({ getDataSource: async () => ({ manager: 
 
 import type { EntityManager } from "typeorm";
 import { findAdminBookingDetails } from "@/lib/db/repositories/bookings.repository";
-import { listAdminUndeliveredNotifications } from "@/lib/notifications/admin-notifications";
 
 const id = "ba000000-0000-4000-8000-000000000001";
 const userId = "ba000000-0000-4000-8000-000000000002";
@@ -17,12 +16,6 @@ const booking = { id, includes_coaching: false, coach_name: null, coaching_progr
   total_amount_minor: 5000, currency: "RON", payment_method: "online", account_user_id: null, created_at: "2024-12-20T09:30:00.123456+00:00" };
 
 beforeEach(() => { vi.clearAllMocks(); authorize.mockResolvedValue({ userId, roles: ["admin"] }); query.mockResolvedValue([booking]); });
-
-test("notification lists authorize before reading and propagate authorization failures", async () => {
-  authorize.mockRejectedValue(new Error("Forbidden"));
-  await expect(listAdminUndeliveredNotifications()).rejects.toThrow("Forbidden");
-  expect(query).not.toHaveBeenCalled();
-});
 
 test("reads historical and cancelled booking snapshots by full UUID without live resource restrictions", async () => {
   const manager = { query } as unknown as EntityManager;
@@ -34,23 +27,4 @@ test("reads historical and cancelled booking snapshots by full UUID without live
   expect(sql).not.toMatch(/is_active|archived_at|clock_timestamp|b.status\s*=|UPDATE|INSERT|DELETE/);
   query.mockResolvedValue([]);
   expect(await findAdminBookingDetails(manager, id)).toBeNull();
-});
-
-test("notification customer association uses the booking account and existing user, never recipient email", async () => {
-  const notification = { id, booking_id: id, account_user_id: userId, recipient: "different@example.test", subject: "Booking cancelled",
-    attempts: 8, last_error: "unavailable", important: false, state: "stopped", created_at: "2026-10-17T09:00:00Z", next_attempt_at: null };
-  query.mockResolvedValueOnce([notification]).mockResolvedValueOnce([{ total: 1, unacknowledged_exceptions: 0 }]);
-  const result = await listAdminUndeliveredNotifications();
-  expect(result.rows[0].account_user_id).toBe(userId);
-  const sql = query.mock.calls[0][0];
-  expect(sql).toContain("JOIN public.users u ON u.id=b.account_user_id");
-  expect(sql).toContain("b.id=booking_notification_deliveries.booking_id");
-  expect(sql).not.toMatch(/u\.email|b\.customer_email/);
-});
-
-test("notification lists preserve guest and missing associations as null", async () => {
-  query.mockResolvedValueOnce([{ id, booking_id: null, account_user_id: null, recipient: "guest@example.test", subject: "Booking confirmed",
-    attempts: 8, last_error: "unavailable", important: false, state: "stopped", created_at: "2026-10-17T09:00:00Z", next_attempt_at: null }])
-    .mockResolvedValueOnce([{ total: 1, unacknowledged_exceptions: 0 }]);
-  expect((await listAdminUndeliveredNotifications()).rows[0]).toMatchObject({ booking_id: null, account_user_id: null });
 });

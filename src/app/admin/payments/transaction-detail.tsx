@@ -1,6 +1,5 @@
 "use client";
 
-import { refreshNotificationUnread } from "@/components/notification-unread";
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -82,7 +81,6 @@ function CheckStripeButton({ refundId, attemptId }: { refundId: string; attemptI
         throw new Error("Unable to check with Stripe. Try again.");
       });
       if (!result.ok) throw new Error(result.message);
-      refreshNotificationUnread();
       router.refresh();
       return attemptId ? result.status === "succeeded" ? "Stripe confirmed the payment."
         : result.status === "cancelled" ? "Stripe cancelled the payment; its hold was released."
@@ -141,7 +139,7 @@ export function TransactionDetail({ transaction: t, listHref = "/admin/payments/
   const cancellation = t.proposal?.kind === "cancellation" ? t.proposal.status === "pending"
       ? "Cancellation requested. The booking stays confirmed until Stripe confirms the refund."
       : t.proposal.status === "applied" ? "The booking was cancelled after the refund was confirmed."
-      : "The cancellation was not completed because the refund failed. The booking was kept and the customer was notified."
+      : "The cancellation was not completed because the refund failed. The booking was kept."
     : null;
 
   return <section aria-label="Transaction details" className="min-w-0 w-full space-y-4">
@@ -173,7 +171,7 @@ export function TransactionDetail({ transaction: t, listHref = "/admin/payments/
         </li>}
         {refund && refundFailed && <li>
           {refund.last_error && Object.hasOwn(refundFailures, refund.last_error) ? refundFailures[refund.last_error] : "This refund could not be completed."}
-          {" "}The customer has not received this money and has been notified. Stripe will not be asked again automatically;
+          {" "}The customer has not received this money. Stripe will not be asked again automatically;
           arrange the repayment with the customer directly.
         </li>}
         {refund && t.refundUnconfirmed && <li>

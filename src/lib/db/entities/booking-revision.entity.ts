@@ -10,7 +10,6 @@ import { CoachProfileEntity } from "./coach-profile.entity";
 import { CoachingProgramEntity } from "./coaching-program.entity";
 
 @Entity({ schema: "public", name: "booking_revisions" })
-@Check("booking_revisions_recovery_version", "recovery_version=1")
 @Unique("booking_revisions_identity", ["bookingId", "id"])
 @Unique("booking_revisions_number", ["bookingId", "revisionNumber"])
 @Unique("booking_revisions_predecessor", ["bookingId", "previousRevisionId"])
@@ -40,7 +39,6 @@ import { CoachingProgramEntity } from "./coaching-program.entity";
 @Check("booking_revisions_timestamp", "isfinite(recorded_at)")
 @Check("booking_revisions_operation_key", "char_length(operation_key) BETWEEN 1 AND 128 AND char_length(intent_hash) BETWEEN 1 AND 64")
 export class BookingRevisionEntity implements RevisionSnapshot {
-  @Column({ name: "recovery_version", type: "smallint", nullable: true }) recoveryVersion?: number | null;
   @PrimaryColumn({ type: "uuid", primaryKeyConstraintName: "booking_revisions_pkey" }) id!: string;
   @Column({ name: "booking_id", type: "uuid" }) bookingId!: string;
   @Column({ name: "revision_number", type: "integer" }) revisionNumber!: number;

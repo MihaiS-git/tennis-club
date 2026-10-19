@@ -36,7 +36,7 @@ export function BookingPayment({ bookingId }: { bookingId: string }) {
   return <PaymentSummary payment={result.payment} />;
 }
 
-export function PaymentSummary({ payment }: { payment: OwnBookingPayment }) {
+function PaymentSummary({ payment }: { payment: OwnBookingPayment }) {
   const money = (amount: number) => formatMoney(amount, payment.currency);
   const date = (value: string) => new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: payment.timezone }).format(new Date(value));
   const online = payment.method === "online";

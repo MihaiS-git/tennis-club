@@ -10,7 +10,7 @@ export const coachingProgramTypeLabels: Record<CoachingProgramType, string> = {
   private: "Private", semi_private: "Semi-private", group: "Group", junior: "Junior",
 };
 
-export const coachingDurationLimits = { min: 15, max: 480, step: 5, count: 8 } as const;
+const coachingDurationLimits = { min: 15, max: 480, step: 5, count: 8 } as const;
 
 export function formatCoachingDuration(minutes: number) {
   return `${minutes} min`;
@@ -58,7 +58,6 @@ export const coachingProgramFieldsSchema = z.strictObject({
     context.addIssue({ code: "custom", path: ["max_participants"], message: "Maximum must be at least the minimum." });
   }
 });
-export type CoachingProgramFields = z.output<typeof coachingProgramFieldsSchema>;
 
 export const coachingProgramMutationSchema = z.strictObject({ id: z.uuid().optional(), fields: coachingProgramFieldsSchema });
 export const coachingProgramStatusSchema = z.strictObject({ id: z.uuid(), is_active: z.boolean() });
@@ -76,7 +75,6 @@ export const coachProfileFieldsSchema = z.strictObject({
   program_ids: z.array(z.uuid()).max(100).refine((ids) => new Set(ids.map((id) => id.toLowerCase())).size === ids.length, "Select each program once."),
   is_public: z.boolean(),
 });
-export type CoachProfileFields = z.output<typeof coachProfileFieldsSchema>;
 
 // Creation names the coach account; edits address the existing profile.
 export const coachProfileMutationSchema = z.strictObject({

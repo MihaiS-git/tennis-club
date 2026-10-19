@@ -1,5 +1,3 @@
-import { renderBookingEmail } from "@/lib/notifications/booking-email";
-import { bookingNotifications } from "../booking-notification-fixtures";
 import { cleanupBookingFixtures } from "../checkout-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
@@ -153,22 +151,13 @@ test.each(["pay_at_club", "online"] as const)("concurrent identical %s submissio
   expect(await counts()).toEqual({ reservations: 1, bookings: 1, attempts: 1 });
 });
 
-test("Pay at club commits contact/policy snapshots and due payment plus exact confirmation payload", async () => {
+test("Pay at club commits contact/policy snapshots and due payment", async () => {
   expect(await createCustomerBooking(input, guest, now)).toMatchObject({ ok: true, status: "confirmed", holdExpiresAt: null,
     cancellationPolicy: { noticeMinutes: 1440, cutoff: null } });
   expect(await stored()).toMatchObject([{ account_user_id: null, customer_name: "Guest Name", customer_email: "Guest@Example.test",
     customer_phone: "+40 123", booking_status: "confirmed", reservation_status: "active", reason: null, created_by_user_id: null,
     attempt_status: "due", provider: null, provider_payment_id: null, checkout_token_hash: null, hold_expires_at: null, expires_at: null,
     total_amount_minor: 5000, amount_minor: 5000, currency: "RON" }]);
-  const rows = await stored();
-  const events = await bookingNotifications(database.manager, rows[0].id);
-  expect(events).toEqual([renderBookingEmail({ event_kind: "confirmed", recipient: "Guest@Example.test", payload: {
-    booking_id: rows[0].id, customer_name: "Guest Name", location_name: "Checkout fixture", timezone: "UTC", court_name: "Court",
-    booking_date: date, starts_at_minute: 600, ends_at_minute: 660, total_amount_minor: 5000, currency: "RON", previous: null,
-    guest_cancellation_notice_minutes: 1440,
-  } })]);
-  expect(events[0].text).toContain("Cancellation terms\nThis booking requires 24 hours' notice.");
-  expect(events[0].text).toContain("To request cancellation, please contact the club before the cancellation deadline. Club staff will handle your request and any applicable refund.");
 });
 
 test("online creation shares the full-precision DB deadline and initialization attaches only ID/capability", async () => {
@@ -193,7 +182,6 @@ test("online creation shares the full-precision DB deadline and initialization a
   expect(await counts()).toEqual({ reservations: 1, bookings: 1, attempts: 1 });
   await expect(readOnlineCheckout({ attemptId: checkout.attemptId, token: "0".repeat(64) })).rejects.toThrow();
   expect(await readOnlineCheckout({ attemptId: checkout.attemptId, token: checkout.token })).toMatchObject({ status: "pending_payment", totalAmountMinor: 5000, currency: "RON" });
-  expect(await bookingNotifications(database.manager, (await stored())[0].id)).toEqual([]);
 });
 
 async function changeConfiguration(manager: EntityManager, kind: "hours" | "resource" | "pricing") {
@@ -498,7 +486,6 @@ test("initial online pending revision confirms exactly once across duplicate and
   expect(confirmed[1]).toMatchObject({revision_number:2,previous_revision_id:initial[0].id,kind:"confirmed",booking_state:"confirmed",total_amount_minor:5000});
   expect(await database.query("SELECT current_revision_id FROM public.bookings WHERE id=$1",[held.bookingId])).toEqual([{current_revision_id:confirmed[1].id}]);
   expect(await database.query("SELECT status FROM public.court_reservations WHERE id=$1",[held.reservationId])).toEqual([{status:"active"}]);
-  expect(await bookingNotifications(database.manager, held.bookingId)).toHaveLength(1);
 });
 
 test("Pay-at-club creation and modification use revision debt while preserving the initial uncollected request",async()=>{

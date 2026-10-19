@@ -67,7 +67,7 @@ Identity services preserve Admin self-management/final-active-Admin checks in Ty
 serialize authoritative role/account reads, and explicitly persist attribution/timestamps.
 Booking/payment/refund commands explicitly expire hold aggregates, maintain timestamps,
 preserve immutable provider/financial snapshots, validate capture evidence and fence
-terminal refund success. Provider calls run between short transactions. Booking email sends follow committed lifecycle changes. No Auth, Storage, Stripe or Brevo call runs
+terminal refund success. Provider calls run between short transactions. No Auth, Storage or Stripe call runs
 inside a database transaction.
 
 Avatar references use owner/profile-fenced TypeORM transactions while bytes remain in
@@ -245,8 +245,8 @@ The three consolidated migrations are `InitialApplicationSchema1791462257924`,
 `ApplicationNativeIntegrity1791462257925` and `SupabaseAuthStorage1791462257926`.
 The initial migration is TypeORM-generated from the same metadata used at runtime,
 including schedules, adjustments, adjustment holds/payment links and refund operations.
-Its only handwritten setup configures `btree_gist` and the transaction search path
-before the generated exclusions. The native migration owns the email expression
+Its handwritten parts configure `btree_gist` and the transaction search path
+before the generated exclusions and create the entity-less `booking_financial_exceptions` table. The native migration owns the email expression
 index, minimal bootstrap records and ownership/revision/financial-context integrity guards; the integration migration owns Auth hooks,
 Storage policies and browser-role restrictions. No business policy is added in SQL.
 
@@ -323,13 +323,13 @@ focused pure `buildBookingRevision()` snapshot builder. TypeScript decides the
 state, price, eligibility, no-op and refund allocation. Repositories perform inserts,
 pointer advancement, queries and locks with an explicit EntityManager. Confirmation,
 occupancy changes, revision/pointer changes and applicable financial obligations
-commit atomically; notifications and provider calls remain post-commit.
+commit atomically; provider calls remain post-commit.
 
 The existing configuration/location/booking/reservation/financial/actor lock order,
 role fences, bounded changed-parent retries and reservation microsecond token remain.
 Owner edits compare the current revision identity rather than a booking timestamp.
 Same intent replays; changed intent with a reused key rejects. No-op saves do not
-write or notify. Pay-at-club requests remain original evidence while current debt
+write. Pay-at-club requests remain original evidence while current debt
 comes from the current contract. The existing refund allocator remains the only
 newest-capture-first allocation implementation.
 
@@ -405,20 +405,16 @@ checks retrieve the registered provider operation; payment checks
 can cancel overdue unused authorizations but never initiate capture. There are no dual
 writes or provider history JSON.
 
-## Booking email delivery
+## Notifications and financial exceptions
 
-Booking confirmation, customer/Admin cancellation and owner rescheduling
-capture the booking contact and schedule within the successful transaction, then
-send the preserved text template through Brevo's transactional HTTP API after commit.
-Use only the snapshotted the current revision’s `customer_email`, never the current account email.
-Quote, stale, failed and unchanged-schedule saves send no rescheduling email;
-pending/failed/expired checkout sends no confirmation. Transition and webhook receipt
-checks prevent replayed operations from sending again. Delivery uses the durable
-`booking_notification_deliveries` outbox, a 5-second HTTP timeout, sanitized error
-logging, request-driven retries, five-minute Supabase Cron retries and an Admin retry;
-see [notifications](booking-notifications.md).
-Email failure cannot change committed booking/payment state. Server-only
-`BREVO_API_KEY` and a Brevo-verified `BOOKING_MAIL_FROM` are required.
+The application has no notification subsystem: no booking emails, inbox, delivery queue,
+scheduled delivery or Brevo integration. Booking and payment workflows have no
+notification side effects. Exceptional financial outcomes (rejected refund-backed changes,
+unapplied surcharges, late captures, failed/unresolved/reversed refunds) are recorded as
+immutable `booking_financial_exceptions` rows inside the deciding financial transaction;
+a failed insert rolls that transaction back. The rows reference the historical revision
+and the payment, refund or adjustment involved, and replay reuses a stable event key.
+Admin visibility comes from the existing refund/payment states in Payments → Transactions.
 Supabase Auth confirmation/recovery emails remain independent.
 
 ## Coaching programs and prices

@@ -6,6 +6,8 @@
 > proposals below remain historical design context, not completed capabilities. Later Task 4 work is pending:
 > see [remaining financial-model work](payments-memberships.md#remaining-financial-model-work-task-4)
 > and [implemented booking contracts](booking-domain.md#implemented-immutable-booking-contracts).
+> Booking notifications (Brevo email and its delivery) referenced below were later removed;
+> the application now sends no booking notifications.
 
 # Immutable booking revisions and financial history
 

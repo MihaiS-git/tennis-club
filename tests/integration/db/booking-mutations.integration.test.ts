@@ -1,4 +1,3 @@
-import { bookingNotifications } from "../booking-notification-fixtures";
 import { appendBookingContractFixture } from "../checkout-fixtures";
 import * as revisions from "@/lib/db/repositories/booking-revisions.repository";
 import * as refundProcessing from "@/lib/payments/refunds";
@@ -32,8 +31,6 @@ import { buildBookingRevision } from "@/lib/bookings/revision";
 import { bookingFinancials, allocateBookingRefund } from "@/lib/payments/financials";
 import { stripeAdapter } from "@/lib/payments/providers/stripe/adapter";
 import { prepareRefund, initiateRefundExecution, commitRefundExecution, type RefundExecutionClaim } from "@/lib/payments/refund-commands";
-import { deliverPendingBookingNotifications } from "@/lib/notifications/booking-delivery";
-import { isolateNotificationQueue } from "../booking-notification-fixtures";
 
 let database: DataSource;
 let service: ReturnType<typeof localFixtureClient>;
@@ -107,7 +104,8 @@ async function edit(f: Fixture, extra = {}) {
   return { id: f.id, expectedRevisionId: context.current_revision_id, expectedUpdatedAt: context.updated_at,
     courtId: secondCourtId,date,startMinute:720,endMinute:780,save:true,expectedTotal:5000,priceAcknowledged:true,...extra };
 }
-const emails = (id: string) => bookingNotifications(database.manager, id);
+const exceptions = async (id: string) => (await database.query("SELECT kind FROM public.booking_financial_exceptions WHERE booking_id=$1 ORDER BY occurred_at,event_key", [id]))
+  .map((row: { kind: string }) => row.kind);
 const save = (input: unknown) => runBookingReschedule(input,actorId);
 const cancel = (f: Fixture, scope: "owner" | "admin" = "owner") => cancelCustomerBookingCommand(f.id,actorId,scope);
 // Fixture provider observations are committed through the real execution commands;
@@ -133,8 +131,7 @@ async function state(f: Fixture) {
   const booking = await inTransaction(m => bookings.findBookingForUpdate(m,f.id));
   const reservation = await inTransaction(m => reservations.findReservationForUpdate(m,f.reservationId));
   const refunds: unknown = await database.query("SELECT * FROM public.payment_refunds WHERE booking_id=$1", [f.id]);
-  const events = await emails(f.id);
-  return { booking,reservation,refunds,events };
+  return { booking,reservation,refunds,exceptions:await exceptions(f.id) };
 }
 function deferred() {
   let resolve!: () => void;
@@ -169,18 +166,18 @@ async function serialize<T,U>(first: () => Promise<T>, second: () => Promise<U>)
   const results = await Promise.all([a,b]); spy.mockRestore(); return results;
 }
 
-test.each([false,true])("cancel/cancel serializes lifecycle, replay and notifications (paid=%s)", async paid => {
+test.each([false,true])("cancel/cancel serializes lifecycle and replay (paid=%s)", async paid => {
   const f = await seed(600,paid);
   const [a,b] = await serialize(() => cancel(f),() => cancel(f));
   expect(a.outcome).toBe(paid ? "cancellation_pending" : "cancelled"); expect(b.outcome).toBe(a.outcome);
   expect(b).toEqual(a);
   expect(a).toMatchObject({ refundIds: paid ? [expect.any(String)] : [] });
   if (a.outcome === "cancellation_pending") {
-    expect(await state(f)).toMatchObject({ booking: { status: "confirmed" }, reservation: { status: "active" }, events: [] });
+    expect(await state(f)).toMatchObject({ booking: { status: "confirmed" }, reservation: { status: "active" }, exceptions: [] });
     await settleRefundRequest(a);
   }
   expect(await state(f)).toMatchObject({ booking:{status:"cancelled"},reservation:{status:"cancelled"},
-    refunds:paid ? [expect.objectContaining({amount_minor:5000})] : [],events:[expect.objectContaining({subject:"Booking cancelled"})] });
+    refunds:paid ? [expect.objectContaining({amount_minor:5000})] : [],exceptions:[] });
   const history = await database.query("SELECT id,kind,operation_key,intent_hash FROM public.booking_revisions WHERE booking_id=$1 ORDER BY revision_number", [f.id]);
   expect(history).toEqual([expect.objectContaining({kind:"created"}),
     expect.objectContaining({kind:"cancelled",operation_key:"cancellation",intent_hash:"cancellation"})]);
@@ -190,18 +187,18 @@ test.each([false,true])("cancel/cancel serializes lifecycle, replay and notifica
   expect(await state(f)).toEqual(before);
   expect(await database.query("SELECT id,kind,operation_key,intent_hash FROM public.booking_revisions WHERE booking_id=$1 ORDER BY revision_number", [f.id])).toEqual(history);
 });
-test.each(["owner", "admin"] as const)("%s notification snapshots preserve committed history across resource renames", async scope => {
+test.each(["owner", "admin"] as const)("%s cancellation snapshots preserve committed history across resource renames", async scope => {
   const f = await seed();
   const original = (await state(f)).booking!.revision;
   try {
     await database.query("UPDATE public.locations SET name='Renamed Club',timezone='Europe/Bucharest' WHERE id=$1", [locationId]);
     await database.query("UPDATE public.courts SET name='Renamed Court' WHERE id=$1", [courtId]);
     expect(await cancel(f, scope)).toMatchObject({ outcome: "cancelled" });
-    expect(await emails(f.id)).toEqual([expect.objectContaining({ to: original.customerEmail,
-      subject: "Booking cancelled", text: expect.stringContaining(`Location: ${original.locationName}`) })]);
-    expect((await emails(f.id))[0].text).toContain(`Schedule: ${original.bookingDate}, 10:00–11:00, ${original.courtName}`);
+    const cancelled = (await state(f)).booking!.revision;
+    expect(cancelled).toMatchObject({ customerEmail: original.customerEmail, locationName: original.locationName,
+      courtName: original.courtName, bookingDate: original.bookingDate, startMinute: original.startMinute, endMinute: original.endMinute });
     expect(await cancel(f, scope)).toMatchObject({ outcome: "cancelled" });
-    expect(await emails(f.id)).toHaveLength(1);
+    expect(await database.query("SELECT count(*)::integer AS count FROM public.booking_revisions WHERE booking_id=$1",[f.id])).toEqual([{count:2}]);
   } finally {
     await database.query("UPDATE public.locations SET name='Phase 6',timezone='UTC' WHERE id=$1", [locationId]);
     await database.query("UPDATE public.courts SET name='Court' WHERE id=$1", [courtId]);
@@ -227,8 +224,6 @@ test.each(["cancel", "reschedule"])("cancel/reschedule sees authoritative state 
   expect(history.map((row: {kind:string}) => row.kind)).toEqual(first === "cancel"
     ? ["created","cancelled"] : ["created","rescheduled","cancelled"]);
   expect((await state(f)).booking?.current_revision_id).toBe(history.at(-1).id);
-  expect((await emails(f.id)).map(e => e.subject)).toEqual(first === "cancel"
-    ? ["Booking cancelled"] : ["Booking rescheduled","Booking cancelled"]);
 });
 test("same target reschedules serialize and reject the loser before its SQL update", async () => {
   const a = await seed(), b = await seed(660), before = [await state(a),await state(b)];
@@ -513,7 +508,7 @@ test("Phase 6 refund replay serializes with TypeORM claim and result without cha
     if (prepared.outcome!=="ready") throw new Error("Missing claim");
     await initiateRefundExecution(prepared.claim);
     const results=await Promise.all([cancel(f),commitRefundExecution(prepared.claim,{kind:"verified",status:"succeeded",providerRefundId:"re-phase8"})]);
-    expect(results).toEqual([cancelled,{status:"succeeded",notice:false}]);
+    expect(results).toEqual([cancelled,{status:"succeeded",requiresResolution:false}]);
     expect((await state(f)).refunds).toEqual([expect.objectContaining({id:cancelled.refundIds[0],amount_minor:5000,currency:"RON",status:"succeeded"})]);
   } finally { if (blocker.isTransactionActive) await blocker.rollbackTransaction(); if (preparation) await Promise.allSettled([preparation]); await blocker.release(); }
 });
@@ -620,7 +615,7 @@ test("quote never writes; price-only same-schedule save emits no reschedule even
   const before=await state(f);
   expect(await save({...input,save:false})).toEqual({ok:true,totalAmountMinor:9000}); expect(await state(f)).toEqual(before);
   expect(await save(input)).toEqual({ok:true,totalAmountMinor:9000});
-  expect((await state(f)).booking?.total_amount_minor).toBe(9000); expect((await state(f)).events).toEqual([]);
+  expect((await state(f)).booking?.total_amount_minor).toBe(9000); expect((await state(f)).exceptions).toEqual([]);
 });
 test("target active hold blocks until its persisted expiry, and ordinary reads never expire it", async () => {
   const f=await seed(), input=await edit(f);
@@ -688,7 +683,7 @@ test.each(["retryable_failed"] as const)("concurrent distinct success/%s events 
   try { await waitForBlock(blocker); } finally { release.resolve(); }
   expect(await Promise.all([a,b])).toEqual(["succeeded","succeeded"]);
   const result=await settlementState(f);
-  expect(result.aggregate).toMatchObject({booking:{status:"confirmed"},reservation:{status:"active"},events:[{subject:"Booking confirmed"}]});
+  expect(result.aggregate).toMatchObject({booking:{status:"confirmed"},reservation:{status:"active"},exceptions:[]});
   expect(result.receipts).toHaveLength(2);
 });
 
@@ -719,7 +714,7 @@ test("global provider-event key collision rolls back a different booking's provi
   try { await waitForBlock(blocker); } finally { release.resolve(); }
   expect(await winner).toBe("succeeded"); await rejected;
   expect(await settlementState(b)).toEqual(before);
-  const winnerState=await settlementState(a); expect(winnerState.receipts).toHaveLength(1); expect(winnerState.aggregate.events).toHaveLength(1);
+  const winnerState=await settlementState(a); expect(winnerState.receipts).toHaveLength(1); expect(await database.query("SELECT id FROM public.booking_revisions WHERE booking_id=$1 AND kind='confirmed'",[a.id])).toHaveLength(1);
   await expect(processOnlinePaymentEvent(paymentEvent(b,"succeeded",key))).rejects.toThrow("Changed payment event evidence.");
   expect(await settlementState(b)).toEqual(before);
 });
@@ -743,7 +738,7 @@ test("failure after lifecycle and receipt insertion rolls back the entire settle
   await expect(processOnlinePaymentEvent(event)).rejects.toThrow("Injected settlement rollback"); spy.mockRestore();
   expect(await settlementState(f)).toEqual(before);
   expect(await processOnlinePaymentEvent(event)).toBe("succeeded");
-  const committed=await settlementState(f); expect(committed.receipts).toHaveLength(1); expect(committed.aggregate.events).toHaveLength(1);
+  const committed=await settlementState(f); expect(committed.receipts).toHaveLength(1); expect(await database.query("SELECT id FROM public.booking_revisions WHERE booking_id=$1 AND kind='confirmed'",[f.id])).toHaveLength(1);
 });
 
 test("settlement lock wait crosses persisted hold deadline; expiry and replacement never reclaim occupancy", async () => {
@@ -758,7 +753,7 @@ test("settlement lock wait crosses persisted hold deadline; expiry and replaceme
     // SKIP LOCKED expiry must not invert settlement's booking/reservation locks.
     await expirePaymentHolds();
     await blocker.commitTransaction(); expect(await settlement).toBe("expired");
-    expect((await settlementState(f)).aggregate).toMatchObject({booking:{status:"expired"},reservation:{status:"released"},events:[expect.objectContaining({subject:"Payment received after checkout ended"})]});
+    expect((await settlementState(f)).aggregate).toMatchObject({booking:{status:"expired"},reservation:{status:"released"},exceptions:["late_capture"]});
     const replacement=await seed(600,false,true), before=await settlementState(replacement);
     expect(await processOnlinePaymentEvent(paymentEvent(f))).toBe("expired"); expect(await settlementState(replacement)).toEqual(before);
   } finally { if (blocker.isTransactionActive) await blocker.rollbackTransaction(); if (settlement) await Promise.allSettled([settlement]); await blocker.release(); }
@@ -782,8 +777,8 @@ test.each(["expiry"])("%s first serializes hold cleanup and application replacem
     await expirePaymentHolds();
     const replacement=await seed(600,false,true), before=await settlementState(replacement);
     expect(await processOnlinePaymentEvent(paymentEvent(f))).toBe("expired"); expect(await settlementState(replacement)).toEqual(before);
-    // The customer is told once that the late payment is being refunded.
-    expect((await state(f)).events).toEqual([expect.objectContaining({subject:"Payment received after checkout ended"})]);
+    // One late-capture exception records that the late payment is being refunded.
+    expect((await state(f)).exceptions).toEqual(["late_capture"]);
   }
 });
 
@@ -797,7 +792,7 @@ test.each(["reschedule"])("receipt-bearing settlement waits for Phase 6 %s and p
   expect(await processOnlinePaymentEvent(paymentEvent(f))).toBe("succeeded");
   await expect(processOnlinePaymentEvent({...paymentEvent(f),amountMinor:7000})).rejects.toThrow("Changed provider capture evidence");
   expect((await state(f)).reservation).toEqual(before.reservation);
-  expect((await state(f)).events).toEqual(before.events);
+  expect((await state(f)).exceptions).toEqual(before.exceptions);
   expect(await database.query("SELECT amount_minor,currency,status FROM public.payment_attempts WHERE id=$1",[f.attemptId]))
     .toEqual([{amount_minor:5000,currency:"RON",status:"succeeded"}]);
 });
@@ -817,7 +812,7 @@ test("deadline crossed after policy read is fenced at the lifecycle write and re
     return original(...args);
   });
   expect(await processOnlinePaymentEvent(paymentEvent(f))).toBe("expired");
-  expect(await settlementState(f)).toMatchObject({aggregate:{booking:{status:"expired"},reservation:{status:"released",hold_expires_at:null},events:[expect.objectContaining({subject:"Payment received after checkout ended"})]},
+  expect(await settlementState(f)).toMatchObject({aggregate:{booking:{status:"expired"},reservation:{status:"released",hold_expires_at:null},exceptions:["late_capture"]},
     attempts:[{status:"expired"}],receipts:[{settlement_result:"expired",reconciliation_required:true}]});
 });
 
@@ -844,7 +839,7 @@ test("expiry holding aggregate locks wins against waiting settlement with durabl
     await expirePaymentHoldsAtLocation(expiry.manager,locationId);
     settlement=processOnlinePaymentEvent(paymentEvent(f)); await waitForBlock(await pid(expiry.manager));
     await expiry.commitTransaction(); expect(await settlement).toBe("expired");
-    expect(await settlementState(f)).toMatchObject({aggregate:{booking:{status:"expired"},reservation:{status:"released"},events:[expect.objectContaining({subject:"Payment received after checkout ended"})]},
+    expect(await settlementState(f)).toMatchObject({aggregate:{booking:{status:"expired"},reservation:{status:"released"},exceptions:["late_capture"]},
       receipts:[{settlement_result:"expired",reconciliation_required:true}]});
   } finally { if (expiry.isTransactionActive) await expiry.rollbackTransaction(); if (settlement) await Promise.allSettled([settlement]); await expiry.release(); }
 });
@@ -878,12 +873,12 @@ test("concurrent refund claims share one execution; takeover retains microsecond
   expect(replacement.execution.id).toBe(claim.execution.id); expect(replacement.token).not.toBe(claim.token);
   await inTransaction(manager=>refundExecutions.recordRefundExecutionCheck(manager,{refundId:f.refundId,executionId:claim.execution.id,
     token:replacement.token,checkedAt:new Date(),lastError:"current_worker",releaseLease:false}));
-  expect(await commitRefundExecution(claim,successResult)).toMatchObject({status:"succeeded",notice:false});
+  expect(await commitRefundExecution(claim,successResult)).toMatchObject({status:"succeeded",requiresResolution:false});
   expect((await refundExecutions.listRefundExecutions(database.manager,f.refundId))[0]).toMatchObject({
     leaseToken:replacement.token,lastError:"current_worker",terminalResult:"succeeded",providerRefundId:"re-phase8"});
-  expect(await commitRefundExecution(replacement,successResult)).toMatchObject({status:"succeeded",notice:false});
+  expect(await commitRefundExecution(replacement,successResult)).toMatchObject({status:"succeeded",requiresResolution:false});
   expect((await refundExecutions.listRefundExecutions(database.manager,f.refundId))[0].leaseToken).toBeNull();
-  expect(await prepareRefund(f.refundId)).toMatchObject({outcome:"terminal",status:"succeeded",notice:false});
+  expect(await prepareRefund(f.refundId)).toMatchObject({outcome:"terminal",status:"succeeded",requiresResolution:false});
 });
 
 test("automatic preparation is independent of Admin roles and attributes no manual initiator", async () => {
@@ -905,9 +900,9 @@ test("automatic preparation is independent of Admin roles and attributes no manu
 test("an automatic claim blocks another worker from issuing a competing operation", async () => {
   const f=await refundFixture(),claim=await claimRefund(f.refundId);
   expect(await prepareRefund(f.refundId)).toMatchObject({outcome:"busy"});
-  expect(await commitRefundExecution(claim,successResult)).toMatchObject({status:"succeeded",notice:false});
+  expect(await commitRefundExecution(claim,successResult)).toMatchObject({status:"succeeded",requiresResolution:false});
   const before=await state(f);
-  expect(await prepareRefund(f.refundId)).toMatchObject({outcome:"terminal",status:"succeeded",notice:false});
+  expect(await prepareRefund(f.refundId)).toMatchObject({outcome:"terminal",status:"succeeded",requiresResolution:false});
   expect((await state(f)).refunds).toEqual(before.refunds);
   expect(await refundExecutions.listRefundExecutions(database.manager,f.refundId)).toHaveLength(1);
 });
@@ -948,7 +943,7 @@ test("receipt-resolution failure rolls back execution success, obligation status
   expect(await state(f)).toEqual(before);
   expect(await refundExecutions.listRefundExecutions(database.manager,prepared.claim.refund.id)).toEqual(history);
   expect(await database.query("SELECT * FROM public.payment_provider_events WHERE attempt_id=$1",[f.attemptId])).toEqual(events);
-  expect(await commitRefundExecution(prepared.claim,successResult)).toMatchObject({status:"succeeded",notice:false});
+  expect(await commitRefundExecution(prepared.claim,successResult)).toMatchObject({status:"succeeded",requiresResolution:false});
   const resolved=await database.query("SELECT * FROM public.payment_provider_events WHERE attempt_id=$1",[f.attemptId]);
   expect(await prepareRefund(refundId)).toMatchObject({outcome:"terminal",status:"succeeded"});
   expect(await database.query("SELECT * FROM public.payment_provider_events WHERE attempt_id=$1",[f.attemptId])).toEqual(resolved);
@@ -991,9 +986,9 @@ test("completion fences obligation and execution snapshots and cannot regress ve
     .rejects.toThrow("Refund financial evidence changed");
   await expect(commitRefundExecution({...claim,execution:{...claim.execution,idempotencyKey:"different"}},successResult))
     .rejects.toThrow("Refund execution request changed");
-  expect(await commitRefundExecution(claim,successResult)).toMatchObject({status:"succeeded",notice:false});
+  expect(await commitRefundExecution(claim,successResult)).toMatchObject({status:"succeeded",requiresResolution:false});
   const history=await refundExecutions.listRefundExecutions(database.manager,f.refundId);
-  expect(await commitRefundExecution(claim,{kind:"error",evidence:{kind:"lookup_failed",operation:"retrieve",providerRefundId:"re-phase8"}})).toMatchObject({status:"succeeded",notice:false});
+  expect(await commitRefundExecution(claim,{kind:"error",evidence:{kind:"lookup_failed",operation:"retrieve",providerRefundId:"re-phase8"}})).toMatchObject({status:"succeeded",requiresResolution:false});
   await expect(commitRefundExecution(claim,{...successResult,providerRefundId:"re_other"})).rejects.toThrow("Conflicting provider refund identity");
   const latest=await refundExecutions.listRefundExecutions(database.manager,f.refundId);
   expect(latest.map(e=>({result:e.terminalResult,id:e.providerRefundId,completed:e.completedAt})))
@@ -1100,7 +1095,6 @@ test("paid 50 → 75 → 100 → 75 → cancellation preserves all captures and 
     eventId:randomUUID(),outcome:"succeeded",amountMinor:5000,currency:"RON"})).toBe("succeeded");
   const original = await database.query("SELECT * FROM public.payment_attempts WHERE id=$1",[f.attemptId]);
   for (const [end,total] of [[690,7500],[720,10000]]) {
-    const count = (await emails(f.id)).length;
     const input = await edit(f,{courtId,startMinute:600,endMinute:end,expectedTotal:total,requestId:randomUUID()});
     const result = await save(input);
     expect(result).toMatchObject({ok:true,adjustmentStatus:"pending",totalAmountMinor:total});
@@ -1113,14 +1107,10 @@ test("paid 50 → 75 → 100 → 75 → cancellation preserves all captures and 
     await expect(database.query(`INSERT INTO public.court_reservations(court_id,booking_date,starts_at_minute,ends_at_minute)
       VALUES($1,$2,$3,$3+60)`,[courtId,date,end-30])).rejects.toMatchObject({code:"23P01"});
     expect(await save(input)).toMatchObject({ok:true,adjustmentId:result.adjustmentId});
-    expect(await emails(f.id)).toHaveLength(count);
     const eventId=randomUUID();
     expect(await captureAdjustment(result.adjustmentId,eventId)).toBe("succeeded");
     expect(await captureAdjustment(result.adjustmentId,eventId)).toBe("succeeded");
     expect(await captureAdjustment(result.adjustmentId)).toBe("succeeded");
-    expect(await emails(f.id)).toHaveLength(count + 1);
-    expect((await emails(f.id)).at(-1)?.text).toContain(`Booking total: ${(total / 100).toFixed(2)} RON`);
-    expect((await emails(f.id)).at(-1)?.text).toContain(`Previous: ${date}, 10:00–${end === 690 ? "11:00" : "11:30"}, Court`);
     expect((await state(f)).booking?.total_amount_minor).toBe(total);
     expect((await state(f)).reservation?.ends_at_minute).toBe(end);
   }
@@ -1146,8 +1136,6 @@ test("paid 50 → 75 → 100 → 75 → cancellation preserves all captures and 
     expect(refund).toMatchObject({ reason: "booking_cancellation", contextRevisionId: history[4].id });
   expect((await state(f)).reservation).toMatchObject({starts_at_minute:600,ends_at_minute:690,status:"cancelled"});
   expect(await cancel(f)).toMatchObject({outcome:"cancelled"});
-  expect((await emails(f.id)).map(e => e.subject)).toEqual(["Booking confirmed", "Booking rescheduled", "Booking rescheduled",
-    "Booking rescheduled", "Booking cancelled"]);
   expect(await database.query("SELECT count(*)::integer AS count FROM public.booking_revisions WHERE booking_id=$1",[f.id])).toEqual([{count:6}]);
 
   for(const p of facts.captures) expect(facts.refunds.filter(r=>r.paymentAttemptId===p.id).reduce((n,r)=>n+r.amountMinor,0)).toBeLessThanOrEqual(p.amountMinor);
@@ -1169,8 +1157,7 @@ test.each(["cancelled","expired","conflict","price","suspended"])("unapplied sur
   expect(await captureAdjustment(result.adjustmentId)).toBe("expired");
   const after=await state(f);
   expect(after.booking).toEqual(before.booking); expect(after.reservation).toEqual(before.reservation);
-  expect(await emails(f.id)).toMatchObject([{ subject: "Booking change not completed",
-    text: expect.stringContaining("additional payment you made for this change is being refunded") }]);
+  expect(await exceptions(f.id)).toEqual(["surcharge_unapplied"]);
   expect(await bookingFinancials(database.manager,f.id)).toMatchObject({captured:7500,refunded:2500,netPaid:5000});
   expect((await bookingFinancials(database.manager, f.id)).refunds).toEqual([
     expect.objectContaining({ reason: "failed_adjustment_compensation", contextRevisionId: before.booking!.current_revision_id,
@@ -1439,7 +1426,7 @@ test("expired checkout capture commits one compensation obligation and retains i
   expect(accepted.refunds).toEqual([expect.objectContaining({ payment_attempt_id: f.attemptId,
     operation_key: "cancellation", amount_minor: 5000, captured_amount_minor: 5000, status: "succeeded",
     reason: "late_capture_compensation", context_revision_id: originalRevision.id })]);
-  expect(accepted.events).toEqual([expect.objectContaining({subject:"Payment received after checkout ended"})]);
+  expect(accepted.exceptions).toEqual(["late_capture"]);
   expect(await database.query("SELECT id,status,amount_minor,provider_payment_id FROM public.payment_attempts WHERE id=$1", [f.attemptId]))
     .toEqual([{ id: f.attemptId, status: "expired", amount_minor: 5000, provider_payment_id: event.providerPaymentId }]);
   expect(await database.query("SELECT outcome,amount_minor,currency FROM public.payment_provider_events WHERE event_id=$1", [event.eventId]))
@@ -1984,19 +1971,18 @@ test("request-driven: cancellation waits through an unconfirmed refund and a lat
   if (request.outcome !== "cancellation_pending") throw new Error("Missing pending request");
   vi.mocked(stripeAdapter.refundPayment).mockRejectedValueOnce(new Error("temporary timeout"));
   expect(await refundProcessing.processBookingRefund(request.refundIds[0])).toBe("pending_retry");
-  expect(await state(f)).toMatchObject({ booking:{status:"confirmed"}, reservation:{status:"active"}, events:[] });
+  expect(await state(f)).toMatchObject({ booking:{status:"confirmed"}, reservation:{status:"active"}, exceptions:[] });
   expect(await webhookCheck(request.refundIds[0])).toBe("succeeded");
   expect(await state(f)).toMatchObject({ booking:{status:"cancelled"}, reservation:{status:"cancelled"},
-    refunds:[expect.objectContaining({status:"succeeded",amount_minor:5000})], events:[expect.objectContaining({subject:"Booking cancelled"})] });
+    refunds:[expect.objectContaining({status:"succeeded",amount_minor:5000})], exceptions:[] });
   expect(await webhookCheck(request.refundIds[0])).toBe("succeeded");
-  expect(await emails(f.id)).toHaveLength(1);
   // The unconfirmed request was replayed under its original key, never re-created.
   expect(await database.query("SELECT id FROM public.refund_executions WHERE refund_id=$1",[request.refundIds[0]])).toHaveLength(1);
   const keys = vi.mocked(stripeAdapter.refundPayment).mock.calls.map(([call]) => call.idempotencyKey);
   expect(new Set(keys).size).toBe(1);
 });
 
-test("request-driven: definitive refund failure voids the obligation, preserves original booking and sends one important failure notice", async () => {
+test("request-driven: definitive refund failure voids the obligation, preserves original booking and records one cancellation rejection", async () => {
   simulatedStripe();
   const f=await seed(600,true), before=await state(f), request=await cancel(f);
   if(request.outcome!=="cancellation_pending") throw new Error("Missing pending request");
@@ -2008,9 +1994,7 @@ test("request-driven: definitive refund failure voids the obligation, preserves 
   expect(after.booking).toEqual(before.booking); expect(after.reservation).toEqual(before.reservation);
   expect(after.refunds).toMatchObject([{status:"voided"}]);
   expect(await database.query("SELECT status FROM public.booking_adjustments WHERE id=$1",[request.adjustmentId])).toEqual([{status:"unsuccessful"}]);
-  expect(await emails(f.id)).toMatchObject([{subject:"Booking cancellation not completed"}]);
-  expect(await database.query("SELECT requires_acknowledgement,acknowledged_at FROM public.booking_notification_deliveries WHERE booking_id=$1",[f.id]))
-    .toEqual([{requires_acknowledgement:true,acknowledged_at:null}]);
+  expect(await exceptions(f.id)).toEqual(["cancellation_rejected"]);
   expect(stripeAdapter.refundPayment).toHaveBeenCalledOnce();
 });
 
@@ -2030,7 +2014,6 @@ test("request-driven: concurrent webhook and Admin checks dispatch one refund", 
   expect((await state(f)).booking?.status).toBe("cancelled");
   expect(stripeAdapter.refundPayment).toHaveBeenCalledOnce();
   expect(await refundExecutions.listRefundExecutions(database.manager, request.refundIds[0])).toHaveLength(1);
-  expect(await emails(f.id)).toHaveLength(1);
 });
 
 test("request-driven: partial refund success then definitive failure must not strand a cancelled booking with money owed", async () => {
@@ -2051,35 +2034,6 @@ test("request-driven: partial refund success then definitive failure must not st
   expect(vi.mocked(stripeAdapter.refundPayment).mock.calls.filter(([call])=>call.amountMinor===2500)).toHaveLength(1);
 });
 
-test("request-driven: the committing request delivers its notification after commit and retries stay durable", async () => {
-  simulatedStripe();
-  const f=await seed(600,true), request=await cancel(f);
-  if(request.outcome!=="cancellation_pending") throw new Error("Missing request");
-  vi.stubEnv("BREVO_API_KEY", "simulated-brevo"); vi.stubEnv("BOOKING_MAIL_FROM", "bookings@example.test");
-  const submitted: string[] = [];
-  vi.stubGlobal("fetch", vi.fn(async (_input: unknown, init?: RequestInit) => {
-    const body = String(init?.body);
-    if (body.includes(f.id)) submitted.push(body);
-    return new Response(null, { status: body.includes(f.id) && submitted.length === 1 ? 503 : 201 });
-  }));
-  const restore = await isolateNotificationQueue(database.manager);
-  try {
-    await refundProcessing.processBookingRefund(request.refundIds[0]);
-    expect((await state(f)).booking?.status).toBe("cancelled");
-    expect(submitted).toHaveLength(1);
-    const queued = await database.query("SELECT id,attempts,delivered_at,last_error FROM public.booking_notification_deliveries WHERE booking_id=$1", [f.id]);
-    expect(queued).toMatchObject([{ attempts: 1, delivered_at: null, last_error: "unavailable" }]);
-    // Not due yet: another financial request does not resend it early.
-    await deliverPendingBookingNotifications();
-    expect(submitted).toHaveLength(1);
-    await database.query("UPDATE public.booking_notification_deliveries SET next_attempt_at=clock_timestamp() WHERE id=$1", [queued[0].id]);
-    await deliverPendingBookingNotifications();
-    expect(submitted).toHaveLength(2);
-    expect(await database.query("SELECT attempts,delivered_at IS NOT NULL AS delivered,last_error FROM public.booking_notification_deliveries WHERE id=$1", [queued[0].id]))
-      .toEqual([{ attempts: 2, delivered: true, last_error: null }]);
-  } finally { await restore(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); }
-});
-
 test("request-driven: failed surcharge payment preserves original booking and occupancy", async () => {
   simulatedStripe(); const f=await seed(600,true),before=await state(f);
   const result=await save(await edit(f,{endMinute:810,expectedTotal:7500,requestId:randomUUID()}));
@@ -2090,7 +2044,7 @@ test("request-driven: failed surcharge payment preserves original booking and oc
     eventId:randomUUID(),outcome:"failed",amountMinor:2500,currency:"RON"});
   const after=await state(f);
   expect(after.booking).toEqual(before.booking);expect(after.reservation).toEqual(before.reservation);
-  expect(await emails(f.id)).toEqual([]);
+  expect(await exceptions(f.id)).toEqual([]);
 });
 
 test.each(["succeeded","failed","temporary"] as const)("request-driven: refund-backed reduction with %s result",async outcome=>{
@@ -2101,19 +2055,19 @@ test.each(["succeeded","failed","temporary"] as const)("request-driven: refund-b
   const result=await save(await edit(f,{expectedTotal:3000,requestId:randomUUID()}));
   expect(result.ok).toBe(true);
   if(outcome==="temporary"){
-    expect(await state(f)).toMatchObject({booking:before.booking,reservation:before.reservation,events:[]});
+    expect(await state(f)).toMatchObject({booking:before.booking,reservation:before.reservation,exceptions:[]});
     for(const refund of await adjustmentRefunds(database.manager,result.ok ? result.adjustmentId ?? "" : "")) await webhookCheck(refund.id);
   }
   const after=await state(f);
   if(outcome==="failed"){
     expect(after.booking).toEqual(before.booking);expect(after.reservation).toEqual(before.reservation);
     expect(after.refunds).toMatchObject([{status:"voided",amount_minor:2000}]);
-    expect(await emails(f.id)).toMatchObject([{subject:"Booking change not completed"}]);
+    expect(await exceptions(f.id)).toEqual(["modification_rejected"]);
   }else{
     expect(after.booking).toMatchObject({status:"confirmed",total_amount_minor:3000});
     expect(after.reservation).toMatchObject({court_id:secondCourtId,starts_at_minute:720,ends_at_minute:780});
     expect(after.refunds).toMatchObject([{status:"succeeded",amount_minor:2000}]);
-    expect(await emails(f.id)).toMatchObject([{subject:"Booking rescheduled"}]);
+    expect(await exceptions(f.id)).toEqual([]);
   }
 });
 
@@ -2139,69 +2093,55 @@ test.each(["temporary", "retryable", "external"] as const)("verification: split 
   });
   const request = await cancel(f);
   if (request.outcome !== "cancellation_pending") throw new Error("Missing refund-backed cancellation");
-  try {
-    for (const id of request.refundIds) await refundProcessing.processBookingRefund(id);
-    const pending = await state(f);
-    expect(pending.booking).toEqual(before.booking);
-    expect(pending.reservation).toEqual(before.reservation);
-    expect(await bookingFinancials(database.manager, f.id)).toMatchObject({ captured: 7500, refunded: 2500, obligated: 7500, netPaid: 5000 });
-    const history = await historyFor(f);
-    expect(history[0].financials.totals).toContainEqual(expect.objectContaining({ captured: 7500, refunded: 2500, uncompletedRefundObligations: 5000 }));
-    const successful = z.array(z.object({ id: z.uuid() })).length(1).parse(await database.query(
-      "SELECT id FROM public.payment_refunds WHERE booking_id=$1 AND status='succeeded'", [f.id]))[0].id;
-    expect(calls.filter(id => id === successful)).toHaveLength(1);
-    recovered = true;
-    // A webhook never replaces an execution after a retryable rejection; only an Admin check does.
-    for (const id of request.refundIds) await webhookCheck(id);
-    expect((await state(f)).booking?.status).toBe(failure === "temporary" ? "cancelled" : "confirmed");
-    for (const id of request.refundIds) await adminCheck(id);
-    expect(calls.filter(id => id === successful)).toHaveLength(1);
-    if (failure === "external") {
-      expect((await state(f)).booking).toEqual(before.booking);
-      expect(await bookingFinancials(database.manager, f.id)).toMatchObject({ refunded: 2500, obligated: 7500, netPaid: 5000 });
-      expect((await historyFor(f)).find(row => row.refund?.amount_minor === 5000)?.refund).toMatchObject({ status: "failed" });
-    } else {
-      expect(await state(f)).toMatchObject({ booking: { status: "cancelled" }, reservation: { status: "cancelled" } });
-      expect(await bookingFinancials(database.manager, f.id)).toMatchObject({ refunded: 7500, netPaid: 0 });
-    }
-  } finally {
-    await database.query("DELETE FROM public.booking_notification_deliveries WHERE message->>'text' LIKE $1", [`%${f.id}%`]);
+  for (const id of request.refundIds) await refundProcessing.processBookingRefund(id);
+  const pending = await state(f);
+  expect(pending.booking).toEqual(before.booking);
+  expect(pending.reservation).toEqual(before.reservation);
+  expect(await bookingFinancials(database.manager, f.id)).toMatchObject({ captured: 7500, refunded: 2500, obligated: 7500, netPaid: 5000 });
+  const history = await historyFor(f);
+  expect(history[0].financials.totals).toContainEqual(expect.objectContaining({ captured: 7500, refunded: 2500, uncompletedRefundObligations: 5000 }));
+  const successful = z.array(z.object({ id: z.uuid() })).length(1).parse(await database.query(
+    "SELECT id FROM public.payment_refunds WHERE booking_id=$1 AND status='succeeded'", [f.id]))[0].id;
+  expect(calls.filter(id => id === successful)).toHaveLength(1);
+  recovered = true;
+  // A webhook never replaces an execution after a retryable rejection; only an Admin check does.
+  for (const id of request.refundIds) await webhookCheck(id);
+  expect((await state(f)).booking?.status).toBe(failure === "temporary" ? "cancelled" : "confirmed");
+  for (const id of request.refundIds) await adminCheck(id);
+  expect(calls.filter(id => id === successful)).toHaveLength(1);
+  if (failure === "external") {
+    expect((await state(f)).booking).toEqual(before.booking);
+    expect(await bookingFinancials(database.manager, f.id)).toMatchObject({ refunded: 2500, obligated: 7500, netPaid: 5000 });
+    expect((await historyFor(f)).find(row => row.refund?.amount_minor === 5000)?.refund).toMatchObject({ status: "failed" });
+  } else {
+    expect(await state(f)).toMatchObject({ booking: { status: "cancelled" }, reservation: { status: "cancelled" } });
+    expect(await bookingFinancials(database.manager, f.id)).toMatchObject({ refunded: 7500, netPaid: 0 });
   }
 });
 
-test("verification: concurrent duplicate webhooks and distinct replay events create one capture, revision and durable notification", async () => {
+test("verification: concurrent duplicate webhooks and distinct replay events create one capture and revision", async () => {
   simulatedStripe();
   const f = await seed(600, false, true);
-  try {
-    const event = paymentEvent(f);
-    const results = await Promise.all([processOnlinePaymentEvent(event), processOnlinePaymentEvent(event),
-      processOnlinePaymentEvent({ ...event, eventId: randomUUID() })]);
-    expect(results).toEqual(["succeeded", "succeeded", "succeeded"]);
-    expect(await database.query("SELECT id FROM public.payment_capture_receipts WHERE payment_attempt_id=$1", [f.attemptId])).toHaveLength(1);
-    expect(await database.query("SELECT id FROM public.booking_revisions WHERE booking_id=$1 AND kind='confirmed'", [f.id])).toHaveLength(1);
-    expect(await database.query("SELECT id FROM public.booking_notification_deliveries WHERE message->>'text' LIKE $1", [`%${f.id}%`])).toHaveLength(1);
-  } finally {
-    await database.query("DELETE FROM public.booking_notification_deliveries WHERE message->>'text' LIKE $1", [`%${f.id}%`]);
-  }
+  const event = paymentEvent(f);
+  const results = await Promise.all([processOnlinePaymentEvent(event), processOnlinePaymentEvent(event),
+    processOnlinePaymentEvent({ ...event, eventId: randomUUID() })]);
+  expect(results).toEqual(["succeeded", "succeeded", "succeeded"]);
+  expect(await database.query("SELECT id FROM public.payment_capture_receipts WHERE payment_attempt_id=$1", [f.attemptId])).toHaveLength(1);
+  expect(await database.query("SELECT id FROM public.booking_revisions WHERE booking_id=$1 AND kind='confirmed'", [f.id])).toHaveLength(1);
 });
 
 test("verification: interrupted booking application after refund commit is completed by a later refund check without another refund", async () => {
   simulatedStripe();
   const f = await seed(600, true), request = await cancel(f);
   if (request.outcome !== "cancellation_pending") throw new Error("Missing pending cancellation");
-  try {
-    const failure = vi.spyOn(reservations, "updateCustomerReservationCancellation").mockRejectedValueOnce(new Error("simulated interruption"));
-    expect(await refundProcessing.processBookingRefund(request.refundIds[0])).toBe("succeeded");
-    failure.mockRestore();
-    expect(await state(f)).toMatchObject({ booking: { status: "confirmed" }, reservation: { status: "active" },
-      refunds: [expect.objectContaining({ status: "succeeded" })] });
-    await webhookCheck(request.refundIds[0]); await webhookCheck(request.refundIds[0]);
-    expect(await state(f)).toMatchObject({ booking: { status: "cancelled" }, reservation: { status: "cancelled" } });
-    expect(stripeAdapter.refundPayment).toHaveBeenCalledOnce();
-    expect(await database.query("SELECT id FROM public.booking_notification_deliveries WHERE message->>'text' LIKE $1", [`%${f.id}%`])).toHaveLength(1);
-  } finally {
-    await database.query("DELETE FROM public.booking_notification_deliveries WHERE message->>'text' LIKE $1", [`%${f.id}%`]);
-  }
+  const failure = vi.spyOn(reservations, "updateCustomerReservationCancellation").mockRejectedValueOnce(new Error("simulated interruption"));
+  expect(await refundProcessing.processBookingRefund(request.refundIds[0])).toBe("succeeded");
+  failure.mockRestore();
+  expect(await state(f)).toMatchObject({ booking: { status: "confirmed" }, reservation: { status: "active" },
+    refunds: [expect.objectContaining({ status: "succeeded" })] });
+  await webhookCheck(request.refundIds[0]); await webhookCheck(request.refundIds[0]);
+  expect(await state(f)).toMatchObject({ booking: { status: "cancelled" }, reservation: { status: "cancelled" } });
+  expect(stripeAdapter.refundPayment).toHaveBeenCalledOnce();
 });
 
 // Manual capture: a booking checkout authorizes only; the server captures inside the deadline.
@@ -2234,7 +2174,7 @@ test("a late authorization after the checkout deadline is cancelled at Stripe an
   expect(await resolveAuthorizedCheckoutPayment({ attemptId: f.attemptId, providerPaymentId: stripe.intent })).toBe("cancelled");
   expect(stripeAdapter.capturePayment).not.toHaveBeenCalled();
   expect(stripe.status()).toBe("cancelled");
-  expect(await state(f)).toMatchObject({ booking: { status: "expired" }, reservation: { status: "released" }, refunds: [], events: [] });
+  expect(await state(f)).toMatchObject({ booking: { status: "expired" }, reservation: { status: "released" }, refunds: [], exceptions: [] });
   expect(await database.query("SELECT id FROM public.payment_capture_receipts WHERE payment_attempt_id=$1", [f.attemptId])).toEqual([]);
 });
 
@@ -2250,7 +2190,7 @@ test("an authorization inside the deadline extends the hold by the capture grace
   // Accepted before capture: the hold ends exactly at the attempt deadline plus the grace.
   expect(observedHold && Date.parse(observedHold.hold!.replace(" ", "T"))).toBe(observedHold && Date.parse(observedHold.deadline.replace(" ", "T")));
   expect(await state(f)).toMatchObject({ booking: { status: "confirmed" }, reservation: { status: "active" },
-    events: [expect.objectContaining({ subject: "Booking confirmed" })] });
+    exceptions: [] });
   expect(await database.query("SELECT id FROM public.payment_capture_receipts WHERE payment_attempt_id=$1", [f.attemptId])).toHaveLength(1);
   expect(await database.query("SELECT id FROM public.booking_revisions WHERE booking_id=$1 AND kind='confirmed'", [f.id])).toHaveLength(1);
   expect(stripeAdapter.cancelPayment).not.toHaveBeenCalled();
@@ -2330,7 +2270,7 @@ test("a late capture past the grace still never reclaims occupancy and is refund
   expect(await resolving).toBe("succeeded");
   expect(await state(f)).toMatchObject({ booking: { status: "expired" }, reservation: { status: "released" },
     refunds: [expect.objectContaining({ reason: "late_capture_compensation", status: "succeeded", amount_minor: 5000 })],
-    events: [expect.objectContaining({ subject: "Payment received after checkout ended" })] });
+    exceptions:["late_capture"] });
 });
 
 // Manual capture for modification surcharges too: the customer only authorizes;
@@ -2368,7 +2308,7 @@ const captureReceipts = (attemptId: string) => database.query("SELECT id FROM pu
 
 test("a surcharge is authorized only; concurrent webhook and status poll capture it once and apply the change once", async () => {
   const outcomes = authorizedSurcharge();
-  const f = await seed(600, true), s = await surcharge(f), sent = (await emails(f.id)).length;
+  const f = await seed(600, true), s = await surcharge(f);
   // Same provider-neutral request as booking checkouts: the adapter always creates manual capture.
   expect(vi.mocked(stripeAdapter.createPayment).mock.calls.map(([call]) => call)).toEqual([{ id: s.attempt.id, amountMinor: 2500, currency: "RON" }]);
   outcomes.set(s.attempt.providerPaymentId, "authorized");
@@ -2388,11 +2328,9 @@ test("a surcharge is authorized only; concurrent webhook and status poll capture
   expect(await captureReceipts(s.attempt.id)).toHaveLength(1);
   expect(await findAdjustment(database.manager, s.adjustmentId)).toMatchObject({ status: "applied" });
   expect(await state(f)).toMatchObject({ booking: { total_amount_minor: 7500 }, reservation: { ends_at_minute: 690 }, refunds: [] });
-  expect(await emails(f.id)).toHaveLength(sent + 1);
   // A delayed payment_intent.succeeded webhook is a no-op.
   expect(await processOnlinePaymentEvent({ attemptId: s.attempt.id, provider: "stripe", providerPaymentId: s.attempt.providerPaymentId,
     eventId: randomUUID(), outcome: "succeeded", amountMinor: 2500, currency: "RON" })).toBe("succeeded");
-  expect(await emails(f.id)).toHaveLength(sent + 1);
   expect(await database.query("SELECT id FROM public.booking_revisions WHERE adjustment_id=$1", [s.adjustmentId])).toHaveLength(1);
 });
 
@@ -2506,7 +2444,7 @@ async function lockLocationsForAcceptance(manager: EntityManager, f: Fixture, at
   await payments.lockSettlementAttempt(manager, attemptId);
 }
 
-test("the same refund reversal delivered repeatedly keeps one reversal notice and the financial history", async () => {
+test("the same refund reversal delivered repeatedly keeps one reversal exception and the financial history", async () => {
   simulatedStripe();
   const f = await seed(600, false, true);
   await database.query("UPDATE public.court_reservations SET hold_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", [f.reservationId]);
@@ -2522,11 +2460,10 @@ test("the same refund reversal delivered repeatedly keeps one reversal notice an
     expect(await refundProcessing.processBookingRefund(refund.id, { strict: true, providerChanged: true })).toBe("failed");
   expect(await refundProcessing.processBookingRefund(refund.id, { actorId, retryRejected: true, strict: true })).toBe("failed");
   expect(await refundProcessing.processBookingRefund(refund.id)).toBe("failed");
-  await emails(f.id); // Explicit scheduled projection after financial processing.
-  expect((await database.query("SELECT event_key FROM public.booking_notification_deliveries WHERE event_key LIKE $1 ORDER BY event_key",
+  expect((await database.query("SELECT event_key FROM public.booking_financial_exceptions WHERE event_key LIKE $1 ORDER BY event_key",
     [`refund:${refund.id}:%`])).map((row: { event_key: string }) => row.event_key))
     .toEqual([`refund:${refund.id}:late_payment`, `refund:${refund.id}:reversed`]);
-  expect((await emails(f.id)).map(email => email.subject)).toEqual(["Payment received after checkout ended", "Refund requires attention"]);
+  expect(await exceptions(f.id)).toEqual(["late_capture", "refund_reversed"]);
   const executions = await refundExecutions.listRefundExecutions(database.manager, refund.id);
   expect(executions).toHaveLength(1);
   expect(executions[0]).toMatchObject({ terminalResult: "succeeded", lastError: "provider_refund_reversed" });
@@ -2548,7 +2485,6 @@ test("refund webhook: a failed booking update after the refund commit propagates
   expect(await refundProcessing.processBookingRefund(request.refundIds[0], { strict: true, providerChanged: true })).toBe("succeeded");
   expect(await state(f)).toMatchObject({ booking: { status: "cancelled" }, reservation: { status: "cancelled" } });
   expect(await refundExecutions.listRefundExecutions(database.manager, request.refundIds[0])).toHaveLength(1);
-  expect(await emails(f.id)).toHaveLength(1);
 });
 
 test("refund webhook: Stripe unreachable during the check propagates instead of acknowledging", async () => {
@@ -2577,7 +2513,7 @@ test("payment webhook redelivery re-drives an unfinished late-capture refund eve
   expect(await processOnlinePaymentEvent(event, { strict: true })).toBe("expired");
   expect((await state(f)).refunds).toMatchObject([{ status: "succeeded", amount_minor: 5000 }]);
   expect(await database.query("SELECT id FROM public.payment_capture_receipts WHERE payment_attempt_id=$1", [f.attemptId])).toHaveLength(1);
-  expect(await emails(f.id)).toMatchObject([{ subject: "Payment received after checkout ended" }]);
+  expect(await exceptions(f.id)).toEqual(["late_capture"]);
 });
 
 test("refund success followed by Stripe refund.failed is recorded as the current exception without a replacement refund", async () => {
@@ -2602,12 +2538,12 @@ test("refund success followed by Stripe refund.failed is recorded as the current
   expect(await bookingFinancials(database.manager, f.id)).toMatchObject({ refunded: 0, netPaid: 5000 });
   expect((await state(f)).refunds).toMatchObject([{ status: "failed" }]);
   expect((await historyFor(f)).find(row => row.refund?.id === request.refundIds[0])?.refund).toMatchObject({ status: "failed", last_error: "provider_refund_reversed" });
-  expect(await emails(f.id)).toMatchObject([{ subject: "Booking cancelled" }, { subject: "Refund requires attention" }]);
-  expect(await database.query("SELECT requires_acknowledgement FROM public.booking_notification_deliveries WHERE event_key=$1",
-    [`refund:${request.refundIds[0]}:reversed`])).toEqual([{ requires_acknowledgement: true }]);
+  expect(await database.query("SELECT kind FROM public.booking_financial_exceptions WHERE event_key=$1",
+    [`refund:${request.refundIds[0]}:reversed`])).toEqual([{ kind: "refund_reversed" }]);
+  expect(await exceptions(f.id)).toEqual(["refund_reversed"]);
 });
 
-test("an unresolved refund of a pending cancellation notifies the customer once and keeps the obligation", async () => {
+test("an unresolved refund of a pending cancellation records one exception and keeps the obligation", async () => {
   simulatedStripe();
   const f = await seed(600, true), before = await state(f), request = await cancel(f);
   if (request.outcome !== "cancellation_pending") throw new Error("Missing pending cancellation");
@@ -2618,9 +2554,7 @@ test("an unresolved refund of a pending cancellation notifies the customer once 
   expect(after.booking).toEqual(before.booking); expect(after.reservation).toEqual(before.reservation);
   expect(after.refunds).toMatchObject([{ status: "pending_retry", amount_minor: 5000 }]);
   expect(await database.query("SELECT status FROM public.booking_adjustments WHERE id=$1", [request.adjustmentId])).toEqual([{ status: "pending" }]);
-  expect(await emails(f.id)).toMatchObject([{ subject: "Refund requires attention" }]);
-  expect(await database.query("SELECT requires_acknowledgement,acknowledged_at FROM public.booking_notification_deliveries WHERE booking_id=$1", [f.id]))
-    .toEqual([{ requires_acknowledgement: true, acknowledged_at: null }]);
+  expect(await exceptions(f.id)).toEqual(["refund_unresolved"]);
 });
 
 async function interruptedBooking(f: Fixture, pastGrace = true) {

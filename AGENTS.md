@@ -547,8 +547,8 @@ service requires an active owner, confirmed booking and active linked reservatio
 The shared TypeScript policy enforces the inclusive snapshot cutoff and Admin/Coach
 notice bypass, while always rejecting booking start. The Phase 6 TypeORM cancellation transaction fences actor roles/account after location,
 booking, reservation, selected attempt and existing refund locks; TypeScript evaluates
-the snapshot deadline using post-lock database wall time, then persists lifecycle,
-refund request atomically, followed by post-commit email.
+the snapshot deadline using post-lock database wall time, then persists lifecycle and
+refund request atomically.
 Personal upcoming customer-booking reads authorize the active account, then use narrow
 server-only TypeORM projections filtered by verified owner, confirmed booking and active
 reservation. TypeScript uses existing location-time utilities for upcoming filtering
@@ -596,7 +596,7 @@ automatic captured-funds refunds but cannot reschedule them. The command retains
 shared configuration/location locks, actor fences and the lossless reservation
 stale token, and now compares the expected current revision UUID. Applied edits
 append immutable snapshots and advance the current pointer atomically with
-occupancy and refund obligations. Identical effective saves do not write or notify.
+occupancy and refund obligations. Identical effective saves do not write.
 
 Customer self-rescheduling from `/my-activity/bookings` uses the shared owner booking
 edit timetable, availability loader, price confirmation form, and same-row transactional
@@ -612,13 +612,13 @@ opening hours and occupancy for its fixed location, independent of public public
 Focused TypeORM command/edit reads retain separate owner and Admin authorization
 boundaries against locked authoritative facts. Success calls `revalidateCourtActivity("edit")`
 for `/book`, `/admin/reservations`, and `/my-activity/bookings`. Full Stripe cancellation
-refunds are implemented; guest self-management is not implemented. Booking lifecycle notifications are
-post-commit Brevo delivery; see `docs/booking-notifications.md`.
+refunds are implemented; guest self-management is not implemented. The application sends
+no booking lifecycle notifications or emails.
 
  `/profile` contains identity and settings;
 `/my-activity` redirects to `/my-activity/bookings`, which
 contains current/upcoming personal booking/reservation management. `/my-activity/history`
-is the current account's completed/cancelled bookings and staff-owned direct reservations. `/my-activity/notifications` provides a persistent account-owned booking-email inbox with server-side search/filter/sort and 25-row pagination. Inbox read/unread and soft deletion are independent of email delivery and explicit financial acknowledgment; unresolved financial alerts remain visible until OK. My Activity and `/profile/*` pages use the shared user sidebar (`UserAreaShell`, same `SidebarNavigation` as Admin). The server activity service authorizes the active account before bounded, privileged owner-filtered SELECTs; direct reservations require an Admin/Coach role. TypeScript classifies, filters and sorts the combined dataset before fixed 20-row pagination, with kind/ID tie-breakers. URL controls preserve filters/sort across pages and reset page 1 when changed.
+is the current account's completed/cancelled bookings and staff-owned direct reservations. My Activity and `/profile/*` pages use the shared user sidebar (`UserAreaShell`, same `SidebarNavigation` as Admin). The server activity service authorizes the active account before bounded, privileged owner-filtered SELECTs; direct reservations require an Admin/Coach role. TypeScript classifies, filters and sorts the combined dataset before fixed 20-row pagination, with kind/ID tie-breakers. URL controls preserve filters/sort across pages and reset page 1 when changed.
 Coupled personal reservation reads bind explicitly to the verified actor UUID through TypeORM and use location-local time for lifecycle classification. Activity/history reads use owner-filtered TypeORM projections through the current activity service.
 Active Admins and Coaches can cancel
 only their own active Upcoming reservations after explicit confirmation. Server authorization and database checks
@@ -1224,19 +1224,12 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 <!-- END:nextjs-agent-rules -->
 
-## Booking email notifications
+## Application notifications
 
-Booking confirmation, customer/Admin cancellation and owner rescheduling
-capture the booking contact and schedule within the successful transaction, then
-send the preserved text template through Brevo's transactional HTTP API after commit.
-Use only the snapshotted the current revision’s `customer_email`, never the current account email.
-Quote, stale, failed and unchanged-schedule saves send no rescheduling email;
-pending/failed/expired checkout sends no confirmation. Transition and webhook receipt
-checks prevent replayed operations from sending again. Delivery is best-effort with
-a 10-second HTTP timeout, sanitized error logging, and no persistent queue or retries.
-Email failure cannot change committed booking/payment state. Server-only
-`BREVO_API_KEY` and a Brevo-verified `BOOKING_MAIL_FROM` are required.
-Supabase Auth confirmation/recovery emails remain independent.
+There is no application-specific notification system: no booking emails, in-app inbox,
+notification bell, Admin notification list, delivery queue, scheduled delivery or Brevo
+integration. Supabase Auth confirmation/recovery emails remain provider-managed and
+independent. Do not add notification side effects to booking, payment or refund workflows.
 
 The `/book` confirmation UI reads only the selected eligible public location’s cancellation-notice value through a narrow TypeORM read. After atomic creation, a read bound to the returned booking ID retrieves its stored policy snapshot; authenticated success uses the existing TypeScript timezone utility for start instant and cutoff display. Guest success shows the stored notice without inferring a timezone-resolved cutoff. Failed post-commit display reads are logged and never report the committed booking as a failed submission. No browser database access or public database grants are added.
 
@@ -1291,7 +1284,7 @@ and loading feedback has a finite timeout. See docs/payments-memberships.md.
 `/api/payments/stripe/webhook` verifies the raw body signature, translates events and
 calls common `processOnlinePaymentEvent`. Its service-only transaction records event
 receipt and reuses existing same-row settlement atomically. Preserve location-first
-lock order, application occupancy validation, retained GiST and notification timing.
+lock order, application occupancy validation and retained GiST.
 Late paid events or financial
 mismatches must set private `payment_provider_events.reconciliation_required` and
 must never reclaim a released court. Full Stripe cancellation refunds and automatic refund execution for captures after explicit checkout cancellation are implemented as described below; other late captures use existing Admin reconciliation. Failover and a background reconciliation worker are not implemented. See `docs/payments-memberships.md` for configuration and verification.
@@ -1323,7 +1316,7 @@ automatic adjustment and Admin reconciliation attribution rules remain. Admin re
 allocate a distinct execution only after verified failure or definitive rejection.
 Automatic processing retains terminal short-circuits. PaymentRefund stores immutable
 obligation terms plus status/timestamps; provider references/errors come from executions.
-No refund notifications, scheduled worker, dual writes or provider history JSON remain.
+No scheduled worker, dual writes or provider history JSON remain.
 
 ## Admin Payments
 
@@ -1387,7 +1380,7 @@ genuinely invalid captures retain compensation. Edit is hidden while a live paym
 is unresolved. `BOOKING_HOLD_SECONDS_OVERRIDE` is test-only (NODE_ENV=test or
 E2E_ALLOW_HOLD_OVERRIDE=1, never production). See docs/payments-memberships.md.
 
-## Durable financial notifications
+## Durable financial exceptions
 
 Refund-backed cancellation/reduction requires every obligation to succeed. Preserve the
 original booking and reservation and all verified partial refunds while any obligation is
@@ -1397,33 +1390,8 @@ unknown/permanent refusal is exceptional and never voids the obligation. Past th
 idempotency replay window use fully paginated Stripe refund evidence only; missing evidence
 is explicitly unresolved and never authorizes blind resend.
 
-Booking notification recovery is forward-only under migration `1791462257935`:
-new revisions/adjustment requests opt in with `recovery_version=1`; existing records stay
-NULL and must never be backfilled. Lifecycle revisions and immutable
-`booking_financial_exceptions` retain original context and occurrence facts atomically
-with financial state. No rendering, notification projection writes or Brevo calls belong
-in financial transactions or requests. The existing `/api/notifications/deliver` cron
-reconstructs missing delivery/inbox snapshots, then sends through Brevo. All email types
-use permanent soft dismissal; never physically delete an Admin-dismissed event key.
-Recovery must preserve original snapshots, read/deletion state and acknowledgment,
-repair missing inbox copies, and retry failed projections from financial evidence.
-Migration `1791462257936` retains a circular recovery scan cursor so failed sources
-cannot monopolize every batch. Recovery has a bounded separate database pool and
-eight seconds of the scheduled invocation; delivery runs even if recovery fails.
-Explicit Admin Retry remains separate. Delivery is at-least-once submission;
-ambiguous acceptance can duplicate email after provider key expiry. See
-`docs/booking-notifications.md` and migrations `1791462257928`/`1791462257929`.
-
-
-## Customer notification inbox
-
-Scheduled projection's `enqueueBookingNotification` atomically snapshots the rendered subject/body,
-booking reference, event kind and timestamp into `customer_notifications` for the booking's
-non-null authoritative `account_user_id`. Never associate by email. A unique event key,
-retained after inbox soft deletion, prevents replay duplicates. There is no delivery FK;
-Admin email deletion cannot remove inbox history. Active owners alone may search, read,
-mark unread or soft-delete their copies. Financial OK acknowledgment updates the existing
-operational delivery record and inbox timestamp in one transaction, locking delivery
-before inbox with fresh statement snapshots; read/unread/deletion
-never acknowledges financial alerts. Keep unresolved alerts visible outside inbox filters.
-Migration `1791462257931-CustomerNotificationHistory` backfills retained delivery records.
+Lifecycle revisions and immutable `booking_financial_exceptions` (initial and native
+integrity migrations) retain original context and occurrence facts
+atomically with financial state; failure to persist that evidence fails the financial
+transaction. Admin sees failed, unresolved and reversed refunds through the existing
+Payments transaction views and financial history.

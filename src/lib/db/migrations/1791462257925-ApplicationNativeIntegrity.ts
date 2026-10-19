@@ -94,11 +94,16 @@ export class ApplicationNativeIntegrity1791462257925 implements MigrationInterfa
       FOR EACH ROW WHEN (NEW.account_user_id IS DISTINCT FROM OLD.account_user_id)
       EXECUTE FUNCTION public.protect_booking_ownership()`);
     await queryRunner.query(`REVOKE ALL ON FUNCTION public.protect_booking_ownership() FROM PUBLIC, anon, authenticated, service_role`);
+    // Surcharge capture acceptance is recorded once; every other proposal fact is fixed.
     await queryRunner.query(`CREATE FUNCTION public.protect_financial_context() RETURNS trigger
       LANGUAGE plpgsql SET search_path = '' AS $$ BEGIN
         IF TG_TABLE_NAME='booking_adjustments' THEN
-          IF (to_jsonb(NEW)-ARRAY['status','updated_at']) IS DISTINCT FROM (to_jsonb(OLD)-ARRAY['status','updated_at']) THEN
+          IF (to_jsonb(NEW)-ARRAY['status','updated_at','capture_accepted_at']) IS DISTINCT FROM
+             (to_jsonb(OLD)-ARRAY['status','updated_at','capture_accepted_at']) THEN
             RAISE EXCEPTION 'Adjustment proposal facts are immutable' USING ERRCODE='23514';
+          END IF;
+          IF OLD.capture_accepted_at IS NOT NULL AND NEW.capture_accepted_at IS DISTINCT FROM OLD.capture_accepted_at THEN
+            RAISE EXCEPTION 'Capture acceptance is immutable' USING ERRCODE='23514';
           END IF;
         ELSE
           IF (to_jsonb(NEW)-ARRAY['status','updated_at']) IS DISTINCT FROM
@@ -155,6 +160,15 @@ export class ApplicationNativeIntegrity1791462257925 implements MigrationInterfa
     for (const name of ["protect_booking_revision", "validate_booking_revision_append", "validate_booking_revision_head"]) {
       await queryRunner.query(`REVOKE ALL ON FUNCTION public.${name}() FROM PUBLIC, anon, authenticated, service_role`);
     }
+    await queryRunner.query(`CREATE FUNCTION public.protect_booking_financial_exception() RETURNS trigger
+      LANGUAGE plpgsql SET search_path = '' AS $$ BEGIN
+        RAISE EXCEPTION 'Booking financial exceptions are immutable' USING ERRCODE='23514';
+      END; $$`);
+    await queryRunner.query(`CREATE TRIGGER booking_financial_exceptions_immutable BEFORE UPDATE OR DELETE ON public.booking_financial_exceptions
+      FOR EACH ROW EXECUTE FUNCTION public.protect_booking_financial_exception()`);
+    await queryRunner.query(`CREATE TRIGGER booking_financial_exceptions_no_truncate BEFORE TRUNCATE ON public.booking_financial_exceptions
+      FOR EACH STATEMENT EXECUTE FUNCTION public.protect_booking_financial_exception()`);
+    await queryRunner.query(`REVOKE ALL ON FUNCTION public.protect_booking_financial_exception() FROM PUBLIC, anon, authenticated, service_role`);
 
     await queryRunner.query(`CREATE UNIQUE INDEX users_email_lower_unique ON public.users (lower(email))`);
     await queryRunner.query(`INSERT INTO public.roles(code) VALUES ('admin'), ('coach')`);
@@ -164,7 +178,12 @@ export class ApplicationNativeIntegrity1791462257925 implements MigrationInterfa
   async down(queryRunner: QueryRunner): Promise<void> {
     // Removing the guards must not enable a subsequent schema rollback to erase history.
     await queryRunner.query(`DO $$ BEGIN IF EXISTS (SELECT 1 FROM public.refund_executions) THEN
-      RAISE EXCEPTION 'Cannot roll back persisted refund execution history'; END IF; END $$`);
+      RAISE EXCEPTION 'Cannot roll back persisted refund execution history'; END IF;
+      IF EXISTS (SELECT 1 FROM public.booking_financial_exceptions) THEN
+      RAISE EXCEPTION 'Cannot discard booking financial exception evidence'; END IF; END $$`);
+    await queryRunner.query(`DROP TRIGGER booking_financial_exceptions_no_truncate ON public.booking_financial_exceptions`);
+    await queryRunner.query(`DROP TRIGGER booking_financial_exceptions_immutable ON public.booking_financial_exceptions`);
+    await queryRunner.query(`DROP FUNCTION public.protect_booking_financial_exception()`);
     await queryRunner.query(`DROP TRIGGER refund_executions_no_truncate ON public.refund_executions`);
     await queryRunner.query(`DROP TRIGGER refund_executions_immutable ON public.refund_executions`);
     await queryRunner.query(`DROP FUNCTION public.protect_refund_execution()`);

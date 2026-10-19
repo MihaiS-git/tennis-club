@@ -16,6 +16,8 @@ export class SupabaseAuthStorage1791462257926 implements MigrationInterface {
       REVOKE ALL ON SEQUENCES FROM PUBLIC, anon, authenticated`);
     await queryRunner.query(`REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC, anon, authenticated`);
     await queryRunner.query(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC, anon, authenticated`);
+    // Financial exception evidence is reachable only through the application's server-side connection.
+    await queryRunner.query(`REVOKE ALL ON public.booking_financial_exceptions FROM service_role`);
 
     await queryRunner.query(`CREATE FUNCTION public.handle_auth_user_created() RETURNS trigger
       LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$

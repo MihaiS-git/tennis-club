@@ -25,7 +25,7 @@ npm run test:e2e
 ```
 
 The initializer verifies the test stack endpoints and database identity before
-applying pending migrations from the seven registered TypeORM migrations (924–930), atomically. It is
+applying pending migrations from the three registered TypeORM migrations (924–926), atomically. It is
 idempotent and checks for pending migrations. It never drops data or runs the
 100-user development seed. Supabase application SQL migrations/seeding are disabled;
 Auth and Storage infrastructure still comes from native Supabase startup.
@@ -54,8 +54,8 @@ Playwright builds into `.next-test` and starts its own production Next.js server
 port 3100, leaving the development server and `.next` output untouched. Port 3100
 must be free; `PLAYWRIGHT_USE_EXISTING_SERVER=1` is rejected.
 The build and server inherit the verified test connections and `APP_URL` explicitly,
-so Next.js cannot replace them with `.env.local` values. Real booking mail and
-payment-provider environment credentials are explicitly blanked; tests opt into
+so Next.js cannot replace them with `.env.local` values. Real payment-provider
+environment credentials are explicitly blanked; tests opt into
 mocked provider settings where needed. Auth confirmation/recovery mail uses the test
 Mailpit URL. Build or startup failures fail the suite.
 
@@ -127,12 +127,12 @@ production routes use TypeORM only.
 ## Database-native protection
 
 `tests/integration/db/migration-cutover.integration.test.ts` directly attempts invalid
-persistence to verify all five overlap exclusions (reservations, coverage, opening
+persistence to verify the court overlap exclusions (reservations, coverage, opening
 hours, schedule validity and pricing), valid adjacent intervals, partial payment uniqueness, positive
 payment/capture/refund amounts, capture identity/deduplication, immutable payment-request/provider-event/capture
 facts, refund/adjustment foreign keys, operation/request uniqueness, adjustment hold-fragment
-duration/state and restrictive financial deletes. It also requires the seven registered
-migrations (924–930) and an empty TypeORM schema-builder diff. Security coverage includes
+duration/state and restrictive financial deletes. It also requires the three registered
+migrations (924–926), no notification tables and an empty TypeORM schema-builder diff. Security coverage includes
 browser-role table/column and future-table privileges, real denied reads, Auth signup
 and email synchronization, and private active-account avatar Storage access.
 Reservation, configuration, payment and profile integration suites provide additional
@@ -202,7 +202,8 @@ DATABASE_URL=<verified-isolated-empty-database-url> node --conditions=react-serv
 Review generated DDL, then put `CREATE EXTENSION IF NOT EXISTS btree_gist WITH SCHEMA
 extensions` and `SET LOCAL search_path = public, extensions` at the beginning of
 `up()` before the entity-generated exclusions. Retain the extension on rollback.
-Ordinary tables, checks, indexes, keys and all exclusions come from entity metadata.
+Re-append the handwritten `booking_financial_exceptions` table (it has no entity) at the
+end of `up()` and drop it first in `down()`. Ordinary tables, checks, indexes, keys and all exclusions come from entity metadata.
 The Auth reference is non-synchronized, and the email expression index is declared
 with `synchronize: false`; a post-initialization schema comparison must propose zero
 changes, including no native-object drops. Do not preserve the removed effective-hours
@@ -215,7 +216,7 @@ nonempty bucket. Runtime Storage access and policies are unchanged.
 
 ## Booking revision validation
 
-The migration-cutover suite checks the seven-migration history (924–930), zero schema diff,
+The migration-cutover suite checks the three-migration history (924–926), zero schema diff,
 non-synchronized Auth reference, composite current/predecessor relationships,
 strict linear numbering, atomic head advancement and revision UPDATE/DELETE/TRUNCATE
 rejection. Ownership checks reject guest/account reassignment in every direction,
@@ -246,8 +247,8 @@ The affected Stripe refunds, Admin reconciliation, booking-mutations and financi
 history suites retain cancellation idempotency, atomic receipt resolution, failed
 adjustment compensation and RON 50 → 75 → 100 → 75 → cancellation coverage.
 Regenerate the existing initial migration only against verified empty isolated
-infrastructure; apply all seven registered migrations (924–930) and verify zero metadata drift.
-No provider calls occur inside transactions, and no real Stripe/Brevo calls or
+infrastructure; apply all three registered migrations (924–926) and verify zero metadata drift.
+No provider calls occur inside transactions, and no real Stripe calls or
 normal development reset are part of these checks.
 
 ## Request-driven payment recovery
@@ -258,29 +259,35 @@ from `.next` and `.next-test` before restarting. Otherwise Next.js can load the 
 instrumentation from an earlier compilation and start the obsolete timer. This concerns
 generated local output only; do not restore the removed source or change database data.
 
-No financial scheduler runs (Supabase Cron only retries emails; tests call
-`POST /api/notifications/deliver` directly and never schedule jobs in the test database). Integration tests drive each outcome the way production does: the
+No scheduler runs. Integration tests drive each outcome the way production does: the
 checkout status poll, `processOnlinePaymentEvent` (signed webhook), and
 `processBookingRefund` with `{ strict: true, providerChanged: true }` (Stripe refund webhook) or
 `{ actorId, retryRejected: true, strict: true }` (Admin "Check with Stripe").
-Apply migrations `1791462257929-RequestDrivenPaymentRecovery` and
-`1791462257930-SurchargeCaptureAcceptance` with the guarded test initializer before running them against the isolated test database.
-`tests/integration/booking-notifications.integration.test.ts` covers post-commit email
-delivery, retries, concurrency and in-app acknowledgement.
+Initialize the isolated test database with the guarded test initializer before running them.
 
-Focused surcharge/Cron regressions (no reset, full suites or build):
+Focused surcharge regressions (no reset, full suites or build):
 
 ```bash
 node --conditions=react-server --import=./scripts/ts-loader.mjs scripts/initialize-test-database.ts
-node node_modules/vitest/vitest.mjs run tests/unit/notification-cron-target.test.ts
-node node_modules/vitest/vitest.mjs run tests/unit/booking-notification-commit.test.ts -t 'paid|surcharge|adjustment|modification'
+node node_modules/vitest/vitest.mjs run tests/unit/booking-commit.test.ts -t 'paid|surcharge|adjustment|modification'
 node tests/run-integration.mjs tests/integration/db/booking-mutations.integration.test.ts -t 'accepted surcharge|a surcharge is authorized only|a surcharge authorization rejected|a surcharge whose capture fails'
 ```
 
 The initializer applies pending additive migrations only to the verified isolated test
 project. Surcharge tests cover the capture deadline, acceptance with and without extra
 court holds, and capture racing expiry, dismissal, supersession and delayed provider
-signals. Cron guard tests do not connect, schedule jobs or contact external services.
+signals.
+
+## Financial exceptions without notifications
+
+The application has no notification system. `tests/integration/booking-financial-exceptions.integration.test.ts`
+verifies that confirmation, rescheduling and failed/successful cancellation refunds settle
+correctly, that exception facts commit atomically with the deciding refund result, keep
+their first context, reject changed identity and are immutable, and that interrupted
+refund-backed changes are resolved by a later check. Booking-mutation, Stripe payment and
+refund suites assert the exception kinds recorded for rejected changes, unapplied
+surcharges, late captures and failed/unresolved/reversed refunds. Navigation component
+tests assert that no notification links or controls are rendered.
 
 ## Coaching coverage
 

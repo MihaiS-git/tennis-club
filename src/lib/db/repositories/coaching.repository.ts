@@ -15,6 +15,7 @@ import { CoachProgramEntity } from "../entities/coach-program.entity";
 import { CoachingPriceEntity } from "../entities/coaching-price.entity";
 import { CoachingProgramDurationEntity } from "../entities/coaching-program-duration.entity";
 import { CoachingProgramEntity } from "../entities/coaching-program.entity";
+import { readIndependently } from "../transaction";
 
 // ---- Programs ----
 
@@ -117,9 +118,9 @@ export async function findCoachProfile(manager: EntityManager, userId: string) {
 export async function lockCoachProfile(manager: EntityManager, userId: string, mode: "pessimistic_read" | "pessimistic_write") {
   const profile = await manager.getRepository(CoachProfileEntity).findOne({ where: { userId: userId.toLowerCase(), archivedAt: IsNull() }, lock: { mode } });
   if (!profile) return null;
-  const [locations, programs] = await Promise.all([
-    manager.getRepository(CoachLocationEntity).find({ where: { coachUserId: profile.userId } }),
-    manager.getRepository(CoachProgramEntity).find({ where: { coachUserId: profile.userId } }),
+  const [locations, programs] = await readIndependently(manager, [
+    () => manager.getRepository(CoachLocationEntity).find({ where: { coachUserId: profile.userId } }),
+    () => manager.getRepository(CoachProgramEntity).find({ where: { coachUserId: profile.userId } }),
   ]);
   return { ...profile, locationIds: locations.map((row) => row.locationId), programIds: programs.map((row) => row.programId) };
 }

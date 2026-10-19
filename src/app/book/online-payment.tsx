@@ -1,6 +1,5 @@
 "use client";
 
-import { refreshNotificationUnread } from "@/components/notification-unread";
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { toast } from "sonner";
@@ -88,7 +87,6 @@ function PaymentForm({ checkout, holdExpiresAt, onConfirmed, onPaymentStatus, di
     finished.current = false;
     generation.current += 1;
     let disposed = false, busy = false, expiredLocally = false;
-    let notificationOutcome = "";
     let request: AbortController | undefined;
     function showStatus(status: CheckoutPaymentStatus, text: string) {
       setPaymentStatus(status); setMessage(text);
@@ -125,7 +123,6 @@ function PaymentForm({ checkout, holdExpiresAt, onConfirmed, onPaymentStatus, di
           return;
         }
         if (result.status === "confirmed") {
-          refreshNotificationUnread();
           finished.current = true;
           processingStarted.current = null;
           showStatus("succeeded", confirmationMessage);
@@ -136,11 +133,6 @@ function PaymentForm({ checkout, holdExpiresAt, onConfirmed, onPaymentStatus, di
         }
         const state = result.paymentStatus;
         if (result.status !== "pending_payment" || state === "refund_pending" || state === "refund_failed" || state === "refunded") {
-          const outcome = `${result.status}:${state}`;
-          if (outcome !== notificationOutcome) {
-            notificationOutcome = outcome;
-            refreshNotificationUnread();
-          }
           uncertain.current = true;
           processingStarted.current = null; setProcessing(false);
           const text = state === "refund_failed" ? messages.refund_failed

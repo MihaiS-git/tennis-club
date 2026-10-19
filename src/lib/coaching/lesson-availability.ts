@@ -22,7 +22,7 @@ const coachingLessonAvailabilitySchema = z.object({
   locationId: z.uuid(), programId: z.uuid(), coachId: z.uuid(), date: z.iso.date(),
 });
 
-export type PublicLessonCourt = {
+type PublicLessonCourt = {
   id: string; name: string; coachingAmountMinor: number; courtAmountMinor: number; totalAmountMinor: number;
 };
 // One starting time and every court on which the whole lesson can take place.

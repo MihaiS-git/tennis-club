@@ -18,7 +18,7 @@ const maxAmountMinor = 2147483647;
 
 // A held or active court reservation occupying the coach, at any court or location.
 // Compared in local wall time on its date, as court_reservation_coach_no_overlap does.
-export type CoachOccupancy = Pick<CalendarReservation, "booking_date" | "starts_at_minute" | "ends_at_minute">;
+type CoachOccupancy = Pick<CalendarReservation, "booking_date" | "starts_at_minute" | "ends_at_minute">;
 
 // Facts of one local date at one location. The caller supplies a publicly eligible
 // location (isPubliclyEligible) with its active courts, the public coaching facts

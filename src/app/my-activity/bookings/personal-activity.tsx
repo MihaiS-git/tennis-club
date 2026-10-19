@@ -1,6 +1,5 @@
 "use client";
 
-import { refreshNotificationUnread } from "@/components/notification-unread";
 
 import { toast } from "sonner";
 
@@ -193,7 +192,7 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
             // X discards an unpaid modification; a processing payment is left to the webhook.
             const adjustmentId = adjustmentRef.current;
             adjustmentRef.current = null;
-            void (adjustmentId ? dismissOwnBookingAdjustmentAction(adjustmentId).then(result => { if (result.ok) refreshNotificationUnread(); }) : Promise.resolve())
+            void (adjustmentId ? dismissOwnBookingAdjustmentAction(adjustmentId) : Promise.resolve())
               .catch(() => { /* The hold still ends at its deadline. */ })
               .then(() => loadPersonalActivityAction(listQuery)).then(setActivity).catch(() => {
                 setActivity(null); setError("Unable to load your court activity. Try again.");

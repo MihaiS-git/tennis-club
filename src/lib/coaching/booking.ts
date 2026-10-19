@@ -43,7 +43,7 @@ export const coachingBookingInputSchema = z.strictObject({
   && value.startMinute + value.durationMinutes <= 1440,
 { path: ["startMinute"], message: "Choose at least 60 minutes in 30-minute steps." });
 
-export type CoachingBookingFailure = CoachingLessonUnavailableReason
+type CoachingBookingFailure = CoachingLessonUnavailableReason
   | "invalid-input" | "account-inactive" | "location-unavailable" | "past" | "payment-unavailable" | "changed" | "failed";
 
 export type CoachingBookingResult =

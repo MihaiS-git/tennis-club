@@ -1,7 +1,6 @@
 import { ProfileDepartureForm, ProfileDepartureLink as Link } from "./profile-departure-navigation";
 import { Suspense } from "react";
 
-import { NotificationBell } from "./notification-bell";
 import { SignOutButton } from "./sign-out-button";
 
 import { signOutAction } from "@/app/account/actions";
@@ -31,7 +30,6 @@ async function AccountControls({ authenticated }: { authenticated: boolean }) {
   if (!authenticated) return <Link className="text-sm font-medium text-primary hover:text-accent" href="/login">Sign in</Link>;
 
   return <>
-    <NotificationBell admin={account.state === "active" && account.roles.includes("admin")} />
     <Link href="/profile" aria-label="Profile"
       className="inline-flex min-h-10 items-center rounded-control border border-border-strong px-1.5 text-primary hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-primary">
       <ProfileNavigationAvatar src={avatarUrl} desktop />

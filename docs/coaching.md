@@ -4,12 +4,11 @@ Admin-configured programs, public coach profiles and coaching prices form the fo
 Coaches and Admins manage private coach availability (see [Coach availability](#coach-availability)).
 Reservation Steps 1–6 support Private and Semi-private lessons on `/book?mode=coaching`, using protected
 coach/court holds and the existing combined-payment, settlement, expiry and refund lifecycle.
-Coaching rescheduling and packages remain deferred. Production release remains blocked by
-the existing court-only notification recovery conflict; notifications are unchanged.
+Coaching rescheduling and packages remain deferred.
 
 ## Data model
 
-Migration `CoachingPrograms1791462257934` creates six tables, generated from the
+The initial migration creates six coaching tables, generated from the
 entity metadata (`db/migration-cutover.integration.test.ts` keeps them equal).
 Browser roles have no grants on any of them.
 
@@ -116,7 +115,7 @@ operational data: it is not published, and alone it never makes a lesson bookabl
 
 ### Data model
 
-Migration `CoachAvailability1791462257937` adds two tables (entity-generated, no browser grants):
+The initial migration creates two availability tables (entity-generated, no browser grants):
 
 | Table | Purpose |
 | --- | --- |
@@ -204,7 +203,7 @@ location-first occupancy locks. Open decisions:
 
 ## Coaching reservations (persistence foundation)
 
-Migration `CoachingReservations1791462257938` prepares lessons to reuse the existing booking,
+The initial migration's coaching columns let lessons reuse the existing booking,
 revision, reservation and payment lifecycle. Server-side checkout, settlement and `/book?mode=coaching` now use it.
 
 - `court_reservations.coach_user_id` (nullable, FK `coach_profiles`): a lesson is one ordinary
@@ -262,7 +261,7 @@ Tests: `tests/unit/coaching/lesson-quote.test.ts`.
 
 `readPublicCoachingLessonAvailability({ locationId, programId, coachId, date })` in
 `src/lib/coaching/lesson-availability.ts` is a read-only, advisory projection: no booking,
-reservation, hold, payment or notification. It takes no session, so visitors and members see the
+reservation, hold or payment. It takes no session, so visitors and members see the
 same result. Malformed input, a non-public location, and an inactive, unsupported or unoffered
 program or ineligible coach all return `null`.
 
@@ -355,19 +354,11 @@ receives an owner-filtered `includes_coaching` flag and withholds Edit. Cancella
 combined-payment refunds reuse their existing commands unchanged; guest self-management
 remains unimplemented.
 
-### Notification conflict and retained limitations
-
-No notification implementation changed. Existing scheduled notification reconstruction
-selects confirmed/cancelled revisions without excluding coaching and renders court-only
-content (for example, “Your court booking is confirmed.”), omitting the coach, program and
-coaching/court breakdown. Coaching settlement therefore produces evidence that the existing
-worker would turn into a court-only customer notification. Resolve this conflict in the
-separate notification review before exposing coaching checkout; Step 5 does not add a
-coaching template, suppressor, persistence path or recovery mechanism.
+### Retained limitations
 
 The existing provider-initialization/attachment ambiguity and loss of guest capability on
 browser refresh remain as documented in `payments-memberships.md` and the payment workflow
-audit. No new recovery workflow or migration is introduced. Migration 936 remains pending.
+audit. No new recovery workflow or migration is introduced.
 
 Focused coverage extends `tests/integration/coaching-booking.integration.test.ts` with mocked
 Stripe and real isolated PostgreSQL. Its explicit payment matrix covers included/excluded
@@ -395,8 +386,8 @@ Application changes:
 Tests: `tests/unit/coaching/checkout.test.ts`,
 `tests/integration/coaching-booking.integration.test.ts`,
 `tests/components/personal-activity.test.tsx`, `tests/unit/activity-service.test.ts`;
-`tests/unit/booking-notification-commit.test.ts` only gains the null coach field in its
-court-only locked-reservation fixture. Notification behavior/infrastructure is unchanged.
+`tests/unit/booking-commit.test.ts` only gains the null coach field in its
+court-only locked-reservation fixture.
 Documentation: this file and `README.md`.
 
 Focused commands (Stripe SDK calls mocked; isolated `tennis-club-tests` PostgreSQL only):
@@ -407,7 +398,7 @@ npm run test:integration -- tests/integration/coaching-booking.integration.test.
   tests/integration/owner-customer-booking-reschedule.integration.test.ts \
   tests/integration/personal-customer-bookings.integration.test.ts
 npx vitest run tests/unit/coaching/checkout.test.ts tests/unit/payment-integrity.test.ts \
-  tests/unit/booking-notification-commit.test.ts tests/components/personal-activity.test.tsx \
+  tests/unit/booking-commit.test.ts tests/components/personal-activity.test.tsx \
   tests/unit/customer-booking-action.test.ts tests/unit/stripe-adapter.test.ts \
   tests/unit/activity-service.test.ts
 npm run typecheck
@@ -417,7 +408,7 @@ npx eslint src/lib/coaching/checkout.ts src/lib/payments/service.ts \
   src/app/my-activity/bookings/customer-booking-cancellation.tsx \
   tests/unit/coaching/checkout.test.ts tests/integration/coaching-booking.integration.test.ts \
   tests/components/personal-activity.test.tsx \
-  tests/unit/{booking-notification-commit,activity-service}.test.ts
+  tests/unit/{booking-commit,activity-service}.test.ts
 ```
 
 Validation passed: 26 PostgreSQL integration tests across four focused files, 118 unit/component
@@ -463,10 +454,8 @@ checkout holds resources, its chosen quote remains snapshotted in UI state acros
 revalidation, even when that hold disappears from public availability. Payment outcomes
 continue to come exclusively from the existing verified status flow.
 
-Coaching and coach detail pages link to the shared booking route. Notifications are
-unchanged. **Production release remains blocked by the court-only notification recovery
-conflict described above.** The browser capability/initialization recovery limitations
-from Step 5 also remain.
+Coaching and coach detail pages link to the shared booking route. The browser
+capability/initialization recovery limitations from Step 5 remain.
 
 ### Step 6 validation
 
@@ -494,7 +483,7 @@ were observed. The available development data has no lesson starts at the inspec
 selectable/payment cases use focused component fixtures and mocked payment transport.
 Validation passed: **84 focused tests across nine files**, TypeScript, scoped ESLint
 on the touched application/test files, `git diff --check`, and both browser smoke viewports.
-No real financial transaction, database reset, build, notification change or commit is made.
+No real financial transaction, database reset, build or commit is made.
 
 Step 6 touches the shared `/book` content, calendar, controls, confirmation and actions;
 adds `coaching-controls.tsx` and the public offer prop type `coaching-selection.ts`;
@@ -562,7 +551,7 @@ means unavailable. Included rental adds zero; excluded rental adds the selected 
 price once. There is one combined Stripe payment. New revisions snapshot the participant count beside
 the historical program/coach names and agreed amounts; confirmation carries those terms unchanged.
 The shared summary displays participants, program, coach, location, court, duration and price breakdown
-in review, checkout and verified confirmation. Notifications and Brevo are unchanged.
+in review, checkout and verified confirmation.
 
 Focused validation commands:
 
@@ -595,7 +584,7 @@ Admin account fence. A held reservation or active lesson whose location-local en
 future blocks removal; no lesson is cancelled or refunded. Without reservation/revision references,
 the profile is physically deleted after prices, availability exceptions, weekly availability,
 program assignments and location assignments. With only historical references, the same cleanup
-archives the profile instead (`archived_at`, migration `CoachRosterRemoval1791462257939`) and hides
+archives the profile instead (`archived_at`) and hides
 it publicly. The UI reports archiving separately from physical deletion. Archived profiles are
 excluded from roster, availability and booking reads and cannot be republished or edited through
 normal Admin mutations. Historical names, contracts, reservations and financial evidence remain.
@@ -625,7 +614,6 @@ Changes for management cleanup and removal:
 - `src/lib/coaching/validation.ts`
 - `src/lib/db/repositories/coaching.repository.ts`
 - `src/lib/db/entities/coach-profile.entity.ts`
-- `src/lib/db/migrations/1791462257939-CoachRosterRemoval.ts`
 - `tests/components/admin-coaching.test.tsx`
 - `tests/unit/coaching/authorization.test.ts`
 - `tests/integration/admin/coaching.integration.test.ts`

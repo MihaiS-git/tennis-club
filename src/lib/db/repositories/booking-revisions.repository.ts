@@ -16,7 +16,7 @@ export function findRevisionOperation(manager: EntityManager, bookingId: string,
   return manager.getRepository(BookingRevisionEntity).findOneBy({ bookingId, operationKey });
 }
 export async function insertRevision(manager: EntityManager, revision: RevisionSnapshot) {
-  await manager.getRepository(BookingRevisionEntity).insert({ ...revision, recoveryVersion: 1 });
+  await manager.getRepository(BookingRevisionEntity).insert(revision);
 }
 // Caller owns aggregate locks and the transaction. A failed pointer/deadline fence
 // throws so provisional revision and occupancy writes cannot commit.

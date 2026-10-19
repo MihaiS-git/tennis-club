@@ -1,16 +1,5 @@
-import { getDataSource } from "@/lib/db/data-source";
-import { deliverPendingBookingNotifications as deliverPending } from "@/lib/notifications/booking-delivery";
-import { recoverBookingNotifications } from "@/lib/notifications/booking-recovery";
-
-// Explicitly simulate the scheduled recovery and delivery pass.
-async function deliverPendingBookingNotifications(options: Parameters<typeof deliverPending>[0]) {
-  await recoverBookingNotifications();
-  return deliverPending({ ...options, limit: 100 }); // Drain this bounded fixture batch explicitly.
-}
-import { bookingNotifications, isolateNotificationQueue } from "./booking-notification-fixtures";
 import { appendBookingContractFixture } from "./checkout-fixtures";
 import { configureCheckoutPolicyFixture } from "./opening-hours-fixtures";
-import { z } from "zod";
 import { processOnlinePaymentEvent } from "@/lib/payments/service";
 import { cleanupBookingFixtures, insertCheckoutFixture } from "./checkout-fixtures";
 import { randomUUID } from "node:crypto";
@@ -27,27 +16,6 @@ import { processBookingRefund } from "@/lib/payments/refunds";
 
 test("customer/Admin refunds preserve occupancy until verified, complete on a later refund check, and remain replay-safe", async () => {
   const db = localFixtureClient();
-  const database = await getDataSource();
-  const restoreQueue = await isolateNotificationQueue(database.manager);
-  const messages: { bookingId: string; recipient: string; text: string; bookingStatus: string; reservationStatus: string }[] = [];
-  const realFetch = globalThis.fetch;
-  let failDelivery = false;
-  vi.stubEnv("BREVO_API_KEY", "mock-brevo-key");
-  vi.stubEnv("BOOKING_MAIL_FROM", "bookings@example.test");
-  vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
-    if (String(input) !== "https://api.brevo.com/v3/smtp/email") return realFetch(input, init);
-    const body = z.object({ to: z.array(z.object({ email: z.email() })).length(1), textContent: z.string() })
-      .parse(JSON.parse(String(init?.body)));
-    const bookingId = z.uuid().parse(body.textContent.match(/Booking reference: (.*)/)?.[1]);
-    // A separate connection must see committed state at the moment HTTP delivery begins.
-    const booking = await db.from("bookings").select("status,reservation_id").eq("id", bookingId).single();
-    const reservation = await db.from("court_reservations").select("status").eq("id", booking.data!.reservation_id).single();
-    messages.push({ bookingId, recipient: body.to[0].email, text: body.textContent,
-      bookingStatus: booking.data!.status, reservationStatus: reservation.data!.status });
-    if (failDelivery) throw new Error("Mock Brevo transport failure");
-    return new Response(null, { status: 201 });
-  });
-  const cancellations = (id: string) => messages.filter(message => message.bookingId === id && message.text.includes("cancelled your booking."));
   const locationId = randomUUID(), courtId = randomUUID(), users: string[] = [];
   const member = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_PUBLISHABLE_KEY!, { auth: { persistSession: false, autoRefreshToken: false } });
   const admin = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_PUBLISHABLE_KEY!, { auth: { persistSession: false, autoRefreshToken: false } });
@@ -157,38 +125,17 @@ test("customer/Admin refunds preserve occupancy until verified, complete on a la
     expect(await cancelOwnCustomerBooking(ownerFlow.booking_id, member)).toEqual({ ok: true, outcome: "cancelled", refundStatus: "succeeded" });
     expect(await rows("payment_refunds", ownerFlow.booking_id)).toHaveLength(1);
     expect(refundPayment).toHaveBeenLastCalledWith(expect.objectContaining({ id: ownerRefund.id, amountMinor: 5000 }));
-    await deliverPendingBookingNotifications({ deadline: Date.now() + 5000 });
-    for (const booking of [own, adminFlow, secondAdminFlow, ownerFlow, replacement]) {
-      expect((await bookingNotifications(database.manager, booking.booking_id)).filter(row => row.subject === "Booking cancelled")).toHaveLength(1);
-      expect(cancellations(booking.booking_id)).toHaveLength(1);
-      expect(cancellations(booking.booking_id)[0]).toMatchObject({ recipient: "refund@example.test",
-        bookingStatus: "cancelled", reservationStatus: "cancelled" });
-    }
-    expect(cancellations(own.booking_id)[0].text).toContain("Your payment has been refunded.");
-    expect(cancellations(adminFlow.booking_id)[0].text).toContain("The club administrator has cancelled");
-    expect(cancellations(ownerFlow.booking_id)[0].text).toContain("You have cancelled");
-    expect(cancellations(secondAdminFlow.booking_id)[0].text).toContain("payment has been refunded");
+    for (const booking of [own, adminFlow, secondAdminFlow, ownerFlow, replacement]) await cancelled(booking);
     expect((await db.from("user_roles").delete().eq("user_id", users[0]).eq("role_code", "coach")).error).toBeNull();
-    const failedDelivery = await book(960);
-    failDelivery = true;
-    expect(await cancelOwnCustomerBooking(failedDelivery.booking_id, member)).toEqual({ ok: true, outcome: "cancelled", refundStatus: "succeeded" });
-    await cancelled(failedDelivery);
-    expect((await rows("payment_refunds", failedDelivery.booking_id))[0].status).toBe("succeeded");
-    expect(await cancelOwnCustomerBooking(failedDelivery.booking_id, member)).toEqual({ ok: true, outcome: "cancelled", refundStatus: "succeeded" });
-    await deliverPendingBookingNotifications({ deadline: Date.now() + 5000 });
-    expect(cancellations(failedDelivery.booking_id)).toHaveLength(1);
-    expect(await database.query("SELECT attempts,delivered_at,last_error FROM public.booking_notification_deliveries WHERE message->>'text' LIKE $1 AND message->>'subject'='Booking cancelled'", [`%${failedDelivery.booking_id}%`]))
-      .toMatchObject([{ attempts: 1, delivered_at: null, last_error: "unconfirmed" }]);
-    failDelivery = false;
-    await database.query("UPDATE public.booking_notification_deliveries SET next_attempt_at=clock_timestamp() WHERE message->>'text' LIKE $1", [`%${failedDelivery.booking_id}%`]);
-    await deliverPendingBookingNotifications({ deadline: Date.now() + 5000 });
-    expect(cancellations(failedDelivery.booking_id)).toHaveLength(2);
-    expect(await rows("payment_refunds", failedDelivery.booking_id)).toMatchObject([{ status: "succeeded", amount_minor: 5000 }]);
+    const replayed = await book(960);
+    expect(await cancelOwnCustomerBooking(replayed.booking_id, member)).toEqual({ ok: true, outcome: "cancelled", refundStatus: "succeeded" });
+    await cancelled(replayed);
+    expect((await rows("payment_refunds", replayed.booking_id))[0].status).toBe("succeeded");
+    expect(await cancelOwnCustomerBooking(replayed.booking_id, member)).toEqual({ ok: true, outcome: "cancelled", refundStatus: "succeeded" });
+    expect(await rows("payment_refunds", replayed.booking_id)).toMatchObject([{ status: "succeeded", amount_minor: 5000 }]);
     expect((await member.from("payment_refunds").select("*")).error?.code).toBe("42501");
     expect((await rows("payment_attempts", own.booking_id))[0]).toMatchObject({ status: "succeeded", amount_minor: 5000, provider: "stripe" });
   } finally {
-    vi.unstubAllGlobals();
-    vi.unstubAllEnvs();
     refundPayment.mockReset();
     await db.from("payment_provider_settings").update({ active_provider: previous }).eq("id", true);
     const ids = (await db.from("court_reservations").select("id").eq("court_id", courtId)).data?.map(r => r.id) ?? [];
@@ -199,6 +146,5 @@ test("customer/Admin refunds preserve occupancy until verified, complete on a la
     await db.from("location_opening_hours").delete().eq("location_id",locationId);
     await db.from("courts").delete().eq("id", courtId); await db.from("locations").delete().eq("id", locationId);
     await cleanupAuthFixtures(db, users);
-    await restoreQueue();
   }
 }, 30000);

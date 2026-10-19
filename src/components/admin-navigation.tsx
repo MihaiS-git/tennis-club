@@ -16,7 +16,6 @@ const adminEntries: readonly SidebarEntry[] = [
   ] },
   { label: "Payments", icon: CreditCard, section: "/admin/payments", links: [
     { label: "Transactions", href: "/admin/payments/transactions" },
-    { label: "Notifications", href: "/admin/payments/notifications" },
     { label: "Settings", href: "/admin/payments/settings" },
   ] },
   { label: "Users", href: "/admin/users", icon: Users },

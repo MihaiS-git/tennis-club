@@ -26,7 +26,6 @@ it.each([
   ["/admin/payments/transactions", "Transactions"],
   ["/admin/payments/transactions/refund/transaction-id", "Transactions"],
   ["/admin/payments/settings", "Settings"],
-  ["/admin/payments/notifications", "Notifications"],
   ["/admin/reservations", "Reservations"],
   ["/admin/reservations/day", "Reservations"],
   ["/admin/bookings", "Bookings"],
@@ -42,8 +41,8 @@ it.each([
   render(<AdminNavigation isAdmin={true} />);
   const nav = screen.getByRole("navigation", { name: "Management navigation" });
   const links = within(nav).getAllByRole("link");
-  expect(links.map((link) => link.textContent)).toEqual(["Locations", "Reservations", "Bookings", "Programs", "Coaches", "Prices", "Availability", "Transactions", "Notifications", "Settings", "Users"]);
-  expect(links.map((link) => link.getAttribute("href"))).toEqual(["/admin/locations", "/admin/reservations", "/admin/bookings", "/admin/coaching/programs", "/admin/coaching/coaches", "/admin/coaching/prices", "/admin/coaching/availability", "/admin/payments/transactions", "/admin/payments/notifications", "/admin/payments/settings", "/admin/users"]);
+  expect(links.map((link) => link.textContent)).toEqual(["Locations", "Reservations", "Bookings", "Programs", "Coaches", "Prices", "Availability", "Transactions", "Settings", "Users"]);
+  expect(links.map((link) => link.getAttribute("href"))).toEqual(["/admin/locations", "/admin/reservations", "/admin/bookings", "/admin/coaching/programs", "/admin/coaching/coaches", "/admin/coaching/prices", "/admin/coaching/availability", "/admin/payments/transactions", "/admin/payments/settings", "/admin/users"]);
   for (const link of links) {
     expect(link.getAttribute("aria-current")).toBe(link.textContent === label ? "page" : null);
     expect(link.className.includes("bg-primary text-primary-foreground")).toBe(link.textContent === label);
@@ -51,7 +50,7 @@ it.each([
   }
 });
 
-it.each(["/admin", "/admin/locations-extra", "/admin/payments-extra", "/admin/users-extra", "/administrator", "/admin/unknown", "/admin/reservations-extra", "/admin/bookings-extra", "/admin/coaching-extra"])(
+it.each(["/admin", "/admin/locations-extra", "/admin/payments-extra", "/admin/users-extra", "/administrator", "/admin/unknown", "/admin/reservations-extra", "/admin/bookings-extra", "/admin/coaching-extra", "/admin/payments/notifications"])(
   "does not activate a section for unrelated pathname %s", (pathname) => {
     navigation.pathname = pathname;
     render(<AdminNavigation isAdmin={true} />);
@@ -71,7 +70,6 @@ it.each(["details", "opening-hours", "courts", "pricing", "public-booking"])(
 it.each([
   ["/admin/payments/transactions", "Transactions", "Settings"],
   ["/admin/payments/settings", "Settings", "Transactions"],
-  ["/admin/payments/notifications", "Notifications", "Settings"],
 ])("keeps Payments active on %s with the correct secondary tab", async (pathname, active, inactive) => {
   navigation.pathname = pathname;
   render(<><AdminNavigation isAdmin={true} />{await PaymentsLayout({ children: <p>Settings content</p> })}</>);
@@ -114,7 +112,7 @@ it("shows only Reservations to Coaches", () => {
 
 it.each([
   [false, ["Reservations", "My availability"]],
-  [true, ["Locations", "Reservations", "Bookings", "Programs", "Coaches", "Prices", "Availability", "Transactions", "Notifications", "Settings", "Users", "My availability"]],
+  [true, ["Locations", "Reservations", "Bookings", "Programs", "Coaches", "Prices", "Availability", "Transactions", "Settings", "Users", "My availability"]],
 ] as const)("adds the Coach area for coaches (Admin: %s)", (isAdmin, labels) => {
   navigation.pathname = "/coach/availability";
   render(<AdminNavigation isAdmin={isAdmin} isCoach />);

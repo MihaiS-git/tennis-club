@@ -23,7 +23,7 @@
 - TypeORM is the sole application ORM and migration authority. Supabase provides native Auth/Storage infrastructure only. Repositories take an explicit `EntityManager` and do not start transactions.
 - Application services own decisions and transaction orchestration; PostgreSQL owns structural constraints, uniqueness, overlap exclusions, and atomic persistence. Do not move policy to SQL functions/triggers.
 - Preserve existing location-first occupancy locking, actor/configuration fences, bounded retries, and stable lock order for booking and configuration changes. Read the relevant service and architecture docs before modifying concurrency-sensitive code.
-- Never perform Auth, Storage, Stripe, Brevo, or other network requests while a database transaction is open.
+- Never perform Auth, Storage, Stripe, or other network requests while a database transaction is open.
 - For unreleased local schema, prefer clean, domain-focused migrations over corrective patch piles. Never edit applied shared/production migrations. Never reset/rebuild a database or discard data without explicit approval.
 
 ## Bookings and payments: non-negotiable invariants
@@ -32,7 +32,7 @@
 - Keep booking, reservation, payment-attempt, capture, adjustment, and refund states distinct. Price/currency/payment method/provider and cancellation rules are server-validated and snapshotted at the appropriate boundary.
 - Payment confirmation requires verified provider evidence; never trust browser-reported payment success. Verify Stripe webhook signatures and process events idempotently. A duplicate or late payment must not reclaim released court occupancy.
 - Refunds and adjustments are provider-bound, idempotent, and based on verified historical captures—not recalculated current prices. Do not create another provider refund when the result of a previous attempt is unknown. Preserve immutable financial evidence and existing recovery rules.
-- Preserve already defined booking/payment lifecycles, locking, auditability, and post-commit notifications. Before modifying these workflows, read `docs/payments-memberships.md` and the relevant implementation/tests.
+- Preserve already defined booking/payment lifecycles, locking, auditability, and financial exception evidence. The application sends no booking notifications; Supabase Auth emails are separate. Before modifying these workflows, read `docs/payments-memberships.md` and the relevant implementation/tests.
 
 ## UI and tests
 
@@ -45,7 +45,6 @@
 - `docs/architecture.md` — domain boundaries, TypeORM persistence and transaction/locking design.
 - `docs/payments-memberships.md` — checkout, Stripe, provider selection, captures, refunds, adjustments, reconciliation, and Admin payment actions.
 - `docs/profiles.md` — player profile and avatar/Storage rules.
-- `docs/booking-notifications.md` — Brevo booking email lifecycle and post-commit delivery.
 - `docs/coaching.md` — coaching programs, coach profiles, coaching prices and the public Coaching page.
 - `docs/testing.md` — local database setup and test/verification procedures.
 - `README.md` — current setup and development commands.

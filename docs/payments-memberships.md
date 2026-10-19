@@ -45,11 +45,10 @@ adapters. The Stripe webhook calls the common event operation, which reuses this
 settlement transaction; no browser-callable settlement action exists. Its TypeORM
 READ COMMITTED transaction takes the shared configuration fence, then locks
 location → booking → reservation → attempt and validates the stored provider/reference.
-A timely success confirms the same booking/reservation and sends one post-commit confirmation
-email. Failure/expiry releases the same reservation and marks the booking/attempt
+A timely success confirms the same booking/reservation. Failure/expiry releases the same reservation and marks the booking/attempt
 failed/expired. A late success cannot reclaim a released or replaced interval.
-Duplicate settlement returns the existing terminal status and emits no extra email.
-Pending/failed/expired checkouts never emit confirmation mail or appear as confirmed
+Duplicate settlement returns the existing terminal status.
+Pending/failed/expired checkouts never appear as confirmed
 personal bookings. Pay at club records a confirmed revision at creation and sends
 confirmation mail after commit.
 
@@ -62,14 +61,14 @@ one-time Stripe flow from future membership scope.
 Transaction A takes shared configuration advisory fence → location FOR UPDATE, loads
 publication/hours/coverage/pricing facts, then fences the linked active account and
 locks online provider settings FOR SHARE. TypeScript calculates policy and price. The
-reservation, booking and attempt insert atomically; Pay-at-club confirmation email follows commit.
+reservation, booking and attempt insert atomically.
 Guest name/email/phone remain required trimmed snapshots; email case is preserved.
-Online creation emits no confirmation email and shares one PostgreSQL +600-second deadline.
+Online creation shares one PostgreSQL +600-second deadline.
 
 Stripe initialization uses the stored attempt after commit, outside any transaction.
 Transaction B conditionally attaches provider reference/capability hash. Coupled policy
 and capability reads use TypeORM. Polling runs the TypeScript hold-expiry service;
-settlement/webhooks use Phase 7 TypeORM transactions; refunds/reconciliation use TypeORM (Phase 8), and booking emails use post-commit Brevo HTTP delivery.
+settlement/webhooks use Phase 7 TypeORM transactions; refunds/reconciliation use TypeORM (Phase 8).
 Public `/book` discovery/calendar use bounded TypeORM projections (Phase 11).
 
 There is no customer-submission idempotency key: identical same-slot submissions compete
@@ -212,10 +211,10 @@ Out-of-order failure cannot downgrade a settled success. A retryable card declin
 the same pending attempt, booking, hold, PaymentIntent and original expiry so another
 card can be entered. Terminal Stripe cancellation records attempt status `cancelled`,
 marks the internal booking `expired`, and releases its reservation immediately.
-Neither transition sends a booking cancellation email. Expiry also releases the hold
+Expiry also releases the hold
 without creating customer activity; expiry cleanup during polling invalidates `/book`.
 My Activity's owner projections include only confirmed/cancelled booking states,
-and online rows require a succeeded payment attempt. A cancellation that races capture may appear in Cancelled history; an uncharged checkout does not. Normal owner/Admin booking cancellation retains its existing cancellation notification.
+and online rows require a succeeded payment attempt. A cancellation that races capture may appear in Cancelled history; an uncharged checkout does not.
 
 Late successful charges and amount mismatches are durably recorded with
 `reconciliation_required = true` and a structured server log. They do not reclaim
@@ -254,8 +253,7 @@ uncertain. The adapter uses stable abandonment idempotency and retrieve-after-fa
 recovery. An exact capture racing cancellation preserves that cancelled contract,
 records capture evidence and creates its compensation obligation, whose refund is
 dispatched after commit (see Recovery without a scheduler). Guest requests use the same capability and
-a nullable refund requester. This operation sends no confirmation or customer-
-cancellation email after cancellation intent commits.
+a nullable refund requester.
 
 Expiry ends payment entry locally even when the status endpoint is unavailable. Server expiry retains the original release/late-capture reconciliation policy, including for held bookings with cancellation intent. Expired attempts cannot be reused; polling attempts provider cancellation when possible. Keep paying is available only for a usable checkout before cancellation starts. A definite card decline permits retry on the original unexpired intent; transport/unknown errors block further submissions. Payment loading feedback becomes a non-blocking uncertainty warning after 30 seconds; booking submission and cancellation loading are bounded at 15 seconds. Customers can always leave while Stripe webhooks (retried by Stripe for up to three days) settle the financial outcome.
 
@@ -270,7 +268,7 @@ Manual service-level verification used real Stripe test-mode PaymentIntents agai
 isolated local Supabase fixtures: declined card retained the intent/hold, a second
 card confirmed the same booking, terminal cancellation released occupancy, simulated
 hold expiry hid the checkout, and only cancellation after confirmation produced
-Cancelled History and a post-commit cancellation email. Browser Payment Element entry and
+Cancelled History. Browser Payment Element entry and
 live Stripe webhook forwarding were not exercised in that verification; focused
 integration tests cover raw signature verification and webhook handling.
 
@@ -281,23 +279,22 @@ in ignored `.env.local`, not source code or chat:
 - `STRIPE_PUBLISHABLE_KEY=pk_test_…` from the same account
 - `STRIPE_WEBHOOK_SECRET=whsec_…` from the local Stripe CLI listener
 - `APP_URL=http://localhost:3000` and the existing local Supabase variables
-- server-only `BREVO_API_KEY` and Brevo-verified `BOOKING_MAIL_FROM` for notifications
 
 For the future authorized verification, run `stripe listen --events payment_intent.succeeded,payment_intent.payment_failed,payment_intent.canceled,payment_intent.processing,payment_intent.amount_capturable_updated,refund.created,refund.updated,refund.failed --forward-to http://localhost:3000/api/payments/stripe/webhook`,
 copy that listener's signing secret into `.env.local`, and restart Next.js.
 Select Stripe in Admin → Payments → Settings. Book an available
-interval: another visitor must see it blocked, and no confirmation email may exist
-before successful settlement. Use Stripe test success card `4242 4242 4242 4242`
+interval: another visitor must see it blocked, and the booking must stay pending
+until successful settlement. Use Stripe test success card `4242 4242 4242 4242`
 and decline card `4000 0000 0000 0002` with future expiry and any valid CVC.
-Success must retain both internal row IDs and create one Mailpit confirmation;
+Success must retain both internal row IDs and confirm the booking once;
 a decline must stay pending, retain occupancy and permit a different card on the
 same intent without a History row. Cancel an unpaid PaymentIntent in Stripe: the
 slot must become available immediately and both My Activity lists must omit it. Replay a captured success
-webhook with Stripe CLI/dashboard resend and verify one confirmation email.
+webhook with Stripe CLI/dashboard resend and verify the booking is confirmed only once.
 Leave an unpaid checkout beyond ten minutes and verify availability returns with
-no activity or cancellation email. After a successful payment, verify the booking
+no activity. After a successful payment, verify the booking
 appears in Bookings; cancel that confirmed booking and verify it moves to History
-as Cancelled with one cancellation notification.
+as Cancelled.
 A success after expiry must record reconciliation without displacing a replacement
 booking. Test instructions follow [Stripe's testing guide](https://docs.stripe.com/testing).
 
@@ -459,14 +456,14 @@ creation time preserves the eligibility decision) plus the refund obligations. T
 booking, its revision and its active reservation stay unchanged. Refunds start
 immediately after commit. When every obligation is terminal, one transaction under the
 existing location → booking locks decides: when every refund is verified as succeeded,
-it finalizes the cancellation (cancelled revision, occupancy released, cancellation email
-saying the payment was refunded); when every obligation definitively failed (no money
-returned), it voids the obligations, marks the request `unsuccessful`, keeps the booking
-unchanged and emails the customer, who may request the cancellation again. If some
+it finalizes the cancellation (cancelled revision, occupancy released); when every
+obligation definitively failed (no money returned), it voids the obligations, marks the
+request `unsuccessful`, keeps the booking unchanged and records a `cancellation_rejected`
+financial exception; the customer may request the cancellation again. If some
 refunds succeeded and another definitively failed, partial repayment cannot be undone:
 the request stays pending, the booking stays unchanged, completed refunds remain recorded
-and each failed obligation is an explicit exception (`refund_incomplete` email, Admin
-attention) for external resolution.
+and each failed obligation is an explicit exception (`refund_failed` financial exception,
+Admin attention) for external resolution.
 A submitted or pending provider refund never cancels a booking. Post-commit processing
 uses the shared execution protocol described in
 [architecture](architecture.md#refund-execution-and-reconciliation-phase-8).
@@ -480,7 +477,7 @@ Lifecycle:
 - `succeeded`: provider confirmed the full refund.
 - `failed`: provider returned a terminal failed/cancelled refund or rejected the request.
   For a committed operation the money is still owed: an explicit exception (Admin
-  attention, customer email). There is no automatic replacement execution.
+  attention, recorded financial exception). There is no automatic replacement execution.
 - `voided`: a failed obligation of an abandoned change; no money moved and it no longer
   reserves captured funds.
 
@@ -565,7 +562,7 @@ Attention lists only genuine exceptions:
   plus 120 seconds — no definitive provider cancellation/capture has been recorded;
   use Check with Stripe. Local expiry never proves remote cancellation;
 - refund `failed` — Stripe definitively failed/declined money that is still owed; the
-  customer has been emailed and sees an in-app notice; arrange repayment directly;
+  application does not contact the customer; arrange repayment directly;
 - refund `pending` or `pending_retry` still unconfirmed 15 minutes after it was requested
   (`unconfirmedRefundMinutes`) — use Check with Stripe; never issue another refund in the
   Stripe Dashboard;
@@ -585,9 +582,8 @@ filters. Payment timestamps display UTC; booking schedules retain location timez
 ## Recovery without a scheduler
 
 There is no background financial scheduler, timer, queue or job lease; the application
-runs on serverless hosting (Vercel) or `next start` alike. The only scheduled job is the
-Supabase Cron call that retries undelivered booking emails; it never touches payments,
-refunds, reconciliation or booking expiry. Every financial outcome is driven by a request: the customer's checkout status poll, cancellation or reschedule, an Admin
+runs on serverless hosting (Vercel) or `next start` alike. There is no scheduled job.
+Every financial outcome is driven by a request: the customer's checkout status poll, cancellation or reschedule, an Admin
 action, or a signed Stripe webhook. Stripe's own webhook redelivery (exponential backoff
 for up to three days on a non-2xx response) is the retry mechanism for missed work.
 
@@ -600,12 +596,11 @@ for up to three days on a non-2xx response) is the retry mechanism for missed wo
 | Abandoned checkout | The unpaid hold expires at its PostgreSQL deadline. Checkout polling or Admin Check with Stripe cancels the exact intent when possible; local expiry alone does not cancel it. A later authorization is never captured. |
 | Accepted capture interrupted before dispatch | During grace, observe only. After grace, polling or Admin Check with Stripe retrieves the intent and attempts cancellation, preserving occupancy until Stripe confirms capture or cancellation. Uncertainty remains visible to Admin. |
 | Accepted capture completes after grace (booking or surcharge) | Accepted occupancy remains protected; verified success applies normally, without a refund solely for lateness. Later observations never dispatch another capture. |
-| Unaccepted late capture, or an otherwise invalid capture | The settlement commits the receipt, the full refund obligation and a customer notice atomically, then dispatches the refund. Released occupancy is never reclaimed. |
+| Unaccepted late capture, or an otherwise invalid capture | The settlement commits the receipt, the full refund obligation and a `late_capture` financial exception atomically, then dispatches the refund. Released occupancy is never reclaimed. |
 | Refund request interrupted or response lost | The execution stays `pending_retry` with its original idempotency key. Stripe's `refund.created`/`refund.updated` webhook re-reads it; otherwise it appears under Admin attention after 15 minutes for Check with Stripe. |
 | Refund pending at Stripe | `refund.updated`/`refund.failed` webhooks commit the final result and decide any waiting cancellation or price reduction. |
-| Stripe fails a refund it had reported succeeded | The `refund.failed`/`refund.updated` webhook re-reads and verifies that exact refund. The success evidence is kept; the execution records `provider_refund_reversed`, the obligation becomes `failed` (Admin attention, no longer counted as refunded), and the customer gets a `refund_incomplete` email and in-app notice. No replacement refund is ever issued. |
+| Stripe fails a refund it had reported succeeded | The `refund.failed`/`refund.updated` webhook re-reads and verifies that exact refund. The success evidence is kept; the execution records `provider_refund_reversed`, the obligation becomes `failed` (Admin attention, no longer counted as refunded), and a `refund_reversed` financial exception is recorded. No replacement refund is ever issued. |
 | Refund-backed change interrupted after the refund committed | Any later check of that refund (webhook redelivery or Admin) re-runs the transition-guarded decision. |
-| Email delivery failed | The row stays queued with backoff. Existing Supabase Cron reconstructs missing post-cutover projections and retries due email every five minutes; financial requests do neither. See [notifications](booking-notifications.md). This is the only scheduled work. |
 
 Webhook refund events are matched only by the `payment_refund_id` metadata this
 application sets; Dashboard-created refunds are ignored. Webhooks run the payment and
@@ -640,7 +635,7 @@ interpretation, rescheduling quotes and recovery eligibility are TypeScript deci
 Checkout (Phase 5), owner rescheduling and owner/Admin cancellation (Phase 6) now
 use TypeORM transactions and focused repositories, as do Phase 7 settlement and Phase 8
 refund execution/reconciliation. No generic booking snapshot, actor snapshot or command RPC architecture remains. Stripe requests
-remain outside transactions. Refund completion sends no email.
+remain outside transactions.
 
 ## Customer booking mutations (Phase 6)
 
@@ -653,7 +648,7 @@ uses the accepted revision's timezone and post-lock database wall time. See [arc
 
 Cancellation without a refund appends an accepted revision and releases occupancy at
 once; a cancellation that returns money is a pending request decided by verified refunds
-(see Stripe cancellation refunds). Email and refund execution follow commit. The accepted
+(see Stripe cancellation refunds). Refund execution follows commit. The accepted
 cancellation revision or pending request permits replay without another refund. Admins may
 cancel other customers' bookings but cannot reschedule them or select refund/no-refund.
 Owners, including Admin/Coach owners, use the same owner rescheduling rules. Same-price
@@ -672,8 +667,8 @@ never a rescheduled booking total. Webhooks require an attached exact provider r
 TypeScript preserves retryable pending, success, terminal failure/cancellation, effective expiry,
 late-capture and mismatch decisions. Lossless deadline comparisons are rechecked before writes;
 the attempt UPDATE also checks clock_timestamp() against the supplied deadline and lets
-TypeScript re-evaluate expiry if crossed. Lifecycle and durable receipt are atomic; first confirmation email follows commit. Late captures keep terminal lifecycle and flag reconciliation; financial mismatch
-records evidence only and is not automatically refundable. Other outcomes emit no confirmation.
+TypeScript re-evaluate expiry if crossed. Lifecycle and durable receipt are atomic. Late captures keep terminal lifecycle and flag reconciliation; financial mismatch
+records evidence only and is not automatically refundable. Other outcomes do not confirm.
 Global provider/event PK dedupe compares attempt, payment reference, outcome, amount and normalized
 currency. Identical events replay stored result without touching Admin resolution. Concurrent
 insert conflicts read the committed winner in a separate READ COMMITTED statement; changed
@@ -683,10 +678,9 @@ Abandonment retains capability validation and retrieve/cancel/retrieve outside t
 a capability-bound transaction first records cancellation intent. Provider-confirmed cancellation runs the receiptless settlement command; verified captures use the common event transaction and existing full-refund operation. Cancellation intent prevents subsequent booking confirmation.
 Payment/refund persistence uses TypeORM transactions with explicit authoritative locks.
 TypeScript hold expiry runs under location-first TypeORM transactions.
-Booking emails use forward-only scheduled reconstruction from immutable financial evidence,
-then leased Brevo delivery with retries. Financial requests never render, project or send
-mail. Apply migration `1791462257935-IndependentNotificationEvidence` before deployment;
-legacy events are not reconstructed. See [notifications](booking-notifications.md).
+Exceptional financial outcomes are recorded atomically as immutable
+`booking_financial_exceptions` (created by the initial migration; its immutability guard is in the native integrity migration).
+The application sends no booking or payment emails.
 
 
 ## Paid-booking price adjustments
@@ -706,7 +700,8 @@ pricing evidence, holds target fragments outside the original occupancy until th
 start, and creates partial-refund obligations for the full price difference. The
 original booking is unchanged until the refunds are verified; then the snapshotted
 schedule/price is applied once (never repriced). Verified failure with no money
-returned abandons it (obligations voided, holds released, customer emailed). If some
+returned abandons it (obligations voided, holds released, `modification_rejected`
+financial exception recorded). If some
 refunds succeeded and another definitively failed, the change is not applied: the
 original booking and holds remain, the modification stays pending, and each failed
 obligation stays an explicit exception for external resolution. Allocation uses newest captures first, reserving
@@ -776,8 +771,8 @@ to `payment_intent.processing` in addition to succeeded/payment_failed/canceled.
 
 Admins cannot create surcharges for other customers; guest rescheduling is not
 implemented. Repeated submissions of one request do not create a replacement charge.
-A captured surcharge that cannot be applied (late or fenced) emails the customer once
-and is refunded automatically. Admin Financial history lists payment requests/refund
+A captured surcharge that cannot be applied (late or fenced) records one
+`surcharge_unapplied` financial exception and is refunded automatically. Admin Financial history lists payment requests/refund
 obligations with historical transaction context and separate current-booking totals,
 read-only. Verified webhooks, checkout polling and the Admin refund check use the
 same settlement/refund services.

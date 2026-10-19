@@ -12,7 +12,7 @@ export function coachIntroduction(bio: string) {
   return paragraph.match(/^.+?[.!?](?=\s|$)/)?.[0] ?? paragraph;
 }
 
-export function coachProfileHref(coachId: string) {
+function coachProfileHref(coachId: string) {
   return `/coaching/coaches/${coachId}`;
 }
 

@@ -2,7 +2,6 @@
 
 import { SignOutButton } from "./sign-out-button";
 
-import { NotificationBell } from "./notification-bell";
 import { Menu, X } from "lucide-react";
 import { signOutAction } from "@/app/account/actions";
 import { ProfileDepartureForm, ProfileDepartureLink as Link } from "./profile-departure-navigation";
@@ -31,8 +30,8 @@ export function MobileNavbarMenu(props: Parameters<typeof MobileNavbarControls>[
   return <MobileNavbarShell><MobileNavbarControls {...props} /></MobileNavbarShell>;
 }
 
-export function MobileNavbarControls({ isAuthenticated, canReserve, isAdmin = false, avatarUrl = null }: {
-  isAuthenticated: boolean; canReserve: boolean; isAdmin?: boolean; avatarUrl?: string | null;
+export function MobileNavbarControls({ isAuthenticated, canReserve, avatarUrl = null }: {
+  isAuthenticated: boolean; canReserve: boolean; avatarUrl?: string | null;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const menuId = useId();
@@ -92,7 +91,6 @@ export function MobileNavbarControls({ isAuthenticated, canReserve, isAdmin = fa
 
   return (
     <>
-          {isAuthenticated && <NotificationBell admin={isAdmin} />}
           <button
             ref={triggerRef}
             type="button"

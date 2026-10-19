@@ -14,8 +14,9 @@ vi.mock("@/app/coaching/coaching-sections", async (original) => ({
 }));
 
 import CoachingPage, { metadata } from "@/app/coaching/page";
+import { pricesByLocation, startingPrices } from "@/app/coaching/coaching-sections";
 
-const { CoachingCoaches, CoachingPrices, CoachingPrograms, pricesByLocation, startingPrices } =
+const { CoachingCoaches, CoachingPrices, CoachingPrograms } =
   await vi.importActual<typeof import("@/app/coaching/coaching-sections")>("@/app/coaching/coaching-sections");
 
 const program = { id: "a1000000-0000-4000-8000-000000000001", name: "Private lesson", description: "One player, one coach.",

@@ -52,8 +52,13 @@ afterAll(async () => {
 
 test("registered migrations match application metadata without schema changes", async () => {
   expect((await database.query("SELECT name FROM public.migrations ORDER BY timestamp")).map((row: { name: string }) => row.name))
-    .toEqual(["InitialApplicationSchema1791462257924", "ApplicationNativeIntegrity1791462257925", "SupabaseAuthStorage1791462257926", "AutomaticFinancialRecovery1791462257927", "DurableBookingNotifications1791462257928", "RequestDrivenPaymentRecovery1791462257929", "SurchargeCaptureAcceptance1791462257930", "CustomerNotificationHistory1791462257931", "BrevoDeliveryEvents1791462257932", "AdminNotificationDismissal1791462257933", "CoachingPrograms1791462257934", "IndependentNotificationEvidence1791462257935", "FairNotificationRecovery1791462257936", "CoachAvailability1791462257937", "CoachingReservations1791462257938", "CoachRosterRemoval1791462257939"]);
+    .toEqual(["InitialApplicationSchema1791462257924", "ApplicationNativeIntegrity1791462257925", "SupabaseAuthStorage1791462257926"]);
   expect(await database.query("SELECT to_regclass('public.job_leases') AS job_leases")).toEqual([{ job_leases: null }]);
+  // No application notification persistence exists.
+  expect(await database.query(`SELECT table_name FROM information_schema.tables WHERE table_schema='public'
+    AND (table_name LIKE '%notification%' OR table_name LIKE '%inbox%')`)).toEqual([]);
+  expect(await database.query(`SELECT table_name,column_name FROM information_schema.columns WHERE table_schema='public'
+    AND column_name='recovery_version'`)).toEqual([]);
   const diff = await database.driver.createSchemaBuilder().log();
   expect(diff.upQueries).toEqual([]);
   expect(diff.downQueries).toEqual([]);

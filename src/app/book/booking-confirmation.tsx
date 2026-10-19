@@ -1,7 +1,6 @@
 "use client";
 
 import type { CoachingSelection } from "./coaching-selection";
-import { refreshNotificationUnread } from "@/components/notification-unread";
 
 import { toast } from "sonner";
 
@@ -110,7 +109,6 @@ export function BookingConfirmation({ selection, details, contact, onContactChan
     }, 15_000);
     try {
       const result = await abandonCheckoutAction({ attemptId: checkout.payment.attemptId, token: checkout.payment.token });
-      if (result.ok) refreshNotificationUnread();
       if (dismissed.current) return;
       if (result.ok) {
         const text = result.paymentStatus === "refund_failed" ? "Booking cancelled, but the refund failed. Contact the club; do not pay again yet."
@@ -157,7 +155,6 @@ export function BookingConfirmation({ selection, details, contact, onContactChan
         customerName: parsed.data.customerName, customerEmail: parsed.data.customerEmail, customerPhone: parsed.data.customerPhone,
         expectedTotalAmountMinor: parsed.data.expectedTotalAmountMinor, expectedCurrency: parsed.data.expectedCurrency })
         : await commitCustomerBookingAction(parsed.data);
-      if (result.ok && result.status === "confirmed") refreshNotificationUnread();
       if (dismissed.current) return;
       if (result.ok) {
         if (result.status === "pending_payment") {

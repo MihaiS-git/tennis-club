@@ -12,7 +12,7 @@ import type { LocationCurrency } from "@/lib/pricing/money";
 import { resolveCoachingPrice, type CoachingPriceRecord, type ResolvedCoachingPrice } from "./pricing";
 import { coachingProgramTypes, type CoachingProgramType } from "./validation";
 
-export type PublicCoachingPrice = {
+type PublicCoachingPrice = {
   locationId: string; locationName: string; durationMinutes: number; amountMinor: number; currency: LocationCurrency;
 };
 export type PublicCoachingProgram = {
@@ -21,7 +21,7 @@ export type PublicCoachingProgram = {
   // Club rates at publicly visible locations, in each location's current currency.
   prices: PublicCoachingPrice[];
 };
-export type PublicCoachRate = PublicCoachingPrice & { programId: string; programName: string; courtRentalIncluded: boolean };
+type PublicCoachRate = PublicCoachingPrice & { programId: string; programName: string; courtRentalIncluded: boolean };
 export type PublicCoach = {
   id: string; displayName: string; bio: string; qualifications: string; specialties: string[]; languages: string[];
   locations: { id: string; name: string }[];

@@ -529,7 +529,6 @@ test("verification: absent evidence after 25 hours is explicitly unresolved acro
       expect(await bookingFinancials(database.manager, data.bookingId)).toMatchObject({ refunded: 0, obligated: 2500 });
     } finally {
       clock.mockRestore();
-      await database.query("DELETE FROM public.booking_notification_deliveries WHERE event_key=$1", [`refund:${data.refundId}:exception`]);
     }
   });
 });
@@ -590,24 +589,20 @@ test("verification: evidence-only unresolved refund remains visible in Admin att
       await payments.writeRefundStatus(manager, data.refundId, "pending");
       await manager.query("UPDATE public.payment_refunds SET updated_at=clock_timestamp()-interval '25 hours' WHERE id=$1", [data.refundId]);
     });
-    try {
-      const { readFinancialHistory } = await import("@/lib/payments/financial-history");
-      const { paymentNeedsAttention, refundUnconfirmed } = await import("@/lib/payments/domain");
-      for (const check of [() => processBookingRefund(data.refundId), () => processBookingRefund(data.refundId, { retryRejected: true })]) {
-        await check();
-        expect(create).not.toHaveBeenCalled();
-        const [execution] = await executions.listRefundExecutions(database.manager, data.refundId);
-        expect(execution).toMatchObject({ lastError: "unresolved_after_idempotency_window" });
-        const page = await readFinancialHistory(database.manager, { page: 1, status: "all", provider: "all", method: "all",
-          attention: true, search: "", sort: "date", direction: "asc", bookingId: data.bookingId, attentionRefundStatuses: ["failed"] });
-        expect(page.rows.map(row => row.refund?.id)).toContain(data.refundId);
-        const row = page.rows.find(row => row.refund?.id === data.refundId)!;
-        expect(Date.parse(row.refund!.outstanding_since)).toBe(execution.dispatchInitiatedAt!.getTime());
-        expect(paymentNeedsAttention(row.refund, row.reconciliation)).toBe(true);
-        expect(refundUnconfirmed(row.refund?.status, row.refund?.outstanding_since)).toBe(true);
-      }
-    } finally {
-      await database.query("DELETE FROM public.booking_notification_deliveries WHERE event_key=$1", [`refund:${data.refundId}:exception`]);
+    const { readFinancialHistory } = await import("@/lib/payments/financial-history");
+    const { paymentNeedsAttention, refundUnconfirmed } = await import("@/lib/payments/domain");
+    for (const check of [() => processBookingRefund(data.refundId), () => processBookingRefund(data.refundId, { retryRejected: true })]) {
+      await check();
+      expect(create).not.toHaveBeenCalled();
+      const [execution] = await executions.listRefundExecutions(database.manager, data.refundId);
+      expect(execution).toMatchObject({ lastError: "unresolved_after_idempotency_window" });
+      const page = await readFinancialHistory(database.manager, { page: 1, status: "all", provider: "all", method: "all",
+        attention: true, search: "", sort: "date", direction: "asc", bookingId: data.bookingId, attentionRefundStatuses: ["failed"] });
+      expect(page.rows.map(row => row.refund?.id)).toContain(data.refundId);
+      const row = page.rows.find(row => row.refund?.id === data.refundId)!;
+      expect(Date.parse(row.refund!.outstanding_since)).toBe(execution.dispatchInitiatedAt!.getTime());
+      expect(paymentNeedsAttention(row.refund, row.reconciliation)).toBe(true);
+      expect(refundUnconfirmed(row.refund?.status, row.refund?.outstanding_since)).toBe(true);
     }
   }, "late_capture_compensation");
 });

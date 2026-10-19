@@ -3,7 +3,8 @@
 The current implementation supports owner paid-booking changes through immutable
 booking revisions and adjustment proposals. Admin management is cancellation-only
 with automatic applicable online refunds. The earlier review and reported validation
-are retained below as historical evidence, not current branch validation.
+are retained below as historical evidence, not current branch validation. Brevo booking
+email mentioned in that evidence was later removed; the application sends no booking notifications.
 
 ## Schema
 

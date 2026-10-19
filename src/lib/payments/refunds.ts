@@ -61,7 +61,7 @@ async function processRefund(id: string, options: RefundProcessingOptions): Prom
   }
   if (prepared.outcome === "terminal") {
     const status = prepared.status === "succeeded" && options.providerChanged ? await reverifyCompletedRefund(id, options) : prepared.status;
-    return afterRefundOutcome(id, status, prepared.notice, options);
+    return afterRefundOutcome(id, status, prepared.requiresResolution, options);
   }
   const claim: RefundExecutionClaim = prepared.claim;
   let dispatch: Awaited<ReturnType<typeof initiateRefundExecution>>;
@@ -93,7 +93,7 @@ async function processRefund(id: string, options: RefundProcessingOptions): Prom
     committed = await commitRefundExecution(claim, observation);
     logger.info({ event: "payments.refund_result", refundId: id, status: committed.status }, "Refund result persisted");
   } catch { return deferred(options, id, "Refund result needs reconciliation"); }
-  const status = await afterRefundOutcome(id, committed.status, committed.notice, options);
+  const status = await afterRefundOutcome(id, committed.status, committed.requiresResolution, options);
   // The uncertainty is committed; Stripe was unreachable, so the event is not processed.
   if (options.strict && observation.kind === "error" && ["uncertain", "lookup_failed"].includes(observation.evidence.kind))
     throw new RefundProcessingError("Stripe did not confirm the refund.");
@@ -124,16 +124,16 @@ async function reverifyCompletedRefund(id: string, options: RefundProcessingOpti
     const reversed = await recordProviderRefundReversal(id, result.providerRefundId);
     logger.error({ event: "payments.refund_reversed", refundId: id, failureReason: result.failureReason },
       "Stripe failed a refund after reporting it succeeded");
-    if (reversed.notice) logger.error({ event: "payments.refund_requires_resolution", refundId: id }, "Outstanding refund requires external resolution");
+    if (reversed.requiresResolution) logger.error({ event: "payments.refund_requires_resolution", refundId: id }, "Outstanding refund requires external resolution");
     return reversed.status;
   } catch { return deferred(options, id, "Refund reversal needs reconciliation"); }
 }
 
 // Post-commit only. A terminal obligation can decide the booking change waiting
 // on it; the change command is transition-guarded, so replays are harmless.
-async function afterRefundOutcome(id: string, status: RefundStatus, notice: boolean,
+async function afterRefundOutcome(id: string, status: RefundStatus, requiresResolution: boolean,
   options: RefundProcessingOptions): Promise<RefundStatus> {
-  if (notice) {
+  if (requiresResolution) {
     logger.error({ event: "payments.refund_requires_resolution", refundId: id }, "Outstanding refund requires external resolution");
   }
   if (status !== "succeeded" && status !== "failed") return status;

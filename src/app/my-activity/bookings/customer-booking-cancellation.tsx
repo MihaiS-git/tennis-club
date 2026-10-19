@@ -1,6 +1,5 @@
 "use client";
 
-import { refreshNotificationUnread } from "@/components/notification-unread";
 
 import { toast } from "sonner";
 import { cancelledBookingMessage } from "@/lib/payments/refund-message";
@@ -40,7 +39,6 @@ export function CustomerBookingCancellation({ booking, staff, onCancelled, onPen
     try {
       const result = await cancelOwnCustomerBookingAction(booking.id);
       if (!result.ok) { toast.error(result.message, { id: notification }); return; }
-      refreshNotificationUnread();
       cancelledMessage = cancelledBookingMessage(result);
       setConfirming(false);
       await onCancelled();
@@ -57,7 +55,7 @@ export function CustomerBookingCancellation({ booking, staff, onCancelled, onPen
   // A requested change waits for its verified refund; the booking stays confirmed.
   if (booking.pending_change) return <p role="status" className="text-sm text-muted-foreground">
     {booking.pending_change === "cancellation"
-      ? "Cancellation in progress. Your booking stays confirmed until the refund is confirmed; you will be emailed if it cannot be completed."
+      ? "Cancellation in progress. Your booking stays confirmed until the refund is confirmed."
       : "Your booking change is waiting for its refund to be confirmed. The current booking stays unchanged until then."}
   </p>;
   return <>

@@ -65,7 +65,7 @@ test("navigation follows the current account and protected routes enforce access
     const userNavigation = page.getByRole("navigation", { name: "My account navigation" });
     const userDestinations = [
       ["Bookings", /\/my-activity\/bookings$/], ["Booking history", /\/my-activity\/history$/],
-      ["Notifications", /\/my-activity\/notifications$/], ["Player identity", /\/profile$/],
+      ["Player identity", /\/profile$/],
       ["Personal information", /\/profile\/personal$/], ["Tennis profile", /\/profile\/tennis$/],
       ["Account & security", /\/profile\/security$/],
     ] as const;
@@ -100,7 +100,7 @@ test("navigation follows the current account and protected routes enforce access
     await navigation.getByRole("link", { name: "Admin" }).click();
     const adminNavigation = page.getByRole("navigation", { name: "Management navigation" });
     await expect(page).toHaveURL(/\/admin\/locations$/);
-    await expect(adminNavigation.getByRole("link")).toHaveText(["Locations", "Reservations", "Bookings", "Programs", "Coaches", "Prices", "Availability", "Transactions", "Notifications", "Settings", "Users"]);
+    await expect(adminNavigation.getByRole("link")).toHaveText(["Locations", "Reservations", "Bookings", "Programs", "Coaches", "Prices", "Availability", "Transactions", "Settings", "Users"]);
     await expect(adminNavigation.getByRole("link", { name: "Locations" })).toHaveAttribute("aria-current", "page");
     await adminNavigation.getByRole("link", { name: "Users" }).click();
     await expect(page.getByRole("heading", { name: "Users", exact: true })).toBeVisible();

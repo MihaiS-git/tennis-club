@@ -160,7 +160,7 @@ export async function cancelCustomerBookingCommand(id: string, actorId: string, 
 // Decides a refund-backed change (cancellation or price reduction) exactly once,
 // only after every refund obligation has succeeded. Called after refund commits and by
 // any later check of a refund (Stripe webhook or Admin); the pending -> applied/unsuccessful
-// transition under the booking lock makes replays no-ops and guards the single notification.
+// transition under the booking lock makes replays no-ops.
 export async function resolveRefundBackedAdjustment(adjustmentId: string): Promise<BookingAdjustmentEntity["status"] | null> {
   const found = await adjustments.findAdjustment((await getDataSource()).manager, adjustmentId);
   if (!found || found.status !== "pending" || !refundBackedAdjustment(found)) return found?.status ?? null;
@@ -173,7 +173,7 @@ export async function resolveRefundBackedAdjustment(adjustmentId: string): Promi
     const outcome = refundBackedOutcome(own.map(refund => refund.status));
     if (outcome === "waiting") {
       for (const refund of own.filter(refund => refund.status === "failed")) {
-        if (adjustment.recoveryVersion === 1) await recordBookingFinancialException(manager, {
+        await recordBookingFinancialException(manager, {
           key: `refund:${refund.id}:exception`, bookingId: a.booking.id, revisionId: a.booking.current_revision_id,
           kind: "refund_failed", refundId: refund.id });
       }

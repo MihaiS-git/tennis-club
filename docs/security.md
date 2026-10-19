@@ -68,6 +68,13 @@ reads require explicit verified owner filters and public reads enforce parent vi
 New private tables must preserve these grant restrictions. Native Supabase Auth and
 private Storage retain their own security; no browser table access is restored for avatars.
 
+The development rebuild recreates `public` with Supabase's stock usage-only schema ACL,
+so effective schema, table, sequence and function privileges match the isolated test
+database. Default-privilege entries still differ in two harmless ways: the rebuilt schema
+has no stock `supabase_admin` defaults and no stock `postgres` function defaults, and
+both only grant more on future objects. Every application function's grants are set
+explicitly by migrations.
+
 ## Public and private player data
 
 Keep tennis information in `public.player_profiles` separate from sensitive account/personal/contact information in `public.users`. Player profiles are readable by active authenticated users, never anonymous users. Suspended accounts do not receive player-profile reads or mutations. Rating has no authenticated INSERT/UPDATE grant. Owners cannot target another user or change ownership. Future coach profiles are a separate sibling domain; membership remains separate from RBAC.

@@ -1,6 +1,5 @@
 "use client";
 
-import { refreshNotificationUnread } from "@/components/notification-unread";
 
 import Link from "next/link";
 import { bookingType } from "@/lib/bookings/booking-type";
@@ -114,7 +113,6 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
     try {
       const result = await cancelAdminCustomerBookingAction({ id: selectedBooking.id });
       if (!result.ok) { toast.error(result.message, { id: notification }); return; }
-      refreshNotificationUnread();
       setConfirming(false);
       dialogRef.current?.close();
       setSelectedOccupancyId(null);

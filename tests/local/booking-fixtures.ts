@@ -60,9 +60,6 @@ export async function cleanupBookingEvidence(manager: EntityManager, selection: 
   await manager.query("ALTER TABLE public.booking_financial_exceptions DISABLE TRIGGER booking_financial_exceptions_immutable");
   await manager.query("DELETE FROM public.booking_financial_exceptions WHERE booking_id=ANY($1::uuid[])", [ids]);
   await manager.query("ALTER TABLE public.booking_financial_exceptions ENABLE TRIGGER booking_financial_exceptions_immutable");
-  await manager.query(`DELETE FROM public.booking_notification_deliveries d
-    WHERE EXISTS (SELECT 1 FROM unnest($1::uuid[]) id
-      WHERE position('Booking reference: ' || id::text || chr(10) in d.message->>'text') > 0)`, [ids]);
   await manager.query("DELETE FROM public.payment_provider_events WHERE attempt_id IN (SELECT id FROM public.payment_attempts WHERE booking_id=ANY($1::uuid[]))", [ids]);
   await manager.query("DELETE FROM public.payment_capture_receipts WHERE payment_attempt_id IN (SELECT id FROM public.payment_attempts WHERE booking_id=ANY($1::uuid[]))", [ids]);
   await manager.query("DELETE FROM public.refund_executions WHERE refund_id IN (SELECT id FROM public.payment_refunds WHERE booking_id=ANY($1::uuid[]))", [ids]);

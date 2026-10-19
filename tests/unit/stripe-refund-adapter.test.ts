@@ -156,7 +156,7 @@ beforeEach(() => {
   prepare.mockResolvedValue({ outcome: "ready", claim });
   initiate.mockResolvedValue({ outcome: "dispatch", operation: "create", execution: claim.execution });
   commit.mockImplementation(async (_claim, observation) => ({ status: observation.kind === "verified" ? observation.status
-    : observation.evidence.kind === "request_rejected" ? "failed" : "pending_retry", notice: null }));
+    : observation.evidence.kind === "request_rejected" ? "failed" : "pending_retry", requiresResolution: false }));
 });
 test("service initiates dispatch before contacting Stripe with exact persisted parameters", async () => {
   expect(await processBookingRefund(refund.id)).toBe("succeeded");
@@ -203,7 +203,7 @@ test.each(["pending", "succeeded", "failed"])("service persists verified %s evid
   expect(commit).toHaveBeenCalledWith(claim, { kind: "verified", status, providerRefundId: result.id, retryable: false, failureReason: undefined });
 });
 test.each(["succeeded", "failed"])("automatic terminal %s short circuit has no provider request", async status => {
-  prepare.mockResolvedValue({ outcome: "terminal", status, notice: null });
+  prepare.mockResolvedValue({ outcome: "terminal", status, requiresResolution: false });
   expect(await processBookingRefund(refund.id)).toBe(status);
   expect(create).not.toHaveBeenCalled();
   expect(initiate).not.toHaveBeenCalled();

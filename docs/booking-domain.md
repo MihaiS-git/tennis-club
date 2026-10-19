@@ -219,8 +219,7 @@ Prevent:
 Admin cancellation of customer bookings and direct reservations is permitted only
 strictly before the location-local start. The details dialog hides cancellation
 for started or past intervals. Both cancellation transactions check wall-clock time after
-acquiring row locks; rejected attempts preserve all booking/reservation snapshots
-and do not send cancellation notifications.
+acquiring row locks; rejected attempts preserve all booking/reservation snapshots.
 
 ## Booking UI
 
@@ -266,8 +265,7 @@ Court 1
 
 See [payment lifecycle foundation](payments-memberships.md). Online commits create
 one pending booking, one temporary reservation hold and one payment attempt.
-Pay at club confirms immediately only when enabled for that location. Confirmation
-email follows actual confirmation; expired holds stop blocking using database time
+Pay at club confirms immediately only when enabled for that location. Expired holds stop blocking using database time
 and transactional cleanup, with the same reservation GiST constraint.
 
 
@@ -310,7 +308,7 @@ Owners retain existing active-account, fixed-location, notice and before-start
 rules, including Coach/Admin owner notice bypass. The revision UUID is the booking
 concurrency token; the lossless reservation timestamp remains the occupancy fence.
 Stable operation keys reject changed intent. Identical effective saves leave the
-pointer, timestamps, payments, refunds and notifications unchanged; a genuine
+pointer, timestamps, payments and refunds unchanged; a genuine
 price-only contractual change appends a revision.
 
 Owner/Admin cancellation appends a final snapshot, releases occupancy and creates

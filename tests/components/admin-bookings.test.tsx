@@ -139,8 +139,6 @@ test("account details link to the authoritative account ID, not the contact emai
 test.each([
   ["/admin/payments/transactions?status=failed&q=Ana&page=4&sort=date&dir=desc", "Back to Transactions",
     "/admin/payments/transactions?status=failed&provider=all&method=all&attention=all&q=Ana&page=4&sort=date&dir=desc"],
-  ["/admin/payments/notifications?q=guest&status=stopped&from=2026-01-01&page=2", "Back to Notifications",
-    "/admin/payments/notifications?q=guest&status=stopped&from=2026-01-01&page=2"],
   [`/admin/payments/transactions/refund/${userId}?q=Ana&page=2`, "Back to Transaction",
     `/admin/payments/transactions/refund/${userId}?status=all&provider=all&method=all&attention=all&q=Ana&page=2&sort=date&dir=desc`],
 ])("opened from %s, Back returns to that exact Admin view and history paging keeps it", async (back, label, href) => {
@@ -156,7 +154,7 @@ test.each([
 });
 
 test.each(["https://evil.example/admin/payments/transactions", "//evil.example/admin/payments/notifications", "/admin/users",
-  "/admin/payments/transactions/refund/not-a-uuid", "javascript:alert(1)"])("ignores unknown or external return target %s", async (back) => {
+  "/admin/payments/notifications?q=guest&page=2", "/admin/payments/transactions/refund/not-a-uuid", "javascript:alert(1)"])("ignores unknown or external return target %s", async (back) => {
   render(await AdminBookingPage({ params: Promise.resolve({ bookingId: guestId }), searchParams: Promise.resolve({ back, status: "cancelled" }) }));
   expect(screen.getByRole("link", { name: "Back to Bookings" }).getAttribute("href")).toBe("/admin/bookings?status=cancelled");
 });

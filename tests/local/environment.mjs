@@ -61,8 +61,6 @@ export function configureTestEnvironment() {
     TEST_SUPABASE_PROJECT: "tennis-club-tests",
     APP_URL: "http://localhost:3000",
     PLAYWRIGHT_APP_URL: "http://localhost:3000",
-    BREVO_API_KEY: "",
-    BOOKING_MAIL_FROM: "",
     STRIPE_TEST_API_URL: "",
     STRIPE_SECRET_KEY: "",
     STRIPE_PUBLISHABLE_KEY: "",

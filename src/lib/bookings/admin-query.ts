@@ -1,10 +1,9 @@
 import { z } from "zod";
 import type { StatusTone } from "@/components/status-badge";
-import { adminNotificationHref, parseAdminNotificationQuery } from "@/lib/notifications/admin-notification-query";
 import { adminPaymentHref, adminTransactionHref, parseAdminPaymentQuery } from "@/lib/payments/admin-query";
 
 // Existing customer booking lifecycle states; direct staff reservations are not bookings.
-export const bookingStatusSchema = z.enum(["confirmed", "pending_payment", "cancelled", "failed", "expired"]);
+const bookingStatusSchema = z.enum(["confirmed", "pending_payment", "cancelled", "failed", "expired"]);
 export type BookingStatus = z.infer<typeof bookingStatusSchema>;
 export const bookingStatusLabels: Record<BookingStatus, string> = {
   confirmed: "Confirmed", pending_payment: "Payment pending", cancelled: "Cancelled", failed: "Failed", expired: "Expired",
@@ -93,8 +92,6 @@ export function parseAdminBookingReturn(params: Record<string, string | string[]
   const search = Object.fromEntries(url.searchParams);
   if (url.pathname === "/admin/payments/transactions")
     return { href: adminPaymentHref(parseAdminPaymentQuery(search)), label: "Back to Transactions" };
-  if (url.pathname === "/admin/payments/notifications")
-    return { href: adminNotificationHref(parseAdminNotificationQuery(search)), label: "Back to Notifications" };
   const detail = transactionDetailPath.exec(url.pathname);
   const transactionId = detail && z.uuid().safeParse(detail[2]);
   if (detail && transactionId?.success) {

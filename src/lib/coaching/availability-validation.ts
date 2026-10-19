@@ -2,9 +2,9 @@ import { z } from "zod";
 
 // Coach availability uses minutes from local midnight at the interval's location,
 // like location opening hours, on 30-minute boundaries. Weekdays are Monday-first (0–6).
-export const availabilityStepMinutes = 30;
+const availabilityStepMinutes = 30;
 export const availabilityWeekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
-export const coachAvailabilityExceptionKinds = ["unavailable", "available"] as const;
+const coachAvailabilityExceptionKinds = ["unavailable", "available"] as const;
 export type CoachAvailabilityExceptionKind = typeof coachAvailabilityExceptionKinds[number];
 // Exceptions are planned at most this many days ahead.
 export const availabilityExceptionHorizonDays = 366;

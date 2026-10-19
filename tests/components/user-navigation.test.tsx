@@ -16,21 +16,20 @@ import ProfileLayout from "../../src/app/profile/layout";
 
 afterEach(() => { cleanup(); navigation.suspended = false; vi.clearAllMocks(); vi.unstubAllGlobals(); });
 
-const labels = ["Bookings", "Booking history", "Notifications", "Player identity", "Personal information", "Tennis profile", "Account & security"];
-const hrefs = ["/my-activity/bookings", "/my-activity/history", "/my-activity/notifications", "/profile", "/profile/personal", "/profile/tennis", "/profile/security"];
+const labels = ["Bookings", "Booking history", "Player identity", "Personal information", "Tennis profile", "Account & security"];
+const hrefs = ["/my-activity/bookings", "/my-activity/history", "/profile", "/profile/personal", "/profile/tennis", "/profile/security"];
 
 it("isolates a suspended dynamic pathname to the sidebar while keeping the page visible", () => {
   navigation.suspended = true;
-  render(<MyActivityLayout><p>Notification details</p></MyActivityLayout>);
+  render(<MyActivityLayout><p>Booking details</p></MyActivityLayout>);
   expect(screen.getByRole("status").textContent).toBe("Loading account navigation…");
   expect(screen.getByRole("heading", { name: "My activity" })).toBeDefined();
-  expect(screen.getByText("Notification details")).toBeDefined();
+  expect(screen.getByText("Booking details")).toBeDefined();
 });
 
 it.each([
   ["/my-activity/bookings", "Bookings", "My activity"],
   ["/my-activity/history", "Booking history", "My activity"],
-  ["/my-activity/notifications", "Notifications", "My activity"],
   ["/profile", "Player identity", "Profile & settings"],
   ["/profile/personal", "Personal information", "Profile & settings"],
   ["/profile/tennis", "Tennis profile", "Profile & settings"],
@@ -50,23 +49,23 @@ it.each([
     expect(within(nav).getByText(section).className).toContain(section === heading ? "text-primary" : "text-muted-foreground");
 });
 
-it.each(["/profile-extra", "/my-activity", "/my-activity/bookings-extra"])("does not activate a destination for %s", (pathname) => {
+it.each(["/profile-extra", "/my-activity", "/my-activity/bookings-extra", "/my-activity/notifications"])("does not activate a destination for %s", (pathname) => {
   navigation.pathname = pathname;
   render(<UserNavigation />);
   expect(screen.getAllByRole("link").every((link) => !link.hasAttribute("aria-current"))).toBe(true);
 });
 
 it("uses the Admin sidebar's link, group and drawer styling", () => {
-  navigation.pathname = "/admin/payments/notifications";
+  navigation.pathname = "/admin/payments/settings";
   const admin = render(<AdminNavigation isAdmin={true} />);
-  const adminActive = screen.getByRole("link", { name: "Notifications" }).className;
-  const adminInactive = screen.getByRole("link", { name: "Settings" }).className;
+  const adminActive = screen.getByRole("link", { name: "Settings" }).className;
+  const adminInactive = screen.getByRole("link", { name: "Transactions" }).className;
   const adminGroup = within(screen.getByRole("navigation")).getByText("Payments").className;
   const adminAside = admin.container.querySelector("aside")!.className;
   admin.unmount();
-  navigation.pathname = "/my-activity/notifications";
+  navigation.pathname = "/my-activity/history";
   const user = render(<UserNavigation />);
-  expect(screen.getByRole("link", { name: "Notifications" }).className).toBe(adminActive);
+  expect(screen.getByRole("link", { name: "Booking history" }).className).toBe(adminActive);
   expect(screen.getByRole("link", { name: "Bookings" }).className).toBe(adminInactive);
   expect(within(screen.getByRole("navigation")).getByText("My activity").className).toBe(adminGroup);
   expect(adminAside).toContain("hidden");

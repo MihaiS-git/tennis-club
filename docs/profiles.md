@@ -35,7 +35,7 @@ Profile sections are routes in the shared user sidebar (the Admin sidebar compon
 
 ## User area navigation
 
-`/my-activity/*` and `/profile/*` render inside `UserAreaShell` (`src/components/management-shell.tsx`), which uses the same grid shell and `SidebarNavigation` component (`src/components/sidebar-navigation.tsx`) as Admin's `ManagementShell`: same desktop sticky sidebar, mobile drawer (focus trap, Escape/backdrop/resize close), active-link styling and `lg` breakpoint. Sections: My activity (Bookings, Booking history, Notifications) and Profile & settings (Player identity, Personal information, Tennis profile, Account & security), with Sign out in the sidebar footer. The navbar has no account dropdown; its avatar links to `/profile`. The layouts are static; each page authorizes the current account itself, so Admin, Coach and Member accounts all use the same area.
+`/my-activity/*` and `/profile/*` render inside `UserAreaShell` (`src/components/management-shell.tsx`), which uses the same grid shell and `SidebarNavigation` component (`src/components/sidebar-navigation.tsx`) as Admin's `ManagementShell`: same desktop sticky sidebar, mobile drawer (focus trap, Escape/backdrop/resize close), active-link styling and `lg` breakpoint. Sections: My activity (Bookings, Booking history) and Profile & settings (Player identity, Personal information, Tennis profile, Account & security), with Sign out in the sidebar footer. The navbar has no account dropdown; its avatar links to `/profile`. The layouts are static; each page authorizes the current account itself, so Admin, Coach and Member accounts all use the same area.
 
 ## Unsaved changes and visit lifecycle
 

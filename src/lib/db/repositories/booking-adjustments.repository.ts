@@ -10,9 +10,6 @@ import { CourtReservationEntity } from "../entities/court-reservation.entity";
 import { BookingEntity } from "../entities/booking.entity";
 import { CourtEntity } from "../entities/court.entity";
 
-export async function hasBookingAdjustments(manager: EntityManager, bookingId: string) {
-  return manager.getRepository(BookingAdjustmentEntity).existsBy({bookingId});
-}
 export async function findAdjustment(manager: EntityManager, id: string) {
   return manager.getRepository(BookingAdjustmentEntity).findOneBy({ id });
 }
@@ -78,7 +75,7 @@ export async function insertAdjustment(manager: EntityManager, input: {
   bookingId: string; baseRevisionId: string; actorId: string; scope: "owner" | "admin"; requestKey: string; target: AdjustmentTarget;
   originalTotal: number; newTotal: number; currency: string; expiresAt: Date; kind?: AdjustmentKind; createdAt?: Date;
 }) {
-  const value = manager.getRepository(BookingAdjustmentEntity).create({ ...input, id: randomUUID(), status: "pending", recoveryVersion: 1 });
+  const value = manager.getRepository(BookingAdjustmentEntity).create({ ...input, id: randomUUID(), status: "pending" });
   await manager.getRepository(BookingAdjustmentEntity).insert(value);
   return value;
 }

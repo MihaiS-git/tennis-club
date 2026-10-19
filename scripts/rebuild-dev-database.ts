@@ -87,9 +87,10 @@ async function main() {
       await manager.query(
         "CREATE SCHEMA public AUTHORIZATION pg_database_owner",
       );
+      // Restore the stock Supabase schema ACL: usage only; postgres creates via pg_database_owner.
       await manager.query("GRANT USAGE ON SCHEMA public TO PUBLIC");
       await manager.query(
-        "GRANT ALL ON SCHEMA public TO postgres, service_role",
+        "GRANT USAGE ON SCHEMA public TO postgres, anon, authenticated, service_role",
       );
       // Retain the privileged local fixture path; browser grants are denied by migrations.
       await manager.query(

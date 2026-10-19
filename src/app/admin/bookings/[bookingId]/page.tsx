@@ -34,7 +34,7 @@ export default async function AdminBookingPage({ params, searchParams }: {
   if (!records) notFound();
   const { booking } = records;
   const query = parseAdminBookingQuery(search);
-  // Opened from Transactions or Notifications: return to that exact view instead.
+  // Opened from Transactions: return to that exact view instead.
   const returnLink = parseAdminBookingReturn(search);
   const back = returnLink ?? { href: adminBookingsHref(query), label: "Back to Bookings" };
   return <>
