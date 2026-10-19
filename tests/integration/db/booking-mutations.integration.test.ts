@@ -513,7 +513,7 @@ test("Phase 6 refund replay serializes with TypeORM claim and result without cha
     if (prepared.outcome!=="ready") throw new Error("Missing claim");
     await initiateRefundExecution(prepared.claim);
     const results=await Promise.all([cancel(f),commitRefundExecution(prepared.claim,{kind:"verified",status:"succeeded",providerRefundId:"re-phase8"})]);
-    expect(results).toEqual([cancelled,{status:"succeeded",notice:null}]);
+    expect(results).toEqual([cancelled,{status:"succeeded",notice:false}]);
     expect((await state(f)).refunds).toEqual([expect.objectContaining({id:cancelled.refundIds[0],amount_minor:5000,currency:"RON",status:"succeeded"})]);
   } finally { if (blocker.isTransactionActive) await blocker.rollbackTransaction(); if (preparation) await Promise.allSettled([preparation]); await blocker.release(); }
 });
@@ -878,12 +878,12 @@ test("concurrent refund claims share one execution; takeover retains microsecond
   expect(replacement.execution.id).toBe(claim.execution.id); expect(replacement.token).not.toBe(claim.token);
   await inTransaction(manager=>refundExecutions.recordRefundExecutionCheck(manager,{refundId:f.refundId,executionId:claim.execution.id,
     token:replacement.token,checkedAt:new Date(),lastError:"current_worker",releaseLease:false}));
-  expect(await commitRefundExecution(claim,successResult)).toMatchObject({status:"succeeded",notice:null});
+  expect(await commitRefundExecution(claim,successResult)).toMatchObject({status:"succeeded",notice:false});
   expect((await refundExecutions.listRefundExecutions(database.manager,f.refundId))[0]).toMatchObject({
     leaseToken:replacement.token,lastError:"current_worker",terminalResult:"succeeded",providerRefundId:"re-phase8"});
-  expect(await commitRefundExecution(replacement,successResult)).toMatchObject({status:"succeeded",notice:null});
+  expect(await commitRefundExecution(replacement,successResult)).toMatchObject({status:"succeeded",notice:false});
   expect((await refundExecutions.listRefundExecutions(database.manager,f.refundId))[0].leaseToken).toBeNull();
-  expect(await prepareRefund(f.refundId)).toMatchObject({outcome:"terminal",status:"succeeded",notice:null});
+  expect(await prepareRefund(f.refundId)).toMatchObject({outcome:"terminal",status:"succeeded",notice:false});
 });
 
 test("automatic preparation is independent of Admin roles and attributes no manual initiator", async () => {
@@ -905,9 +905,9 @@ test("automatic preparation is independent of Admin roles and attributes no manu
 test("an automatic claim blocks another worker from issuing a competing operation", async () => {
   const f=await refundFixture(),claim=await claimRefund(f.refundId);
   expect(await prepareRefund(f.refundId)).toMatchObject({outcome:"busy"});
-  expect(await commitRefundExecution(claim,successResult)).toMatchObject({status:"succeeded",notice:null});
+  expect(await commitRefundExecution(claim,successResult)).toMatchObject({status:"succeeded",notice:false});
   const before=await state(f);
-  expect(await prepareRefund(f.refundId)).toMatchObject({outcome:"terminal",status:"succeeded",notice:null});
+  expect(await prepareRefund(f.refundId)).toMatchObject({outcome:"terminal",status:"succeeded",notice:false});
   expect((await state(f)).refunds).toEqual(before.refunds);
   expect(await refundExecutions.listRefundExecutions(database.manager,f.refundId)).toHaveLength(1);
 });
@@ -948,7 +948,7 @@ test("receipt-resolution failure rolls back execution success, obligation status
   expect(await state(f)).toEqual(before);
   expect(await refundExecutions.listRefundExecutions(database.manager,prepared.claim.refund.id)).toEqual(history);
   expect(await database.query("SELECT * FROM public.payment_provider_events WHERE attempt_id=$1",[f.attemptId])).toEqual(events);
-  expect(await commitRefundExecution(prepared.claim,successResult)).toMatchObject({status:"succeeded",notice:null});
+  expect(await commitRefundExecution(prepared.claim,successResult)).toMatchObject({status:"succeeded",notice:false});
   const resolved=await database.query("SELECT * FROM public.payment_provider_events WHERE attempt_id=$1",[f.attemptId]);
   expect(await prepareRefund(refundId)).toMatchObject({outcome:"terminal",status:"succeeded"});
   expect(await database.query("SELECT * FROM public.payment_provider_events WHERE attempt_id=$1",[f.attemptId])).toEqual(resolved);
@@ -991,9 +991,9 @@ test("completion fences obligation and execution snapshots and cannot regress ve
     .rejects.toThrow("Refund financial evidence changed");
   await expect(commitRefundExecution({...claim,execution:{...claim.execution,idempotencyKey:"different"}},successResult))
     .rejects.toThrow("Refund execution request changed");
-  expect(await commitRefundExecution(claim,successResult)).toMatchObject({status:"succeeded",notice:null});
+  expect(await commitRefundExecution(claim,successResult)).toMatchObject({status:"succeeded",notice:false});
   const history=await refundExecutions.listRefundExecutions(database.manager,f.refundId);
-  expect(await commitRefundExecution(claim,{kind:"error",evidence:{kind:"lookup_failed",operation:"retrieve",providerRefundId:"re-phase8"}})).toMatchObject({status:"succeeded",notice:null});
+  expect(await commitRefundExecution(claim,{kind:"error",evidence:{kind:"lookup_failed",operation:"retrieve",providerRefundId:"re-phase8"}})).toMatchObject({status:"succeeded",notice:false});
   await expect(commitRefundExecution(claim,{...successResult,providerRefundId:"re_other"})).rejects.toThrow("Conflicting provider refund identity");
   const latest=await refundExecutions.listRefundExecutions(database.manager,f.refundId);
   expect(latest.map(e=>({result:e.terminalResult,id:e.providerRefundId,completed:e.completedAt})))
@@ -1551,12 +1551,18 @@ test("known capture abandonment keeps cancellation context during later provider
     [f.attemptId, createHash("sha256").update(token).digest("hex")]);
   const event = paymentEvent(f);
   expect(await processOnlinePaymentEvent(event)).toBe("succeeded");
-  await abandonOnlineCheckout({ attemptId: f.attemptId, token });
-  const cancellation = (await state(f)).booking!.revision;
+  // Confirmation revokes the checkout capability; booking management owns cancellation.
+  const confirmed = await state(f);
+  await expect(abandonOnlineCheckout({ attemptId: f.attemptId, token })).rejects.toThrow("already confirmed");
+  expect(await state(f)).toEqual(confirmed);
+  const cancelled = await cancel(f);
+  expect(cancelled.outcome).toBe("cancellation_pending");
+  const context = (await state(f)).booking!.current_revision_id;
   const before = await database.query("SELECT * FROM public.payment_refunds WHERE booking_id=$1", [f.id]);
-  expect(before).toEqual([expect.objectContaining({ reason: "booking_cancellation", context_revision_id: cancellation.id })]);
+  expect(before).toEqual([expect.objectContaining({ reason: "booking_cancellation", context_revision_id: context })]);
   expect(await processOnlinePaymentEvent({ ...event, eventId: randomUUID() })).toBe("succeeded");
   expect(await database.query("SELECT * FROM public.payment_refunds WHERE booking_id=$1", [f.id])).toEqual(before);
+  expect((await state(f)).booking!.current_revision_id).toBe(context);
 });
 
 test("refund context conflicts reject replay; obligation insertion failure rolls back its revision and occupancy", async () => {

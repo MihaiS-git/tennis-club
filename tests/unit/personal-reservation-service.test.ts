@@ -11,7 +11,7 @@ const id = (n: number) => `ca000000-0000-4000-8000-${String(n).padStart(12, "0")
 const owner = id(1), other = id(2), locationId = id(20);
 const now = new Date("2026-10-02T12:30:45Z");
 const token = "2026-10-01T12:00:00.123456+00:00";
-const row = { id: id(10), court_id: id(11), updated_at: token, created_at: token,
+const row = { id: id(10), court_id: id(11), coach_user_id: null, updated_at: token, created_at: token,
   booking_date: "2026-10-02", starts_at_minute: 900, ends_at_minute: 960, reason: "Practice", status: "active",
   created_by_user_id: owner, cancelled_at: null, cancelled_by_user_id: null, hold_expires_at: null,
   creator_name: "Ana Pop", cancelled_by_name: null, court_name: "Court 1", court_active: true,

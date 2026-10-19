@@ -52,7 +52,7 @@ afterAll(async () => {
 
 test("registered migrations match application metadata without schema changes", async () => {
   expect((await database.query("SELECT name FROM public.migrations ORDER BY timestamp")).map((row: { name: string }) => row.name))
-    .toEqual(["InitialApplicationSchema1791462257924", "ApplicationNativeIntegrity1791462257925", "SupabaseAuthStorage1791462257926", "AutomaticFinancialRecovery1791462257927", "DurableBookingNotifications1791462257928", "RequestDrivenPaymentRecovery1791462257929", "SurchargeCaptureAcceptance1791462257930", "CustomerNotificationHistory1791462257931", "BrevoDeliveryEvents1791462257932", "AdminNotificationDismissal1791462257933", "CoachingPrograms1791462257934", "IndependentNotificationEvidence1791462257935", "FairNotificationRecovery1791462257936", "CoachAvailability1791462257937", "CoachingReservations1791462257938"]);
+    .toEqual(["InitialApplicationSchema1791462257924", "ApplicationNativeIntegrity1791462257925", "SupabaseAuthStorage1791462257926", "AutomaticFinancialRecovery1791462257927", "DurableBookingNotifications1791462257928", "RequestDrivenPaymentRecovery1791462257929", "SurchargeCaptureAcceptance1791462257930", "CustomerNotificationHistory1791462257931", "BrevoDeliveryEvents1791462257932", "AdminNotificationDismissal1791462257933", "CoachingPrograms1791462257934", "IndependentNotificationEvidence1791462257935", "FairNotificationRecovery1791462257936", "CoachAvailability1791462257937", "CoachingReservations1791462257938", "CoachRosterRemoval1791462257939"]);
   expect(await database.query("SELECT to_regclass('public.job_leases') AS job_leases")).toEqual([{ job_leases: null }]);
   const diff = await database.driver.createSchemaBuilder().log();
   expect(diff.upQueries).toEqual([]);

@@ -100,7 +100,7 @@ test("navigation follows the current account and protected routes enforce access
     await navigation.getByRole("link", { name: "Admin" }).click();
     const adminNavigation = page.getByRole("navigation", { name: "Management navigation" });
     await expect(page).toHaveURL(/\/admin\/locations$/);
-    await expect(adminNavigation.getByRole("link")).toHaveText(["Locations", "Reservations", "Transactions", "Notifications", "Settings", "Users"]);
+    await expect(adminNavigation.getByRole("link")).toHaveText(["Locations", "Reservations", "Bookings", "Programs", "Coaches", "Prices", "Availability", "Transactions", "Notifications", "Settings", "Users"]);
     await expect(adminNavigation.getByRole("link", { name: "Locations" })).toHaveAttribute("aria-current", "page");
     await adminNavigation.getByRole("link", { name: "Users" }).click();
     await expect(page.getByRole("heading", { name: "Users", exact: true })).toBeVisible();
@@ -153,7 +153,7 @@ test("navigation follows the current account and protected routes enforce access
     await expect(navigation.getByRole("link", { name: "Admin", exact: true })).toHaveAttribute("href", "/admin");
     await navigation.getByRole("link", { name: "Admin", exact: true }).click();
     await expect(page).toHaveURL(/\/admin\/reservations$/);
-    await expect(adminNavigation.getByRole("link")).toHaveText(["Reservations"]);
+    await expect(adminNavigation.getByRole("link")).toHaveText(["Reservations", "My availability"]);
     await page.goto("/admin");
     await expect(page).toHaveURL(/\/admin\/reservations$/);
     for (const route of ["/admin/locations", "/admin/locations/new", "/admin/courts", "/admin/pricing", "/admin/users", "/admin/payments", "/admin/payments/transactions", "/admin/payments/settings"]) {
@@ -162,7 +162,7 @@ test("navigation follows the current account and protected routes enforce access
     }
     await page.goto("/admin/reservations?date=2099-10-15");
     await expect(page.getByRole("heading", { name: "Reservations", exact: true })).toBeVisible();
-    await expect(adminNavigation.getByRole("link")).toHaveText(["Reservations"]);
+    await expect(adminNavigation.getByRole("link")).toHaveText(["Reservations", "My availability"]);
     await page.getByRole("link", { name: "Profile", exact: true }).click();
     await visitUserDestinations();
     await page.getByRole("button", { name: "Sign out", exact: true }).click();
