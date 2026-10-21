@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen, within } from "@testing-library/react";
-import { afterEach, expect, it, vi } from "vitest";
+import { renderToReadableStream } from "react-dom/server";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 vi.mock("next/server", () => ({ connection: async () => undefined }));
 vi.mock("@/lib/courts/public", () => ({ listPublicLocationsWithCourts: vi.fn(async () => []) }));
@@ -16,13 +17,23 @@ import Home from "@/app/page";
 import type { PublicCoaching } from "@/lib/coaching/public";
 
 afterEach(cleanup);
+beforeEach(() => vi.clearAllMocks());
 
-it("links to coaching without implying online lesson booking or invented lesson times", () => {
-  render(<Home params={Promise.resolve({})} searchParams={Promise.resolve({})} />);
-  const coachingLinks = screen.getAllByRole("link").filter((link) => link.getAttribute("href") === "/coaching");
+// Resolve the homepage's async Server Component children with the server renderer,
+// as in the navbar tests, before inspecting the completed HTML.
+async function renderHome() {
+  const stream = await renderToReadableStream(<Home params={Promise.resolve({})} searchParams={Promise.resolve({})} />);
+  await stream.allReady;
+  render(<div dangerouslySetInnerHTML={{ __html: await new Response(stream).text() }} />);
+  return document;
+}
+
+it("links to coaching without implying online lesson booking or invented lesson times", async () => {
+  const home = within((await renderHome()).body);
+  const coachingLinks = home.getAllByRole("link").filter((link) => link.getAttribute("href") === "/coaching");
   expect(coachingLinks.length).toBeGreaterThan(0);
   for (const link of coachingLinks) expect(link.textContent).not.toMatch(/book/i);
-  const card = screen.getByRole("article", { name: "Coaching" });
+  const card = home.getByRole("article", { name: "Coaching" });
   expect(card.textContent).toContain("Lessons can’t be booked online yet.");
   expect(card.textContent).not.toMatch(/\d{1,2}:\d{2}|availability|slot/i);
   expect(within(card).getByRole("link", { name: /Explore coaching/ }).getAttribute("href")).toBe("/coaching");
@@ -50,10 +61,10 @@ it("uses neutral copy when no program is published or coaching cannot be loaded"
 });
 
 it("reads coaching once, on the same public locations, without hardcoded categories", async () => {
-  render(<Home params={Promise.resolve({})} searchParams={Promise.resolve({})} />);
-  await vi.waitFor(() => expect(readPublicCoaching).toHaveBeenCalledWith([]));
+  const home = await renderHome();
+  expect(readPublicCoaching).toHaveBeenCalledWith([]);
   expect(readPublicCoaching).toHaveBeenCalledTimes(1);
-  const section = document.getElementById("coaching")!;
+  const section = home.getElementById("coaching")!;
   expect(section.textContent).not.toMatch(/Performance training|Individual coaching/);
   expect(within(section).getByRole("link", { name: /Meet the coaches/ }).getAttribute("href")).toBe("/coaching");
 });

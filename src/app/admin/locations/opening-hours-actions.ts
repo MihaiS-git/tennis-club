@@ -11,6 +11,7 @@ export async function mutateOpeningHoursAction(input: unknown) {
     revalidatePath("/book");
     revalidatePath("/courts");
     revalidatePath("/admin/reservations");
+    revalidatePath("/admin/bookings");
   }
   return result;
 }

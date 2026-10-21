@@ -1,10 +1,11 @@
 import { localStartInstant } from "@/lib/courts/local-time";
 import { mondayWeekday } from "@/lib/pricing/resolution";
+import { scheduleStatus } from "@/lib/admin/opening-hours-validation";
 import type { CoachAvailabilityExceptionKind } from "./availability-validation";
 
 export type WeeklyAvailabilityInterval = { location_id: string; weekday: number; start_minute: number; end_minute: number };
 export type AvailabilityException = {
-  date: string; kind: CoachAvailabilityExceptionKind; location_id: string | null; start_minute: number | null; end_minute: number | null;
+  date: string; until_date?: string; kind: CoachAvailabilityExceptionKind; location_id: string | null; start_minute: number | null; end_minute: number | null;
 };
 export type CoachAvailabilityWindow = {
   location_id: string; date: string; start_minute: number; end_minute: number;
@@ -39,7 +40,7 @@ export function resolveCoachAvailability(input: {
   timezones: ReadonlyMap<string, string>;
 }): CoachAvailabilityWindow[] {
   const weekday = mondayWeekday(input.date);
-  const exceptions = input.exceptions.filter((exception) => exception.date === input.date);
+  const exceptions = input.exceptions.filter((exception) => exception.date <= input.date && (exception.until_date ?? exception.date) >= input.date);
   const cuts = exceptions.map(exceptionRange);
   const segments = [
     ...input.weekly.filter((interval) => interval.weekday === weekday).flatMap((interval) =>
@@ -57,4 +58,27 @@ export function resolveCoachAvailability(input: {
     return [{ location_id: segment.location_id, date: input.date, start_minute: segment.start, end_minute: segment.end,
       starts_at: startsAt, ends_at: endsAt, source: segment.source }];
   }).sort((a, b) => a.starts_at.localeCompare(b.starts_at) || a.location_id.localeCompare(b.location_id));
+}
+
+export type LocationOpeningSchedule = {
+  starts_on: string; ends_on: string | null; status: "current" | "scheduled";
+  intervals: { weekday: number; opens_at_minute: number; closes_at_minute: number }[];
+};
+
+// The schedule in effect on the location's local date and any later dated schedules,
+// using the same inclusive date-range rule as opening-hours resolution. History is dropped.
+export function currentAndUpcomingOpeningHours(
+  schedules: readonly { id: string; starts_on: string; ends_on: string | null }[],
+  hours: readonly { schedule_id: string; weekday: number; opens_at_minute: number; closes_at_minute: number }[],
+  today: string,
+): LocationOpeningSchedule[] {
+  return schedules.filter((schedule) => scheduleStatus(schedule, today) !== "History")
+    .toSorted((a, b) => a.starts_on.localeCompare(b.starts_on))
+    .map((schedule) => ({
+      starts_on: schedule.starts_on, ends_on: schedule.ends_on,
+      status: scheduleStatus(schedule, today) === "Current" ? "current" : "scheduled",
+      intervals: hours.filter((row) => row.schedule_id === schedule.id)
+        .map(({ weekday, opens_at_minute, closes_at_minute }) => ({ weekday, opens_at_minute, closes_at_minute }))
+        .toSorted((a, b) => a.weekday - b.weekday || a.opens_at_minute - b.opens_at_minute),
+    }));
 }

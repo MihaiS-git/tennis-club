@@ -150,7 +150,14 @@ test("Late-capture compensation preserves payment identity, idempotency and occu
     await db.from("payment_provider_settings").update({ active_provider:previous }).eq("id",true);
     const ids=cancelledRows.map(r => r.booking_id);
     await cleanupBookingFixtures({ bookingIds: ids });
-    await db.from("court_reservations").delete().eq("court_id",courtId);await db.from("courts").delete().eq("id",courtId);await db.from("locations").delete().eq("id",locationId);
+    await cleanupBookingFixtures({ courtIds: [courtId] });
+    // The checkout policy fixture's pricing and opening hours reference the court and
+    // location; remove them first, and fail loudly instead of leaking the location.
+    expect((await db.from("court_reservations").delete().eq("court_id",courtId)).error).toBeNull();
+    expect((await db.from("pricing_rule_sets").delete().eq("location_id",locationId)).error).toBeNull();
+    expect((await db.from("location_opening_hours").delete().eq("location_id",locationId)).error).toBeNull();
+    expect((await db.from("courts").delete().eq("id",courtId)).error).toBeNull();
+    expect((await db.from("locations").delete().eq("id",locationId)).error).toBeNull();
     await cleanupAuthFixtures(db,users);
   }
 },30000);

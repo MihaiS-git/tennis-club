@@ -11,11 +11,21 @@ import { normalizeDatabaseError } from "@/lib/db/errors";
 import { lockActiveAdminAccount } from "@/lib/db/repositories/accounts.repository";
 import * as clubs from "@/lib/db/repositories/clubs.repository";
 import * as pricing from "@/lib/db/repositories/pricing.repository";
+import * as coachAvailability from "@/lib/db/repositories/coach-availability.repository";
+import { listLocationLiveOccupancy } from "@/lib/db/repositories/reservations.repository";
 import type { LocationOpeningHoursEntity } from "@/lib/db/entities/location-opening-hours.entity";
 import { planOpeningHoursPricing, reconcileOpeningHoursPricing } from "@/lib/pricing/opening-hours-reconciliation";
-import { localToday } from "@/lib/courts/local-time";
+import { localMinute, localToday } from "@/lib/courts/local-time";
+import { fitsOpeningHours } from "@/lib/reservations/domain";
+import { changedOpeningDates, fromDate, openingIntervalsOn, planWorkingHoursReconciliation, type OpeningPeriod } from "@/lib/coaching/working-hours";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
+function openingPeriods(schedules: readonly { id: string; startsOn: string; endsOn: string | null }[],
+  hours: readonly (clubs.OpeningHoursFields & { scheduleId: string })[]): OpeningPeriod[] {
+  return schedules.map((schedule) => ({ starts_on: schedule.startsOn, ends_on: schedule.endsOn,
+    intervals: hours.filter((row) => row.scheduleId === schedule.id)
+      .map((row) => ({ weekday: row.weekday, opens_at_minute: row.opensAtMinute, closes_at_minute: row.closesAtMinute })) }));
+}
 function openingHoursDto(row: LocationOpeningHoursEntity, schedule?: { starts_on: string; ends_on: string | null }) {
   return {
     id: row.id, location_id: row.locationId, schedule_id: row.scheduleId, ...schedule && { starts_on: schedule.starts_on, ends_on: schedule.ends_on }, weekday: row.weekday,
@@ -130,6 +140,31 @@ async function processAdminOpeningHours(input: unknown, supabase?: Client): Prom
       const reconciliation = reconcileOpeningHoursPricing(rules, dated(allHours, schedules), dated(candidateHours, candidateSchedules), today, candidateSchedules,
         courts.map((court) => ({ courtId: court.id, courtState: court.environment })));
       const pricingPlan = planOpeningHoursPricing(rules, reconciliation);
+      // Only dates from today whose opening hours can change are affected. The exclusive
+      // configuration fence excludes concurrent booking commands and availability writes.
+      const adjusted = adjustment && schedules.find((schedule) => schedule.id === adjustment.id);
+      const affected = fromDate(changedOpeningDates([
+        { before: existing ? { from: existing.startsOn, until: existing.endsOn } : null,
+          after: operation === "delete" ? null : { from: startsOn, until: endsOn }, hoursChanged: changedHours },
+        ...adjustment && adjusted ? [{ before: { from: adjusted.startsOn, until: adjusted.endsOn },
+          after: { from: adjustment.starts_on, until: adjustment.ends_on }, hoursChanged: false }] : [],
+      ]), today);
+      const periods = openingPeriods(candidateSchedules, candidateHours);
+      // Live future court and coaching reservations must stay inside the opening hours:
+      // a change that would leave one outside them is rejected, never applied to it.
+      const previous = openingPeriods(schedules, allHours);
+      const minute = localMinute(location.timezone, now);
+      const conflicts = (await listLocationLiveOccupancy(manager, location.id, today)).filter((row) =>
+        (row.booking_date > today || row.ends_at_minute > minute)
+        && affected.some((range) => range.from <= row.booking_date && (range.until === null || row.booking_date <= range.until))
+        && fitsOpeningHours(openingIntervalsOn(previous, row.booking_date), row.booking_date, row.starts_at_minute, row.ends_at_minute)
+        && !fitsOpeningHours(openingIntervalsOn(periods, row.booking_date), row.booking_date, row.starts_at_minute, row.ends_at_minute));
+      if (conflicts.length) return { ok: false, reason: "booking-conflict", dates: [...new Set(conflicts.map((row) => row.booking_date))] };
+      // Coach working hours at this location follow the new opening hours on the affected
+      // dates: kept, trimmed or removed, never extended. Other locations are untouched.
+      const workingHours = planWorkingHoursReconciliation((await coachAvailability.listLocationWeeklyAvailability(manager, location.id)).map((row) => ({
+        row, weekday: row.weekday, start_minute: row.startMinute, end_minute: row.endMinute, valid_from: row.validFrom, valid_until: row.validUntil,
+      })), periods, affected);
       failureMessage = "Unable to change opening hours.";
       let savedId = existing?.id;
       if (operation === "delete") await clubs.deleteOpeningHoursSchedule(manager, location.id, id);
@@ -148,13 +183,17 @@ async function processAdminOpeningHours(input: unknown, supabase?: Client): Prom
         }
       }
       await pricing.applyOpeningHoursPricing(manager, location.id, pricingPlan, now);
+      await coachAvailability.replaceCoachWeeklyAvailability(manager, workingHours.changed.map(({ row, replacements }) => ({
+        row: row.row, replacements: replacements.map((hours) => ({ weekday: hours.weekday, startMinute: hours.start_minute, endMinute: hours.end_minute,
+          validFrom: hours.valid_from, validUntil: hours.valid_until })),
+      })), now);
       failureMessage = "Unable to refresh opening hours.";
       const refreshed = await clubs.listLocationOpeningHours(manager, location.id);
       const refreshedSchedules = await readSchedules(location.id, manager);
       const hours = z.array(datedOpeningIntervalSchema).parse(refreshed.map((row) => openingHoursDto(row, refreshedSchedules.find((s) => s.id === row.scheduleId))));
       failureMessage = "Unable to change opening hours.";
       return { ok: true, intervals: hours, schedules: refreshedSchedules, scheduleId: savedId, pricingAdjusted: reconciliation.changed.length > 0 || reconciliation.additions.length > 0,
-        missingPricing: reconciliation.missingPricing };
+        missingPricing: reconciliation.missingPricing, workingHoursAdjusted: workingHours.changed.length > 0 };
     });
   } catch (error) {
     // inTransaction has rolled back.

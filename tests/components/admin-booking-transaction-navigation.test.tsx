@@ -46,6 +46,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.authorize.mockResolvedValue({ roles: ["admin"] });
   mocks.records.mockResolvedValue({ booking, history: [], summary,
+    cancellation: { availability: "started", startsAt: "2025-01-01T10:00:00.000Z", refundAvailable: false },
     operations: { page: 2, total: 21, totalPages: 2, rows: [operation] } });
   mocks.transactions.mockResolvedValue({ rows: [transaction], page: 1, total: 1, totalPages: 1 });
 });

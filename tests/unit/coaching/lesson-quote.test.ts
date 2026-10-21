@@ -305,3 +305,12 @@ describe("semi-private complete-session quotes", () => {
     expect(reason(eastDay({ coaching: { ...coaching, programs: coaching.programs.map(p => ({ ...p, program_type: "junior" })) } }))).toBe("not-offered");
   });
 });
+
+it.each(["2026-12-20", "2026-12-21", "2026-12-31", "2027-01-01", "2027-01-10", "2027-01-11"])(
+  "blocks booking quotes only inside the inclusive local time-off range: %s", onDate => {
+    const day = eastDay({ date: onDate }, { exceptions: [{ date: "2026-12-21", until_date: "2027-01-10", kind: "unavailable", location_id: null, start_minute: null, end_minute: null }] });
+    const inside = onDate >= "2026-12-21" && onDate <= "2027-01-10";
+    expect(quoteCoachingLesson(day, lesson()).ok).toBe(!inside);
+    expect(listCoachingLessonOffers(day, { programId: ids.private, durationMinutes: 60 }).length === 0).toBe(inside);
+  },
+);

@@ -86,7 +86,9 @@ export async function insertBookingRecords(manager: EntityManager, input: unknow
     customer_name: z.string(), customer_email: z.string(), customer_phone: z.string(), total_amount_minor: z.number().int(),
     currency: z.string(), payment_method: z.enum(["online", "pay_at_club"]).nullable().optional(),
     cancellation_notice_minutes: z.number().int(), status: z.enum(["confirmed", "pending_payment", "cancelled", "expired", "failed"]).optional(),
-    created_at: z.string().optional(), updated_at: z.string().optional() });
+    created_at: z.string().optional(), updated_at: z.string().optional(),
+    // A coaching lesson's stored coach and program terms, as the booking flow snapshots them.
+    coaching: z.object({ coach_user_id: z.uuid(), coaching_program_id: z.uuid(), coach_name: z.string(), coaching_program_name: z.string() }).optional() });
   const values = z.array(schema).parse(Array.isArray(input) ? input : [input]);
   for (const value of values) {
     const id = value.id ?? randomUUID(), revisionId = randomUUID();
@@ -105,17 +107,20 @@ export async function insertBookingRecords(manager: EntityManager, input: unknow
     const evidence = {version:1,rounding:"half-hour-sum-round",courtState:"outdoor",slots:times.map((minute,i)=>({minute,ruleId:randomUUID(),ruleSetId:randomUUID(),hourlyMinor:rate+(i<remainder ? 1 : 0),startsOn:null,endsOn:null}))};
     await manager.query(`INSERT INTO public.booking_revisions(id,booking_id,revision_number,previous_revision_id,operation_key,intent_hash,kind,booking_state,
       location_id,court_id,location_name,court_name,timezone,booking_date,starts_at_minute,ends_at_minute,
-      customer_name,customer_email,customer_phone,total_amount_minor,currency,payment_method,cancellation_notice_minutes,actor_user_id,actor_scope,recorded_at,pricing_evidence)
-      VALUES($1,$2,1,NULL,'created','fixture','created',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,coalesce($21::timestamptz,now()),$22)`,
+      customer_name,customer_email,customer_phone,total_amount_minor,currency,payment_method,cancellation_notice_minutes,actor_user_id,actor_scope,recorded_at,pricing_evidence,
+      coach_user_id,coaching_program_id,coach_name,coaching_program_name)
+      VALUES($1,$2,1,NULL,'created','fixture','created',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,coalesce($21::timestamptz,now()),$22,$23,$24,$25,$26)`,
       [revisionId,id,state,resource.location_id,resource.court_id,resource.location_name,resource.court_name,resource.timezone,resource.booking_date,
         resource.starts_at_minute,resource.ends_at_minute,value.customer_name,value.customer_email,value.customer_phone,value.total_amount_minor,value.currency,
-        value.payment_method ?? "pay_at_club",value.cancellation_notice_minutes,value.account_user_id ?? null,value.account_user_id ? "customer":"guest",value.created_at ?? null,JSON.stringify(evidence)]);
+        value.payment_method ?? "pay_at_club",value.cancellation_notice_minutes,value.account_user_id ?? null,value.account_user_id ? "customer":"guest",value.created_at ?? null,JSON.stringify(evidence),
+        value.coaching?.coach_user_id ?? null,value.coaching?.coaching_program_id ?? null,value.coaching?.coach_name ?? null,value.coaching?.coaching_program_name ?? null]);
     if (value.status === "cancelled") {
       const finalId = randomUUID();
       await manager.query(`INSERT INTO public.booking_revisions SELECT $1,booking_id,2,id,'cancellation','fixture','cancelled',
         'cancelled',location_id,court_id,location_name,court_name,timezone,booking_date,starts_at_minute,ends_at_minute,
         customer_name,customer_email,customer_phone,total_amount_minor,currency,payment_method,cancellation_notice_minutes,
-        $3,'admin',now(),NULL,'admin_cancelled',pricing_evidence,NULL FROM public.booking_revisions WHERE id=$2`, [finalId,revisionId,resource.cancelled_by_user_id]);
+        $3,'admin',now(),NULL,'admin_cancelled',pricing_evidence,coach_user_id,coaching_program_id,coach_name,coaching_program_name
+        FROM public.booking_revisions WHERE id=$2`, [finalId,revisionId,resource.cancelled_by_user_id]);
       await manager.query("UPDATE public.bookings SET current_revision_id=$1 WHERE id=$2",[finalId,id]);
     }
   }

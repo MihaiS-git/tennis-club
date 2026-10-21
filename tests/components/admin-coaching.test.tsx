@@ -82,7 +82,7 @@ it("shows an empty state when no programs exist", () => {
 });
 
 it("prevents showing a coach without an eligible coach account", () => {
-  render(<CoachesTable coaches={[{ ...coach, ineligibility: "no-coach-role" }]} locations={[location]} programs={[program]} />);
+  render(<CoachesTable coaches={[listItem({ ...coach, ineligibility: "no-coach-role" })]} locations={[location]} programs={[program]} />);
   const [visibility] = screen.getAllByRole("combobox", { name: "Visibility of Ana Pop" });
   expect((within(visibility).getByRole("option", { name: "Public" }) as HTMLOptionElement).disabled).toBe(true);
   expect(screen.getAllByText("No Coach role").length).toBeGreaterThan(0);
@@ -143,7 +143,7 @@ it("edits an existing coach's public profile, specialties, qualifications, langu
   actions.saveCoachProfileAction.mockResolvedValueOnce({ ok: false, reason: "has-prices" }).mockResolvedValueOnce({ ok: true, id: coach.user_id });
   const west: AdminCoachingLocation = { id: "b1000000-0000-4000-8000-000000000002", name: "West Club", currency: "EUR", is_active: true };
   const group: AdminCoachingProgram = { ...program, id: "a1000000-0000-4000-8000-000000000002", name: "Group drills", is_active: false };
-  render(<CoachesTable coaches={[{ ...coach, specialties: ["Serve"], languages: ["English"], qualifications: "Level 1" }]}
+  render(<CoachesTable coaches={[listItem({ ...coach, specialties: ["Serve"], languages: ["English"], qualifications: "Level 1" })]}
     locations={[location, west]} programs={[program, group]} />);
   fireEvent.click(screen.getByRole("row", { name: "Edit coach Ana Pop" }));
   const dialog = screen.getByRole("dialog", { name: "Edit coach" });
@@ -193,7 +193,7 @@ it("shows Pencil and Trash2 program actions and offers explicit deactivation for
 
 it.each([false, true])("confirms coach removal and reports physical deletion versus archiving (archive=%s)", async archived => {
   actions.deleteCoachProfileAction.mockResolvedValue({ ok: true, id: coach.user_id, archived });
-  render(<CoachesTable coaches={[coach]} locations={[location]} programs={[program]} />);
+  render(<CoachesTable coaches={[listItem(coach)]} locations={[location]} programs={[program]} />);
   const row = screen.getByRole("row", { name: "Edit coach Ana Pop" });
   expect(within(row).getByRole("button", { name: "Edit coach" }).querySelector(".lucide-pencil")).toBeTruthy();
   const button = within(row).getByRole("button", { name: "Delete coach" });
@@ -240,10 +240,40 @@ it("edits every program field in the existing dialog from the Pencil action", as
 
 it("keeps coach removal open with a clear active-lesson explanation", async () => {
   actions.deleteCoachProfileAction.mockResolvedValue({ ok: false, reason: "active-lessons" });
-  render(<CoachesTable coaches={[coach]} locations={[location]} programs={[program]} />);
+  render(<CoachesTable coaches={[listItem(coach)]} locations={[location]} programs={[program]} />);
   fireEvent.click(within(screen.getByRole("row", { name: "Edit coach Ana Pop" })).getByRole("button", { name: "Delete coach" }));
   const dialog = screen.getByRole("dialog", { name: "Remove Ana Pop?" });
   fireEvent.click(within(dialog).getByRole("button", { name: "Remove coach" }));
   expect((await within(dialog).findByRole("alert")).textContent).toContain("Handle those lessons first");
   expect(screen.getByRole("dialog", { name: "Remove Ana Pop?" })).toBeTruthy();
+});
+
+function listItem(profile: AdminCoach): import("@/lib/coaching/admin-lists").AdminCoachListItem {
+  return { user_id: profile.user_id, name: profile.display_name, email: profile.email,
+    account_status: profile.ineligibility === "suspended" ? "suspended" : "active", profile_status: "configured", profile };
+}
+
+it("configures a missing profile directly from its account row", async () => {
+  actions.saveCoachProfileAction.mockResolvedValue({ ok: true, id: coach.user_id });
+  render(<CoachesTable coaches={[{ ...listItem(coach), profile: null, profile_status: "not-configured" }]}
+    locations={[location]} programs={[program]} />);
+  const row = screen.getByRole("row", { name: "Configure profile Ana Pop" });
+  expect(row.textContent).toContain("Not configured");
+  fireEvent.click(within(row).getByRole("button", { name: "Configure profile" }));
+  const dialog = screen.getByRole("dialog", { name: "Add coach" });
+  expect(within(dialog).queryByLabelText("Coach account")).toBeNull();
+  expect((within(dialog).getByLabelText("Public name") as HTMLInputElement).value).toBe("Ana Pop");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save coach" }));
+  await waitFor(() => expect(actions.saveCoachProfileAction).toHaveBeenCalledWith({ user_id: coach.user_id, create: true,
+    fields: expect.objectContaining({ display_name: "Ana Pop", is_public: false, location_ids: [], program_ids: [] }) }));
+});
+
+it("shows archived profiles without offering mutations or a new profile", () => {
+  render(<CoachesTable coaches={[{ ...listItem(coach), profile_status: "archived", account_status: "suspended" }]}
+    locations={[location]} programs={[program]} />);
+  const row = screen.getByRole("row", { name: "Archived coach Ana Pop" });
+  expect(row.textContent).toContain("Suspended");
+  expect(row.textContent).toContain("Archived");
+  expect(within(row).queryByRole("button")).toBeNull();
+  expect(within(row).queryByRole("combobox")).toBeNull();
 });

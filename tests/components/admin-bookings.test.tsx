@@ -3,12 +3,13 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ query: "", replace: vi.fn(), push: vi.fn(), authorize: vi.fn(), list: vi.fn(), options: vi.fn(),
-  coaches: vi.fn(), records: vi.fn(), notFound: vi.fn(() => { throw new Error("not found"); }) }));
+  coaches: vi.fn(), records: vi.fn(), calendar: vi.fn(), notFound: vi.fn(() => { throw new Error("not found"); }) }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: mocks.replace, push: mocks.push }), usePathname: () => "/admin/bookings",
   useSearchParams: () => new URLSearchParams(mocks.query), notFound: mocks.notFound }));
 vi.mock("@/lib/admin/authorization", () => ({ requireActiveAdmin: mocks.authorize }));
 vi.mock("@/lib/bookings/admin-details", () => ({ listAdminBookings: mocks.list, listAdminBookingFilterOptions: mocks.options,
   listAdminBookingCoachFilterOptions: mocks.coaches, getAdminBookingRecords: mocks.records }));
+vi.mock("@/app/admin/reservations/reservation-content", () => ({ ReservationContent: (props: object) => { mocks.calendar(props); return <p>Scheduler</p>; } }));
 
 import AdminBookingsPage from "@/app/admin/bookings/page";
 import AdminBookingPage from "@/app/admin/bookings/[bookingId]/page";
@@ -20,7 +21,7 @@ const guestId = "ac000000-0000-4000-8000-0000000000a1", accountBookingId = "ac00
 const userId = "ac000000-0000-4000-8000-0000000000f1";
 const locations = [{ id: central, name: "Central", archived: false, courts: [{ id: court, name: "Court 1" }] },
   { id: archived, name: "Old club", archived: true, courts: [{ id: oldCourt, name: "Old court" }] }];
-const booking = { includes_coaching: false, coach_name: null, coaching_program_name: null, id: guestId, status: "cancelled", created_at: "2024-12-20T09:30:00+00:00", account_user_id: null,
+const booking = { kind: "booking", includes_coaching: false, coach_name: null, coaching_program_name: null, id: guestId, status: "cancelled", created_at: "2024-12-20T09:30:00+00:00", account_user_id: null,
   booking_date: "2025-01-01", starts_at_minute: 600, ends_at_minute: 690, location_id: archived, location_name: "Old club",
   location_timezone: "UTC", court_id: oldCourt, court_name: "Old court", customer_name: "Guest Person", customer_email: "guest@example.test",
   total_amount_minor: 4550, currency: "RON" };
@@ -32,7 +33,8 @@ const snapshot = { locationName: "Old club", courtName: "Old court", timezone: "
 const created = { key: "r1", kind: "created", label: "Booking created", detail: "Booked by guest · Online payment", at: "2024-12-20T09:30:00.000Z",
   recorded: true, requestedAt: null, previous: null, next: snapshot, status: { label: "Confirmed", tone: "success" } };
 const noOperations = { rows: [], page: 1, total: 0, totalPages: 1 };
-const emptyRecords = { booking: details, history: [created], summary, operations: noOperations };
+const unavailable = { availability: "unavailable", startsAt: "2025-01-01T10:00:00.000Z", refundAvailable: false };
+const emptyRecords = { booking: details, history: [created], summary, operations: noOperations, cancellation: unavailable };
 // The page reads the booking and its records together, from one snapshot.
 const withBooking = (booking: object, records: object = {}) => mocks.records.mockResolvedValue({ ...emptyRecords, ...records, booking });
 
@@ -80,7 +82,7 @@ test("list renders guest and account bookings with links that preserve filters a
   render(await AdminBookingsPage({ searchParams: Promise.resolve({ status: "cancelled", location: archived, court: oldCourt, page: "2" }) }));
   expect(mocks.authorize.mock.invocationCallOrder[0]).toBeLessThan(mocks.list.mock.invocationCallOrder[0]);
   expect(mocks.list).toHaveBeenCalledWith(expect.objectContaining({ status: "cancelled", location: archived, court: oldCourt, page: 2 }));
-  const table = within(screen.getByRole("table", { name: "Bookings" }));
+  const table = within(screen.getByRole("table", { name: "Bookings and reservations" }));
   expect(table.getAllByText("Guest Person")).toHaveLength(2);
   expect(table.getAllByText("Guest")).toHaveLength(1);
   expect(table.getByText("Payment pending")).toBeDefined();
@@ -98,11 +100,11 @@ test("unknown locations and courts from another location are not queried", async
   mocks.list.mockResolvedValue({ rows: [], page: 1, total: 0, totalPages: 1 });
   render(await AdminBookingsPage({ searchParams: Promise.resolve({ location: central, court: oldCourt }) }));
   expect(mocks.list).toHaveBeenLastCalledWith(expect.objectContaining({ location: central, court: "" }));
-  expect(screen.getByText("No bookings match these filters.")).toBeDefined();
+  expect(screen.getByText("No bookings or reservations match these filters.")).toBeDefined();
   cleanup();
   render(await AdminBookingsPage({ searchParams: Promise.resolve({ location: "ac000000-0000-4000-8000-00000000dead" }) }));
   expect(mocks.list).toHaveBeenLastCalledWith(expect.objectContaining({ location: "", court: "" }));
-  expect(screen.getByText("No bookings yet.")).toBeDefined();
+  expect(screen.getByText("No bookings or reservations yet.")).toBeDefined();
 });
 
 test("list authorization failure stops before reading", async () => {
@@ -173,7 +175,7 @@ test("details render recorded history, verified financial summary and full-ident
   const paymentId = "ac000000-0000-4000-8000-0000000000c1", refundId = "ac000000-0000-4000-8000-0000000000c2";
   const failedId = "ac000000-0000-4000-8000-0000000000c3";
   const operation = { method: "online", provider: "stripe", currency: "RON", needsAttention: false, refunded_minor: 0, proposal: null };
-  mocks.records.mockResolvedValue({
+  mocks.records.mockResolvedValue({ cancellation: unavailable,
     booking: { ...details, id: accountBookingId, account_user_id: userId, status: "confirmed", total_amount_minor: 5000 },
     history: [created, { ...created, key: "r2", kind: "change", label: "Extended", detail: "Changed by customer",
       at: "2024-12-21T10:00:00.000Z", previous: snapshot, next: { ...snapshot, endMinute: 720, total: 7500 } },
@@ -248,7 +250,7 @@ test("Type filters compose with search, sorting and existing filters, and reset 
   mocks.query = `q=Ana&status=confirmed&location=${central}&court=${court}&sort=scheduled&dir=asc&page=3&type=coaching`;
   render(<BookingsToolbar locations={locations} />);
   const type = screen.getByRole("combobox", { name: "Type" }) as HTMLSelectElement;
-  expect([...type.options].map(option => option.textContent)).toEqual(["All", "Court", "Coaching"]);
+  expect([...type.options].map(option => option.textContent)).toEqual(["All", "Court", "Coaching", "Staff reservation"]);
   expect(type.value).toBe("coaching");
   fireEvent.change(type, { target: { value: "court" } });
   expect(lastParams()).toEqual({ q: "Ana", status: "confirmed", location: central, court, sort: "scheduled", dir: "asc", type: "court" });
@@ -262,8 +264,8 @@ test("the Admin table and mobile cards share historical type details and preserv
     coach_name: "Daniel Stoica", coaching_program_name: "Private coaching" }], page: 2, total: 21, totalPages: 2 });
   render(await AdminBookingsPage({ searchParams: Promise.resolve({ type: "coaching", q: "Ana", page: "2" }) }));
   expect(mocks.list).toHaveBeenCalledWith(expect.objectContaining({ type: "coaching", q: "Ana", page: 2 }));
-  const table = screen.getByRole("table", { name: "Bookings" });
-  const cards = screen.getByRole("list", { name: "Bookings" });
+  const table = screen.getByRole("table", { name: "Bookings and reservations" });
+  const cards = screen.getByRole("list", { name: "Bookings and reservations" });
   expect(within(table).getAllByRole("columnheader")).toHaveLength(8);
   expect(within(table).getByRole("columnheader", { name: "Type" })).toBeDefined();
   for (const view of [table, cards]) {
@@ -338,7 +340,7 @@ test("coach filter survives list links, sorting, pagination and Back navigation"
   mocks.list.mockResolvedValue({ rows: [booking], page: 2, total: 21, totalPages: 2 });
   render(await AdminBookingsPage({ searchParams: Promise.resolve({ type: "coaching", coach: userId, page: "2" }) }));
   expect(mocks.list).toHaveBeenCalledWith(expect.objectContaining({ type: "coaching", coach: userId, page: 2 }));
-  const table = within(screen.getByRole("table", { name: "Bookings" }));
+  const table = within(screen.getByRole("table", { name: "Bookings and reservations" }));
   expect(table.getByRole("link", { name: "#ac000000" }).getAttribute("href"))
     .toBe(`/admin/bookings/${guestId}?type=coaching&coach=${userId}&page=2`);
   expect(new URL(table.getByRole("link", { name: "Scheduled" }).getAttribute("href")!, "http://x").searchParams.get("coach")).toBe(userId);
@@ -349,4 +351,77 @@ test("coach filter survives list links, sorting, pagination and Back navigation"
     searchParams: Promise.resolve({ type: "coaching", coach: userId, page: "2" }) }));
   expect(screen.getByRole("link", { name: "Back to Bookings" }).getAttribute("href"))
     .toBe(`/admin/bookings?type=coaching&coach=${userId}&page=2`);
+});
+
+test("one area shows URL-backed Calendar and List tabs without stacking the two views", async () => {
+  mocks.list.mockResolvedValue({ rows: [booking], page: 1, total: 1, totalPages: 1 });
+  render(await AdminBookingsPage({ searchParams: Promise.resolve({ status: "cancelled" }) }));
+  expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Bookings & Reservations");
+  const tabs = within(screen.getByRole("navigation", { name: "Bookings and reservations views" })).getAllByRole("link");
+  expect(tabs.map((tab) => [tab.textContent, tab.getAttribute("href"), tab.getAttribute("aria-current")]))
+    .toEqual([["Calendar", "/admin/bookings?view=calendar", null], ["List", "/admin/bookings", "page"]]);
+  expect(screen.getByRole("table", { name: "Bookings and reservations" })).toBeDefined();
+  expect(screen.queryByText("Scheduler")).toBeNull();
+  cleanup(); vi.clearAllMocks(); mocks.authorize.mockResolvedValue({ roles: ["admin"] });
+
+  render(await AdminBookingsPage({ searchParams: Promise.resolve({ view: "calendar", location: central, date: "2026-10-15", status: "cancelled" }) }));
+  const calendarTabs = within(screen.getByRole("navigation", { name: "Bookings and reservations views" })).getAllByRole("link");
+  expect(calendarTabs.map((tab) => tab.getAttribute("aria-current"))).toEqual(["page", null]);
+  expect(screen.getByText("Scheduler")).toBeDefined();
+  expect(screen.queryByRole("table", { name: "Bookings and reservations" })).toBeNull();
+  expect(mocks.list).not.toHaveBeenCalled();
+  const props = mocks.calendar.mock.lastCall![0];
+  expect(props.href).toBe("/admin/bookings?view=calendar");
+  await expect(props.searchParams).resolves.toEqual({ location: central, date: "2026-10-15" });
+});
+
+test("both views stay Admin-only", async () => {
+  mocks.authorize.mockRejectedValue(new Error("not found"));
+  for (const view of [undefined, "calendar"])
+    await expect(AdminBookingsPage({ searchParams: Promise.resolve({ view }) })).rejects.toThrow("not found");
+  expect(mocks.list).not.toHaveBeenCalled();
+  expect(mocks.calendar).not.toHaveBeenCalled();
+});
+
+const staffReservationId = "ac000000-0000-4000-8000-0000000000c1";
+const staffReservation = { kind: "reservation", id: staffReservationId, status: "active", created_at: "2026-10-01T08:00:00+00:00",
+  booking_date: "2099-02-01", starts_at_minute: 480, ends_at_minute: 600, location_id: central, location_name: "Central",
+  location_timezone: "UTC", court_id: court, court_name: "Court 1", reason: "Court maintenance",
+  creator_name: "Staff Member", creator_email: "staff@example.test" };
+
+test("the List shows staff reservations beside bookings, linking to their own details with the list state", async () => {
+  mocks.list.mockResolvedValue({ rows: [booking, staffReservation, { ...staffReservation, id: "ac000000-0000-4000-8000-0000000000c2",
+    status: "cancelled", reason: null, creator_name: null, creator_email: null }], page: 1, total: 3, totalPages: 1 });
+  render(await AdminBookingsPage({ searchParams: Promise.resolve({ q: "court", sort: "scheduled" }) }));
+  expect(screen.getByText(/^3 results/)).toBeDefined();
+  const table = screen.getByRole("table", { name: "Bookings and reservations" });
+  const cards = screen.getByRole("list", { name: "Bookings and reservations" });
+  for (const view of [table, cards]) {
+    expect(within(view).getAllByText("Staff reservation")).toHaveLength(2);
+    expect(within(view).getByText("Court maintenance")).toBeDefined();
+    expect(within(view).getByText("Staff Member")).toBeDefined();
+    expect(within(view).getByText("Unknown creator")).toBeDefined();
+    expect(within(view).getByText("Active")).toBeDefined();
+    // Free records: no price is shown or implied.
+    expect(within(view).getAllByText("No charge")).toHaveLength(2);
+  }
+  const [link] = within(table).getAllByRole("link").filter((item) => item.getAttribute("href")!.includes(staffReservationId));
+  expect(link.getAttribute("href")).toBe(`/admin/bookings/reservations/${staffReservationId}?q=court&sort=scheduled`);
+  fireEvent.keyDown(within(table).getByRole("row", { name: `Staff reservation ac000000 by Staff Member` }), { key: "Enter" });
+  expect(mocks.push).toHaveBeenCalledWith(link.getAttribute("href"));
+});
+
+test("the Type filter offers staff reservations and each Type offers only its own statuses", () => {
+  mocks.query = "type=reservation&status=active&q=Ana&page=2";
+  render(<BookingsToolbar locations={locations} />);
+  const status = () => [...(screen.getByRole("combobox", { name: "Status" }) as HTMLSelectElement).options].map((option) => option.textContent);
+  expect(status()).toEqual(["All", "Active", "Cancelled"]);
+  // Switching to a booking Type clears the reservation-only status; Cancelled survives both.
+  fireEvent.change(screen.getByRole("combobox", { name: "Type" }), { target: { value: "court" } });
+  expect(lastParams()).toEqual({ q: "Ana", type: "court" });
+  cleanup(); mocks.query = "status=cancelled";
+  render(<BookingsToolbar locations={locations} />);
+  expect(status()).toEqual(["All", "Confirmed", "Active", "Payment pending", "Cancelled", "Failed", "Expired"]);
+  fireEvent.change(screen.getByRole("combobox", { name: "Type" }), { target: { value: "reservation" } });
+  expect(lastParams()).toEqual({ status: "cancelled", type: "reservation" });
 });

@@ -1,20 +1,21 @@
 import { beforeEach, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ authorize: vi.fn(), snapshot: vi.fn(), details: vi.fn(), revisions: vi.fn(), adjustments: vi.fn(),
-  facts: vi.fn(), history: vi.fn(), manager: { snapshot: true } }));
+  facts: vi.fn(), history: vi.fn(), pendingChange: vi.fn(), livePayment: vi.fn(), manager: { snapshot: true } }));
 vi.mock("@/lib/admin/authorization", () => ({ requireActiveAdmin: mocks.authorize }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: async () => ({}) }));
 vi.mock("@/lib/db/data-source", () => ({ getDataSource: async () => ({ manager: {} }) }));
 vi.mock("@/lib/db/transaction", () => ({ inReadSnapshot: mocks.snapshot }));
 vi.mock("@/lib/db/repositories/bookings.repository", () => ({ findAdminBookingDetails: mocks.details }));
 vi.mock("@/lib/db/repositories/booking-revisions.repository", () => ({ listBookingRevisions: mocks.revisions }));
-vi.mock("@/lib/db/repositories/booking-adjustments.repository", () => ({ listBookingAdjustments: mocks.adjustments }));
+vi.mock("@/lib/db/repositories/booking-adjustments.repository", () => ({ listBookingAdjustments: mocks.adjustments,
+  listBookingsWithPendingChange: mocks.pendingChange, listBookingsWithLivePayment: mocks.livePayment }));
 vi.mock("@/lib/db/repositories/payments.repository", () => ({ loadAdminTransactionContext: mocks.facts }));
 vi.mock("@/lib/payments/financial-history", async (original) => ({
   ...await original<typeof import("@/lib/payments/financial-history")>(), readFinancialHistory: mocks.history }));
 vi.mock("@/lib/payments/admin", () => ({ toAdminPaymentTransaction: (row: unknown) => row }));
 
-import { buildBookingHistory, hasRecordedChanges, summarizeBookingFinancials } from "@/lib/bookings/admin-history";
+import { adminBookingEditable, adminCancellationAvailability, buildBookingHistory, hasRecordedChanges, summarizeBookingFinancials } from "@/lib/bookings/admin-history";
 import { getAdminBookingRecords, type AdminBookingDetails } from "@/lib/bookings/admin-details";
 import { summarizeReportedFinancials } from "@/lib/payments/financials";
 
@@ -143,7 +144,7 @@ const booking = { id: bookingId, status: "confirmed", booking_date: "2026-11-02"
   location_name: "Central", location_timezone: "Europe/Bucharest", court_name: "Court 1", customer_name: "Guest",
   customer_email: "guest@example.test", customer_phone: "1", cancellation_notice_minutes: 1440, total_amount_minor: 5000,
   currency: "RON", payment_method: "online", account_user_id: null, created_at: "2026-10-01T08:00:00+00:00",
-  includes_coaching: false, coach_name: null, coaching_program_name: null, coaching: null } satisfies AdminBookingDetails;
+  includes_coaching: false, coach_name: null, coaching_program_name: null, coaching: null, coach_user_id: null } satisfies AdminBookingDetails;
 const row = (kind: "payment" | "refund" | "booking", n: number) => ({ transaction_kind: kind, transaction_id: uuid(n) });
 // 1,001 operations: 1,000 failed attempts plus one captured payment, all for this booking.
 const own = <T,>(attempt: T) => ({ ...attempt, bookingId });
@@ -155,6 +156,7 @@ beforeEach(() => {
   mocks.snapshot.mockImplementation(async (work: (manager: unknown) => unknown) => work(mocks.manager));
   mocks.details.mockResolvedValue(booking);
   mocks.revisions.mockResolvedValue([revision(1)]); mocks.adjustments.mockResolvedValue([]);
+  mocks.pendingChange.mockResolvedValue(new Map()); mocks.livePayment.mockResolvedValue(new Set());
   mocks.facts.mockResolvedValue({ payments: [own(attempt(1, 5000, "succeeded"))], captures: [capture(1, 5000)], refunds: [], executions: [],
     revisions: [], adjustments: [] });
 });
@@ -208,4 +210,59 @@ test("invalid history pages fall back to the first page; a booking without attem
 test("database failures surface a generic error", async () => {
   mocks.snapshot.mockRejectedValue(new Error("could not serialize access"));
   await expect(getAdminBookingRecords(bookingId)).rejects.toThrow("Unable to load booking history. Try again.");
+});
+
+test("Admin cancellation is offered only for confirmed bookings before start without a change in progress", () => {
+  const base = { status: "confirmed" as const, startsAt: "2026-11-02T08:00:00.000Z", now: new Date("2026-11-02T07:59:59Z"),
+    pendingChange: null, paymentPending: false };
+  expect(adminCancellationAvailability(base)).toBe("eligible");
+  expect(adminCancellationAvailability({ ...base, now: new Date("2026-11-02T08:00:00Z") })).toBe("started");
+  for (const status of ["cancelled", "pending_payment", "failed", "expired"] as const)
+    expect(adminCancellationAvailability({ ...base, status })).toBe("unavailable");
+  expect(adminCancellationAvailability({ ...base, pendingChange: "cancellation" })).toBe("cancellation_pending");
+  expect(adminCancellationAvailability({ ...base, pendingChange: "reschedule" })).toBe("change_pending");
+  expect(adminCancellationAvailability({ ...base, paymentPending: true })).toBe("change_pending");
+});
+
+test("records derive cancellation availability and refund notice in the same snapshot", async () => {
+  mocks.history.mockResolvedValue({ rows: [row("payment", 1)], page: 1, total: 1, totalPages: 1 });
+  const before = new Date("2026-10-18T00:00:00Z");
+  let records = await getAdminBookingRecords(bookingId, { now: before });
+  expect(mocks.pendingChange).toHaveBeenCalledWith(mocks.manager, [bookingId]);
+  expect(mocks.livePayment).toHaveBeenCalledWith(mocks.manager, [bookingId]);
+  // 10:00 in Europe/Bucharest on 2 November is 08:00 UTC.
+  expect(records?.cancellation).toEqual({ availability: "eligible", startsAt: "2026-11-02T08:00:00.000Z", refundAvailable: true });
+  mocks.pendingChange.mockResolvedValue(new Map([[bookingId, "cancellation"]]));
+  records = await getAdminBookingRecords(bookingId, { now: before });
+  expect(records?.cancellation.availability).toBe("cancellation_pending");
+  mocks.pendingChange.mockResolvedValue(new Map()); mocks.livePayment.mockResolvedValue(new Set([bookingId]));
+  records = await getAdminBookingRecords(bookingId, { now: before });
+  expect(records?.cancellation.availability).toBe("change_pending");
+  mocks.livePayment.mockResolvedValue(new Set());
+  records = await getAdminBookingRecords(bookingId, { now: new Date("2026-11-02T08:00:00Z") });
+  expect(records?.cancellation.availability).toBe("started");
+  mocks.details.mockResolvedValue({ ...booking, status: "cancelled" });
+  records = await getAdminBookingRecords(bookingId, { now: before });
+  expect(records?.cancellation.availability).toBe("unavailable");
+  // Funds already owed back (or club payment) are not refunded again.
+  mocks.details.mockResolvedValue(booking);
+  mocks.facts.mockResolvedValue({ payments: [own(attempt(1, 5000, "succeeded"))], captures: [capture(1, 5000)],
+    refunds: [{ id: uuid(80), bookingId, paymentAttemptId: uuid(1), amountMinor: 5000, currency: "RON", status: "pending" }],
+    executions: [], revisions: [], adjustments: [] });
+  records = await getAdminBookingRecords(bookingId, { now: before });
+  expect(records?.cancellation.refundAvailable).toBe(false);
+  mocks.details.mockResolvedValue({ ...booking, payment_method: "pay_at_club" });
+  records = await getAdminBookingRecords(bookingId, { now: before });
+  expect(records?.cancellation.refundAvailable).toBe(false);
+});
+
+test("Admin editing is limited to the existing owner rescheduling boundary", () => {
+  const actor = "ad000000-0000-4000-8000-0000000000a1";
+  const base = { availability: "eligible" as const, accountUserId: actor, actorUserId: actor, includesCoaching: false };
+  expect(adminBookingEditable(base)).toBe(true);
+  expect(adminBookingEditable({ ...base, accountUserId: "ad000000-0000-4000-8000-0000000000b2" })).toBe(false);
+  expect(adminBookingEditable({ ...base, accountUserId: null })).toBe(false);
+  expect(adminBookingEditable({ ...base, includesCoaching: true })).toBe(false);
+  for (const availability of ["started", "cancellation_pending", "change_pending", "unavailable"] as const)
+    expect(adminBookingEditable({ ...base, availability })).toBe(false);
 });

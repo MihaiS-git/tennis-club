@@ -531,10 +531,96 @@ it.each([
   const coachingSection = within(dialog).getByRole("heading", { name: "Coaching details" }).closest("section")!;
   expect(within(coachingSection).getByText(/120[.,]00/)).toBeTruthy();
   expect(within(coachingSection).getByText("60 min")).toBeTruthy();
-  expect(within(dialog).getByRole("link", { name: "View full booking details" }).getAttribute("href")).toBe(`/admin/bookings/${booking.id}`);
+  expect(within(dialog).getByRole("link", { name: "View full booking details" }).getAttribute("href")).toBe(`/admin/bookings/${booking.id}?${new URLSearchParams({
+    back: `/admin/bookings?view=calendar&location=${coachLocation.id}&date=${booking.booking_date}` })}`);
   expect(within(dialog).getByRole("button", { name: "Cancel booking" })).toBeTruthy();
   expect(within(dialog).queryByRole("button", { name: "Edit booking" })).toBeNull();
   rerender(<ReservationCalendar {...props} day={day} canManage={false} />);
   expect(within(dialog).queryByRole("link", { name: "View full booking details" })).toBeNull();
   expect(within(dialog).queryByRole("button", { name: "Cancel booking" })).toBeNull();
+});
+
+it("closes the Admin booking preview when following its details link, so no modal outlives the Calendar", () => {
+  const courtId = "22222222-2222-4222-8222-222222222222";
+  const location = { id: "11111111-1111-4111-8111-111111111111", name: "RIVUS", timezone: "UTC", courts: [{ id: courtId, name: "Court 2" }] };
+  const booking = { account_user_id: null, payments: [], kind: "booking" as const, stripe_refund_available: false,
+    id: "33333333-3333-4333-8333-333333333333", court_id: courtId, payment_method: "pay_at_club" as const,
+    booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660, customer_name: "Ana Pop", customer_email: "ana@example.test",
+    customer_phone: "+40 123", cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON" as const };
+  render(<ReservationCalendar canManage date={booking.booking_date} location={location}
+    day={{ times: [600, 630], courts: [{ court: location.courts[0], cells: ["booked", "booked"] }] }} adminOccupancy={[booking]} />);
+  fireEvent.click(screen.getByRole("button", { name: /Booking · Ana Pop/ }));
+  const link = within(screen.getByRole("dialog", { name: "Booking details" })).getByRole("link", { name: "View full booking details" });
+  link.addEventListener("click", (event) => event.preventDefault());
+  fireEvent.click(link);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(cancelBookingAction).not.toHaveBeenCalled();
+});
+
+it("links an Admin's staff reservation preview to its details page with Calendar return, closing the preview", () => {
+  const courtId = "22222222-2222-4222-8222-222222222222";
+  const location = { id: "11111111-1111-4111-8111-111111111111", name: "RIVUS", timezone: "UTC", courts: [{ id: courtId, name: "Court 2" }] };
+  const reservation = { creator_email: null, creator_phone: null, payment_method: null, kind: "reservation" as const,
+    id: "33333333-3333-4333-8333-333333333333", court_id: courtId, booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660,
+    reason: "Maintenance", created_by_user_id: "44444444-4444-4444-8444-444444444444", creator_name: "Staff Member" };
+  const day = { times: [600, 630], courts: [{ court: location.courts[0], cells: ["booked" as const, "booked" as const] }] };
+  const { unmount } = render(<ReservationCalendar canManage date={reservation.booking_date} location={location} day={day} adminOccupancy={[reservation]} />);
+  fireEvent.click(screen.getByRole("button", { name: /Reservation · Staff Member/ }));
+  const link = within(screen.getByRole("dialog", { name: "Reservation details" })).getByRole("link", { name: "View full reservation details" });
+  expect(link.getAttribute("href")).toBe(`/admin/bookings/reservations/${reservation.id}?${new URLSearchParams({
+    back: `/admin/bookings?view=calendar&location=${location.id}&date=2099-10-15` })}`);
+  link.addEventListener("click", (event) => event.preventDefault());
+  fireEvent.click(link);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  unmount();
+  // Coaches keep their Calendar dialog without the Admin details destination.
+  render(<ReservationCalendar date={reservation.booking_date} location={location} day={day} adminOccupancy={[reservation]} />);
+  fireEvent.click(screen.getByRole("button", { name: /Reservation · Staff Member/ }));
+  expect(screen.queryByRole("link", { name: "View full reservation details" })).toBeNull();
+});
+
+it("links a Coach only to their own reservation and own lesson details, returning to the Coach Calendar", () => {
+  const courtId = "22222222-2222-4222-8222-222222222222", coachId = "44444444-4444-4444-8444-444444444444";
+  const otherId = "55555555-5555-4555-8555-555555555555";
+  const location = { id: "11111111-1111-4111-8111-111111111111", name: "RIVUS", timezone: "UTC",
+    courts: [{ id: courtId, name: "Court 2" }] };
+  const back = `/coach/bookings?view=calendar&location=${location.id}&date=2099-10-15`;
+  const reservation = (id: string, creator: string, name: string, start: number) => ({ creator_email: null, creator_phone: null,
+    payment_method: null, kind: "reservation" as const, id, court_id: courtId, booking_date: "2099-10-15", starts_at_minute: start,
+    ends_at_minute: start + 30, reason: "Clinic", created_by_user_id: creator, creator_name: name });
+  // The Coach projection: own lesson with contact only, every other booking as a bare interval.
+  const occupancy: AdminOperationalOccupancy[] = [reservation("33333333-3333-4333-8333-000000000001", coachId, "Me Coach", 600),
+    reservation("33333333-3333-4333-8333-000000000002", otherId, "Other Coach", 630),
+    { kind: "lesson", id: "33333333-3333-4333-8333-000000000003", court_id: courtId, booking_date: "2099-10-15", starts_at_minute: 660,
+      ends_at_minute: 690, coach_user_id: coachId, coach_name: "Me Coach", coaching_program_name: "Juniors", customer_name: "My Student",
+      customer_email: "student@example.test", customer_phone: "+40 700" },
+    { kind: "occupied", id: `occupied:${courtId}:690`, court_id: courtId, booking_date: "2099-10-15", starts_at_minute: 690, ends_at_minute: 720 }];
+  render(<ReservationCalendar actorUserId={coachId} date="2099-10-15" location={location} adminOccupancy={occupancy}
+    day={{ times: [600, 630, 660, 690], courts: [{ court: location.courts[0], cells: ["booked", "booked", "booked", "booked"] }] }} />);
+  const open = (name: RegExp, title: string) => {
+    fireEvent.click(screen.getByRole("button", { name }));
+    return screen.getByRole("dialog", { name: title });
+  };
+  let dialog = open(/Reservation · Me Coach/, "Reservation details");
+  expect(within(dialog).getByRole("link", { name: "View full reservation details" }).getAttribute("href"))
+    .toBe(`/coach/bookings/reservations/${occupancy[0].id}?${new URLSearchParams({ back })}`);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+  dialog = open(/Reservation · Other Coach/, "Reservation details");
+  expect(within(dialog).queryByRole("link")).toBeNull();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+  dialog = open(/Coaching · My Student/, "Lesson details");
+  for (const text of ["Me Coach", "Juniors", "My Student", "student@example.test", "+40 700", "RIVUS", "Court 2"]) expect(within(dialog).getByText(text)).toBeTruthy();
+  expect(within(dialog).queryByText(/Total|Currency|Payment|Customer type|Cancellation|Coaching fee/)).toBeNull();
+  const link = within(dialog).getByRole("link", { name: "View lesson details" });
+  expect(link.getAttribute("href")).toBe(`/coach/bookings/lessons/${occupancy[2].id}?${new URLSearchParams({ back })}`);
+  expect(within(dialog).queryByRole("link", { name: "View full booking details" })).toBeNull();
+  link.addEventListener("click", (event) => event.preventDefault());
+  fireEvent.click(link);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  const occupied = screen.getByRole("button", { name: "Court 2 2099-10-15 11:30–12:00, Booked" });
+  expect(occupied.textContent).toBe("");
+  dialog = open(/11:30–12:00, Booked/, "Occupied court details");
+  expect(within(dialog).queryByRole("link")).toBeNull();
+  expect(within(dialog).queryByText(/Customer|Coach|Payment|Total|@/)).toBeNull();
+  expect(within(dialog).getByText("11:30–12:00 (UTC)")).toBeTruthy();
 });

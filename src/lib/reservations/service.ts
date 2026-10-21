@@ -6,7 +6,7 @@ import { successfulRefundPayment } from "@/lib/payments/providers/stripe/refund-
 import { finishBookingCancellation, type BookingCancellationResult } from "@/lib/payments/refunds";
 
 import { z } from "zod";
-import type { BookingTypeSnapshot } from "@/lib/bookings/booking-type";
+import { bookingType, type BookingTypeSnapshot } from "@/lib/bookings/booking-type";
 import { pricingEvidenceSchema, type PricingEvidence } from "@/lib/bookings/revision";
 import { cancellationNoticeMinutesSchema } from "@/lib/bookings/cancellation-policy";
 import { createClient } from "@/lib/supabase/server";
@@ -16,6 +16,7 @@ import * as reservations from "@/lib/db/repositories/reservations.repository";
 import { createDirectReservationCommand, editDirectReservationCommand, cancelDirectReservationCommand } from "./commands";
 import { logger } from "@/lib/logger";
 import { localMinute, localToday } from "@/lib/courts/calendar";
+import { localStartInstant } from "@/lib/courts/local-time";
 import { locationCurrencies } from "@/lib/admin/locations-validation";
 import type { LocationCurrency } from "@/lib/pricing/money";
 import { isStructurallyReady, publicationToday } from "@/lib/locations/publication";
@@ -27,7 +28,7 @@ type Client = Awaited<ReturnType<typeof createClient>>;
 const occupancySchema = z.object({ court_id: z.uuid(), starts_at_minute: z.number().int(), ends_at_minute: z.number().int() });
 const adminOccupancyFields = occupancySchema.extend({ id: z.uuid(),
   location_name: z.string().nullable(), court_name: z.string().nullable(), location_timezone: z.string().nullable(),
-  includes_coaching: z.boolean(), coach_name: z.string().nullable(), coaching_program_name: z.string().nullable(),
+  includes_coaching: z.boolean(), coach_user_id: z.uuid().nullable(), coach_name: z.string().nullable(), coaching_program_name: z.string().nullable(),
   coaching: pricingEvidenceSchema.shape.coaching.unwrap().nullable(),
   booking_date: z.iso.date(), reason: z.string().nullable(), created_by_user_id: z.uuid().nullable(),
   creator_name: z.string().nullable(), creator_email: z.string().nullable(), creator_phone: z.string().nullable(),
@@ -43,11 +44,15 @@ export type AdminBooking = Pick<z.infer<typeof adminOccupancyRowSchema>,
   "id" | "court_id" | "booking_date" | "starts_at_minute" | "ends_at_minute"> & BookingTypeSnapshot & {
     coaching?: PricingEvidence["coaching"] | null;
     location_name?: string | null; court_name?: string | null; location_timezone?: string | null;
-    kind: "booking"; account_user_id: string | null; payment_method: "online" | "pay_at_club";
+    kind: "booking"; account_user_id: string | null; coach_user_id?: string | null; payment_method: "online" | "pay_at_club";
     payments: Pick<z.infer<typeof paymentFactSchema>, "id" | "method" | "provider" | "status">[]; stripe_refund_available: boolean; customer_name: string; customer_email: string; customer_phone: string;
     cancellation_notice_minutes: number; total_amount_minor: number; currency: LocationCurrency;
   };
-export type AdminOperationalOccupancy = AdminReservation | AdminBooking;
+// Coach Calendar projections: own lessons keep schedule and customer contact only; other bookings are bare intervals.
+type CoachLessonOccupancy = Pick<AdminBooking, "id" | "court_id" | "booking_date" | "starts_at_minute" | "ends_at_minute"
+  | "coach_name" | "coaching_program_name" | "customer_name" | "customer_email" | "customer_phone"> & { kind: "lesson"; coach_user_id: string };
+type RestrictedOccupancy = Pick<AdminBooking, "court_id" | "booking_date" | "starts_at_minute" | "ends_at_minute"> & { kind: "occupied"; id: string };
+export type AdminOperationalOccupancy = AdminReservation | AdminBooking | CoachLessonOccupancy | RestrictedOccupancy;
 export type InternalLocation = { id: string; name: string; timezone: string; courts: { id: string; name: string }[] };
 export type ReservationResult = { ok: true } | { ok: false; message: string };
 
@@ -132,7 +137,7 @@ export async function getReservationDay(location: InternalLocation, date: string
         starts_at_minute: row.starts_at_minute, ends_at_minute: row.ends_at_minute,
         account_user_id: row.account_user_id, payment_method: row.payment_method,
         location_name: row.location_name, court_name: row.court_name, location_timezone: row.location_timezone,
-        includes_coaching: row.includes_coaching, coach_name: row.coach_name, coaching_program_name: row.coaching_program_name, coaching: row.coaching,
+        includes_coaching: row.includes_coaching, coach_user_id: row.coach_user_id, coach_name: row.coach_name, coaching_program_name: row.coaching_program_name, coaching: row.coaching,
         payments: row.payment_facts.map(({ id, method, provider, status }) => ({ id, method, provider, status })),
         customer_name: row.customer_name, customer_email: row.customer_email, customer_phone: row.customer_phone,
         cancellation_notice_minutes: row.cancellation_notice_minutes,
@@ -142,9 +147,21 @@ export async function getReservationDay(location: InternalLocation, date: string
       throw new Error("Unable to load booking details.");
     }
   }
+  const canManage = actor.roles.includes("admin");
   return { ...buildReservationDay({ date, today: localToday(location.timezone, now), currentMinute: localMinute(location.timezone, now),
-    courts: location.courts, hours, reservations: occupancy }), occupancy, adminOccupancy,
-    actorUserId: actor.userId, canManage: actor.roles.includes("admin") };
+    courts: location.courts, hours, reservations: occupancy }), occupancy,
+    adminOccupancy: canManage ? adminOccupancy : adminOccupancy.map((item) => projectStaffOccupancy(item, actor.userId)),
+    actorUserId: actor.userId, canManage };
+}
+
+// Non-Admin staff never receive another customer's identity, payments or prices.
+function projectStaffOccupancy(item: AdminOperationalOccupancy, actorUserId: string): AdminOperationalOccupancy {
+  if (item.kind !== "booking" || item.account_user_id === actorUserId) return item;
+  const interval = { court_id: item.court_id, booking_date: item.booking_date, starts_at_minute: item.starts_at_minute, ends_at_minute: item.ends_at_minute };
+  if (bookingType(item) === "coaching" && item.coach_user_id === actorUserId) return { kind: "lesson", id: item.id, ...interval,
+    coach_user_id: actorUserId, coach_name: item.coach_name, coaching_program_name: item.coaching_program_name,
+    customer_name: item.customer_name, customer_email: item.customer_email, customer_phone: item.customer_phone };
+  return { kind: "occupied", id: `occupied:${item.court_id}:${item.starts_at_minute}`, ...interval };
 }
 
 export async function createDirectReservation(input: unknown, supabase?: Client, now = new Date()): Promise<ReservationResult> {
@@ -199,6 +216,29 @@ export async function cancelCustomerBookingAsAdmin(input: unknown, supabase?: Cl
     bookingId: parsed.data.id, outcome: outcome.outcome }, "Admin customer booking cancellation accepted");
   return outcome;
 }
+
+// Staff reservation details for Admin management, including cancelled reservations
+// and inactive resources. Actions mirror the existing Admin edit/cancel commands, which
+// still decide on submit: active resources, editable until it ends, cancellable until it starts.
+export async function getAdminDirectReservation(input: unknown, supabase?: Client, now = new Date()) {
+  await requireAdminReservationRole(supabase ?? await createClient());
+  const id = z.uuid().safeParse(input);
+  if (!id.success) return null;
+  let row: Awaited<ReturnType<typeof reservations.findAdminDirectReservationDetails>>;
+  try {
+    row = await reservations.findAdminDirectReservationDetails((await getDataSource()).manager, id.data);
+  } catch (error: unknown) {
+    logger.error({ event: "reservations.admin_details_failed", code: normalizeDatabaseError(error).sqlState }, "Failed to load reservation details");
+    throw new Error("Unable to load reservation details. Try again.");
+  }
+  if (!row) return null;
+  const startsAt = localStartInstant(row.location_timezone, row.booking_date, row.starts_at_minute);
+  const endsAt = localStartInstant(row.location_timezone, row.booking_date, row.ends_at_minute);
+  const manageable = row.status === "active" && row.court_active && row.location_active && row.archived_at === null;
+  return { reservation: row, startsAt, endsAt, started: Date.parse(startsAt) <= now.getTime(),
+    editable: manageable && Date.parse(endsAt) > now.getTime(), cancellable: manageable && Date.parse(startsAt) > now.getTime() };
+}
+export type AdminDirectReservationDetails = NonNullable<Awaited<ReturnType<typeof getAdminDirectReservation>>>;
 
 export async function getAdminReservationEditDay(input: { reservationId: unknown; date: unknown },
   supabase?: Client, now = new Date()) {

@@ -46,6 +46,34 @@ const resources = `c.id AS court_id, c.name AS court_name, c.is_active AS court_
   l.id AS location_id, l.name AS location_name, l.timezone AS location_timezone,
   l.is_active AS location_active, ${timestamp("l.archived_at")} AS archived_at`;
 
+// A direct staff reservation: staff-created, never linked to a customer booking, and
+// never a coaching or adjustment hold fragment (those belong to customer bookings).
+export const directReservationPredicate = `r.created_by_user_id IS NOT NULL AND r.adjustment_id IS NULL
+  AND r.coach_user_id IS NULL AND r.status IN ('active','cancelled')
+  AND NOT EXISTS(SELECT 1 FROM public.bookings db WHERE db.reservation_id=r.id)`;
+// The staff display name the Calendar shows: account name, then profile display name, then email.
+export function staffNameSql(user: string, profile: string) {
+  return `coalesce(nullif(btrim(concat_ws(' ', nullif(btrim(${user}.first_name), ''), nullif(btrim(${user}.last_name), ''))), ''),
+    nullif(btrim(${profile}.display_name), ''), ${user}.email)`;
+}
+
+// Read-only details of one direct staff reservation, including cancelled ones and
+// inactive or archived resources. The caller must authorize an active Admin first.
+export async function findAdminDirectReservationDetails(manager: EntityManager, id: string) {
+  const rows: unknown = await manager.query(
+    `SELECT ${projection}, ${resources}, ${staffNameSql("u", "p")} AS creator_name, u.email AS creator_email,
+       u.phone AS creator_phone, ${staffNameSql("cu", "cp")} AS canceller_name
+     FROM public.court_reservations r
+     JOIN public.courts c ON c.id = r.court_id JOIN public.locations l ON l.id = c.location_id
+     LEFT JOIN public.users u ON u.id = r.created_by_user_id LEFT JOIN public.player_profiles p ON p.user_id = u.id
+     LEFT JOIN public.users cu ON cu.id = r.cancelled_by_user_id LEFT JOIN public.player_profiles cp ON cp.user_id = cu.id
+     WHERE r.id = $1 AND ${directReservationPredicate}`, [id],
+  );
+  return z.array(reservationSchema.extend(resourceSchema.shape).extend({ status: z.enum(["active", "cancelled"]),
+    created_by_user_id: z.uuid(), creator_name: z.string().nullable(), creator_email: z.string().nullable(),
+    creator_phone: z.string().nullable(), canceller_name: z.string().nullable() })).max(1).parse(rows)[0] ?? null;
+}
+
 export async function findReservationParent(manager: EntityManager, id: string) {
   const rows: unknown = await manager.query(
     `SELECT c.location_id FROM public.court_reservations r
@@ -281,6 +309,18 @@ export async function listCustomerEditOccupancy(manager: EntityManager, location
 }
 
 
+// Live court and coaching occupancy at a location from a local date, on every court.
+// Called under the exclusive configuration fence, which excludes booking commands.
+export async function listLocationLiveOccupancy(manager: EntityManager, locationId: string, fromDate: string) {
+  const rows: unknown = await manager.query(
+    `SELECT r.booking_date::text,r.starts_at_minute,r.ends_at_minute FROM public.court_reservations r
+     JOIN public.courts c ON c.id=r.court_id
+     WHERE c.location_id=$1 AND r.booking_date>=$2::date
+       AND (r.status='active' OR (r.status='held' AND (r.hold_expires_at>clock_timestamp() OR ${acceptedCaptureOccupancy})))
+     ORDER BY r.booking_date,r.starts_at_minute,r.id`, [locationId, fromDate]);
+  return z.array(z.object({ booking_date: z.iso.date(), starts_at_minute: z.number().int(), ends_at_minute: z.number().int() })).parse(rows);
+}
+
 // Caller holds the location, booking, reservation and attempt locks and has
 // accepted a manual-capture authorization. The hold ends exactly at the attempt
 // deadline plus the operational grace, which records acceptance durably.
@@ -333,7 +373,7 @@ export async function listAdminOperationalProjection(manager: EntityManager, cou
       u.email AS creator_email, u.phone AS creator_phone,
       b.account_user_id, v.location_name, v.court_name, v.timezone AS location_timezone, v.payment_method, v.customer_name, v.customer_email, v.customer_phone,
       v.total_amount_minor, v.currency, v.cancellation_notice_minutes,
-      (v.coach_user_id IS NOT NULL) AS includes_coaching, v.coach_name, v.coaching_program_name,
+      (v.coach_user_id IS NOT NULL) AS includes_coaching, v.coach_user_id, v.coach_name, v.coaching_program_name,
       v.pricing_evidence->'coaching' AS coaching,
       coalesce((select jsonb_agg(to_jsonb(p) order by p.created_at,p.id) from public.payment_attempts p where p.booking_id=b.id),'[]'::jsonb) AS payment_facts
     from public.court_reservations r

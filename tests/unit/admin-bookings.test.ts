@@ -11,7 +11,7 @@ import { listAdminBookingCoachFilterOptions, listAdminBookingFilterOptions, list
 import { adminBookingHref, adminBookingsHref, parseAdminBookingQuery } from "@/lib/bookings/admin-query";
 
 const locationId = "ab000000-0000-4000-8000-000000000001", courtId = "ab000000-0000-4000-8000-000000000002";
-const row = (index: number, accountUserId: string | null = null) => ({
+const row = (index: number, accountUserId: string | null = null) => ({ kind: "booking",
   id: `ab000000-0000-4000-8000-${String(index).padStart(12, "0")}`, status: "cancelled", created_at: "2026-10-06T10:00:00.5+00:00",
   includes_coaching: false, coach_name: null, coaching_program_name: null,
   account_user_id: accountUserId, booking_date: "2024-01-01", starts_at_minute: 600, ends_at_minute: 660, location_id: locationId,
@@ -48,29 +48,34 @@ test("filters, searches and paginates in the database on the current booking sna
   const result = await listAdminBookings(parseAdminBookingQuery({ q: "Ana", status: "cancelled", location: locationId, court: courtId,
     from: "2024-01-01", to: "2024-12-31", page: "2" }));
   expect(result).toMatchObject({ page: 2, total: 45, totalPages: 3 });
-  expect(result.rows.map((item) => item.account_user_id)).toEqual([null, "ab000000-0000-4000-8000-0000000000aa"]);
+  expect(result.rows.map((item) => item.kind === "booking" && item.account_user_id)).toEqual([null, "ab000000-0000-4000-8000-0000000000aa"]);
   const [countSql, countArgs] = query.mock.calls[0], [pageSql, pageArgs] = query.mock.calls[1];
-  expect(countArgs).toEqual(["cancelled", locationId, courtId, "2024-01-01", "2024-12-31", "Ana", "all", null]);
+  expect(countArgs).toEqual(["cancelled", locationId, courtId, "2024-01-01", "2024-12-31", "Ana", "all", null, null]);
   expect(pageArgs).toEqual([...countArgs, 20, 20]);
   for (const sql of [countSql, pageSql]) {
     expect(sql).toContain("v.id=b.current_revision_id AND v.booking_id=b.id");
     expect(sql).toContain("strpos(b.id::text,lower($6))>0");
     expect(sql).toMatch(/v\.location_id=\$2[\s\S]*v\.court_id=\$3/);
     // Historical, archived and inactive resources stay visible; reads never write.
-    expect(sql).not.toMatch(/is_active|archived_at|is_public|court_reservations|UPDATE|INSERT|DELETE/);
+    expect(sql).not.toMatch(/is_active|archived_at|is_public|UPDATE|INSERT|DELETE/);
+    // Staff reservations are a separate table read alongside, never a booking row.
+    expect(sql).toContain("FROM public.court_reservations r");
+    expect(sql).toContain("NOT EXISTS(SELECT 1 FROM public.bookings db WHERE db.reservation_id=r.id)");
+    expect(sql).toMatch(/r\.created_by_user_id IS NOT NULL AND r\.adjustment_id IS NULL\s+AND r\.coach_user_id IS NULL/);
   }
-  expect(pageSql).toContain("ORDER BY b.created_at DESC,b.id DESC OFFSET $9 LIMIT $10");
+  expect(pageSql).toContain("UNION ALL");
+  expect(pageSql).toContain("ORDER BY x.created_sort DESC,x.id DESC OFFSET $10 LIMIT $11");
 });
 
 test.each([
-  [{ sort: "scheduled", dir: "asc" }, "ORDER BY v.booking_date ASC,v.starts_at_minute ASC,b.created_at DESC,b.id"],
-  [{ sort: "scheduled" }, "ORDER BY v.booking_date DESC,v.starts_at_minute DESC,b.created_at DESC,b.id"],
-  [{ dir: "asc" }, "ORDER BY b.created_at ASC,b.id ASC"],
+  [{ sort: "scheduled", dir: "asc" }, "ORDER BY x.booking_date ASC,x.starts_at_minute ASC,x.created_sort DESC,x.id"],
+  [{ sort: "scheduled" }, "ORDER BY x.booking_date DESC,x.starts_at_minute DESC,x.created_sort DESC,x.id"],
+  [{ dir: "asc" }, "ORDER BY x.created_sort ASC,x.id ASC"],
 ])("orders by %o", async (params, order) => {
   query.mockResolvedValueOnce([{ total: 1 }]).mockResolvedValueOnce([row(1)]);
   await listAdminBookings(parseAdminBookingQuery(params));
   expect(query.mock.calls[1][0]).toContain(order);
-  expect(query.mock.calls[0][1]).toEqual([null, null, null, null, null, "", "all", null]);
+  expect(query.mock.calls[0][1]).toEqual([null, null, null, null, null, "", "all", null, null]);
 });
 
 test("clamps out-of-range pages and skips the page read when nothing matches", async () => {
@@ -110,6 +115,38 @@ test.each(["court", "coaching"])("applies %s to both database count and paginate
     expect(args[6]).toBe(type);
   }
   expect(query.mock.calls[1][1].slice(-2)).toEqual([20, 20]);
+});
+
+test("staff reservations are listed with their own lifecycle and no customer or financial fields", async () => {
+  const reservation = { kind: "reservation", id: "ab000000-0000-4000-8000-0000000000f1", status: "active",
+    created_at: "2026-10-06T10:00:00+00:00", booking_date: "2099-01-01", starts_at_minute: 600, ends_at_minute: 720,
+    location_id: locationId, location_name: "Central", location_timezone: "UTC", court_id: courtId, court_name: "Court 1",
+    reason: "Maintenance", creator_name: "Staff Member", creator_email: "staff@example.test",
+    account_user_id: null, customer_name: null, customer_email: null, total_amount_minor: null, currency: null,
+    includes_coaching: false, coach_name: null, coaching_program_name: null };
+  query.mockResolvedValueOnce([{ total: 2 }]).mockResolvedValueOnce([row(1), reservation]);
+  const result = await listAdminBookings(parseAdminBookingQuery({ type: "reservation", status: "active" }));
+  expect(result.rows[1]).toEqual({ kind: "reservation", id: reservation.id, status: "active", created_at: reservation.created_at,
+    booking_date: "2099-01-01", starts_at_minute: 600, ends_at_minute: 720, location_id: locationId, location_name: "Central",
+    location_timezone: "UTC", court_id: courtId, court_name: "Court 1", reason: "Maintenance", creator_name: "Staff Member",
+    creator_email: "staff@example.test" });
+  for (const [sql, args] of query.mock.calls) {
+    // Reservations join only for "all"/"reservation"; coach filtering never matches them.
+    expect(sql).toContain("$7::text IN ('all','reservation') AND $8::uuid IS NULL");
+    expect(sql).toContain("strpos(lower(coalesce(r.reason,'')),lower($6))>0");
+    expect(args.slice(0, 8)).toEqual(["active", null, null, null, null, "", "reservation", null]);
+  }
+});
+
+test("status filters stay within the selected Type's lifecycle", () => {
+  expect(parseAdminBookingQuery({ type: "reservation", status: "active" }).status).toBe("active");
+  expect(parseAdminBookingQuery({ type: "reservation", status: "cancelled" }).status).toBe("cancelled");
+  expect(parseAdminBookingQuery({ type: "reservation", status: "confirmed" }).status).toBe("all");
+  expect(parseAdminBookingQuery({ type: "court", status: "active" }).status).toBe("all");
+  expect(parseAdminBookingQuery({ status: "active" }).status).toBe("active");
+  expect(parseAdminBookingQuery({ status: "pending_payment" }).status).toBe("pending_payment");
+  const query = parseAdminBookingQuery({ type: "reservation", status: "cancelled", q: "court", page: "2" });
+  expect(parseAdminBookingQuery(Object.fromEntries(new URL(adminBookingsHref(query), "http://x").searchParams))).toEqual(query);
 });
 
 test("invalid and duplicated booking types safely select all", () => {

@@ -1,9 +1,13 @@
 "use client";
 
+import { useTransition } from "react";
+import { Button } from "@/components/button";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { CalendarDateNavigation } from "@/components/calendar-date-navigation";
 import { LocationSelect } from "@/components/location-select";
+
+export const clearCoachingFiltersEvent = "tennis-club:clear-coaching-filters";
 
 function relativeDay(date: string, today: string) {
   if (date === today) return "Today";
@@ -17,12 +21,24 @@ export function CalendarControls({ locations, locationId, date, today, timezone,
   coaching?: { program?: string; coach?: string; duration?: string };
 }) {
   const router = useRouter();
+  const [resetPending, startReset] = useTransition();
+  const clearFilters = () => {
+    // The mounted timetable can veto a reset while its confirmation/payment
+    // dialog is open. Native modal inertness also blocks background interaction.
+    if (!window.dispatchEvent(new Event(clearCoachingFiltersEvent, { cancelable: true }))) return;
+    const href = "/book?mode=coaching";
+    startReset(() => {
+      // Let the server resolve the same defaults as a fresh Coaching visit.
+      if (`${window.location.pathname}${window.location.search}` === href) router.refresh();
+      else router.push(href);
+    });
+  };
   const navigate = (location: string, selectedDate?: string) => {
     const params = new URLSearchParams();
     params.set("location", location);
     if (coaching) {
       params.set("mode", "coaching");
-      if (selectedDate) for (const [key, value] of Object.entries(coaching)) if (value) params.set(key, value);
+      for (const [key, value] of Object.entries(coaching)) if (value) params.set(key, value);
     }
     if (selectedDate) params.set("date", selectedDate);
     router.push(`/book${params.size ? `?${params}` : ""}`);
@@ -42,6 +58,8 @@ export function CalendarControls({ locations, locationId, date, today, timezone,
     <div className="grid gap-3 sm:flex sm:flex-wrap sm:items-end">
       <LocationSelect id="book-location" locations={locations} selectedId={locationId} onChange={(id) => navigate(id)} />
       <CalendarDateNavigation id="book-date" date={date} today={today} onChange={(selectedDate) => navigate(locationId, selectedDate)} />
+      {coaching && <Button type="button" variant="secondary" disabled={resetPending} aria-busy={resetPending}
+        onClick={clearFilters} className="min-h-11 self-end sm:min-h-10">Clear filters</Button>}
     </div>
   </div></>;
 }

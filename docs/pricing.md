@@ -66,11 +66,12 @@ schedule therefore preserves compatible prices for reconciliation.
 
 Partial definitions retain unaffected rows and partition rule sets as needed to keep
 the editor's court × weekday representation valid. New reconciled date/time/price slices retain rectangular court × weekday definitions; empty parents are removed. The configuration fence and location
-lock serialize opening-hours and pricing writes. Confirmed future/in-progress reservations never block configuration changes and
-are never modified by them. Existing booking price/currency, payment-method and
-cancellation snapshots, payment attempts and refunds remain intact. Calendars extend
-their visible range to grandfathered occupancy, while rejecting new bookings outside
-applicable hours. Pending holds revalidate playing-date hours, amount/currency,
+lock serialize opening-hours and pricing writes. An opening-hours change that would leave a live, not yet ended court or coaching
+reservation outside the opening hours on a date it changes is rejected with those
+dates; reservations are never modified by configuration changes. Existing booking
+price/currency, payment-method and cancellation snapshots, payment attempts and refunds
+remain intact. Calendars extend their visible range to any occupancy outside the
+applicable hours, while rejecting new bookings outside them. Pending holds revalidate playing-date hours, amount/currency,
 cancellation notice and publication before confirmation. Invalid captured attempts
 follow existing expiry and Stripe refund/reconciliation handling. Ordinary deletion confirmation
 remains, without a pricing dependency dialog. Successful commits refresh schedule,

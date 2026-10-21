@@ -147,11 +147,15 @@ export function OpeningHours({ locationId, intervals, schedules = [], today = ""
         setDraft(next); setBaseline(draftSnapshot(next)); setDraftSchedules(result.schedules ?? schedules); setSavedHours(result.intervals);
         toast.success(result.pricingAdjusted ? "Opening hours updated. Pricing adjusted automatically." : "Opening hours updated.", { id: notification });
         if (result.missingPricing) toast.warning("Some newly opened hours need pricing configuration for one or more courts.");
+        if (result.workingHoursAdjusted) toast.info("Coach working hours at this location were trimmed to the new opening hours.");
         router.refresh();
       } else if (result.reason === "invalid-input") {
         toast.dismiss(notification); setFieldErrors(result.fieldErrors);
       } else if (result.reason === "overlap") {
         toast.error(`${result.weekdays.map((day) => weekdays[day]).join(", ") || "Selected days"} conflict with existing opening hours. Check the intervals; no changes were saved.`, { id: notification });
+      } else if (result.reason === "booking-conflict") {
+        const shown = result.dates.slice(0, 5).join(", ") + (result.dates.length > 5 ? ` and ${result.dates.length - 5} more dates` : "");
+        toast.error(`Existing bookings on ${shown} would fall outside these opening hours. Move or cancel them first; no changes were saved.`, { id: notification });
       } else if (result.reason === "period-overlap") {
         toast.error("These dates overlap another schedule. Edit its validity dates explicitly; scheduled future policies cannot be adjusted automatically.", { id: notification });
       } else if (result.reason === "stale") {

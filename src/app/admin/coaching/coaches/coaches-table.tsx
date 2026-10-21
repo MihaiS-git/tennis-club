@@ -1,5 +1,7 @@
 "use client";
 
+import { SortableTableHeading, SortableTableLink, tableAriaSort, type TableSortLink } from "@/components/sortable-table-heading";
+import type { AdminCoachListItem } from "@/lib/coaching/admin-lists";
 import { Pencil } from "lucide-react";
 import { Button } from "@/components/button";
 import { CoachingDeleteButton } from "../delete-button";
@@ -14,6 +16,8 @@ import { coachingFailureMessages } from "../coaching-form";
 import { CoachDialog } from "./coach-dialog";
 
 const hover = "cursor-pointer transition-colors hover:bg-surface-muted focus-visible:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-focus";
+const cell = "px-3 py-3 align-top";
+const heading = "px-3 py-2.5";
 const ineligibilityLabels = { suspended: "Account suspended", "no-coach-role": "No Coach role" } as const;
 
 // Inline visibility edit. Hidden coaches without a valid coach account cannot be shown.
@@ -50,45 +54,64 @@ function VisibilityControl({ coach }: { coach: AdminCoach }) {
   </span>;
 }
 
-function names(ids: readonly string[], items: readonly { id: string; name: string }[]) {
-  const listed = ids.flatMap((id) => items.find((item) => item.id === id)?.name ?? []);
+function names(ids: readonly string[], items: readonly { id: string; name: string }[], fallback: string) {
+  const listed = ids.map((id) => items.find((item) => item.id === id)?.name ?? fallback);
   return listed.length ? listed.join(", ") : "None";
 }
 
-function CoachRow({ coach, locations, programs, mobile }: {
-  coach: AdminCoach; locations: AdminCoachingLocation[]; programs: AdminCoachingProgram[]; mobile?: boolean;
+// Public only while a configured, unarchived profile is public; otherwise hidden.
+function visibilityLabel(item: AdminCoachListItem) {
+  return item.profile_status === "configured" && item.profile?.is_public ? "Public" : "Hidden";
+}
+
+// Name above a muted, fully wrapped email; an account without a name shows its email once.
+function CoachIdentity({ item }: { item: AdminCoachListItem }) {
+  const named = item.name !== item.email;
+  return <div className="min-w-0">
+    {named && <p className="break-words font-semibold text-foreground">{item.name}</p>}
+    <p title={item.email} className={`[overflow-wrap:anywhere] ${named ? "text-xs text-muted-foreground" : "font-semibold text-foreground"}`}>{item.email}</p>
+  </div>;
+}
+
+function CoachRow({ item, locations, programs, mobile }: {
+  item: AdminCoachListItem; locations: AdminCoachingLocation[]; programs: AdminCoachingProgram[]; mobile?: boolean;
 }) {
+  const coach = item.profile;
+  const editable = item.profile_status !== "archived";
+  const name = item.name;
+  const profileStatus = { configured: "Configured", "not-configured": "Not configured", archived: "Archived" }[item.profile_status];
   const [open, setOpen] = useState(false);
   const rowRef = useRef<HTMLElement | null>(null);
   const rowProps = {
     ref: (element: HTMLTableRowElement | HTMLElement | null) => { rowRef.current = element; },
-    tabIndex: 0,
-    "aria-label": `Edit coach ${coach.display_name}`,
-    onClick: () => setOpen(true),
+    tabIndex: editable ? 0 : undefined,
+    "aria-label": `${!editable ? "Archived coach" : coach ? "Edit coach" : "Configure profile"} ${name}`,
+    onClick: () => { if (editable) setOpen(true); },
     onKeyDown: (event: React.KeyboardEvent) => {
       if (event.target !== event.currentTarget) return;
-      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setOpen(true); }
+      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); if (editable) setOpen(true); }
     },
   };
-  const dialog = open && createPortal(<CoachDialog coach={coach} locations={locations} programs={programs} open onOpenChange={(nextOpen) => {
+  const dialog = open && editable && createPortal(<CoachDialog coach={coach ?? undefined}
+    account={coach ? undefined : { id: item.user_id, email: item.email, suggested_name: item.name }} locations={locations} programs={programs} open onOpenChange={(nextOpen) => {
     setOpen(nextOpen);
     if (!nextOpen) rowRef.current?.focus();
   }} />, document.body);
-  const actions = <span className="inline-flex gap-2" onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>
-    <Button type="button" variant="secondary" size="small" aria-label="Edit coach" onClick={() => setOpen(true)}><Pencil size={14} aria-hidden="true" /></Button>
-    <CoachingDeleteButton kind="coach" id={coach.user_id} name={coach.display_name} />
-  </span>;
-  const locationNames = names(coach.location_ids, locations);
-  const programNames = names(coach.program_ids, programs);
+  const actions = editable ? <span className="inline-flex gap-2" onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>
+    <Button type="button" variant="secondary" size="small" className="gap-1.5 whitespace-nowrap" aria-label={coach ? "Edit coach" : "Configure profile"} onClick={() => setOpen(true)}><Pencil size={14} aria-hidden="true" />{!coach && "Configure profile"}</Button>
+    {coach && <CoachingDeleteButton kind="coach" id={coach.user_id} name={coach.display_name} />}
+  </span> : <span className="text-xs text-muted-foreground">Archived</span>;
+  const locationNames = names(coach?.location_ids ?? [], locations, "Archived location");
+  const programNames = names(coach?.program_ids ?? [], programs, "Unavailable program");
+  // Visibility is editable only on a configured profile.
+  const visibility = coach && editable ? <VisibilityControl coach={coach} /> : visibilityLabel(item);
   if (mobile) return <>
-    <article {...rowProps} role="button" className={`min-w-0 rounded-card border border-border bg-surface p-4 ${hover}`}>
+    <article {...rowProps} role={editable ? "button" : undefined} className={`min-w-0 rounded-card border border-border bg-surface p-4 ${hover}`}>
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="break-words font-semibold text-foreground">{coach.display_name}</p>
-          <p className="break-words text-xs text-muted-foreground">{coach.email}</p>
-        </div>
-        <VisibilityControl coach={coach} />
+        <CoachIdentity item={item} />
+        {visibility}
       </div>
+      <p className="mt-2 text-sm text-muted-foreground">{item.account_status === "active" ? "Active" : "Suspended"} · {profileStatus}</p>
       <p className="mt-2 text-sm text-muted-foreground">Locations: {locationNames}</p>
       <p className="text-sm text-muted-foreground">Programs: {programNames}</p>
       <div className="mt-3">{actions}</div>
@@ -97,40 +120,47 @@ function CoachRow({ coach, locations, programs, mobile }: {
   </>;
   return <>
     <tr {...rowProps} className={hover}>
-      <td className="px-4 py-3">
-        <p className="break-words font-semibold text-foreground">{coach.display_name}</p>
-        <p className="break-words text-xs text-muted-foreground">{coach.email}</p>
-      </td>
-      <td className="px-4 py-3"><VisibilityControl coach={coach} /></td>
-      <td className="break-words px-4 py-3">{locationNames}</td>
-      <td className="break-words px-4 py-3">{programNames}</td>
-      <td className="px-4 py-3">{actions}</td>
+      <td className={cell}><CoachIdentity item={item} /></td>
+      <td className={cell}>{item.account_status === "active" ? "Active" : "Suspended"}</td>
+      <td className={cell}>{profileStatus}</td>
+      <td className={cell}>{visibility}</td>
+      <td className={`${cell} break-words`}>{locationNames}</td>
+      <td className={`${cell} break-words`}>{programNames}</td>
+      <td className={cell}>{actions}</td>
     </tr>
     {dialog}
   </>;
 }
 
-export function CoachesTable({ coaches, locations, programs }: {
-  coaches: AdminCoach[]; locations: AdminCoachingLocation[]; programs: AdminCoachingProgram[];
+export function CoachesTable({ coaches, locations, programs, sortLinks, filtered = false }: {
+  coaches: AdminCoachListItem[]; sortLinks?: Record<string, TableSortLink>; filtered?: boolean; locations: AdminCoachingLocation[]; programs: AdminCoachingProgram[];
 }) {
   if (!coaches.length) return <p className="rounded-card border border-border bg-surface px-4 py-5 text-sm text-muted-foreground">
-    No coach profiles yet. Add a coach for an active account with the Coach role.
+    {filtered ? "No coaches match these filters." : "No accounts have the Coach role. Assign the role under Users."}
   </p>;
   return <section aria-label="Coaches">
-    <div className="space-y-3 lg:hidden">{coaches.map((coach) => <CoachRow key={coach.user_id} coach={coach} locations={locations} programs={programs} mobile />)}</div>
+    <div className="space-y-3 lg:hidden">{coaches.map((coach) => <CoachRow key={coach.user_id} item={coach} locations={locations} programs={programs} mobile />)}</div>
     <div className="hidden overflow-hidden rounded-card border border-border bg-surface lg:block">
       <table className="w-full table-fixed text-left font-sans text-sm" aria-label="Coaches">
         <thead className="border-b border-border bg-surface-muted text-xs font-semibold text-muted-foreground">
           <tr>
-            <th scope="col" className="w-[28%] px-4 py-2.5">Coach</th>
-            <th scope="col" className="w-[22%] px-4 py-2.5">Visibility</th>
-            <th scope="col" className="px-4 py-2.5">Locations</th>
-            <th scope="col" className="px-4 py-2.5">Programs</th>
-            <th scope="col" className="w-28 px-4 py-2.5">Actions</th>
+            {/* The Coach column sorts by name or email. */}
+            <th scope="col" className={`w-[21%] ${heading}`} aria-sort={tableAriaSort(sortLinks?.email?.direction ? sortLinks.email : sortLinks?.name)}>
+              {sortLinks?.name && sortLinks.email ? <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <SortableTableLink label="Coach" sort={sortLinks.name} />
+                <span className="font-normal"><SortableTableLink label="Email" sort={sortLinks.email} /></span>
+              </span> : "Coach"}
+            </th>
+            <SortableTableHeading label="Account" sort={sortLinks?.status} className={`w-[9%] ${heading}`} />
+            <SortableTableHeading label="Profile" sort={sortLinks?.profile} className={`w-[11%] ${heading}`} />
+            <th scope="col" className={`w-[12%] ${heading}`}>Visibility</th>
+            <th scope="col" className={heading}>Locations</th>
+            <th scope="col" className={heading}>Programs</th>
+            <th scope="col" className={`w-[19%] ${heading}`}>Actions</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-border">
-          {coaches.map((coach) => <CoachRow key={coach.user_id} coach={coach} locations={locations} programs={programs} />)}
+          {coaches.map((coach) => <CoachRow key={coach.user_id} item={coach} locations={locations} programs={programs} />)}
         </tbody>
       </table>
     </div>

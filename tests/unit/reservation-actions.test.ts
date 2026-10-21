@@ -22,7 +22,7 @@ import { cancelAdminCustomerBookingAction, cancelAdminReservationAction, editAdm
   reserveCourtAction } from "@/app/admin/reservations/actions";
 import { cancelOwnReservationAction, editOwnReservationAction } from "@/app/my-activity/bookings/actions";
 
-const upcomingPaths = [["/book"], ["/admin/reservations"], ["/my-activity/bookings"]];
+const upcomingPaths = [["/book"], ["/admin/reservations"], ["/admin/bookings"], ["/coach/bookings"], ["/my-activity/bookings"]];
 const cancelledPaths = [...upcomingPaths, ["/my-activity/history"]];
 const mutations = [
   { name: "direct reservation create", action: reserveCourtAction, service: services.create, paths: upcomingPaths },

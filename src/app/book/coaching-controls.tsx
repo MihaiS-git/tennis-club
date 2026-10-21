@@ -1,13 +1,16 @@
 "use client";
 
+import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 
-export function CoachingControls({ locationId, date, programs, coaches, durations, programId, coachId, durationMinutes }: {
+export function CoachingControls({ locationId, date, programs, coaches, durations, programId, coachId, durationMinutes, invalidCoachUrl }: {
+  invalidCoachUrl?: string;
   locationId: string; date: string; programs: { id: string; name: string }[];
   coaches: { id: string; displayName: string }[]; durations: number[];
   programId: string; coachId: string; durationMinutes: number;
 }) {
   const router = useRouter();
+  useEffect(() => { if (invalidCoachUrl) router.replace(invalidCoachUrl, { scroll: false }); }, [invalidCoachUrl, router]);
   const navigate = (field: "program" | "coach" | "duration", value: string) => {
     const params = new URLSearchParams({ mode: "coaching", location: locationId, date });
     if (programId) params.set("program", programId);

@@ -152,3 +152,23 @@ export function summarizeBookingFinancials(input: { status: BookingStatus; total
   };
 }
 export type AdminBookingFinancialSummary = ReturnType<typeof summarizeBookingFinancials>;
+
+// Presentation-only availability of the existing Admin cancellation, mirroring the
+// command's checks so ineligible bookings offer no action. The command stays
+// authoritative and re-checks everything under its locks.
+export type AdminCancellationAvailability = "eligible" | "started" | "cancellation_pending" | "change_pending" | "unavailable";
+export function adminCancellationAvailability(input: { status: BookingStatus; startsAt: string; now: Date;
+  pendingChange: "reschedule" | "cancellation" | null; paymentPending: boolean }): AdminCancellationAvailability {
+  if (input.pendingChange === "cancellation") return "cancellation_pending";
+  if (input.status !== "confirmed") return "unavailable";
+  if (Date.parse(input.startsAt) <= input.now.getTime()) return "started";
+  if (input.pendingChange || input.paymentPending) return "change_pending";
+  return "eligible";
+}
+
+// Booking Details offers editing only through the existing owner rescheduling boundary:
+// Admins may reschedule their own court bookings, never other customers' or coaching bookings.
+export function adminBookingEditable(input: { availability: AdminCancellationAvailability; accountUserId: string | null;
+  actorUserId: string; includesCoaching: boolean }) {
+  return input.availability === "eligible" && input.accountUserId === input.actorUserId && !input.includesCoaching;
+}

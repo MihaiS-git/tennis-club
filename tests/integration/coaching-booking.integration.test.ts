@@ -3,7 +3,8 @@ import { parseAdminBookingQuery } from "@/lib/bookings/admin-query";
 import { ensureIntegrationAdminAnchor } from "./admin-anchor";
 import { parseActivityQuery } from "@/lib/bookings/activity-query";
 import { inTransaction } from "@/lib/db/transaction";
-import { insertBookingRecords } from "../local/booking-fixtures";
+import { normalizeDatabaseError } from "@/lib/db/errors";
+import { cleanupBookingEvidence, insertBookingRecords } from "../local/booking-fixtures";
 import Stripe from "stripe";
 import { commitCoachingCheckout } from "@/lib/coaching/checkout";
 import { readOnlineCheckout, resolveAuthorizedCheckoutPayment, startOnlineCheckout } from "@/lib/payments/checkout";
@@ -18,11 +19,11 @@ import { createClient } from "@supabase/supabase-js";
 import type { DataSource } from "typeorm";
 import { afterAll, assert, beforeAll, expect, test, vi } from "vitest";
 import { createCustomerBooking } from "@/lib/bookings/service";
+import { deleteCoachProfile } from "@/lib/coaching/admin";
 import { createCoachingBooking } from "@/lib/coaching/booking";
 import { createDataSource, getDataSource } from "@/lib/db/data-source";
 import { mondayWeekday } from "@/lib/pricing/resolution";
 import { cleanupAuthFixtures, localFixtureClient } from "./auth-fixtures";
-import { cleanupBookingFixtures } from "./checkout-fixtures";
 
 // Same Stripe SDK boundary as stripe-payment.integration.test.ts. No provider network calls.
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
@@ -64,6 +65,7 @@ const guest = reader(), member = reader();
 let database: DataSource;
 let previousProvider: string | null = null;
 const userIds: string[] = [];
+const removalCoachIds: string[] = [];
 const [locationA, locationB] = [randomUUID(), randomUUID()];
 const [courtA1, courtA2, courtA3, courtB1] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
 const [program, includedProgram, inactiveProgram, groupProgram] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
@@ -109,20 +111,26 @@ async function aggregate(bookingId: string) {
 }
 
 // A competing writer on its own connection, outside the small application pool
-// that the booking under test and the lock observer share.
+// that the booking under test and the lock observer share. Sessions a failed or
+// timed-out test leaves open are closed before teardown; closing the connection
+// rolls back their transaction and releases its locks.
+const sessions = new Set<() => Promise<void>>();
 async function session() {
   const source = await createDataSource().initialize();
   const runner = source.createQueryRunner();
   await runner.connect();
-  return { query: (sql: string, parameters?: unknown[]) => runner.query(sql, parameters),
-    end: async () => { await runner.release(); await source.destroy(); } };
+  const end = async () => { if (!sessions.delete(end)) return; await runner.release(); await source.destroy(); };
+  sessions.add(end);
+  return { query: (sql: string, parameters?: unknown[]) => runner.query(sql, parameters), end };
 }
 
 // Waits until another session is blocked on a lock in a statement matching the pattern.
-async function blockedOn(pattern: string) {
-  for (let tries = 0; tries < 200; tries++) {
-    const [row] = await database.query(`SELECT count(*)::int AS waiting FROM pg_stat_activity
-      WHERE wait_event_type='Lock' AND query ILIKE $1`, [pattern]);
+// Bounded well inside Vitest's 5 s test timeout: a missing wait fails the test and its
+// finally ends the competing session, rather than Vitest abandoning it mid-transaction.
+async function blockedOn(pattern: string, observer?: Awaited<ReturnType<typeof session>>) {
+  for (const deadline = Date.now() + 2000; Date.now() < deadline;) {
+    const query = `SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE wait_event_type='Lock' AND query ILIKE $1`;
+    const [row] = await (observer ? observer.query(query, [pattern]) : database.query(query, [pattern]));
     if (row.waiting > 0) return;
     await sleep(25);
   }
@@ -192,37 +200,56 @@ beforeAll(async () => {
   await database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,location_id,coach_user_id,amount_minor,currency) VALUES
     ($1,60,$3,NULL,10000,'RON'),($1,60,$3,$4,12000,'RON'),($1,90,$3,NULL,14000,'RON'),($2,60,$3,NULL,15000,'RON')`,
     [semiProgram, semiIncludedProgram, locationA, coach]);
-  await database.query(`INSERT INTO public.coach_weekly_availability(coach_user_id,location_id,weekday,start_minute,end_minute) VALUES
-    ($1,$5,$6,480,960),($1,$7,$6,960,1200),($2,$5,$6,480,900),($3,$5,$6,480,900),($4,$5,$6,480,900)`,
+  await database.query(`INSERT INTO public.coach_weekly_availability(coach_user_id,location_id,weekday,start_minute,end_minute,valid_from) VALUES
+    ($1,$5,$6,480,960,'2000-01-01'),($1,$7,$6,960,1200,'2000-01-01'),($2,$5,$6,480,900,'2000-01-01'),($3,$5,$6,480,900,'2000-01-01'),($4,$5,$6,480,900,'2000-01-01')`,
   [coach, coach2, hiddenCoach, formerCoach, locationA, weekday, locationB]);
 });
+
+// One transaction: a failed teardown leaves every fixture row or none. Work from a
+// failed test may still briefly hold a lock or commit a late row, so a fresh attempt
+// (which reselects bookings by court) is retried a bounded number of times.
+async function removeFixtures() {
+  const locations = [locationA, locationB], coaches = [coach, coach2, hiddenCoach, formerCoach, ...removalCoachIds];
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await inTransaction(async manager => {
+        await manager.query("SET LOCAL lock_timeout = '2s'");
+        await cleanupBookingEvidence(manager, { courtIds: courts });
+        await manager.query("DELETE FROM public.court_reservations WHERE court_id=ANY($1::uuid[])", [courts]);
+        await manager.query("DELETE FROM public.coach_availability_exceptions WHERE coach_user_id=ANY($1::uuid[])", [coaches]);
+        await manager.query("DELETE FROM public.coach_weekly_availability WHERE coach_user_id=ANY($1::uuid[])", [coaches]);
+        await manager.query("DELETE FROM public.coaching_prices WHERE location_id=ANY($1::uuid[])", [locations]);
+        await manager.query("DELETE FROM public.coach_programs WHERE coach_user_id=ANY($1::uuid[])", [coaches]);
+        await manager.query("DELETE FROM public.coach_locations WHERE coach_user_id=ANY($1::uuid[])", [coaches]);
+        await manager.query("DELETE FROM public.coach_profiles WHERE user_id=ANY($1::uuid[])", [coaches]);
+        await manager.query("DELETE FROM public.coaching_programs WHERE id=ANY($1::uuid[])", [[program, includedProgram, inactiveProgram, groupProgram, semiProgram, semiIncludedProgram]]);
+        await manager.query("DELETE FROM public.location_pricing_rules WHERE location_id=ANY($1::uuid[])", [locations]);
+        await manager.query("DELETE FROM public.pricing_rule_sets WHERE location_id=ANY($1::uuid[])", [locations]);
+        await manager.query("DELETE FROM public.location_opening_hours WHERE location_id=ANY($1::uuid[])", [locations]);
+        await manager.query("DELETE FROM public.opening_hours_schedules WHERE location_id=ANY($1::uuid[])", [locations]);
+        await manager.query("DELETE FROM public.courts WHERE location_id=ANY($1::uuid[])", [locations]);
+        await manager.query("DELETE FROM public.locations WHERE id=ANY($1::uuid[])", [locations]);
+      });
+    } catch (error) {
+      // Lock timeout, deadlock, or a late row referencing a fixture; anything else is reported at once.
+      if (attempt === 3 || !["55P03", "40P01", "23503"].includes(normalizeDatabaseError(error).sqlState ?? "")) throw error;
+      await sleep(250);
+    }
+  }
+}
 
 afterAll(async () => {
   if (!database) return;
   try {
-    const locations = [locationA, locationB], coaches = [coach, coach2, hiddenCoach, formerCoach];
-    await cleanupBookingFixtures({ courtIds: courts });
-    await database.query("DELETE FROM public.court_reservations WHERE court_id=ANY($1::uuid[])", [courts]);
-    await database.query("DELETE FROM public.coach_availability_exceptions WHERE coach_user_id=ANY($1::uuid[])", [coaches]);
-    await database.query("DELETE FROM public.coach_weekly_availability WHERE coach_user_id=ANY($1::uuid[])", [coaches]);
-    await database.query("DELETE FROM public.coaching_prices WHERE location_id=ANY($1::uuid[])", [locations]);
-    await database.query("DELETE FROM public.coach_programs WHERE coach_user_id=ANY($1::uuid[])", [coaches]);
-    await database.query("DELETE FROM public.coach_locations WHERE coach_user_id=ANY($1::uuid[])", [coaches]);
-    await database.query("DELETE FROM public.coach_profiles WHERE user_id=ANY($1::uuid[])", [coaches]);
-    await database.query("DELETE FROM public.coaching_programs WHERE id=ANY($1::uuid[])", [[program, includedProgram, inactiveProgram, groupProgram, semiProgram, semiIncludedProgram]]);
-    await database.query("DELETE FROM public.location_pricing_rules WHERE location_id=ANY($1::uuid[])", [locations]);
-    await database.query("DELETE FROM public.pricing_rule_sets WHERE location_id=ANY($1::uuid[])", [locations]);
-    await database.query("DELETE FROM public.location_opening_hours WHERE location_id=ANY($1::uuid[])", [locations]);
-    await database.query("DELETE FROM public.opening_hours_schedules WHERE location_id=ANY($1::uuid[])", [locations]);
-    await database.query("DELETE FROM public.courts WHERE location_id=ANY($1::uuid[])", [locations]);
-    await database.query("DELETE FROM public.locations WHERE id=ANY($1::uuid[])", [locations]);
+    await Promise.all([...sessions].map(end => end()));
     await database.query("UPDATE public.payment_provider_settings SET active_provider=$1 WHERE id=true", [previousProvider]);
+    await removeFixtures();
     await cleanupAuthFixtures(service, userIds);
   } finally {
     vi.unstubAllEnvs();
     await database.destroy();
   }
-});
+}, 30000);
 
 test("rejects invalid, ineligible, unavailable and stale requests without writing anything", async () => {
   const before = await written();
@@ -358,8 +385,8 @@ test("coach conflicts across locations: live holds block, expired holds are rele
   assert.ok(live.ok); assert.ok(stale.ok);
   await expireHold(stale.reservationId);
   // The coach then moves those hours to A.
-  await database.query(`INSERT INTO public.coach_availability_exceptions(coach_user_id,exception_date,kind,location_id,start_minute,end_minute,note)
-    VALUES($1,$2,'available',$3,960,1140,'')`, [coach, date, locationA]);
+  await database.query(`INSERT INTO public.coach_availability_exceptions(coach_user_id,exception_date,until_date,kind,location_id,start_minute,end_minute,note)
+    VALUES($1,$2,$2,'available',$3,960,1140,'')`, [coach, date, locationA]);
   const at = (startMinute: number) => ({ courtId: courtA1, startMinute, expectedTotalAmountMinor: 17000 });
 
   expect(await book(at(960))).toMatchObject({ ok: false, reason: "coach-booked" });
@@ -398,8 +425,8 @@ test("a concurrent coach availability change serializes with booking creation", 
   } finally {
     await other.end();
   }
-  await database.query(`INSERT INTO public.coach_weekly_availability(coach_user_id,location_id,weekday,start_minute,end_minute)
-    VALUES($1,$2,$3,480,900)`, [coach2, locationA, weekday]);
+  await database.query(`INSERT INTO public.coach_weekly_availability(coach_user_id,location_id,weekday,start_minute,end_minute,valid_from)
+    VALUES($1,$2,$3,480,900,'2000-01-01')`, [coach2, locationA, weekday]);
   expect(await book({ coachId: coach2, courtId: courtA2, startMinute: 480, expectedTotalAmountMinor: 17000 })).toMatchObject({ ok: true });
 });
 
@@ -883,3 +910,142 @@ test("Admin coach filters use historical IDs and names including archived coache
     await database.query("UPDATE public.coach_profiles SET display_name='Second Coach',is_public=true,archived_at=NULL WHERE user_id=$1", [coach2]);
   }
 });
+
+
+// Dedicated coaches and dates keep each removal assertion independent of earlier
+// bookings in this suite. Only the isolated test database is used.
+let removalAdmin: ReturnType<typeof reader> | undefined;
+async function removalFixture() {
+  if (!removalAdmin) {
+    await ensureIntegrationAdminAnchor(service);
+    const accountDetails = await account();
+    await database.query("INSERT INTO public.user_roles(user_id,role_code) VALUES($1,'admin')", [accountDetails.id]);
+    removalAdmin = reader();
+    assert.strictEqual((await removalAdmin.auth.signInWithPassword(accountDetails)).error, null);
+  }
+  const { id } = await account(["coach"]);
+  removalCoachIds.push(id);
+  const date = new Date(Date.UTC(2101, 0, 3 + removalCoachIds.length * 7)).toISOString().slice(0, 10);
+  await database.query(`INSERT INTO public.coach_profiles(user_id,display_name,bio,qualifications,specialties,languages,is_public) VALUES($1,'Removal regression coach','','','{}','{}',true)`, [id]);
+  await database.query("INSERT INTO public.coach_locations(coach_user_id,location_id) VALUES($1,$2)", [id, locationA]);
+  await database.query("INSERT INTO public.coach_programs(coach_user_id,program_id) VALUES($1,$2)", [id, program]);
+  await database.query(`INSERT INTO public.coach_weekly_availability(coach_user_id,location_id,weekday,start_minute,end_minute,valid_from)
+    VALUES($1,$2,$3,480,960,'2000-01-01')`, [id, locationA, mondayWeekday(date)]);
+  return { id, admin: removalAdmin, intent: { ...base(), coachId: id, date, expectedTotalAmountMinor: 16000 } };
+}
+
+// Complete persistence evidence, rather than just lifecycle status: failed removal
+// and historical archival must leave every reservation and financial row unchanged.
+async function removalBookingSnapshot(coachId: string) {
+  const reservationIds = "SELECT id FROM public.court_reservations WHERE coach_user_id=$1";
+  const bookingIds = `SELECT id FROM public.bookings WHERE reservation_id IN (${reservationIds})`;
+  const attemptIds = `SELECT id FROM public.payment_attempts WHERE booking_id IN (${bookingIds})`;
+  const refundIds = `SELECT id FROM public.payment_refunds WHERE booking_id IN (${bookingIds})`;
+  const scopes = [
+    ["court_reservations", "coach_user_id=$1"], ["bookings", `id IN (${bookingIds})`],
+    ["booking_revisions", `booking_id IN (${bookingIds})`], ["payment_attempts", `booking_id IN (${bookingIds})`],
+    ["payment_capture_receipts", `payment_attempt_id IN (${attemptIds})`],
+    ["payment_refunds", `booking_id IN (${bookingIds})`], ["refund_executions", `refund_id IN (${refundIds})`],
+    ["payment_provider_events", `attempt_id IN (${attemptIds})`],
+  ];
+  return Promise.all(scopes.map(([table, scope]) => database.query(`SELECT * FROM public.${table} WHERE ${scope} ORDER BY ${table === "payment_provider_events" ? "provider,event_id" : "id"}`, [coachId])));
+}
+
+async function removalConfigurationSnapshot(coachId: string) {
+  return Promise.all([
+    database.query("SELECT * FROM public.coach_profiles WHERE user_id=$1", [coachId]),
+    ...["coach_locations", "coach_programs", "coach_weekly_availability", "coaching_prices"].map(table =>
+      database.query(`SELECT * FROM public.${table} WHERE coach_user_id=$1 ORDER BY 1`, [coachId])),
+  ]);
+}
+
+test.each(["live hold", "uncertain accepted capture", "confirmed lesson"])("coach removal rejects a %s without changing bookings, configuration or payment evidence", async phase => {
+  setupStripe();
+  const fixture = await removalFixture();
+  const lesson = await commitCoachingCheckout(fixture.intent, member);
+  assert.ok(lesson.ok);
+  if (phase !== "live hold") {
+    const intent = remote(lesson.paymentAttemptId);
+    intent.status = "requires_capture"; intent.amount_capturable = 16000;
+    if (phase === "uncertain accepted capture") {
+      stripeFixture.capture.mockRejectedValueOnce(new Error("Capture response lost"));
+      stripeFixture.retrieve.mockResolvedValueOnce({ ...intent }).mockRejectedValueOnce(new Error("Stripe unavailable"));
+      expect(await readOnlineCheckout(access(lesson.checkout))).toMatchObject({ status: "pending_payment", paymentStatus: "unknown" });
+      const accepted = await aggregate(lesson.bookingId);
+      expect(Date.parse(accepted.hold_expires_at) - Date.parse(accepted.attempt_expires_at)).toBe(120000);
+    } else {
+      expect(await readOnlineCheckout(access(lesson.checkout))).toMatchObject({ status: "confirmed", paymentStatus: "succeeded" });
+      expect(await database.query("SELECT id FROM public.payment_capture_receipts WHERE payment_attempt_id=$1", [lesson.paymentAttemptId])).toHaveLength(1);
+    }
+  }
+  const bookingBefore = await removalBookingSnapshot(fixture.id);
+  const configurationBefore = await removalConfigurationSnapshot(fixture.id);
+  const providerCallsBefore = [stripeFixture.capture.mock.calls.length, stripeFixture.cancel.mock.calls.length, stripeFixture.refundCreate.mock.calls.length];
+  expect(await deleteCoachProfile({ user_id: fixture.id }, fixture.admin)).toEqual({ ok: false, reason: "active-lessons" });
+  expect(await removalBookingSnapshot(fixture.id)).toEqual(bookingBefore);
+  expect(await removalConfigurationSnapshot(fixture.id)).toEqual(configurationBefore);
+  expect([stripeFixture.capture.mock.calls.length, stripeFixture.cancel.mock.calls.length, stripeFixture.refundCreate.mock.calls.length]).toEqual(providerCallsBefore);
+  expect((await service.auth.admin.getUserById(fixture.id)).data.user?.id).toBe(fixture.id);
+});
+
+test("coach removal archives cancelled lesson history without changing captured payments, refunds, reservations or the account", async () => {
+  setupStripe();
+  const fixture = await removalFixture();
+  const lesson = await commitCoachingCheckout(fixture.intent, member);
+  assert.ok(lesson.ok);
+  const intent = remote(lesson.paymentAttemptId);
+  intent.status = "requires_capture"; intent.amount_capturable = 16000;
+  expect(await readOnlineCheckout(access(lesson.checkout))).toMatchObject({ status: "confirmed" });
+  expect(await cancelOwnCustomerBooking(lesson.bookingId, member)).toMatchObject({ ok: true, refundStatus: "succeeded" });
+  expect(await database.query("SELECT status FROM public.payment_refunds WHERE booking_id=$1", [lesson.bookingId])).toEqual([{ status: "succeeded" }]);
+  const before = await removalBookingSnapshot(fixture.id);
+  const refundCalls = stripeFixture.refundCreate.mock.calls.length;
+  expect(await deleteCoachProfile({ user_id: fixture.id }, fixture.admin)).toEqual({ ok: true, id: fixture.id, archived: true });
+  expect(await removalBookingSnapshot(fixture.id)).toEqual(before);
+  expect(await database.query("SELECT is_public,archived_at IS NOT NULL AS archived FROM public.coach_profiles WHERE user_id=$1", [fixture.id]))
+    .toEqual([{ is_public: false, archived: true }]);
+  expect((await service.auth.admin.getUserById(fixture.id)).data.user?.id).toBe(fixture.id);
+  expect(stripeFixture.refundCreate).toHaveBeenCalledTimes(refundCalls);
+});
+
+test.each(["booking first", "removal first"])("coach removal and booking creation serialize safely: %s", async order => {
+  const fixture = await removalFixture();
+  const blocker = await session();
+  const observer = await session();
+  let booking: ReturnType<typeof createCoachingBooking> | undefined;
+  let removal: ReturnType<typeof deleteCoachProfile> | undefined;
+  try {
+    await blocker.query("BEGIN");
+    if (order === "booking first") {
+      // Stop booking after its shared configuration/profile fences, at the
+      // existing location lock. Removal must wait for its transaction to finish.
+      await blocker.query("SELECT id FROM public.locations WHERE id=$1 FOR UPDATE", [locationA]);
+      booking = createCoachingBooking(fixture.intent, guest);
+      await blockedOn("%location%", observer);
+      removal = deleteCoachProfile({ user_id: fixture.id }, fixture.admin);
+      await blockedOn("%pg_advisory_xact_lock(1791462257, 1)%", observer);
+      await blocker.query("COMMIT");
+      expect(await booking).toMatchObject({ ok: true, status: "pending_payment" });
+      expect(await removal).toEqual({ ok: false, reason: "active-lessons" });
+      expect(await database.query("SELECT status FROM public.court_reservations WHERE coach_user_id=$1", [fixture.id])).toEqual([{ status: "held" }]);
+    } else {
+      // Stop removal after its exclusive configuration fence, at the profile
+      // lock. A new booking cannot enter until the removal commits.
+      await blocker.query("SELECT user_id FROM public.coach_profiles WHERE user_id=$1 FOR UPDATE", [fixture.id]);
+      removal = deleteCoachProfile({ user_id: fixture.id }, fixture.admin);
+      await blockedOn("%CoachProfileEntity%", observer);
+      booking = createCoachingBooking(fixture.intent, guest);
+      await blockedOn("%pg_advisory_xact_lock_shared(1791462257, 1)%", observer);
+      await blocker.query("COMMIT");
+      expect(await removal).toEqual({ ok: true, id: fixture.id, archived: false });
+      expect(await booking).toMatchObject({ ok: false, reason: "not-offered" });
+      expect(await database.query("SELECT id FROM public.court_reservations WHERE coach_user_id=$1", [fixture.id])).toEqual([]);
+      expect((await service.auth.admin.getUserById(fixture.id)).data.user?.id).toBe(fixture.id);
+    }
+  } finally {
+    await blocker.query("ROLLBACK");
+    await Promise.allSettled([booking, removal]);
+    await blocker.end();
+    await observer.end();
+  }
+}, 15000);

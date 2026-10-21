@@ -5,8 +5,8 @@ import { Activity, type ComponentProps } from "react";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-const { refresh, confirm, coachingConfirm, abandon, paymentProps, settled } = vi.hoisted(() => ({ refresh: vi.fn(), confirm: vi.fn(), coachingConfirm: vi.fn(), abandon: vi.fn(), paymentProps: vi.fn(), settled: { amount: 11000, currency: "EUR" as "EUR" | "RON" } }));
-vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
+const { push, refresh, confirm, coachingConfirm, abandon, paymentProps, settled } = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn(), confirm: vi.fn(), coachingConfirm: vi.fn(), abandon: vi.fn(), paymentProps: vi.fn(), settled: { amount: 11000, currency: "EUR" as "EUR" | "RON" } }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push, refresh }) }));
 vi.mock("@/app/book/actions", () => ({ commitCustomerBookingAction: confirm, commitCoachingBookingAction: coachingConfirm, abandonCheckoutAction: abandon }));
 vi.mock("@/app/book/online-payment", () => ({ OnlinePayment: (props: ComponentProps<typeof import("@/app/book/online-payment").OnlinePayment>) => {
   paymentProps(props);
@@ -15,12 +15,13 @@ vi.mock("@/app/book/online-payment", () => ({ OnlinePayment: (props: ComponentPr
     <button onClick={() => props.onPaymentStatus?.("unknown")}>Simulate unknown</button>
     <button onClick={() => props.onPaymentStatus?.("expired")}>Simulate expiry</button></section>;
 } }));
+import { CalendarControls } from "@/app/book/calendar-controls";
 import { BookingCalendar } from "@/app/book/booking-calendar";
 import { BookCourtLink } from "@/components/book-court-link";
 import type { CourtDay } from "@/lib/courts/calendar";
 
 beforeEach(() => {
-  refresh.mockReset(); confirm.mockReset(); coachingConfirm.mockReset(); abandon.mockReset(); settled.amount = 11000; settled.currency = "EUR";
+  push.mockReset(); refresh.mockReset(); confirm.mockReset(); coachingConfirm.mockReset(); abandon.mockReset(); settled.amount = 11000; settled.currency = "EUR";
   window.history.replaceState(null, "", "/book");
   installDialogMock();
 });
@@ -565,4 +566,46 @@ it("switches coaches with fresh offers, preserves courts and clears the old less
   expect(screen.getByText("No lesson start")).toBeTruthy();
   view.rerender(<BookingCalendar {...coachingProps} />);
   expect(screen.getAllByRole("button", { name: /90 min lesson/ })).toHaveLength(courts.length);
+});
+
+
+function CoachingResetControls() {
+  return <CalendarControls locations={[{ id: coaching.locationId, name: "Club" }]} locationId={coaching.locationId}
+    date={coachingProps.date} today={coachingProps.date} coaching={{ program: coaching.programId, coach: coaching.coachId, duration: "90" }} />;
+}
+
+it("Clear filters clears the selected lesson even when the default URL and timetable context stay the same", () => {
+  window.history.replaceState(null, "", "/book?mode=coaching");
+  render(<><CoachingResetControls /><BookingCalendar {...coachingProps} /></>);
+  fireEvent.click(screen.getByRole("button", { name: /Court 1 .*90 min lesson/ }));
+  expect(screen.getByRole("region", { name: "Selected interval" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+  expect(screen.queryByRole("region", { name: "Selected interval" })).toBeNull();
+  expect(refresh).toHaveBeenCalledOnce();
+  expect(coachingConfirm).not.toHaveBeenCalled();
+  expect(abandon).not.toHaveBeenCalled();
+});
+
+it.each(["review", "submitting", "pending", "processing"])("Clear filters preserves %s confirmation/payment and cannot navigate or cancel it", async phase => {
+  if (phase === "submitting") coachingConfirm.mockImplementation(() => new Promise(() => {}));
+  else coachingConfirm.mockResolvedValue({ ok: true, status: "pending_payment", holdExpiresAt: "2099-10-15T10:00:00Z", checkout,
+    totalAmountMinor: 17000, currency: "RON" });
+  render(<><CoachingResetControls /><BookingCalendar {...coachingProps} authenticated
+    initialContact={{ customerName: "Member", customerEmail: "member@example.test", customerPhone: "123" }} /></>);
+  fireEvent.click(screen.getByRole("button", { name: /Court 1 .*90 min lesson/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  if (phase !== "review") fireEvent.click(screen.getByRole("button", { name: "Continue to payment" }));
+  if (phase === "pending" || phase === "processing") await screen.findByRole("region", { name: "Online payment" });
+  if (phase === "processing") fireEvent.click(screen.getByRole("button", { name: "Simulate processing" }));
+  refresh.mockClear();
+  // jsdom does not enforce native modal inertness; this also exercises the
+  // cancellation guard against a programmatically dispatched background click.
+  fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+  expect(screen.getByRole("dialog")).toBeTruthy();
+  expect(screen.getByRole("region", { name: "Selected interval" })).toBeTruthy();
+  expect(push).not.toHaveBeenCalled();
+  expect(refresh).not.toHaveBeenCalled();
+  expect(abandon).not.toHaveBeenCalled();
+  expect(coachingConfirm).toHaveBeenCalledTimes(phase === "review" ? 0 : 1);
+  if (phase === "pending" || phase === "processing") expect(screen.getByRole("region", { name: "Online payment" })).toBeTruthy();
 });

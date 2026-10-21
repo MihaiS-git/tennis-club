@@ -26,8 +26,8 @@ function coachFields(form: HTMLFormElement) {
   };
 }
 
-export function CoachDialog({ coach, accounts = [], locations, programs, open: controlledOpen, onOpenChange }: {
-  coach?: AdminCoach; accounts?: AdminCoachAccount[]; locations: AdminCoachingLocation[]; programs: AdminCoachingProgram[];
+export function CoachDialog({ coach, account, accounts = [], locations, programs, open: controlledOpen, onOpenChange }: {
+  coach?: AdminCoach; account?: AdminCoachAccount; accounts?: AdminCoachAccount[]; locations: AdminCoachingLocation[]; programs: AdminCoachingProgram[];
   open?: boolean; onOpenChange?: (open: boolean) => void;
 }) {
   const router = useRouter();
@@ -41,7 +41,7 @@ export function CoachDialog({ coach, accounts = [], locations, programs, open: c
   const [pending, setPending] = useState(false);
   const { setFieldErrors, errorProps, fieldError } = useFieldErrors(prefix);
   const { attach, dirty, valid, sync, submitted, commit } = useEditableFormBaseline(editableFields, undefined,
-    (form) => (coach !== undefined || formText(new FormData(form), "user_id") !== "") && coachProfileFieldsSchema.safeParse(coachFields(form)).success);
+    (form) => (coach !== undefined || account !== undefined || formText(new FormData(form), "user_id") !== "") && coachProfileFieldsSchema.safeParse(coachFields(form)).success);
   // Archived locations stay listed only while this coach is still assigned to them.
   const locationChoices = [...locations, ...(coach?.location_ids ?? []).filter((id) => !locations.some((location) => location.id === id))
     .map((id) => ({ id, name: "Archived location", currency: "EUR" as const, is_active: false }))];
@@ -51,7 +51,7 @@ export function CoachDialog({ coach, accounts = [], locations, programs, open: c
     pendingRef.current = true;
     setPending(true); setFieldErrors({});
     const saved = submitted(form);
-    const userId = coach?.user_id ?? formText(new FormData(form), "user_id");
+    const userId = coach?.user_id ?? account?.id ?? formText(new FormData(form), "user_id");
     const notification = toast.loading("Saving coach…");
     try {
       const result = await saveCoachProfileAction({ user_id: userId, create: !coach, fields: coachFields(form) });
@@ -96,7 +96,7 @@ export function CoachDialog({ coach, accounts = [], locations, programs, open: c
           disabled={pending} onClose={() => dialogRef.current?.close()} /></div>
         <form ref={attach} onInput={sync} onChange={sync} onSubmit={(event) => { event.preventDefault(); void submit(event.currentTarget); }}>
           <fieldset disabled={pending} className="space-y-4">
-            {coach ? <p className="text-sm text-muted-foreground">Account: <span className="text-foreground">{coach.email}</span>. The email is never shown publicly.</p> : <div>
+            {coach || account ? <p className="text-sm text-muted-foreground">Account: <span className="text-foreground">{coach?.email ?? account?.email}</span>. The email is never shown publicly.</p> : <div>
               <label htmlFor={`${prefix}-user_id`} className={labelClass}>Coach account</label>
               <select id={`${prefix}-user_id`} name="user_id" required className={selectClass} defaultValue="" {...errorProps("user_id")}
                 onChange={(event) => {
@@ -111,7 +111,7 @@ export function CoachDialog({ coach, accounts = [], locations, programs, open: c
             </div>}
             <div>
               <label htmlFor={`${prefix}-display_name`} className={labelClass}>Public name</label>
-              <Input ref={nameRef} id={`${prefix}-display_name`} name="display_name" required maxLength={100} defaultValue={coach?.display_name ?? ""} {...errorProps("display_name")} />
+              <Input ref={nameRef} id={`${prefix}-display_name`} name="display_name" required maxLength={100} defaultValue={coach?.display_name ?? account?.suggested_name ?? ""} {...errorProps("display_name")} />
               {fieldError("display_name")}
             </div>
             <div>

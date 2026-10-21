@@ -36,7 +36,7 @@ export function reservationEditInput(input: {
         endMinute: input.selection?.endMinute, reason: input.reason } };
 }
 
-export function fitsOpeningHours(hours: readonly OpeningInterval[], date: string, start: number, end: number) {
+export function fitsOpeningHours(hours: readonly Pick<OpeningInterval, "weekday" | "opens_at_minute" | "closes_at_minute">[], date: string, start: number, end: number) {
   return hours.some((hour) => hour.weekday === mondayWeekday(date)
     && hour.opens_at_minute <= start && end <= hour.closes_at_minute);
 }

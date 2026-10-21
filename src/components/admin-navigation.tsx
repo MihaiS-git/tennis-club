@@ -1,13 +1,12 @@
 "use client";
 
-import { CalendarClock, CalendarDays, ClipboardList, CreditCard, GraduationCap, MapPin, Users } from "lucide-react";
+import { CalendarClock, ClipboardList, CreditCard, GraduationCap, MapPin, Users } from "lucide-react";
 import { SidebarNavigation, type SidebarEntry } from "./sidebar-navigation";
 
-const reservations: SidebarEntry = { label: "Reservations", href: "/admin/reservations", icon: CalendarDays };
 const adminEntries: readonly SidebarEntry[] = [
   { label: "Locations", href: "/admin/locations", icon: MapPin },
-  reservations,
-  { label: "Bookings", href: "/admin/bookings", icon: ClipboardList },
+  // One Admin entry for the Calendar and List views; /admin/reservations redirects here.
+  { label: "Bookings & Reservations", href: "/admin/bookings", icon: ClipboardList },
   { label: "Coaching", icon: GraduationCap, section: "/admin/coaching", links: [
     { label: "Programs", href: "/admin/coaching/programs" },
     { label: "Coaches", href: "/admin/coaching/coaches" },
@@ -20,7 +19,8 @@ const adminEntries: readonly SidebarEntry[] = [
   ] },
   { label: "Users", href: "/admin/users", icon: Users },
 ];
-const coachEntries: readonly SidebarEntry[] = [reservations];
+// Coaches get their own Calendar and List of their lessons and staff reservations.
+const coachEntries: readonly SidebarEntry[] = [{ label: "Bookings & Reservations", href: "/coach/bookings", icon: ClipboardList }];
 // The Coach area is shown to every current coach, including Admins who also coach.
 const ownAvailability: SidebarEntry = { label: "My availability", href: "/coach/availability", icon: CalendarClock };
 

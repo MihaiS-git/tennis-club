@@ -12,21 +12,21 @@ import { cancelOwnReservationAction, editOwnReservationAction, loadReservationEd
   loadOwnBookingEditDayAction, quoteOwnBookingAction, rescheduleOwnBookingAction } from "@/app/my-activity/bookings/actions";
 import { CustomerBookingCancellation } from "@/app/my-activity/bookings/customer-booking-cancellation";
 import { localStartInstant } from "@/lib/courts/local-time";
-import { cancelledBookingMessage } from "@/lib/payments/refund-message";
 import { BookingEditForm, type BookingEditActions } from "@/components/booking-edit-form";
 import { minuteToTime } from "@/lib/admin/opening-hours-validation";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
-import { DialogHeader, DialogFooter } from "@/components/dialog-layout";
+import { DetailSection, DialogHeader, DialogFooter } from "@/components/dialog-layout";
 import { BookingDetails } from "@/components/booking-details";
 import { ModalDialog } from "@/components/modal-dialog";
 import { ReservationEditForm } from "@/components/reservation-edit-form";
-import { ReservationDetailsView, reservationDateLabel } from "@/components/reservation-details";
-import { formatMoney } from "@/lib/pricing/money";
+import { ReservationDetailsView, ReservationScheduleFieldsView, reservationDateLabel } from "@/components/reservation-details";
 import { ReservationTimetable, type ReservationTimetableDay } from "@/components/reservation-timetable";
 import { reservationEditInput, reservationEditSchema, selectReservationCell, type ReservationCell, type ReservationSelection } from "@/lib/reservations/domain";
 import { isReservationBeforeStart, isReservationInProgress, isReservationUpcoming } from "@/lib/reservations/personal";
 import type { AdminOperationalOccupancy, AdminReservation, InternalLocation } from "@/lib/reservations/service";
-import { cancelAdminCustomerBookingAction, cancelAdminReservationAction, editAdminReservationAction, loadAdminReservationEditDayAction, reserveCourtAction } from "./actions";
+import { adminBookingLinkFrom, adminReservationLinkFrom, coachLessonLinkFrom, coachReservationLinkFrom } from "@/lib/bookings/admin-query";
+import { AdminBookingCancellation } from "./admin-booking-cancellation";
+import { cancelAdminReservationAction, editAdminReservationAction, loadAdminReservationEditDayAction, reserveCourtAction } from "./actions";
 
 const ownBookingActions: BookingEditActions = { load: loadOwnBookingEditDayAction, quote: quoteOwnBookingAction, save: rescheduleOwnBookingAction };
 
@@ -55,7 +55,9 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
   const titleId = useId();
   const selectedOccupancy = adminOccupancy.find((item) => item.id === selectedOccupancyId);
   const selectedGenericOccupancy = !adminOccupancy.length
-    ? occupancy.find((item) => `${item.court_id}:${item.starts_at_minute}` === selectedOccupancyId) : undefined;
+    ? occupancy.find((item) => `${item.court_id}:${item.starts_at_minute}` === selectedOccupancyId)
+    : selectedOccupancy?.kind === "occupied" ? selectedOccupancy : undefined;
+  const selectedLesson = selectedOccupancy?.kind === "lesson" ? selectedOccupancy : null;
   const selectedReservation = selectedOccupancy?.kind === "reservation"
     ? updatedReservation?.id === selectedOccupancy.id ? updatedReservation : selectedOccupancy : null;
   const selectedBooking = selectedOccupancy?.kind === "booking" ? selectedOccupancy : null;
@@ -106,23 +108,6 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
       toast.error("Unable to cancel this reservation. Try again.", { id: notification });
     } finally { setCancelPending(false); }
   }
-  async function cancelBooking() {
-    if (!canManage || !selectedBooking || cancelPending || !isReservationBeforeStart({ ...selectedBooking, location_timezone: location.timezone }, new Date())) return;
-    const notification = toast.loading("Cancelling…");
-    setCancelPending(true);
-    try {
-      const result = await cancelAdminCustomerBookingAction({ id: selectedBooking.id });
-      if (!result.ok) { toast.error(result.message, { id: notification }); return; }
-      setConfirming(false);
-      dialogRef.current?.close();
-      setSelectedOccupancyId(null);
-      setSelection(null);
-      toast.success(cancelledBookingMessage(result), { id: notification });
-      router.refresh();
-    } catch {
-      toast.error("Unable to cancel this booking. Try again.", { id: notification });
-    } finally { setCancelPending(false); }
-  }
   async function openEdit() {
     if (!canEditReservation || !selectedReservation) return;
     setEditing(true); setEditToken(null); setEditError("");
@@ -138,8 +123,10 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
     {day.times.length === 0 ? <p className="mt-5 rounded-card border border-border bg-surface p-5 text-muted-foreground">{location.name} is closed on {date}.</p>
       : <ReservationTimetable day={day} date={date} timezone={location.timezone} selection={selection} onChoose={choose} disabled={pending}
           occupiedIntervals={adminOccupancy.length ? adminOccupancy.map((item) => ({ id: item.id, courtId: item.court_id,
-            startsAtMinute: item.starts_at_minute, endsAtMinute: item.ends_at_minute, kind: item.kind, includesCoaching: item.kind === "booking" && bookingType(item) === "coaching",
-            label: item.kind === "booking" ? `${bookingType(item) === "coaching" ? "Coaching" : "Booking"} · ${item.customer_name}` : `Reservation · ${item.creator_name || "Unknown creator"}` }))
+            startsAtMinute: item.starts_at_minute, endsAtMinute: item.ends_at_minute, kind: item.kind === "reservation" ? item.kind : "booking",
+            includesCoaching: item.kind === "lesson" || item.kind === "booking" && bookingType(item) === "coaching",
+            label: item.kind === "occupied" ? "Booked" : item.kind === "lesson" ? `Coaching · ${item.customer_name}`
+              : item.kind === "booking" ? `${bookingType(item) === "coaching" ? "Coaching" : "Booking"} · ${item.customer_name}` : `Reservation · ${item.creator_name || "Unknown creator"}` }))
             : occupancy.map((item) => ({ id: `${item.court_id}:${item.starts_at_minute}`, courtId: item.court_id,
               startsAtMinute: item.starts_at_minute, endsAtMinute: item.ends_at_minute, label: "Booked" }))}
           onOccupiedClick={(id) => {
@@ -167,8 +154,25 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
           if (dialogRef.current?.querySelector("[data-booking-modification]")) router.refresh();
           setUpdatedReservation(null); setConfirming(false); returnFocusRef.current?.focus(); }}
         className={`fixed inset-0 m-auto max-h-[calc(100dvh-2rem)] overflow-y-auto w-[calc(100%-2rem)] rounded-card border border-border bg-surface p-5 text-foreground shadow-floating backdrop:bg-foreground/50 has-[[data-booking-modification]]:max-w-lg ${editing && !editInProgress ? "max-w-6xl" : "max-w-md"}`}>
-        <DialogHeader titleId={titleId} title={selectedGenericOccupancy ? "Occupied court details" : selectedBooking ? editing ? "Edit booking" : "Booking details" : editing ? "Edit reservation" : "Reservation details"} status={editing || selectedGenericOccupancy ? undefined : selectedBooking ? "Confirmed" : "Active"} disabled={cancelPending} onClose={() => dialogRef.current?.close()} />
-        {selectedBooking ? <>
+        <DialogHeader titleId={titleId} title={selectedGenericOccupancy ? "Occupied court details" : selectedLesson ? "Lesson details" : selectedBooking ? editing ? "Edit booking" : "Booking details" : editing ? "Edit reservation" : "Reservation details"} status={editing || selectedGenericOccupancy ? undefined : selectedBooking || selectedLesson ? "Confirmed" : "Active"} disabled={cancelPending} onClose={() => dialogRef.current?.close()} />
+        {selectedLesson ? <>
+          <DetailSection title="Lesson">
+            <dt className="text-muted-foreground">Coach</dt><dd>{selectedLesson.coach_name}</dd>
+            <dt className="text-muted-foreground">Program</dt><dd>{selectedLesson.coaching_program_name}</dd>
+          </DetailSection>
+          <DetailSection title="Court and time"><ReservationScheduleFieldsView reservation={{ ...selectedLesson,
+            location_name: location.name, location_timezone: location.timezone, court_name: selectedCourtName }} /></DetailSection>
+          <DetailSection title="Customer contact">
+            <dt className="text-muted-foreground">Name</dt><dd>{selectedLesson.customer_name}</dd>
+            <dt className="text-muted-foreground">Email</dt><dd>{selectedLesson.customer_email}</dd>
+            <dt className="text-muted-foreground">Phone</dt><dd>{selectedLesson.customer_phone}</dd>
+          </DetailSection>
+          {/* Coaches open only their own lessons, from the Coach Calendar. */}
+          <Link href={coachLessonLinkFrom(selectedLesson.id, `/coach/bookings?${new URLSearchParams({ view: "calendar", location: location.id, date })}`)}
+            onClick={() => dialogRef.current?.close()} className="mt-4 inline-flex min-h-10 items-center text-sm font-semibold text-primary underline focus-visible:outline-2 focus-visible:outline-focus">View lesson details</Link>
+          <DialogFooter><button type="button" onClick={() => dialogRef.current?.close()}
+            className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button></DialogFooter>
+        </> : selectedBooking ? <>
           {!editing && <>
           <BookingDetails booking={{ ...selectedBooking, location_name: selectedBooking.location_name ?? location.name,
             location_timezone: selectedBooking.location_timezone ?? location.timezone, court_name: selectedBooking.court_name ?? selectedCourtName }} />
@@ -180,7 +184,14 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
               <dt className="text-muted-foreground">Payment{payment.provider ? ` (${payment.provider})` : ""}</dt><dd>{payment.status}</dd>
             </div>)}
           </dl>
-          {canManage && <Link href={`/admin/bookings/${selectedBooking.id}`} className="mt-4 inline-flex min-h-10 items-center text-sm font-semibold text-primary underline focus-visible:outline-2 focus-visible:outline-focus">View full booking details</Link>}
+          {canManage && <Link href={adminBookingLinkFrom(selectedBooking.id,
+            `/admin/bookings?${new URLSearchParams({ view: "calendar", location: location.id, date })}`)}
+            // A preserved (hidden) Calendar route must not keep its modal open over Booking Details.
+            onClick={() => dialogRef.current?.close()} className="mt-4 inline-flex min-h-10 items-center text-sm font-semibold text-primary underline focus-visible:outline-2 focus-visible:outline-focus">View full booking details</Link>}
+          {/* Coaches open only their own lessons, from the Coach Calendar. */}
+          {!canManage && !!actorUserId && selectedBooking.coach_user_id === actorUserId && <Link href={coachLessonLinkFrom(selectedBooking.id,
+            `/coach/bookings?${new URLSearchParams({ view: "calendar", location: location.id, date })}`)}
+            onClick={() => dialogRef.current?.close()} className="mt-4 inline-flex min-h-10 items-center text-sm font-semibold text-primary underline focus-visible:outline-2 focus-visible:outline-focus">View lesson details</Link>}
           </>}
           {editing ? <BookingEditForm booking={selectedBooking} location={location}
             actions={ownBookingActions}
@@ -193,9 +204,10 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
                 location_name: location.name, location_timezone: location.timezone, court_name: selectedCourtName }} staff
               onEdit={() => setEditing(true)} onPendingChange={setCancelPending}
               onCancelled={async () => { dialogRef.current?.close(); setSelectedOccupancyId(null); setSelection(null); router.refresh(); }} />}
-            {canManage && !ownsBooking && isReservationBeforeStart({ ...selectedBooking, location_timezone: location.timezone }, new Date()) && <button ref={cancelButtonRef} type="button" disabled={cancelPending}
-              onClick={() => {  setConfirming(true); }}
-              className="min-h-10 rounded-control border border-danger px-4 text-sm font-semibold text-danger">Cancel booking</button>}
+            {canManage && !ownsBooking && isReservationBeforeStart({ ...selectedBooking, location_timezone: location.timezone }, new Date()) && <AdminBookingCancellation
+              booking={{ ...selectedBooking, location_name: location.name, court_name: selectedCourtName }}
+              refundAvailable={selectedBooking.stripe_refund_available} onPendingChange={setCancelPending}
+              onCancelled={() => { dialogRef.current?.close(); setSelectedOccupancyId(null); setSelection(null); router.refresh(); }} />}
             <button type="button" disabled={cancelPending} onClick={() => dialogRef.current?.close()}
               className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button>
           </DialogFooter>}
@@ -235,6 +247,12 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
           {selectedReservation.creator_email && <><dt className="text-muted-foreground">Email</dt><dd>{selectedReservation.creator_email}</dd></>}
           {selectedReservation.creator_phone && <><dt className="text-muted-foreground">Phone</dt><dd>{selectedReservation.creator_phone}</dd></>}
         </ReservationDetailsView>
+        {canManage && <Link href={adminReservationLinkFrom(selectedReservation.id,
+          `/admin/bookings?${new URLSearchParams({ view: "calendar", location: location.id, date })}`)}
+          onClick={() => dialogRef.current?.close()} className="mt-4 inline-flex min-h-10 items-center text-sm font-semibold text-primary underline focus-visible:outline-2 focus-visible:outline-focus">View full reservation details</Link>}
+        {!canManage && ownsReservation && <Link href={coachReservationLinkFrom(selectedReservation.id,
+          `/coach/bookings?${new URLSearchParams({ view: "calendar", location: location.id, date })}`)}
+          onClick={() => dialogRef.current?.close()} className="mt-4 inline-flex min-h-10 items-center text-sm font-semibold text-primary underline focus-visible:outline-2 focus-visible:outline-focus">View full reservation details</Link>}
         <DialogFooter>
           {canEditReservation && <button type="button" disabled={cancelPending} onClick={openEdit}
               className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold text-primary">Edit reservation</button>}
@@ -254,15 +272,10 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
             className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button></DialogFooter>
         </> : null}
       </ModalDialog>, document.body)}
-    <ConfirmationDialog open={confirming && (selectedBooking ? canManage : canCancelReservation)} title={selectedBooking ? "Cancel booking?" : "Cancel reservation?"}
-      message={selectedBooking
-        ? `Customer\n${selectedBooking.customer_name}\n\n${location.name} · ${selectedCourtName}\n${reservationDateLabel(selectedBooking.booking_date)} · ${minuteToTime(selectedBooking.starts_at_minute)}–${minuteToTime(selectedBooking.ends_at_minute)}\n\nTotal\n${formatMoney(selectedBooking.total_amount_minor, selectedBooking.currency)} · ${selectedBooking.currency}\n\nThis will cancel the booking and free the court.`
-        : selectedReservation ? `${location.name} · ${selectedCourtName}\n${reservationDateLabel(selectedReservation.booking_date)} · ${minuteToTime(selectedReservation.starts_at_minute)}–${minuteToTime(selectedReservation.ends_at_minute)}\nCreated by\n${selectedReservation.creator_name || "Unknown creator"}\n\nThis will free the court for other bookings and reservations.` : ""}
-      confirmLabel={selectedBooking ? "Cancel booking" : "Cancel reservation"}
-      cancelLabel={selectedBooking ? "Keep booking" : "Keep reservation"} pending={cancelPending}
-      onConfirm={selectedBooking ? cancelBooking : cancelReservation}
-      onClose={() => { if (!cancelPending) setConfirming(false); }} returnFocusRef={cancelButtonRef}>
-      {selectedBooking?.stripe_refund_available && <p className="mt-3 text-sm">Captured online funds will be refunded automatically.</p>}
-    </ConfirmationDialog>
+    <ConfirmationDialog open={confirming && !selectedBooking && canCancelReservation} title="Cancel reservation?"
+      message={selectedReservation ? `${location.name} · ${selectedCourtName}\n${reservationDateLabel(selectedReservation.booking_date)} · ${minuteToTime(selectedReservation.starts_at_minute)}–${minuteToTime(selectedReservation.ends_at_minute)}\nCreated by\n${selectedReservation.creator_name || "Unknown creator"}\n\nThis will free the court for other bookings and reservations.` : ""}
+      confirmLabel="Cancel reservation" cancelLabel="Keep reservation" pending={cancelPending}
+      onConfirm={cancelReservation}
+      onClose={() => { if (!cancelPending) setConfirming(false); }} returnFocusRef={cancelButtonRef} />
   </>;
 }

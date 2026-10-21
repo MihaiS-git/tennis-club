@@ -4,7 +4,7 @@ export function SiteFooter() {
   return (
     <footer className="border-t border-ivory/20 bg-forest-800 text-chalk">
       <div className="mx-auto max-w-7xl px-6 pb-8 pt-14 md:px-8 md:pt-16 lg:px-6 xl:px-8">
-        <div className="grid gap-10 md:grid-cols-2 md:gap-12">
+        <div className="grid gap-8 md:grid-cols-[minmax(0,1fr)_auto] md:items-start md:gap-12">
           <div>
             <p className="font-heading text-xl font-semibold tracking-tight">
               Tennis Club
@@ -19,7 +19,7 @@ export function SiteFooter() {
 
           <nav
             aria-label="Footer"
-            className="grid grid-cols-2 gap-x-6 gap-y-1 sm:grid-cols-3 md:grid-cols-2 lg:grid-cols-3"
+            className="grid w-fit grid-cols-2 gap-x-12 gap-y-1 sm:gap-x-16 md:-mt-2 md:justify-self-end"
           >
             <Link
               href="/book"

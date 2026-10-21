@@ -42,6 +42,14 @@ it.each([
   expect(push).toHaveBeenLastCalledWith(`${path}?location=rivus&date=2026-10-31`);
 });
 
+it("keeps the hosting Calendar tab when changing location or date", () => {
+  render(<ReservationControls locations={locations} locationId="rivus" date="2026-10-03" today="2026-10-02" href="/admin/bookings?view=calendar" />);
+  fireEvent.click(screen.getByRole("button", { name: "Previous day" }));
+  expect(push).toHaveBeenLastCalledWith("/admin/bookings?view=calendar&location=rivus&date=2026-10-02");
+  fireEvent.change(screen.getByRole("combobox", { name: "Location" }), { target: { value: "second" } });
+  expect(push).toHaveBeenLastCalledWith("/admin/bookings?view=calendar&location=second");
+});
+
 it("book shows the selected day with its weekday, relative day and timezone", () => {
   const { rerender } = render(<CalendarControls locations={locations} locationId="rivus" date="2026-10-02" today="2026-10-02" timezone="Europe/Bucharest" />);
   expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("Friday, 2 October 2026");

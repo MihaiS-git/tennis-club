@@ -1707,8 +1707,32 @@ terminal refund success; all network calls remain outside transactions.
 
 See [focused disposable validation](docs/testing.md#typeorm-cutover-validation).
 
-Management routing uses `/admin/reservations` for active Admins and Coaches and
-`/admin/payments/transactions` for Admin transaction management; provider settings
+Management routing uses `/admin/bookings` ("Bookings & Reservations") for active Admins,
+with URL-backed Calendar (`?view=calendar`, the existing day scheduler) and List (default,
+the customer booking list) tabs; Admin requests to `/admin/reservations` redirect to the
+Calendar tab with their location and date. Coaches keep `/admin/reservations`.
+Both views open `/admin/bookings/[bookingId]`, whose Back link restores the originating
+Calendar (location/date) or List (filters/sort/page). Booking Details offers the existing
+Admin cancellation (`cancelCustomerBookingAsAdmin`) only for confirmed bookings before start
+with no change in progress; cancellation never deletes booking or financial records.
+Its Edit booking opens the existing owner rescheduling form only for the signed-in Admin's own
+court bookings; other customers', guest and coaching bookings cannot be rescheduled there.
+The List also includes direct staff reservations (Type "Staff reservation", status Active or
+Cancelled) from `court_reservations` rows without a customer booking, read alongside bookings in
+one database-sorted, paginated query; they remain separate free records with no price or payment.
+Calendar and List open them at `/admin/bookings/reservations/[reservationId]`, which shows
+location, court, date/time, duration, creator, reason and status (cancelled ones keep who
+cancelled them) and offers the existing Admin Edit (`editDirectReservationAsAdmin`, reason-only
+once started) and Cancel (`cancelDirectReservationAsAdmin`, before start) on active resources.
+Coaches have their own Bookings & Reservations area at `/coach/bookings` (`/admin` and
+`/admin/reservations` redirect there; `/admin/bookings` stays Admin-only). Its Calendar tab is the
+existing court occupancy calendar. Its List reuses the same database query, scoped by the query to the
+Coach's own confirmed or cancelled coaching lessons and their own staff reservations, with no prices.
+`/coach/bookings/lessons/[bookingId]` shows the lesson schedule and customer contact read-only
+(no payment, refund or booking actions), and `/coach/bookings/reservations/[reservationId]` offers
+the existing owner Edit and Cancel (`editOwnDirectReservation`/`cancelOwnDirectReservation`, until
+it ends). Another Coach's records are not found.
+`/admin/payments/transactions` serves Admin transaction management; provider settings
 remain at `/admin/payments/settings`. The shared management shell requires an active
 Admin or Coach. Locations, Courts, Pricing, Payments and Users retain Admin-only
 server guards; Coaches access Reservations with shared staff details and may edit/cancel their own
@@ -1742,3 +1766,10 @@ There is no background scheduler: payments and refunds resolve through requests,
 Stripe webhooks (subscribe to the payment and `refund.*` events listed in
 [payments](docs/payments-memberships.md#recovery-without-a-scheduler)) and the Admin
 "Check with Stripe" action, so the app runs on serverless hosting.
+
+Coaching management lists support URL-based search, filters, sorting and server-side
+pagination. Shared Admin/Coach availability stores inclusive time-off date ranges as one
+record, with single-day partial absences and separate extra availability. Existing
+coaching bookings/live holds block conflicting changes. The final-state initial migration
+now requires `coach_availability_exceptions.until_date`; applied local schemas require an
+explicitly authorized rebuild before using these changes. See [coaching](docs/coaching.md).

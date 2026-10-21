@@ -6,6 +6,8 @@ import { revalidatePath } from "next/cache";
 export function revalidateCourtActivity(mutation: "create" | "edit" | "cancel") {
   revalidatePath("/book");
   revalidatePath("/admin/reservations");
+  revalidatePath("/admin/bookings");
+  revalidatePath("/coach/bookings");
   // These are shared route paths, including when an Admin changes another owner's activity.
   revalidatePath("/my-activity/bookings");
   // Existing edits keep reservations in Upcoming; cancellation moves them to History.

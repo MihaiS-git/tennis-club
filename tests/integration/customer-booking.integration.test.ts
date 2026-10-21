@@ -167,3 +167,57 @@ test("customer booking persists both rows, snapshots contact and price, and roll
     }
   }
 });
+
+test("direct checkout uses the public eligibility of every schedule, not only the playing date's", async () => {
+  const service = localFixtureClient();
+  const guest = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_PUBLISHABLE_KEY!, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  });
+  const locationId = randomUUID(), courtId = randomUUID(), ruleSetId = randomUUID();
+  const currentScheduleId = randomUUID(), futureScheduleId = randomUUID();
+  const date = "2099-10-15", now = new Date("2099-10-14T12:00:00Z"), weekday = mondayWeekday(date);
+  const intent = { paymentMethod: "pay_at_club", courtId, date, startMinute: 600, endMinute: 660,
+    customerName: "Guest", customerEmail: "guest@example.test", customerPhone: "123",
+    expectedTotalAmountMinor: 5000, expectedCurrency: "RON" };
+  const reservationIds = async () => (await service.from("court_reservations").select("id").eq("court_id", courtId)).data?.map((row) => row.id) ?? [];
+  const listed = async () => (await listPublicLocationsWithCourts()).some((location) => location.id === locationId);
+  try {
+    assert.strictEqual((await service.from("locations").insert({ id: locationId, slug: `booking-${locationId}`,
+      name: "Schedule eligibility", timezone: "UTC", currency: "RON", is_public: true, allow_pay_at_club: true })).error, null);
+    assert.strictEqual((await service.from("courts").insert({ id: courtId, location_id: locationId, name: "Court",
+      slug: "court", surface: "clay", environment: "outdoor", is_active: true })).error, null);
+    assert.strictEqual((await service.from("opening_hours_schedules").insert([
+      { id: currentScheduleId, location_id: locationId, starts_on: "0001-01-01", ends_on: "2099-10-31" },
+      { id: futureScheduleId, location_id: locationId, starts_on: "2099-11-01" },
+    ])).error, null);
+    assert.strictEqual((await insertOpeningHoursFixture(service, [
+      { location_id: locationId, schedule_id: currentScheduleId, weekday, opens_at_minute: 600, closes_at_minute: 720 },
+      { location_id: locationId, schedule_id: futureScheduleId, weekday, opens_at_minute: 600, closes_at_minute: 780 },
+    ])).error, null);
+    assert.strictEqual((await service.from("pricing_rule_sets").insert({ id: ruleSetId, location_id: locationId })).error, null);
+    const price = { location_id: locationId, rule_set_id: ruleSetId, court_id: courtId, court_state: "outdoor",
+      weekday, starts_at_minute: 600, ends_at_minute: 720, price_per_hour_minor: 5000 };
+    assert.strictEqual((await service.from("location_pricing_rules").insert(price)).error, null);
+
+    // The playing date is fully priced, but the future schedule is not: the location is
+    // not publicly eligible, so a direct request must not book it either.
+    expect(await listed()).toBe(false);
+    expect(await createCustomerBooking(intent, guest, now))
+      .toEqual({ ok: false, message: "That court is not available for booking." });
+    expect(await reservationIds()).toEqual([]);
+
+    assert.strictEqual((await service.from("location_pricing_rules").insert({ ...price,
+      starts_at_minute: 720, ends_at_minute: 780, starts_on: "2099-11-01" })).error, null);
+    expect(await listed()).toBe(true);
+    expect(await createCustomerBooking(intent, guest, now)).toMatchObject({ ok: true, status: "confirmed" });
+    expect(await reservationIds()).toHaveLength(1);
+  } finally {
+    await cleanupBookingFixtures({ reservationIds: await reservationIds() });
+    assert.strictEqual((await service.from("court_reservations").delete().eq("court_id", courtId)).error, null);
+    assert.strictEqual((await service.from("location_pricing_rules").delete().eq("location_id", locationId)).error, null);
+    assert.strictEqual((await service.from("pricing_rule_sets").delete().eq("location_id", locationId)).error, null);
+    assert.strictEqual((await service.from("location_opening_hours").delete().eq("location_id", locationId)).error, null);
+    assert.strictEqual((await service.from("courts").delete().eq("location_id", locationId)).error, null);
+    assert.strictEqual((await service.from("locations").delete().eq("id", locationId)).error, null);
+  }
+});

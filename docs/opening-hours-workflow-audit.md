@@ -18,7 +18,7 @@ Expected behavior is based on AGENTS.md, README.md and docs/pricing.md. Verifica
 | Pricing extensions/inheritance | Use adjacent compatible court/state/weekday/date prices; max across gaps. Never invent a missing price or borrow from another court/season. | TypeScript combinations; browser pricing rows |
 | Missing price coverage | Warn when an active court has uncovered newly opened time, even if other courts are priced. New customer bookings require a valid quote. | TypeScript scopes; browser warnings/calendar |
 | Manual pricing Create/Edit | Validate against current/future applicable schedules; optional dates must not demand opening hours before today. Display each schedule separately. Reject stale edits/removals. | Browser pricing form; stale persistence |
-| Confirmed bookings/reservations | Configuration changes preserve their row identities, intervals, contract snapshots, payment/refund records; show occupancy outside revised hours. | PostgreSQL contract snapshot; browser calendar |
+| Confirmed bookings/reservations | Reject opening-hours changes that would leave live, not yet ended court or coaching reservations outside the hours on changed dates. Configuration changes preserve their row identities, intervals, contract snapshots, payment/refund records. | TypeScript check under the exclusive fence; PostgreSQL contract snapshot; browser rejection |
 | New direct/customer reservations | Locked authoritative playing-date configuration, alignment/minimum length, applicable opening hours, valid price for customer bookings, active resources/actor, overlap exclusion. | Existing command integration; browser reservation |
 | Pending payment settlement | Revalidate playing-date hours, current price/currency/cancellation/publication under shared config fence. Invalid capture releases hold and records reconciliation; valid holds confirm unchanged. | Focused PostgreSQL settlement |
 | Stale/parallel configuration | Keep configuration fence then location/actor locks; stale edits cannot overwrite later changes, including automatic reconciliation. Clean UI refreshes reload; dirty drafts retain their original stale token. | Browser two-editor sequence; PostgreSQL concurrency/rollback |
@@ -53,7 +53,8 @@ isolated database. Only resource/account fixtures and contract assertions use di
 test persistence. It creates the first policy with two daily intervals; saves two
 multi-court prices with optional dates; rejects competing hours/pricing edits; publishes
 the location; creates a direct reservation and a pay-at-club customer booking; creates a
-bounded future policy with the automatic cutoff; verifies grandfathered occupancy;
+future policy excluding those bookings and sees it rejected unchanged; creates a
+bounded future policy with the automatic cutoff; verifies the preserved occupancy;
 rejects an ambiguous middle policy; inserts one into a gap; edits adjacent validity
 boundaries; retains a History policy; verifies a closed gap; adds two adjacent intervals,
 modifies another, removes one, reloads, and verifies all surviving intervals and exact

@@ -164,7 +164,7 @@ test.each([false, true])("projects complete nullable staff details (captured Str
     { kind: "reservation", id: target.id, court_id: target.court_id, booking_date: date,
       starts_at_minute: 600, ends_at_minute: 660, reason: target.reason, created_by_user_id: target.created_by_user_id,
       creator_name: direct.creator_name, creator_email: direct.creator_email, creator_phone: direct.creator_phone, payment_method: null },
-    { kind: "booking", includes_coaching: false, coach_name: null, coaching_program_name: null, coaching: null, location_name: null, court_name: null, location_timezone: null, id: booking.id, court_id: booking.court_id, booking_date: date,
+    { kind: "booking", includes_coaching: false, coach_user_id: null, coach_name: null, coaching_program_name: null, coaching: null, location_name: null, court_name: null, location_timezone: null, id: booking.id, court_id: booking.court_id, booking_date: date,
       starts_at_minute: 600, ends_at_minute: 660, account_user_id: booking.account_user_id, payment_method: booking.payment_method,
       payments: captured ? [{ id: payment.id, method: payment.method, provider: payment.provider, status: payment.status }] : [],
       stripe_refund_available: captured, customer_name: booking.customer_name, customer_email: booking.customer_email,

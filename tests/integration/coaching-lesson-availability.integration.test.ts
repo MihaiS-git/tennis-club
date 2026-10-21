@@ -1,3 +1,6 @@
+import { readCoachingBookingOptions } from "@/lib/coaching/booking-options";
+import { readPublicCoaching } from "@/lib/coaching/public";
+import { listPublicLocationsWithCourts } from "@/lib/courts/public";
 import { randomUUID } from "node:crypto";
 import { afterAll, assert, beforeAll, expect, test } from "vitest";
 import type { DataSource } from "typeorm";
@@ -74,10 +77,10 @@ beforeAll(async () => {
   await database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,location_id,coach_user_id,amount_minor,currency) VALUES
     ($1,60,$2,NULL,10000,'RON'),($1,90,$2,NULL,14000,'RON'),($1,90,$2,$3,16000,'RON'),($4,60,$2,NULL,9000,'RON')`,
   [program, locationA, coach, inactiveProgram]);
-  await database.query(`INSERT INTO public.coach_weekly_availability(coach_user_id,location_id,weekday,start_minute,end_minute)
-    VALUES($1,$2,$3,540,900)`, [coach, locationA, mondayWeekday(date)]);
-  await database.query(`INSERT INTO public.coach_availability_exceptions(coach_user_id,exception_date,kind,start_minute,end_minute,note)
-    VALUES($1,$2,'unavailable',840,900,'Private dentist note')`, [coach, date]);
+  await database.query(`INSERT INTO public.coach_weekly_availability(coach_user_id,location_id,weekday,start_minute,end_minute,valid_from)
+    VALUES($1,$2,$3,540,900,'2000-01-01')`, [coach, locationA, mondayWeekday(date)]);
+  await database.query(`INSERT INTO public.coach_availability_exceptions(coach_user_id,exception_date,until_date,kind,start_minute,end_minute,note)
+    VALUES($1,$2,$2,'unavailable',840,900,'Private dentist note')`, [coach, date]);
 
   // Court A1: a live customer hold 10:00–11:00. Court A2: an expired hold 10:00–11:00
   // and a member's active booking 11:00–12:00.
@@ -143,7 +146,7 @@ test("lists every free court per start with exact prices from real occupancy, av
   for (const hidden of [member, memberEmail, "Private bio", "Private qualifications", "Private dentist note", "evidence", "@"])
     expect(serialized).not.toContain(hidden);
   expect((await listCoachDayAvailability(database.manager, coach, date)).exceptions).toEqual([
-    { date, kind: "unavailable", location_id: null, start_minute: 840, end_minute: 900 },
+    { date, until_date: date, kind: "unavailable", location_id: null, start_minute: 840, end_minute: 900 },
   ]);
   expect(await listCoachDayOccupancy(database.manager, coach, date)).toEqual([
     { booking_date: date, starts_at_minute: 720, ends_at_minute: 780 }, { booking_date: date, starts_at_minute: 780, ends_at_minute: 840 },
@@ -208,10 +211,10 @@ test("isolates two coaches' schedules and exceptions while retaining all court c
     await database.query("INSERT INTO public.coach_profiles(user_id,display_name,bio,qualifications,specialties,languages,is_public) VALUES($1,'Other private coach','','','{}','{}',true)", [other]);
     await database.query("INSERT INTO public.coach_locations(coach_user_id,location_id) VALUES($1,$2)", [other, locationA]);
     await database.query("INSERT INTO public.coach_programs(coach_user_id,program_id) VALUES($1,$2)", [other, program]);
-    await database.query(`INSERT INTO public.coach_weekly_availability(coach_user_id,location_id,weekday,start_minute,end_minute)
-      VALUES($1,$2,$3,900,1020)`, [other, locationA, mondayWeekday(date)]);
-    await database.query(`INSERT INTO public.coach_availability_exceptions(coach_user_id,exception_date,kind,start_minute,end_minute,note)
-      VALUES($1,$2,'unavailable',540,600,'Other private exception')`, [other, date]);
+    await database.query(`INSERT INTO public.coach_weekly_availability(coach_user_id,location_id,weekday,start_minute,end_minute,valid_from)
+      VALUES($1,$2,$3,900,1020,'2000-01-01')`, [other, locationA, mondayWeekday(date)]);
+    await database.query(`INSERT INTO public.coach_availability_exceptions(coach_user_id,exception_date,until_date,kind,start_minute,end_minute,note)
+      VALUES($1,$2,$2,'unavailable',540,600,'Other private exception')`, [other, date]);
     expect(atNine(await read())).toEqual([courtA1, courtA2]);
     expect(atNine(await read({ coachId: other }))).toEqual([]);
     expect((await read({ coachId: other }))?.durations[0].starts.some(s => s.startMinute === 900)).toBe(true);
@@ -236,4 +239,81 @@ test("isolates two coaches' schedules and exceptions while retaining all court c
     await database.query("DELETE FROM public.coach_locations WHERE coach_user_id=$1", [other]);
     await database.query("DELETE FROM public.coach_profiles WHERE user_id=$1", [other]);
   }
+});
+
+
+test("a persisted multi-day absence removes public lesson offers on its inclusive dates", async () => {
+  // Extend the existing partial-day fixture instead of inserting an overlapping row.
+  try {
+    await database.query(`UPDATE public.coach_availability_exceptions SET exception_date='2099-10-31',until_date='2099-11-02',
+      start_minute=NULL,end_minute=NULL WHERE coach_user_id=$1`, [coach]);
+    expect(starts(await read(), 60)).toEqual([]);
+    await database.query("UPDATE public.coach_availability_exceptions SET until_date='2099-11-01' WHERE coach_user_id=$1", [coach]);
+    expect((starts(await read(), 60) ?? []).length).toBeGreaterThan(0);
+  } finally {
+    await database.query(`UPDATE public.coach_availability_exceptions SET exception_date=$2,until_date=$2,
+      start_minute=840,end_minute=900 WHERE coach_user_id=$1`, [coach, date]);
+  }
+});
+
+test("public lessons include both working intervals and exclude the lunch break", async () => {
+  // Exact split-day hours: 08:00–12:00 and 14:00–21:00. The existing
+  // 14:00–15:00 absence still applies, so afternoon offers start at 15:00.
+  await database.query("UPDATE public.coach_weekly_availability SET start_minute=480,end_minute=720 WHERE coach_user_id=$1", [coach]);
+  const [interval]: { id: string }[] = await database.query(`INSERT INTO public.coach_weekly_availability
+    (coach_user_id,location_id,weekday,start_minute,end_minute,valid_from,valid_until)
+    VALUES($1,$2,$3,840,1260,$4,$4) RETURNING id`, [coach, locationA, mondayWeekday(date), date]);
+  try {
+    const availability = await read();
+    const offers = availability?.durations.find((duration) => duration.durationMinutes === 60)?.starts ?? [];
+    expect(offers.some((offer) => offer.startMinute === 480)).toBe(true);
+    expect(offers.some((offer) => offer.startMinute === 900)).toBe(true);
+    expect(offers.some((offer) => offer.startMinute === 1200)).toBe(true);
+    expect(offers.some((offer) => offer.startMinute < 840 && offer.endMinute > 720)).toBe(false);
+    expect((await listCoachDayAvailability(database.manager, coach, date)).weekly).toHaveLength(2);
+    // The bounded interval does not leak into another occurrence of the weekday.
+    expect((await listCoachDayAvailability(database.manager, coach, "2099-11-09")).weekly).toHaveLength(1);
+  } finally {
+    await database.query("DELETE FROM public.coach_weekly_availability WHERE id=$1", [interval.id]);
+    await database.query("UPDATE public.coach_weekly_availability SET start_minute=540,end_minute=900 WHERE coach_user_id=$1", [coach]);
+  }
+});
+
+
+test("public selector uses local effective working hours, keeps booked coaches and preserves public eligibility checks", async () => {
+  const location = (await listPublicLocationsWithCourts()).find(row => row.id === locationA)!;
+  const options = async () => readCoachingBookingOptions(await readPublicCoaching([location]), location, beforeOpening);
+  const includesCoach = async () => (await options()).some(option => option.coach.id === coach);
+  // Current-day occupancy does not control selector eligibility.
+  expect(await includesCoach()).toBe(true);
+  await database.query("UPDATE public.coach_weekly_availability SET location_id=$2 WHERE coach_user_id=$1", [coach, locationB]);
+  const extra = randomUUID();
+  try {
+    expect(await includesCoach()).toBe(false);
+    await database.query(`INSERT INTO public.coach_availability_exceptions(id,coach_user_id,exception_date,until_date,kind,location_id,start_minute,end_minute)
+      VALUES($1,$2,'2099-11-03','2099-11-03','available',$3,600,660)`, [extra, coach, locationA]);
+    const extraOption = (await options()).find(option => option.coach.id === coach);
+    expect(extraOption?.programs.find(item => item.id === program)?.durations).toEqual([60]);
+  } finally {
+    await database.query("DELETE FROM public.coach_availability_exceptions WHERE id=$1", [extra]);
+    await database.query("UPDATE public.coach_weekly_availability SET location_id=$2 WHERE coach_user_id=$1", [coach, locationA]);
+  }
+  await database.query("UPDATE public.coach_weekly_availability SET valid_until='2099-11-01' WHERE coach_user_id=$1", [coach]);
+  try { expect(await includesCoach()).toBe(false); }
+  finally { await database.query("UPDATE public.coach_weekly_availability SET valid_until=NULL WHERE coach_user_id=$1", [coach]); }
+  await database.query("UPDATE public.coach_weekly_availability SET valid_from='2099-12-01' WHERE coach_user_id=$1", [coach]);
+  try { expect(await includesCoach()).toBe(true); }
+  finally { await database.query("UPDATE public.coach_weekly_availability SET valid_from='2000-01-01' WHERE coach_user_id=$1", [coach]); }
+  const toggles = [
+    ["UPDATE public.coach_profiles SET is_public=false WHERE user_id=$1", "UPDATE public.coach_profiles SET is_public=true WHERE user_id=$1", coach],
+    ["UPDATE public.coach_profiles SET archived_at=clock_timestamp(),is_public=false WHERE user_id=$1", "UPDATE public.coach_profiles SET archived_at=NULL,is_public=true WHERE user_id=$1", coach],
+    ["UPDATE public.users SET status='suspended' WHERE id=$1", "UPDATE public.users SET status='active' WHERE id=$1", coach],
+    ["UPDATE public.coaching_programs SET is_active=false WHERE id=$1", "UPDATE public.coaching_programs SET is_active=true WHERE id=$1", program],
+  ] as const;
+  for (const [disable, restore, id] of toggles) {
+    await database.query(disable, [id]);
+    try { expect(await includesCoach()).toBe(false); }
+    finally { await database.query(restore, [id]); }
+  }
+  expect(await includesCoach()).toBe(true);
 });

@@ -61,7 +61,11 @@ test("Admin and Coach share direct, customer and guest details while mutations r
     assert.strictEqual((await service.from("users").update({ first_name: "Different", last_name: "Profile" }).eq("id", member.id)).error, null);
     expect((await getReservationDay(location, date, now, admin.client)).adminOccupancy.find((row) => row.kind === "booking")).toMatchObject({ customer_name: "Ana Pop" });
     const coachDay = await getReservationDay(location, date, now, coach.client);
-    expect(coachDay.adminOccupancy).toEqual(adminDay.adminOccupancy);
+    // Coaches keep staff reservations but receive another customer's booking as a bare interval.
+    expect(coachDay.adminOccupancy).toEqual([adminDay.adminOccupancy.find((row) => row.kind === "reservation"),
+      { kind: "occupied", id: `occupied:${courtId}:660`, court_id: courtId, booking_date: date, starts_at_minute: 660, ends_at_minute: 750 }]);
+    for (const leaked of [bookingId, member.id, paymentId, "Ana Pop", "ana@example.test", "+40 123", "pay_at_club", "7500", "RON"])
+      expect(JSON.stringify(coachDay)).not.toContain(leaked);
     expect(adminDay.canManage).toBe(true);
     expect(coachDay.canManage).toBe(false);
     await expect(getReservationDay(location, date, now, member.client)).rejects.toThrow();
@@ -82,7 +86,11 @@ test("Admin and Coach share direct, customer and guest details while mutations r
       provider_payment_id: `pi_${guestPaymentId}`, status: "succeeded", expires_at: "2099-10-14T12:10:00Z",
       completed_at: "2099-10-14T12:01:00Z" })).error, null);
     const guestAdminDay = await getReservationDay(location, date, now, admin.client);
-    expect((await getReservationDay(location, date, now, coach.client)).adminOccupancy).toEqual(guestAdminDay.adminOccupancy);
+    const guestCoachDay = await getReservationDay(location, date, now, coach.client);
+    expect(guestCoachDay.adminOccupancy.find((row) => row.kind !== "reservation")).toEqual({ kind: "occupied",
+      id: `occupied:${courtId}:660`, court_id: courtId, booking_date: date, starts_at_minute: 660, ends_at_minute: 750 });
+    for (const leaked of [guestBookingId, guestPaymentId, `pi_${guestPaymentId}`, "Ana Pop", "ana@example.test", "stripe", "succeeded"])
+      expect(JSON.stringify(guestCoachDay)).not.toContain(leaked);
     expect(guestAdminDay.adminOccupancy.find((row) => row.kind === "booking")).toMatchObject({
       account_user_id: null, customer_name: "Ana Pop", customer_email: "ana@example.test", customer_phone: "+40 123", payment_method: "online", stripe_refund_available: true,
       payments: [{ id: guestPaymentId, method: "online", provider: "stripe", status: "succeeded" }] });

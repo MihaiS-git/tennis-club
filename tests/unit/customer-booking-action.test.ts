@@ -51,7 +51,7 @@ it("waits for successful persistence before invalidating affected reads", async 
   finish({ ok: true, status: "confirmed", holdExpiresAt: null, totalAmountMinor: 5000, currency: "RON", cancellationPolicy: { noticeMinutes: 120, cutoff: null } });
   await pending;
   expect(revalidate.mock.calls).toEqual([
-    ["/book"], ["/admin/reservations"], ["/my-activity/bookings"],
+    ["/book"], ["/admin/reservations"], ["/admin/bookings"], ["/coach/bookings"], ["/my-activity/bookings"],
   ]);
 });
 

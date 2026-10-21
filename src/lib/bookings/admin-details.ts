@@ -9,7 +9,7 @@ import { countAdminBookings, findAdminBookingDetails, findAdminBookingsPage, lis
 import * as clubs from "@/lib/db/repositories/clubs.repository";
 import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
-import { listBookingAdjustments } from "@/lib/db/repositories/booking-adjustments.repository";
+import { listBookingAdjustments, listBookingsWithLivePayment, listBookingsWithPendingChange } from "@/lib/db/repositories/booking-adjustments.repository";
 import { listBookingRevisions } from "@/lib/db/repositories/booking-revisions.repository";
 import { loadAdminTransactionContext } from "@/lib/db/repositories/payments.repository";
 import { localStartInstant } from "@/lib/courts/local-time";
@@ -18,7 +18,7 @@ import { attentionRefundStatuses, unconfirmedRefundMinutes } from "@/lib/payment
 import { readFinancialHistory, summarizeBookingFacts } from "@/lib/payments/financial-history";
 import { reportedOutstanding } from "@/lib/payments/financials";
 import { ADMIN_BOOKINGS_PAGE_SIZE, parseAdminBookingQuery, type AdminBookingQuery } from "./admin-query";
-import { buildBookingHistory, summarizeBookingFinancials } from "./admin-history";
+import { adminCancellationAvailability, buildBookingHistory, summarizeBookingFinancials } from "./admin-history";
 
 export type AdminBookingDetails = NonNullable<Awaited<ReturnType<typeof findAdminBookingDetails>>>;
 
@@ -41,6 +41,9 @@ export async function getAdminBookingRecords(input: unknown, options: { historyP
       // One snapshot connection: reads run in sequence rather than queueing concurrently on it.
       const revisions = await listBookingRevisions(manager, id.data);
       const adjustments = await listBookingAdjustments(manager, id.data);
+      // The same pending-change reads My Activity uses to withhold booking actions.
+      const pendingChange = (await listBookingsWithPendingChange(manager, [id.data])).get(id.data) ?? null;
+      const paymentPending = (await listBookingsWithLivePayment(manager, [id.data])).has(id.data);
       const payments = await loadAdminTransactionContext(manager, { bookingIds: [id.data], revisionIds: [], adjustmentIds: [] });
       const facts = { ...payments, revisions, adjustments };
       const financials = summarizeBookingFacts(facts, id.data);
@@ -53,8 +56,13 @@ export async function getAdminBookingRecords(input: unknown, options: { historyP
         : { ...page, rows: page.rows.map(toAdminPaymentTransaction) };
       const now = options.now ?? new Date();
       const ended = Date.parse(localStartInstant(booking.location_timezone, booking.booking_date, booking.ends_at_minute)) <= now.getTime();
+      const startsAt = localStartInstant(booking.location_timezone, booking.booking_date, booking.starts_at_minute);
       return {
         booking,
+        cancellation: { availability: adminCancellationAvailability({ status: booking.status, startsAt, now, pendingChange, paymentPending }),
+          startsAt, // As the command decides: online captures not already owed back are refunded automatically.
+          refundAvailable: booking.payment_method === "online" && financials.totals.some(total =>
+            total.currency === booking.currency && total.captured - total.refundObligations > 0) },
         history: buildBookingHistory({ status: booking.status, revisions, adjustments }),
         summary: summarizeBookingFinancials({ status: booking.status, total: booking.total_amount_minor, currency: booking.currency,
           paymentMethod: booking.payment_method, ended, financials,
@@ -73,10 +81,15 @@ export type AdminBookingRecords = NonNullable<Awaited<ReturnType<typeof getAdmin
 // Admin-wide, ownership-independent list of authenticated and guest customer bookings.
 export async function listAdminBookings(input: AdminBookingQuery, supabase?: Awaited<ReturnType<typeof createClient>>) {
   await requireActiveAdmin(supabase ?? await createClient());
-  const query = parseAdminBookingQuery({ ...input, page: String(input.page) });
+  return readBookingListPage(parseAdminBookingQuery({ ...input, page: String(input.page) }), null);
+}
+
+// The one List read for Admins and Coaches. Callers authorize first; a Coach passes
+// their own user ID, which the query enforces for every row and the total.
+export async function readBookingListPage(query: AdminBookingQuery, staffUserId: string | null) {
   const filters = { coachId: query.coach || null, type: query.type, search: query.q, status: query.status === "all" ? null : query.status,
     locationId: query.location || null, courtId: query.court || null, from: query.from || null, to: query.to || null,
-    sort: query.sort, direction: query.dir };
+    sort: query.sort, direction: query.dir, staffUserId };
   try {
     const manager = (await getDataSource()).manager;
     const total = await countAdminBookings(manager, filters);
@@ -94,6 +107,10 @@ export type AdminBookingListItem = Awaited<ReturnType<typeof listAdminBookings>>
 // Every location (published, unpublished and archived) with its courts, for historical filtering.
 export async function listAdminBookingFilterOptions(supabase?: Awaited<ReturnType<typeof createClient>>) {
   await requireActiveAdmin(supabase ?? await createClient());
+  return readBookingFilterLocations();
+}
+// Callers authorize first.
+export async function readBookingFilterLocations() {
   try {
     const manager = (await getDataSource()).manager;
     const [current, archived, courts] = await Promise.all([clubs.listAdminLocations(manager, "current"),

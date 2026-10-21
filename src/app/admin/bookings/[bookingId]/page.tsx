@@ -10,11 +10,13 @@ import { ReservationScheduleFieldsView } from "@/components/reservation-details"
 import { StatusBadge } from "@/components/status-badge";
 import { requireActiveAdmin } from "@/lib/admin/authorization";
 import { getAdminBookingRecords } from "@/lib/bookings/admin-details";
+import { adminBookingEditable } from "@/lib/bookings/admin-history";
 import { adminBookingHistoryHref, adminBookingsHref, adminBookingTransactionHref, bookingCreatedLabel, bookingStatusLabels, bookingStatusTones, parseAdminBookingQuery,
   parseAdminBookingReturn, parseFinancialHistoryPage } from "@/lib/bookings/admin-query";
 import { bookingTypeLabel } from "@/lib/bookings/booking-type";
 import { paymentMethodLabels } from "@/lib/payments/admin-query";
 import { formatMoney } from "@/lib/pricing/money";
+import { BookingActions } from "./booking-actions";
 import { BookingHistory } from "./booking-history";
 import { FinancialHistory, FinancialSummary } from "./booking-financials";
 import { CopyBookingId } from "./copy-booking-id";
@@ -26,7 +28,7 @@ export default async function AdminBookingPage({ params, searchParams }: {
   params: Promise<{ bookingId: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  await requireActiveAdmin();
+  const account = await requireActiveAdmin();
   const id = z.uuid().safeParse((await params).bookingId);
   if (!id.success) notFound();
   const search = await searchParams;
@@ -46,6 +48,12 @@ export default async function AdminBookingPage({ params, searchParams }: {
     </>}>
       <StatusBadge tone={bookingStatusTones[booking.status]}>{bookingStatusLabels[booking.status]}</StatusBadge>
     </AdminPageHeader>
+    <BookingActions booking={{ id: booking.id, customer_name: booking.customer_name, location_name: booking.location_name,
+      court_name: booking.court_name, booking_date: booking.booking_date, starts_at_minute: booking.starts_at_minute,
+      ends_at_minute: booking.ends_at_minute, total_amount_minor: booking.total_amount_minor, currency: booking.currency }} availability={records.cancellation.availability}
+      startsAt={records.cancellation.startsAt} refundAvailable={records.cancellation.refundAvailable}
+      editable={adminBookingEditable({ availability: records.cancellation.availability, accountUserId: booking.account_user_id,
+        actorUserId: account.userId, includesCoaching: booking.includes_coaching })} />
     <div className="grid max-w-4xl gap-x-8 rounded-card border border-border bg-surface p-5 pt-1 md:grid-cols-2">
       <DetailSection title="Booking identity">
         <dt className="text-muted-foreground">Booking type</dt><dd>{bookingTypeLabel(booking)}</dd>

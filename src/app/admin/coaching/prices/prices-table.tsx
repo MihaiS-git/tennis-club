@@ -1,22 +1,15 @@
 "use client";
 
 import { useId, useRef, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { SortableTableHeading, type TableSortLink } from "@/components/sortable-table-heading";
+import type { PriceFilters } from "@/lib/coaching/admin-filters";
 import { Button } from "@/components/button";
-import { AdminLocationSelect } from "@/components/admin-page-controls";
 import { DialogHeader } from "@/components/dialog-layout";
 import { ModalDialog } from "@/components/modal-dialog";
 import type { AdminCoach, AdminCoachingLocation, AdminCoachingPrice, AdminCoachingProgram } from "@/lib/coaching/admin";
 import { formatCoachingDuration } from "@/lib/coaching/validation";
 import { formatMoney } from "@/lib/pricing/money";
 import { PriceEditor } from "./price-editor";
-
-export function PricesLocationSelect({ locations, selectedId }: { locations: AdminCoachingLocation[]; selectedId: string }) {
-  const router = useRouter();
-  const pathname = usePathname();
-  return <AdminLocationSelect locations={locations} selectedId={selectedId}
-    onChange={(value) => router.push(`${pathname}?location=${encodeURIComponent(value)}`, { scroll: false })} />;
-}
 
 type Row = { program: AdminCoachingProgram; durationMinutes: number };
 
@@ -50,50 +43,59 @@ function CoachPricesDialog({ row, location, coaches, prices }: {
   </>;
 }
 
-export function PricesTable({ location, programs, coaches, prices }: {
+export function PricesTable({ location, programs, coaches, prices, groups, filters, sortLinks }: {
   location: AdminCoachingLocation; programs: AdminCoachingProgram[]; coaches: AdminCoach[]; prices: AdminCoachingPrice[];
+  groups?: (Row & { location: AdminCoachingLocation })[]; filters?: PriceFilters; sortLinks?: Record<string, TableSortLink>;
 }) {
-  const rows: Row[] = programs.flatMap((program) => program.durations.map((durationMinutes) => ({ program, durationMinutes })));
+  const rows = groups ?? programs.flatMap((program) => program.durations.map((durationMinutes) => ({ program, durationMinutes, location })));
   if (!rows.length) return <p className="rounded-card border border-border bg-surface px-4 py-5 text-sm text-muted-foreground">
-    No coaching programs yet. Create a program with at least one duration under Programs, then set its prices here.
+    {filters ? "No coaching prices match these filters." : "No coaching programs yet. Create a program with at least one duration under Programs, then set its prices here."}
   </p>;
   const coachName = new Map(coaches.map((coach) => [coach.user_id, coach.display_name]));
   return <div className="overflow-x-auto rounded-card border border-border bg-surface">
-    <table className="w-full min-w-[44rem] text-left font-sans text-sm" aria-label={`Coaching prices at ${location.name}`}>
+    <table className="w-full min-w-[44rem] text-left font-sans text-sm" aria-label={groups ? "Coaching prices" : `Coaching prices at ${location.name}`}>
       <thead className="border-b border-border bg-surface-muted text-xs font-semibold text-muted-foreground">
         <tr>
-          <th scope="col" className="px-4 py-2.5">Program</th>
-          <th scope="col" className="px-4 py-2.5">Duration</th>
-          <th scope="col" className="px-4 py-2.5">Club price</th>
+          <SortableTableHeading label="Program" sort={sortLinks?.program} />
+          <SortableTableHeading label="Location" sort={sortLinks?.location} />
+          <SortableTableHeading label="Duration" sort={sortLinks?.duration} />
+          <SortableTableHeading label="Club price" sort={sortLinks?.amount} />
           <th scope="col" className="px-4 py-2.5">Individual coach prices</th>
         </tr>
       </thead>
       <tbody className="divide-y divide-border">
         {rows.map((row) => {
-          const matching = prices.filter((price) => price.program_id === row.program.id && price.duration_minutes === row.durationMinutes);
-          const overrides = matching.filter((price) => price.coach_user_id !== null);
-          const offering = coaches.filter((coach) => coach.program_ids.includes(row.program.id) && coach.location_ids.includes(location.id));
+          const location = row.location;
+          const search = filters?.search?.toLowerCase();
+          const programMatches = !search || row.program.name.toLowerCase().includes(search);
+          const showClub = filters?.scope !== "coach" && !filters?.coach && programMatches;
+          const matching = prices.filter((price) => price.location_id === location.id && price.program_id === row.program.id && price.duration_minutes === row.durationMinutes);
+          const offering = coaches.filter((coach) => coach.program_ids.includes(row.program.id) && coach.location_ids.includes(location.id)
+            && (!filters?.coach || coach.user_id === filters.coach)
+            && (programMatches || (search && `${coach.display_name} ${coach.email}`.toLowerCase().includes(search))));
+          const overrides = matching.filter((price) => price.coach_user_id !== null && offering.some(coach => coach.user_id === price.coach_user_id));
           const label = `${row.program.name}, ${formatCoachingDuration(row.durationMinutes)}`;
-          return <tr key={`${row.program.id}-${row.durationMinutes}`} className="align-top">
+          return <tr key={`${location.id}-${row.program.id}-${row.durationMinutes}`} className="align-top">
             <td className="px-4 py-3">
               <p className="font-semibold text-foreground">{row.program.name}</p>
               <p className="text-xs text-muted-foreground">
                 Court rental {row.program.court_rental_included ? "included" : "not included"}{row.program.is_active ? "" : " · Inactive"}
               </p>
             </td>
+            <td className="px-4 py-3">{location.name}</td>
             <td className="whitespace-nowrap px-4 py-3">{formatCoachingDuration(row.durationMinutes)}</td>
             <td className="px-4 py-3">
-              <PriceEditor label={`Club price for ${label}`} currency={location.currency} emptyHint="Not set"
+              {showClub ? <PriceEditor label={`Club price for ${label}`} currency={location.currency} emptyHint="Not set"
                 target={{ program_id: row.program.id, duration_minutes: row.durationMinutes, location_id: location.id, coach_user_id: null }}
-                price={matching.find((price) => price.coach_user_id === null)} />
+                price={matching.find((price) => price.coach_user_id === null)} /> : "—"}
             </td>
             <td className="px-4 py-3">
-              {overrides.length > 0 && <ul className="mb-2 space-y-0.5 text-sm">
+              {filters?.scope !== "club" && overrides.length > 0 && <ul className="mb-2 space-y-0.5 text-sm">
                 {overrides.map((price) => <li key={price.id} className={price.current ? "" : "text-danger"}>
                   {coachName.get(price.coach_user_id ?? "") ?? "Coach"}: {formatMoney(price.amount_minor, price.currency)}{price.current ? "" : " (re-enter)"}
                 </li>)}
               </ul>}
-              <CoachPricesDialog row={row} location={location} coaches={offering} prices={overrides} />
+              {filters?.scope !== "club" && <CoachPricesDialog row={row} location={location} coaches={offering} prices={overrides} />}
             </td>
           </tr>;
         })}

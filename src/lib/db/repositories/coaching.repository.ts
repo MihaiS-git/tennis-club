@@ -20,9 +20,9 @@ import { readIndependently } from "../transaction";
 // ---- Programs ----
 
 export async function listCoachingPrograms(manager: EntityManager) {
-  const [programs, durations] = await Promise.all([
-    manager.getRepository(CoachingProgramEntity).find({ order: { name: "ASC", id: "ASC" } }),
-    manager.getRepository(CoachingProgramDurationEntity).find({ order: { durationMinutes: "ASC" } }),
+  const [programs, durations] = await readIndependently(manager, [
+    () => manager.getRepository(CoachingProgramEntity).find({ order: { name: "ASC", id: "ASC" } }),
+    () => manager.getRepository(CoachingProgramDurationEntity).find({ order: { durationMinutes: "ASC" } }),
   ]);
   return programs.map((program) => ({
     ...program,
@@ -157,11 +157,12 @@ export async function changeCoachPrograms(manager: EntityManager, coachUserId: s
 
 // ---- Prices ----
 
-export async function listCoachingPrices(manager: EntityManager, filter: { locationId?: string; programId?: string; coachUserId?: string } = {}) {
+export async function listCoachingPrices(manager: EntityManager, filter: { locationId?: string; programId?: string; programIds?: readonly string[]; coachUserId?: string } = {}) {
   return manager.getRepository(CoachingPriceEntity).find({
     where: {
       ...(filter.locationId ? { locationId: filter.locationId.toLowerCase() } : {}),
       ...(filter.programId ? { programId: filter.programId.toLowerCase() } : {}),
+      ...(filter.programIds ? { programId: In(filter.programIds.map((id) => id.toLowerCase())) } : {}),
       ...(filter.coachUserId ? { coachUserId: filter.coachUserId.toLowerCase() } : {}),
     },
     order: { programId: "ASC", durationMinutes: "ASC", locationId: "ASC", coachUserId: "ASC" },

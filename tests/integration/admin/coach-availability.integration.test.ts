@@ -7,15 +7,18 @@ import {
   changeCoachAvailability, changeOwnCoachAvailability, loadAdminCoachAvailability, loadOwnCoachAvailability,
 } from "../../../src/lib/coaching/availability";
 import { resolveCoachAvailability } from "../../../src/lib/coaching/availability-schedule";
+import { listCoachDayAvailability } from "@/lib/db/repositories/coach-availability.repository";
 import { localToday } from "../../../src/lib/courts/local-time";
 import { cleanupAuthFixtures, localFixtureClient } from "../auth-fixtures";
 import { ensureIntegrationAdminAnchor } from "../admin-anchor";
+import { insertOpeningHoursFixture } from "../opening-hours-fixtures";
 
 const service = localFixtureClient();
 const password = "availability-integration-password-123";
 const userIds: string[] = [];
 // A: Europe/Bucharest, B: UTC, C: assigned to nobody.
 const [locationA, locationB, locationC] = [randomUUID(), randomUUID(), randomUUID()];
+const courtIds: string[] = [];
 const locationIds = [locationA, locationB, locationC];
 const publicClient = () => createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_PUBLISHABLE_KEY!, {
   auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
@@ -52,9 +55,13 @@ const coachFields = (location_ids: string[]) => ({ display_name: "Availability C
 afterAll(async () => {
   const database = await getDataSource();
   try {
+    await database.query("DELETE FROM public.court_reservations WHERE court_id = ANY($1::uuid[])", [courtIds]);
+    await database.query("DELETE FROM public.courts WHERE id = ANY($1::uuid[])", [courtIds]);
     await database.query("DELETE FROM public.coach_availability_exceptions WHERE coach_user_id = ANY($1::uuid[])", [userIds]);
     await database.query("DELETE FROM public.coach_weekly_availability WHERE coach_user_id = ANY($1::uuid[])", [userIds]);
     await database.query("DELETE FROM public.coach_profiles WHERE user_id = ANY($1::uuid[])", [userIds]);
+    await database.query("DELETE FROM public.location_opening_hours WHERE location_id = ANY($1::uuid[])", [locationIds]);
+    await database.query("DELETE FROM public.opening_hours_schedules WHERE location_id = ANY($1::uuid[])", [locationIds]);
     await database.query("DELETE FROM public.locations WHERE id = ANY($1::uuid[])", [locationIds]);
     await cleanupAuthFixtures(service, userIds);
   } finally {
@@ -69,6 +76,11 @@ test("coach availability enforces ownership, Admin authorization, eligibility, s
     { id: locationB, name: "Availability West", slug: `availability-west-${locationB}`, timezone: "UTC" },
     { id: locationC, name: "Availability North", slug: `availability-north-${locationC}`, timezone: "UTC" },
   ])).error, null);
+  // Open around the clock: containment in opening hours is covered by coach-working-hours.
+  for (const location_id of [locationA, locationB]) {
+    assert.strictEqual((await insertOpeningHoursFixture(service, Array.from({ length: 7 }, (_, weekday) => ({
+      location_id, weekday, opens_at_minute: 0, closes_at_minute: 1440 })))).error, null);
+  }
   const admin = await account(["admin"]);
   const coach = await account(["coach"]);
   const otherCoach = await account(["coach"]);
@@ -215,9 +227,47 @@ test("coach availability enforces ownership, Admin authorization, eligibility, s
   expect(await changeOwnCoachAvailability(absence(addDays(today, 400)), coach.client)).toEqual({ ok: false, reason: "out-of-range" });
   expect(await changeOwnCoachAvailability({ ...absence(addDays(day, 1), 540, 660), id: appointment.id }, coach.client)).toEqual({ ok: true, id: appointment.id });
   expect(await changeOwnCoachAvailability({ operation: "remove-exception", id: vacation.id }, otherCoach.client)).toEqual({ ok: false, reason: "not-found" });
+  // Inclusive periods persist once, resolve on both boundaries, and edit/delete as a whole.
+  const from = addDays(today, 40), until = addDays(today, 61);
+  const period = (start = from, end = until) => ({ ...absence(start), fields: { ...absence(start).fields, until_date: end } });
+  const holiday = await changeOwnCoachAvailability(period(), coach.client);
+  assert.ok(holiday.ok);
+  expect(await database.query("SELECT exception_date::text,until_date::text FROM public.coach_availability_exceptions WHERE id=$1", [holiday.id]))
+    .toEqual([{ exception_date: from, until_date: until }]);
+  for (const date of [from, addDays(from, 10), until]) {
+    expect((await listCoachDayAvailability(database.manager, coach.id, date)).exceptions).toHaveLength(1);
+  }
+  for (const date of [addDays(from, -1), addDays(until, 1)]) {
+    expect((await listCoachDayAvailability(database.manager, coach.id, date)).exceptions).toEqual([]);
+  }
+  expect(await changeOwnCoachAvailability(period(), coach.client)).toEqual({ ok: false, reason: "overlap" });
+  expect(await changeOwnCoachAvailability(period(until, addDays(until, 1)), coach.client)).toEqual({ ok: false, reason: "overlap" });
+  expect(await changeOwnCoachAvailability({ ...period(), id: holiday.id }, otherCoach.client)).toEqual({ ok: false, reason: "not-found" });
+  expect(await changeCoachAvailability({ coach_user_id: coach.id, change: { ...period(from, addDays(until, 1)), id: holiday.id } }, admin.client))
+    .toEqual({ ok: true, id: holiday.id });
+  expect(await changeOwnCoachAvailability({ operation: "remove-exception", id: holiday.id }, coach.client)).toEqual({ ok: true, id: holiday.id });
+  expect((await listCoachDayAvailability(database.manager, coach.id, from)).exceptions).toEqual([]);
+
+  // Confirmed occupancy and live holds reject time off without altering the booking.
+  const court = randomUUID(); courtIds.push(court);
+  await database.query("INSERT INTO public.courts(id,location_id,name,slug,surface,environment) VALUES($1,$2,'Availability court',$3,'clay','outdoor')", [court, locationA, `availability-${court}`]);
+  const [{ id: reservation }] = await database.query(`INSERT INTO public.court_reservations(court_id,coach_user_id,booking_date,starts_at_minute,ends_at_minute)
+    VALUES($1,$2,$3,600,660) RETURNING id`, [court, coach.id, addDays(from, 10)]);
+  expect(await changeOwnCoachAvailability(period(), coach.client)).toEqual({ ok: false, reason: "booking-conflict" });
+  expect(await database.query("SELECT status,booking_date::text FROM public.court_reservations WHERE id=$1", [reservation]))
+    .toEqual([{ status: "active", booking_date: addDays(from, 10) }]);
+  expect(await changeOwnCoachAvailability(extra(addDays(from, 10), locationB, 600, 660), coach.client)).toEqual({ ok: false, reason: "booking-conflict" });
+  await database.query("UPDATE public.court_reservations SET status='held',hold_expires_at=now()+interval '5 minutes' WHERE id=$1", [reservation]);
+  expect(await changeOwnCoachAvailability(period(), coach.client)).toEqual({ ok: false, reason: "booking-conflict" });
+  await database.query("UPDATE public.court_reservations SET hold_expires_at=now()-interval '1 minute' WHERE id=$1", [reservation]);
+  const afterExpiry = await changeOwnCoachAvailability(period(), coach.client);
+  assert.ok(afterExpiry.ok);
+  await changeOwnCoachAvailability({ operation: "remove-exception", id: afterExpiry.id }, coach.client);
+  await database.query("DELETE FROM public.court_reservations WHERE id=$1", [reservation]);
+
   // A past exception can only be removed.
-  const [{ id: past }] = await database.query(`INSERT INTO public.coach_availability_exceptions(coach_user_id,exception_date,kind)
-    VALUES ($1,$2,'unavailable') RETURNING id`, [coach.id, addDays(today, -3)]);
+  const [{ id: past }] = await database.query(`INSERT INTO public.coach_availability_exceptions(coach_user_id,exception_date,until_date,kind)
+    VALUES ($1,$2,$2,'unavailable') RETURNING id`, [coach.id, addDays(today, -3)]);
   expect(await changeOwnCoachAvailability({ ...absence(addDays(today, 3)), id: past }, coach.client)).toEqual({ ok: false, reason: "out-of-range" });
   expect(await changeOwnCoachAvailability({ operation: "remove-exception", id: past }, coach.client)).toEqual({ ok: true, id: past });
 
@@ -261,17 +311,24 @@ test("coach availability enforces ownership, Admin authorization, eligibility, s
   expect((await loadOwnCoachAvailability(coach.client))?.locations.find((location) => location.id === locationB)?.archived).toBe(true);
   expect(await changeOwnCoachAvailability({ operation: "remove-weekly", id: tuesday.id }, coach.client)).toEqual({ ok: true, id: tuesday.id });
 
+  // Native range integrity: ordering and whole-day-only multi-day rows.
+  for (const [start, end, minute] of [[addDays(today, 80), addDays(today, 79), null], [addDays(today, 80), addDays(today, 81), 600]] as const) {
+    await expect(database.query(`INSERT INTO public.coach_availability_exceptions(coach_user_id,exception_date,until_date,kind,start_minute,end_minute)
+      VALUES($1,$2,$3,'unavailable',$4,$5)`, [coach.id, start, end, minute, minute === null ? null : 660]))
+      .rejects.toMatchObject({ driverError: { code: "23514", constraint: "coach_availability_exceptions_dates_check" } });
+  }
+
   // PostgreSQL constraints back the TypeScript rules.
   const insertWeekly = (coachId: string, location: string, weekdayValue: number, start: number, end: number) => database.query(
-    "INSERT INTO public.coach_weekly_availability(coach_user_id,location_id,weekday,start_minute,end_minute) VALUES ($1,$2,$3,$4,$5)",
+    "INSERT INTO public.coach_weekly_availability(coach_user_id,location_id,weekday,start_minute,end_minute,valid_from) VALUES ($1,$2,$3,$4,$5,'2000-01-01')",
     [coachId, location, weekdayValue, start, end]);
   await expect(insertWeekly(coach.id, locationB, 0, 600, 660)).rejects.toMatchObject({ driverError: { code: "23P01", constraint: "coach_weekly_availability_no_overlap" } });
   await expect(insertWeekly(coach.id, locationC, 3, 600, 660)).rejects.toMatchObject({ driverError: { code: "23503", constraint: "coach_weekly_availability_coach_location_fkey" } });
   for (const [start, end, weekdayValue] of [[600, 600, 3], [615, 660, 3], [600, 1470, 3], [600, 660, 7]]) {
     await expect(insertWeekly(coach.id, locationA, weekdayValue, start, end)).rejects.toMatchObject({ driverError: { code: "23514" } });
   }
-  const insertException = (values: string) => database.query(`INSERT INTO public.coach_availability_exceptions(coach_user_id,exception_date,kind,location_id,start_minute,end_minute)
-    VALUES ($1,$2,${values})`, [coach.id, addDays(day, 3)]);
+  const insertException = (values: string) => database.query(`INSERT INTO public.coach_availability_exceptions(coach_user_id,exception_date,until_date,kind,location_id,start_minute,end_minute)
+    VALUES ($1,$2,$2,${values})`, [coach.id, addDays(day, 3)]);
   await expect(insertException(`'available',NULL,600,660`)).rejects.toMatchObject({ driverError: { code: "23514", constraint: "coach_availability_exceptions_kind_check" } });
   await expect(insertException(`'unavailable','${locationA}',600,660`)).rejects.toMatchObject({ driverError: { code: "23514", constraint: "coach_availability_exceptions_kind_check" } });
   await expect(insertException(`'available','${locationA}',NULL,NULL`)).rejects.toMatchObject({ driverError: { code: "23514" } });

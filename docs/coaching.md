@@ -74,6 +74,15 @@ confirms), inline coach visibility and inline club prices, and one Create/Edit d
 for programs and coaches. The per-lesson Coach prices dialog lists only coaches offering
 that program at that location.
 
+The Program Create/Edit dialog also edits club prices: one input per selected duration, grouped
+by current location in that location's currency, on the same `coaching_prices` rows (coach
+`NULL`) as Prices. An empty input means not configured, never zero; removing a saved price is an
+explicit Remove action. Program details, durations and submitted club price changes save in one
+transaction (configuration exclusive fence → submitted locations `FOR SHARE` → Admin fence);
+archived or unknown price locations return `invalid-location` and save nothing. Removing a
+duration still deletes its prices, and the dialog lists the affected club and coach prices
+before saving. Coach-specific prices remain on the Prices page only.
+
 ## Public page
 
 `/coaching` is the same for visitors and members. One request-time read
@@ -119,8 +128,8 @@ The initial migration creates two availability tables (entity-generated, no brow
 
 | Table | Purpose |
 | --- | --- |
-| `coach_weekly_availability` | Coach, location, Monday-first `weekday` (0–6), `start_minute`/`end_minute`. |
-| `coach_availability_exceptions` | Coach, `exception_date`, `kind` (`unavailable`, `available`), optional location and minutes, private `note` (≤ 200). |
+| `coach_weekly_availability` | Coach, location, Monday-first `weekday` (0–6), `start_minute`/`end_minute`, inclusive `valid_from` / nullable `valid_until` (no end: unbounded). |
+| `coach_availability_exceptions` | Coach, inclusive `exception_date` / `until_date`, `kind` (`unavailable`, `available`), optional location and minutes, private `note` (≤ 200). |
 
 Minutes are local wall time at the location (like opening hours), on 30-minute boundaries,
 `0 ≤ start < end ≤ 1440`; there are no overnight intervals. PostgreSQL enforces structure only:
@@ -128,12 +137,14 @@ Minutes are local wall time at the location (like opening hours), on 30-minute b
 - composite `(coach_user_id, location_id)` FKs to `coach_locations`: availability exists only at
   assigned locations, and an assignment with availability cannot be removed (Admin coach saves
   return `has-availability`; remove the availability first, including past exceptions);
-- `coach_weekly_availability_no_overlap`: one coach's weekly intervals never overlap on a weekday,
-  across all locations;
-- `coach_availability_exceptions_no_overlap`: one coach's exceptions never overlap on a date
+- `coach_weekly_availability_no_overlap`: one coach's weekly intervals never overlap on a weekday
+  on overlapping validity dates, across all locations; `coach_weekly_availability_dates_check`
+  keeps the finite validity dates ordered;
+- `coach_availability_exceptions_no_overlap`: one coach's inclusive date ranges and minute intervals cannot both overlap
   (a whole-day absence covers `[0, 1440)`);
-- `unavailable` is coach-wide (no location), for the whole day (no minutes) or an interval;
-  `available` names a location and an interval.
+- `unavailable` is coach-wide (no location), for one or more whole days (no minutes) or a single-day interval;
+  `available` names one date, a location and an interval. Both dates are finite and ordered;
+  multi-day rows must be whole-day time off. No daily expansion is stored.
 
 ### Schedule resolution
 
@@ -141,7 +152,7 @@ Minutes are local wall time at the location (like opening hours), on 30-minute b
 deterministic for one local date:
 
 1. take the weekly intervals for the date's weekday;
-2. every exception on that date overrides the weekly schedule for its interval: its range is
+2. every exception whose inclusive period contains that local date overrides the weekly schedule for its interval: its range is
    removed from every weekly interval;
 3. `available` exceptions are added at their location;
 4. each window is converted to instants with its location's timezone (`localStartInstant`);
@@ -164,16 +175,51 @@ availability writes and assignment changes per coach; TypeScript then checks:
   (`not-eligible`); Admins may still remove availability of a suspended or former coach;
 - a saved location is assigned and not archived (`invalid-location`); existing rows at an
   archived location remain listed and removable;
-- no overlap with the coach's other weekly intervals, or other exceptions on that date (`overlap`);
-- adding working hours applies one location and interval to any set of weekdays in one
-  transaction; every selected day is checked first, and any conflict returns `overlap` with the
-  conflicting weekdays and saves nothing;
+- no overlap with the coach's other weekly intervals, or other date/minute exception ranges (`overlap`);
+- adding working hours applies one location, interval and validity range to any set of weekdays in one
+  transaction (the shared dialog offers Weekdays / Weekend quick toggles, shows the selected
+  location's current and scheduled opening hours with Closed days, and offers only times open on
+  every selected day throughout the chosen dates); every selected day is checked first, and any
+  conflict returns `overlap` with the conflicting weekdays and saves nothing;
+- working hours must lie inside the location's opening hours on every date they apply to
+  (see below); otherwise `outside-opening-hours` names the weekdays and nothing is saved;
+- validity starts today or later in the location's calendar (default: today); an edited row may keep
+  its original start; ended rows (`valid_until` before today) can only be removed;
 - exception dates are from today (the location's date for additional hours, the earliest local
-  date across the coach's locations for absences) up to 366 days ahead; past exceptions can only
-  be removed (`out-of-range`);
+  date across the coach's locations for absences) up to 366 days ahead; completed periods can only
+  be removed (`out-of-range`); ongoing periods may retain their original start when edited;
 - an edited or removed row must belong to the coach (`not-found`).
 
 Exclusion and FK violations map to the same results.
+
+### Opening hours dependency
+
+A coach's working hours at a location are always contained in that location's applicable
+opening hours. Opening hours are effective-dated schedules (`opening_hours_schedules`), so
+working hours carry their own validity dates and are checked per schedule period; dates
+covered by no schedule are closed. The pure rules are in `src/lib/coaching/working-hours.ts`
+(touching opening intervals are joined; boundaries are narrowed to the 30-minute grid).
+
+- Saving working hours (`src/lib/coaching/availability.ts`) rereads the location's schedules
+  under the configuration share fence and rejects any selected weekday that is not open
+  throughout the interval on every remaining date of the validity range.
+- Saving opening hours (`src/lib/admin/opening-hours.ts`) reconciles every coach's working hours at
+  that location in the same transaction, after pricing reconciliation, under the exclusive
+  configuration fence (which excludes availability writes and booking commands). Only the dates whose
+  opening hours changed are touched, from the location's today: the edited schedule's old and new
+  periods when its intervals change, otherwise the dates entering or leaving it (including an
+  automatically shortened current schedule). On those dates hours inside stay, partly outside are
+  trimmed to the intersection (possibly several intervals), entirely outside or on closed dates are
+  removed. A row whose result differs by date is split at the period boundary; earlier dates and
+  history keep their hours. Extensions never extend working hours.
+- Before any write, the change is rejected (`booking-conflict`, with the dates) if a live court or
+  coaching reservation at the location that fits the current opening hours would fall outside the new
+  ones on an affected date and has not yet ended. Live means active, or held with an unexpired hold or
+  an accepted capture, the occupancy rule of booking commands; containment is the booking rule
+  (`fitsOpeningHours`). Nothing is cancelled or moved: the Admin moves or cancels those bookings first.
+- Other locations, other dates, and bookings with their payment records are never changed. A failure
+  rolls back the opening-hours change, pricing and working hours together. The Admin is told when
+  coach working hours were adjusted.
 
 ### Interfaces
 
@@ -184,8 +230,12 @@ Exclusion and FK violations map to the same results.
   the same `AvailabilityManager` (`src/components/coach-availability/`) with an Admin action bound
   to that coach. Ineligible coaches are flagged and read-only except for removal.
 
-Both show assigned locations with timezones, a compact Monday–Sunday schedule (interval chips open
-one Create/Edit dialog), upcoming exceptions in a table and past exceptions behind a disclosure.
+Both show assigned locations with timezones, a compact Monday–Sunday schedule of current and future
+working hours (interval chips show limited validity and open one Create/Edit dialog; ended hours are
+behind a disclosure), upcoming periods in a table and completed periods behind a disclosure. Explicit Add time off
+and Add extra availability actions open focused dialogs. Time off has From date and Until date
+(inclusive); only single-day time off offers partial-day times. The optional private note is
+shared by both workflows. Edit and Remove operate on one whole persisted period.
 
 ### Before coaching reservations
 
@@ -626,3 +676,40 @@ constraints; TypeScript and scoped ESLint passed. The three Admin integration te
 also rerun after adding the explicit assignment cleanup assertion. The new migration alone
 was applied to the isolated test database and local development database; no reset, unrelated
 migration, build, broad suite or commit was performed.
+
+
+## Management lists and time-off ranges
+
+Programs use `q`, `type`, `status`, `sort` (`name`, `type`, `status`), `dir` and `page`.
+Prices use `q` (program name or coach name/email), `location`, `program`, `duration`,
+`scope` (`club`, `coach`), optional `coach`, `sort` (`program`, `location`, `duration`,
+`amount`), `dir` and `page`. Both use the extracted shared ManagementTableToolbar,
+shared sortable headings and existing Pagination. Query boundaries normalize invalid/repeated
+parameters. Sorting is changed only through column headings (first click ascending, second
+descending); there are no Sort/Direction controls. Filter/sort changes reset pagination; Clear
+filters resets the list URL. The Prices Program filter is a searchable combobox. In Coaches, the
+Visibility filter treats coaches without a profile or with an archived profile as Hidden.
+Repository SELECTs apply filtering/sorting/counting and 20-group pagination in PostgreSQL;
+counts and page reads share a read snapshot. Prices retain one group per program/duration/location,
+including unset targets when no explicit scope is selected, with the same inline club editor
+and focused coach-prices dialog. Scope filters require an entered price of that scope;
+coach filters restrict assigned coach targets. Multiple matching overrides do not duplicate groups.
+Amount sorting uses the lowest matching entered amount within a group, with unset amounts last;
+amounts retain their location currencies. Checkout resolution remains unchanged.
+
+Saving time off rejects overlapping active coaching occupancy or unexpired payment holds
+with `booking-conflict`, preserving every booking. Extra availability at a different location
+also rejects such conflicts. This check uses each reservation's own local playing date and
+half-open minutes under the existing coach-profile write fence; booking commands hold its
+shared counterpart before location locks and reread the ranged schedule. Expired holds do not
+reject configuration. PostgreSQL's inclusive `daterange` plus minute-range GiST exclusion backs
+TypeScript overlap checks. Availability never bypasses opening hours, public eligibility,
+court/coach occupancy or other existing lesson quote restrictions.
+
+The consolidated initial migration and entity include non-null `until_date`; existing
+applied databases are unchanged by source edits. An explicitly authorized development rebuild
+and separate test-project reinitialization are required before exercising ranged workflows.
+Do not run a reset/rebuild without approval. Existing single-day fixtures explicitly store
+identical start and end dates. Focused range integration coverage is in
+`tests/integration/admin/coach-availability.integration.test.ts`; list coverage is in
+`tests/integration/admin/coaching-lists.integration.test.ts`.

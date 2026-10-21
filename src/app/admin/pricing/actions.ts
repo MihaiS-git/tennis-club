@@ -11,6 +11,7 @@ export async function savePricingRuleAction(input: unknown) {
     revalidatePath("/book");
     revalidatePath("/courts");
     revalidatePath("/admin/reservations");
+    revalidatePath("/admin/bookings");
   }
   return result;
 }
@@ -22,6 +23,7 @@ export async function removePricingRuleAction(input: unknown) {
     revalidatePath("/book");
     revalidatePath("/courts");
     revalidatePath("/admin/reservations");
+    revalidatePath("/admin/bookings");
   }
   return result;
 }

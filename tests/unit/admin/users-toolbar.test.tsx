@@ -19,3 +19,19 @@ it("composes consecutive filter changes before the URL finishes updating", () =>
   fireEvent.change(screen.getByRole("combobox", { name: "Role" }), { target: { value: "admin" } });
   expect(params()).toMatchObject({ status: "suspended", role: "admin" });
 });
+
+it("debounces search, resets the page and preserves current sort and filters", () => {
+  render(<UsersToolbar />);
+  fireEvent.change(screen.getByRole("searchbox"), { target: { value: "  new@example.test  " } });
+  expect(navigation.replace).not.toHaveBeenCalled();
+  vi.advanceTimersByTime(350);
+  expect(params()).toEqual({ q: "new@example.test", status: "active", role: "coach", sort: "email", dir: "asc" });
+});
+
+it("resets the search draft after Back/Forward and links Clear filters to the clean URL", () => {
+  const { rerender } = render(<UsersToolbar />);
+  navigation.query = "q=restored";
+  rerender(<UsersToolbar />);
+  expect((screen.getByRole("searchbox") as HTMLInputElement).value).toBe("restored");
+  expect(screen.getByRole("link", { name: "Clear filters" }).getAttribute("href")).toBe("/admin/users");
+});

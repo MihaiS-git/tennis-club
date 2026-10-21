@@ -4,7 +4,9 @@ import { getReservationDay, listInternalLocations } from "@/lib/reservations/ser
 import { ReservationCalendar } from "./reservation-calendar";
 import { ReservationControls } from "./reservation-controls";
 
-export async function ReservationContent({ searchParams }: { searchParams: Promise<{ location?: string; date?: string }> }) {
+export async function ReservationContent({ searchParams, href }: {
+  searchParams: Promise<{ location?: string; date?: string }>; href?: string;
+}) {
   const locations = await listInternalLocations();
   if (!locations.length) return <p className="mt-5 rounded-card border border-border bg-surface p-5">No configured locations are available for reservations.</p>;
   const params = await searchParams;
@@ -14,7 +16,7 @@ export async function ReservationContent({ searchParams }: { searchParams: Promi
   const validDate = z.iso.date().safeParse(params.date).success;
   const date = !params.date ? today : validDate ? params.date! : null;
   return <>
-    <ReservationControls locations={locations} locationId={location.id} date={date} today={today} />
+    <ReservationControls locations={locations} locationId={location.id} date={date} today={today} href={href} />
     <p className="mt-2 text-xs text-muted-foreground">Times shown in {location.timezone}.</p>
     {params.date && !validDate && <p role="alert" className="mt-2 text-sm text-danger">Choose a valid date.</p>}
     {!date ? <p className="mt-5 text-sm text-muted-foreground">Choose a date to see available courts.</p> :

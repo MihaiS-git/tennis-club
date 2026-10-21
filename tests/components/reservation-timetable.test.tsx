@@ -1,9 +1,40 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import { ReservationTimetable } from "@/components/reservation-timetable";
+import { ReservationTimetable, type OccupiedInterval } from "@/components/reservation-timetable";
 
 afterEach(cleanup);
+
+it.each([60, 90, 180])("labels each occupied block once across a %i-minute interval and preserves its click target", (duration) => {
+  const onOccupiedClick = vi.fn();
+  const onChoose = vi.fn();
+  const times = Array.from({ length: duration / 30 }, (_, index) => 600 + index * 30);
+  const intervals: OccupiedInterval[] = ([
+    { id: "staff", courtId: "staff-court", kind: "reservation", label: "Reservation · Staff" },
+    { id: "coaching", courtId: "coaching-court", kind: "booking", includesCoaching: true, label: "Coaching · Customer" },
+    { id: "booking", courtId: "booking-court", kind: "booking", label: "Booking · Customer" },
+  ] satisfies Omit<OccupiedInterval, "startsAtMinute" | "endsAtMinute">[]).map(item => ({ ...item, startsAtMinute: 600, endsAtMinute: 600 + duration }));
+  render(<ReservationTimetable date="2099-10-15" selection={null} onChoose={onChoose} onOccupiedClick={onOccupiedClick}
+    day={{ times, courts: intervals.map(item => ({ court: { id: item.courtId, name: item.courtId }, cells: times.map(() => "booked") })) }}
+    occupiedIntervals={intervals} />);
+
+  for (const interval of intervals) {
+    const block = screen.getByRole("button", { name: new RegExp(interval.label) });
+    expect(block.parentElement?.style.gridColumn).toBe(`2 / span ${duration / 30}`);
+    if (interval.kind === "reservation") {
+      expect(within(block).getAllByText("Reservation")).toHaveLength(1);
+      expect(block.className).toContain("bg-clay-300");
+    } else if (interval.includesCoaching) {
+      expect(within(block).getAllByText("Coaching")).toHaveLength(1);
+    } else {
+      expect(block.textContent).toBe("");
+    }
+    fireEvent.click(block);
+  }
+  expect(screen.getAllByRole("button")).toHaveLength(3);
+  expect(onOccupiedClick.mock.calls).toEqual([["staff"], ["coaching"], ["booking"]]);
+  expect(onChoose).not.toHaveBeenCalled();
+});
 
 it("renders natural name order independent of occupancy and preserves selection and court identity", () => {
   const courts = [10, 3, 1, 4, 2].map(number => ({ court: { id: `${number}`, name: `C${number}` }, cells: ["available", "available"] as const }));

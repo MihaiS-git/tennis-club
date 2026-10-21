@@ -66,9 +66,11 @@ export const weeklyHoursMutationSchema = z.discriminatedUnion("operation", [
 export type OpeningHoursMutation = z.infer<typeof weeklyHoursMutationSchema>;
 
 export type OpeningHoursMutationResult =
-  | { ok: true; intervals: OpeningInterval[]; schedules?: OpeningHoursSchedule[]; scheduleId?: string; pricingAdjusted?: boolean; missingPricing?: boolean }
+  | { ok: true; intervals: OpeningInterval[]; schedules?: OpeningHoursSchedule[]; scheduleId?: string; pricingAdjusted?: boolean; missingPricing?: boolean;
+    workingHoursAdjusted?: boolean }
   | { ok: false; reason: "invalid-input"; fieldErrors: Record<string, string> }
   | { ok: false; reason: "overlap"; weekdays: number[] }
+  | { ok: false; reason: "booking-conflict"; dates: string[] }
   | { ok: false; reason: "stale" | "period-overlap" }
   | { ok: false; reason: "not-found" | "archived" | "unchanged" };
 
@@ -77,7 +79,9 @@ export function openingHoursScheduleKey(intervals: readonly Pick<OpeningInterval
     .sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2]));
 }
 
-function weeklySchedule(locationId: string, intervals: readonly OpeningInterval[]) {
+type WeeklyInterval = Pick<OpeningInterval, "id" | "location_id" | "weekday" | "opens_at_minute" | "closes_at_minute">;
+
+function weeklySchedule(locationId: string, intervals: readonly WeeklyInterval[]) {
   return weekdays.map((label, weekday) => ({
     label, weekday,
     intervals: intervals.filter((interval) => interval.location_id === locationId && interval.weekday === weekday)
@@ -85,7 +89,7 @@ function weeklySchedule(locationId: string, intervals: readonly OpeningInterval[
   }));
 }
 
-export function groupedWeeklySchedule(locationId: string, intervals: readonly OpeningInterval[]) {
+export function groupedWeeklySchedule(locationId: string, intervals: readonly WeeklyInterval[]) {
   const groups: { weekdays: number[]; intervals: { opens_at_minute: number; closes_at_minute: number; ids: string[] }[] }[] = [];
   for (const day of weeklySchedule(locationId, intervals)) {
     const match = groups.find((group) => group.intervals.length === day.intervals.length &&

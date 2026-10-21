@@ -47,7 +47,7 @@ export function ReservationTimetable({ day, date, timezone, selection, onChoose,
             const blockStyle = occupied.kind === "reservation" ? reservationBlockStyle : timelineCellStyles.booked;
             return <div key={`${minute}:${occupied.id}`} role="cell" aria-colspan={span} style={{ gridColumn: `${row + 2} / span ${span}` }} className="min-w-0 border-b border-r border-border p-0.5">
               {onOccupiedClick ? <button type="button" disabled={disabled} onClick={() => onOccupiedClick(occupied.id)} aria-label={label}
-                className={`block h-full w-full rounded-control border border-current/30 focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-accent ${blockStyle}`}>{occupied.includesCoaching && <span className="block truncate px-1 text-[10px] font-semibold">Coaching</span>}</button>
+                className={`block h-full w-full rounded-control border border-current/30 focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-accent ${blockStyle}`}>{(occupied.kind === "reservation" || occupied.includesCoaching) && <span className="block truncate px-1 text-[10px] font-semibold">{occupied.kind === "reservation" ? "Reservation" : "Coaching"}</span>}</button>
                 : <div aria-label={label} className={`h-full rounded-control border border-current/30 ${blockStyle}`} />}
             </div>;
           }

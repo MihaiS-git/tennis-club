@@ -61,6 +61,8 @@ export async function createCustomerBooking(input: unknown, reader?: Reader,
         if (!authoritative || authoritative.locationId !== parent.locationId) throw new CheckoutParentChanged();
         const courts = await listCheckoutLocationCourts(manager, location.id);
         const hours = await listLocationOpeningHours(manager, location.id, date);
+        // Publication eligibility spans every schedule, exactly as the public listing evaluates it.
+        const configuredHours = await listLocationOpeningHours(manager, location.id);
         const schedules = await listOpeningHoursSchedules(manager, location.id);
         const publicationPricing = await listLocationPublicationPricing(manager, location.id);
         const coverage = await listCheckoutCourtCoverage(manager, courtId, date);
@@ -77,7 +79,7 @@ export async function createCustomerBooking(input: unknown, reader?: Reader,
         const today = publicationToday(location.timezone, now);
         if (!isPubliclyEligible({ name: location.name, slug: location.slug, timezone: location.timezone,
           currency: location.currency, is_active: location.isActive, is_public: location.isPublic,
-          archived_at: location.archivedAt?.toISOString() ?? null, location_opening_hours: hours.map((h) => {
+          archived_at: location.archivedAt?.toISOString() ?? null, location_opening_hours: configuredHours.map((h) => {
             const schedule = schedules.find((s) => s.id === h.scheduleId);
             if (!schedule) throw new Error("Opening-hours schedule missing.");
             return { id: h.id, weekday: h.weekday, starts_on: schedule.startsOn, ends_on: schedule.endsOn, opens_at_minute: h.opensAtMinute, closes_at_minute: h.closesAtMinute };

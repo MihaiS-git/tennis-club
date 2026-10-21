@@ -16,7 +16,7 @@ const row = { court_id: id(2), starts_at_minute: 600, ends_at_minute: 660, statu
 const hours = { id: id(4), location_id: id(1), weekday: 3, opens_at_minute: 600, closes_at_minute: 840,
   created_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-01T00:00:00Z" };
 let detailRows: unknown[] = [];
-const common = { includes_coaching: false, coach_name: null, coaching_program_name: null, coaching: null, location_name: null, court_name: null, location_timezone: null, court_id: id(2), booking_date: date, starts_at_minute: 600, ends_at_minute: 660,
+const common = { includes_coaching: false, coach_user_id: null, coach_name: null, coaching_program_name: null, coaching: null, location_name: null, court_name: null, location_timezone: null, court_id: id(2), booking_date: date, starts_at_minute: 600, ends_at_minute: 660,
   cancellation_notice_minutes: null, total_amount_minor: null, currency: null, payment_facts: [], creator_email: null, creator_phone: null, account_user_id: null, payment_method: null };
 const direct = { ...common, kind: "reservation", id: id(5), reason: "Practice", created_by_user_id: id(6),
   creator_name: "Own Name", customer_name: null, customer_email: null, customer_phone: null };
@@ -74,8 +74,8 @@ test("includes live held rows with microseconds, excludes equal/expired/null dea
   expect(query.mock.calls.every(([sql]) => !/UPDATE|DELETE|INSERT/.test(sql))).toBe(true);
 });
 
-test.each(["admin", "coach"])("projects historical coaching terms in one staff details query for %s", async role => {
-  account.mockResolvedValue({ state: "active", userId: id(6), roles: [role] });
+test("projects historical coaching terms in one staff details query for Admins", async () => {
+  account.mockResolvedValue({ state: "active", userId: id(6), roles: ["admin"] });
   const coaching = { programId: id(10), coachUserId: id(11), locationId: id(1), participantCount: 2,
     durationMinutes: 60, source: "club", amountMinor: 6000, currency: "RON", courtRentalIncluded: false,
     courtRentalMinor: 3000, courtAmountMinor: 3000 };
@@ -90,4 +90,35 @@ test.each(["admin", "coach"])("projects historical coaching terms in one staff d
   expect(details[0][0]).toContain("v.coach_name");
   expect(details[0][0]).not.toContain("coach_profiles");
   expect(details[0][0]).not.toContain("coaching_programs");
+});
+
+test("Coaches receive bare intervals for other bookings and only contact details for their own lessons", async () => {
+  const coachId = id(6), otherCoachId = id(11);
+  const lesson = (n: number, coachUserId: string, customer: string) => ({ ...booking, id: id(20 + n), starts_at_minute: 720 + n * 60, ends_at_minute: 780 + n * 60,
+    includes_coaching: true, coach_user_id: coachUserId, coach_name: `Coach ${n}`, coaching_program_name: `Program ${n}`, account_user_id: id(40 + n),
+    customer_name: customer, customer_email: `${customer}@example.test`, customer_phone: `+40 ${n}`, total_amount_minor: 7700, payment_method: "online",
+    payment_facts: [{ id: id(50 + n), booking_id: id(20 + n), method: "online", provider: "stripe", provider_payment_id: "pi_secret", amount_minor: 7700,
+      currency: "RON", status: "captured", expires_at: null, created_at: "2026-10-01T00:00:00Z" }],
+    coaching: { programId: id(60), coachUserId, locationId: id(1), participantCount: 1, durationMinutes: 60, source: "club", amountMinor: 5500,
+      currency: "RON", courtRentalIncluded: false, courtRentalMinor: 2200, courtAmountMinor: 2200 } });
+  const ownBooking = { ...booking, id: id(9), starts_at_minute: 1200, ends_at_minute: 1260, account_user_id: coachId, customer_name: "Coach as customer" };
+  detailRows = [direct, { ...booking, account_user_id: id(30) }, lesson(1, otherCoachId, "OtherLessonCustomer"), lesson(2, coachId, "OwnLessonCustomer"), ownBooking];
+  const result = await getReservationDay(location, date, now, client);
+  expect(result.canManage).toBe(false);
+  const interval = (start: number) => ({ court_id: id(2), booking_date: date, starts_at_minute: start, ends_at_minute: start + 60 });
+  expect(result.adminOccupancy).toEqual([
+    expect.objectContaining({ kind: "reservation", id: id(5), creator_name: "Own Name" }),
+    { kind: "occupied", id: `occupied:${id(2)}:660`, ...interval(660) },
+    { kind: "occupied", id: `occupied:${id(2)}:780`, ...interval(780) },
+    { kind: "lesson", id: id(22), ...interval(840), coach_user_id: coachId, coach_name: "Coach 2", coaching_program_name: "Program 2",
+      customer_name: "OwnLessonCustomer", customer_email: "OwnLessonCustomer@example.test", customer_phone: "+40 2" },
+    // The Coach's own customer booking keeps its self-service details.
+    expect.objectContaining({ kind: "booking", id: id(9), customer_name: "Coach as customer", total_amount_minor: 9000 }),
+  ]);
+  // Nothing identifying or financial about unrelated customers, other Coaches' lessons or own lessons leaves the server.
+  const serialized = JSON.stringify(result.adminOccupancy.slice(1, 4));
+  for (const leaked of ["Snapshot", "snapshot@example.test", "OtherLessonCustomer", "Coach 1", "Program 1", id(7), id(21), id(30), id(41), id(42),
+    "pay_at_club", "online", "stripe", "pi_secret", "captured", "7700", "5500", "9000", "RON", "payment", "total_amount_minor", "currency",
+    "account_user_id", "coaching\":", "cancellation_notice_minutes"])
+    expect(serialized).not.toContain(leaked);
 });

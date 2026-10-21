@@ -1,4 +1,4 @@
-import { assert, beforeEach, expect, it, vi } from "vitest";
+import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { readCurrentAccount, notFound, redirect, getDataSource } = vi.hoisted(() => ({
   readCurrentAccount: vi.fn(),
@@ -11,7 +11,7 @@ vi.mock("next/navigation", () => ({ notFound, redirect }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn(async () => ({})) }));
 vi.mock("@/lib/db/data-source", () => ({ getDataSource }));
 
-import { resolveCoachAvailability } from "@/lib/coaching/availability-schedule";
+import { currentAndUpcomingOpeningHours, resolveCoachAvailability } from "@/lib/coaching/availability-schedule";
 import {
   changeCoachAvailability, changeOwnCoachAvailability, loadAdminCoachAvailability, loadOwnCoachAvailability,
 } from "@/lib/coaching/availability";
@@ -160,4 +160,62 @@ it("returns field errors for invalid changes without database access", async () 
   expect(await changeCoachAvailability({ coach_user_id: locationA, change: { operation: "save-exception", fields: exception({ kind: "available" }) } }))
     .toMatchObject({ ok: false, reason: "invalid-input", fieldErrors: { location_id: "Select a location." } });
   expect(getDataSource).not.toHaveBeenCalled();
+});
+
+it.each([
+  [{ date: "2026-12-21", until_date: "2027-01-10" }, true],
+  [{ until_date: "2099-06-01", start_minute: 600, end_minute: 660 }, true],
+  [{ until_date: "2099-05-31" }, false],
+  [{ until_date: "2099-06-02", start_minute: 600, end_minute: 660 }, false],
+  [{ until_date: "2099-06-02", kind: "available", location_id: locationA, start_minute: 600, end_minute: 660 }, false],
+  [{ until_date: "2099-02-30" }, false],
+])("validates inclusive periods and single-day partial absences %#", (overrides, valid) => {
+  expect(availabilityExceptionFieldsSchema.safeParse(exception(overrides)).success).toBe(valid);
+});
+
+it.each(["2026-12-20", "2026-12-21", "2026-12-31", "2027-01-01", "2027-01-10", "2027-01-11"])(
+  "overrides weekly availability on inclusive local dates across year boundaries: %s", date => {
+    const weekday = (new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7;
+    const windows = resolveCoachAvailability({ date,
+      timezones: new Map([[locationA, "Pacific/Auckland"], [locationB, "America/Los_Angeles"]]),
+      weekly: [weekly({ weekday }), weekly({ weekday, location_id: locationB, start_minute: 900, end_minute: 1080 })],
+      exceptions: [{ date: "2026-12-21", until_date: "2027-01-10", kind: "unavailable", location_id: null, start_minute: null, end_minute: null }],
+    });
+    expect(windows).toHaveLength(date >= "2026-12-21" && date <= "2027-01-10" ? 0 : 2);
+  },
+);
+
+describe("currentAndUpcomingOpeningHours", () => {
+  const schedules = [
+    { id: "past", starts_on: "2026-01-01", ends_on: "2026-03-31" },
+    { id: "later", starts_on: "2026-07-01", ends_on: null },
+    { id: "now", starts_on: "2026-04-01", ends_on: "2026-06-30" },
+  ];
+  const hours = [
+    { schedule_id: "now", weekday: 5, opens_at_minute: 540, closes_at_minute: 1260 },
+    { schedule_id: "now", weekday: 0, opens_at_minute: 900, closes_at_minute: 1320 },
+    { schedule_id: "now", weekday: 0, opens_at_minute: 480, closes_at_minute: 720 },
+    { schedule_id: "past", weekday: 0, opens_at_minute: 0, closes_at_minute: 1440 },
+    { schedule_id: "later", weekday: 6, opens_at_minute: 600, closes_at_minute: 1200 },
+  ];
+
+  it("returns the schedule in effect on the local date, then later schedules, and drops history", () => {
+    expect(currentAndUpcomingOpeningHours(schedules, hours, "2026-05-10")).toEqual([
+      { starts_on: "2026-04-01", ends_on: "2026-06-30", status: "current", intervals: [
+        { weekday: 0, opens_at_minute: 480, closes_at_minute: 720 }, { weekday: 0, opens_at_minute: 900, closes_at_minute: 1320 },
+        { weekday: 5, opens_at_minute: 540, closes_at_minute: 1260 }] },
+      { starts_on: "2026-07-01", ends_on: null, status: "scheduled", intervals: [{ weekday: 6, opens_at_minute: 600, closes_at_minute: 1200 }] },
+    ]);
+  });
+
+  it("uses inclusive schedule boundaries", () => {
+    expect(currentAndUpcomingOpeningHours(schedules, hours, "2026-06-30").map((schedule) => schedule.status)).toEqual(["current", "scheduled"]);
+    expect(currentAndUpcomingOpeningHours(schedules, hours, "2026-07-01").map((schedule) => [schedule.starts_on, schedule.status]))
+      .toEqual([["2026-07-01", "current"]]);
+  });
+
+  it("returns nothing when no schedule is configured or every schedule has ended", () => {
+    expect(currentAndUpcomingOpeningHours([], [], "2026-05-10")).toEqual([]);
+    expect(currentAndUpcomingOpeningHours([schedules[0]], hours, "2026-05-10")).toEqual([]);
+  });
 });

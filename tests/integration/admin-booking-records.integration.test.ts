@@ -102,17 +102,21 @@ test("Admin booking records show persisted history and verified financial operat
       ["payment", original, "succeeded", 5000], ["payment", failed, "failed", 900], ["payment", extra, "succeeded", 2500],
       ["refund", verified, "succeeded", 1000], ["refund", retrying, "pending_retry", 500], ["refund", rejected, "failed", 300]]);
     expect(records.operations.rows.find(row => row.transaction_id === verified)?.operation_label).toBe("Late capture compensation");
+    // An unsuccessful request blocks nothing; captures not already owed back would be refunded.
+    expect(records.cancellation).toEqual({ availability: "eligible", startsAt: "2099-12-01T10:30:00.000Z", refundAvailable: true });
 
     const guest = (await getAdminBookingRecords(club, { supabase: admin }))!;
     expect(guest.history.map(event => event.label)).toEqual(["Booking created", "Cancelled"]);
     expect(guest.summary).toMatchObject({ paid: 0, refunded: 0, outstanding: 0, dueAtClub: 0, unrecordedAtClub: 0, activeBooking: false });
     expect(guest.operations.rows.map(row => [row.method, row.transaction_status, row.amount_minor])).toEqual([["pay_at_club", "due", 4000]]);
+    expect(guest.cancellation).toMatchObject({ availability: "unavailable", refundAvailable: false });
 
     const unpaid = (await getAdminBookingRecords(expired, { supabase: admin }))!;
     expect(unpaid.history.map(event => [event.label, event.recorded, event.at])).toEqual([["Booking created", true, "2026-10-03T10:00:00.000Z"],
       ["Checkout expired", false, null]]);
     expect(unpaid.operations).toEqual({ rows: [], page: 1, total: 0, totalPages: 1 });
     expect(unpaid.summary).toMatchObject({ paid: 0, outstanding: 0 });
+    expect(unpaid.cancellation.availability).toBe("unavailable");
 
     // Losing the Admin role denies the records read.
     expect((await db.from("user_roles").delete().eq("user_id", users[0]).eq("role_code", "admin")).error).toBeNull();

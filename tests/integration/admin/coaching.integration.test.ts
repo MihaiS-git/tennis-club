@@ -11,6 +11,8 @@ import { readPublicCoaching } from "../../../src/lib/coaching/public";
 import { cleanupAuthFixtures, localFixtureClient } from "../auth-fixtures";
 import { ensureIntegrationAdminAnchor } from "../admin-anchor";
 
+import { loadCoachesPage } from "@/lib/coaching/admin-lists";
+
 const service = localFixtureClient();
 const password = "coaching-integration-password-123";
 const userIds: string[] = [];
@@ -70,6 +72,7 @@ test("coaching administration enforces Admin authorization, coach eligibility, c
   // Authorization: non-Admins are rejected before any write.
   for (const session of [member.client, coach.client, publicClient()]) {
     await expect(loadAdminCoaching(session)).rejects.toThrow();
+    await expect(loadCoachesPage({}, session)).rejects.toThrow();
     await expect(saveCoachingProgram({ fields: programFields }, session)).rejects.toThrow();
     await expect(saveCoachProfile({ user_id: coach.id, create: true, fields: coachFields() }, session)).rejects.toThrow();
     await expect(saveCoachingPrice({}, session)).rejects.toThrow();
@@ -92,14 +95,26 @@ test("coaching administration enforces Admin authorization, coach eligibility, c
   expect(state.coachAccounts.map((item) => item.id)).toEqual(expect.arrayContaining([coach.id, adminCoach.id]));
   expect(state.coachAccounts.map((item) => item.id)).not.toContain(member.id);
   expect(state.coachAccounts.map((item) => item.id)).not.toContain(suspendedCoach.id);
-  for (const ineligible of [member.id, suspendedCoach.id, randomUUID()]) {
+  for (const ineligible of [member.id, randomUUID()]) {
     expect(await saveCoachProfile({ user_id: ineligible, create: true, fields: coachFields() }, admin.client)).toEqual({ ok: false, reason: "not-eligible" });
   }
+  expect(await saveCoachProfile({ user_id: suspendedCoach.id, create: true, fields: coachFields({ is_public: true }) }, admin.client))
+    .toEqual({ ok: false, reason: "not-eligible" });
+  expect(await saveCoachProfile({ user_id: suspendedCoach.id, create: true, fields: coachFields() }, admin.client))
+    .toEqual({ ok: true, id: suspendedCoach.id });
   expect(await saveCoachProfile({ user_id: coach.id, create: true, fields: coachFields({ location_ids: [randomUUID()] }) }, admin.client))
     .toEqual({ ok: false, reason: "invalid-location" });
   expect(await saveCoachProfile({ user_id: coach.id, create: true, fields: coachFields({ program_ids: [randomUUID()] }) }, admin.client))
     .toEqual({ ok: false, reason: "invalid-program" });
+  const beforeConfiguration = await loadCoachesPage({ search: coach.email }, admin.client);
+  expect(beforeConfiguration).toMatchObject({ total: 1, coaches: [{ user_id: coach.id, profile: null, profile_status: "not-configured" }] });
   expect(await saveCoachProfile({ user_id: coach.id, create: true, fields: coachFields() }, admin.client)).toEqual({ ok: true, id: coach.id });
+  expect(await loadCoachesPage({ search: coach.email }, admin.client))
+    .toMatchObject({ total: 1, coaches: [{ user_id: coach.id, profile_status: "configured", profile: { display_name: "Integration Coach" } }] });
+  const allCoaches = await loadCoachesPage({}, admin.client);
+  const roleCount = await database.query("SELECT count(*)::int AS total FROM public.users u WHERE EXISTS (SELECT 1 FROM public.user_roles r WHERE r.user_id=u.id AND r.role_code='coach')");
+  expect(allCoaches.total).toBe(roleCount[0].total);
+
   expect(await saveCoachProfile({ user_id: coach.id, create: true, fields: coachFields() }, admin.client)).toEqual({ ok: false, reason: "already-exists" });
   expect(await saveCoachProfile({ user_id: adminCoach.id, create: true, fields: coachFields({ display_name: "Second Coach", program_ids: [], is_public: true }) }, admin.client))
     .toEqual({ ok: true, id: adminCoach.id });
@@ -147,12 +162,13 @@ test("coaching administration enforces Admin authorization, coach eligibility, c
   expect(published.programs[0].prices).toEqual([{ locationId: locationIds[0], locationName: "Coaching East", durationMinutes: 60, amountMinor: 12550, currency: "RON" }]);
   expect(published.coaches.map((item) => item.displayName)).toEqual(["Second Coach"]);
   expect(await setCoachVisibility({ user_id: coach.id, is_public: true }, admin.client)).toEqual({ ok: true, id: coach.id });
-  expect(await setCoachVisibility({ user_id: suspendedCoach.id, is_public: true }, admin.client)).toEqual({ ok: false, reason: "not-found" });
+  expect(await setCoachVisibility({ user_id: suspendedCoach.id, is_public: true }, admin.client)).toEqual({ ok: false, reason: "not-eligible" });
   // A suspended account is hidden publicly and cannot be made public again.
   expect(await setCoachVisibility({ user_id: adminCoach.id, is_public: false }, admin.client)).toEqual({ ok: true, id: adminCoach.id });
   assert.strictEqual((await service.from("users").update({ status: "suspended" }).eq("id", adminCoach.id)).error, null);
   expect(await setCoachVisibility({ user_id: adminCoach.id, is_public: true }, admin.client)).toEqual({ ok: false, reason: "not-eligible" });
   expect((await loadAdminCoaching(admin.client)).coaches.find((item) => item.user_id === adminCoach.id)?.ineligibility).toBe("suspended");
+  await expect(loadCoachesPage({}, adminCoach.client)).rejects.toThrow();
   assert.strictEqual((await service.from("users").update({ status: "active" }).eq("id", adminCoach.id)).error, null);
   expect(await setCoachVisibility({ user_id: adminCoach.id, is_public: true }, admin.client)).toEqual({ ok: true, id: adminCoach.id });
   published = await ours();
@@ -224,8 +240,8 @@ test("duration edits clean all locations, overrides and stale currencies atomica
     await expect(deleteCoachingProgram({ id: created.id }, session)).rejects.toThrow();
     await expect(deleteCoachProfile({ user_id: coach.id }, session)).rejects.toThrow();
   }
-  await db.query(`INSERT INTO public.coach_weekly_availability(coach_user_id,location_id,weekday,start_minute,end_minute) VALUES($1,$2,0,600,660)`, [coach.id, locationIds[0]]);
-  await db.query(`INSERT INTO public.coach_availability_exceptions(coach_user_id,exception_date,kind,note) VALUES($1,'2099-01-01','unavailable','Away')`, [coach.id]);
+  await db.query(`INSERT INTO public.coach_weekly_availability(coach_user_id,location_id,weekday,start_minute,end_minute,valid_from) VALUES($1,$2,0,600,660,'2000-01-01')`, [coach.id, locationIds[0]]);
+  await db.query(`INSERT INTO public.coach_availability_exceptions(coach_user_id,exception_date,until_date,kind,note) VALUES($1,'2099-01-01','2099-01-01','unavailable','Away')`, [coach.id]);
   await db.query("INSERT INTO public.player_profiles(user_id,display_name) VALUES($1,'Player identity')", [coach.id]);
   const removeCoach = coachingRepository.removeCoachConfiguration;
   const coachFault = vi.spyOn(coachingRepository, "removeCoachConfiguration").mockImplementationOnce(async (...args) => {

@@ -12,6 +12,11 @@ export const coachingProgramTypeLabels: Record<CoachingProgramType, string> = {
 
 const coachingDurationLimits = { min: 15, max: 480, step: 5, count: 8 } as const;
 
+export function isCoachingDuration(minutes: number) {
+  return Number.isInteger(minutes) && minutes >= coachingDurationLimits.min && minutes <= coachingDurationLimits.max
+    && minutes % coachingDurationLimits.step === 0;
+}
+
 export function formatCoachingDuration(minutes: number) {
   return `${minutes} min`;
 }
@@ -59,7 +64,30 @@ export const coachingProgramFieldsSchema = z.strictObject({
   }
 });
 
-export const coachingProgramMutationSchema = z.strictObject({ id: z.uuid().optional(), fields: coachingProgramFieldsSchema });
+// Club-default prices saved with the program, per location and selected duration. Omitted
+// prices are unchanged; an empty amount is never sent, and removal is always explicit.
+const clubPriceKey = { location_id: z.uuid(), duration_minutes: z.number().int() };
+const clubPriceKeyText = (price: { location_id: string; duration_minutes: number }) => `${price.location_id.toLowerCase()}:${price.duration_minutes}`;
+export const coachingProgramMutationSchema = z.strictObject({
+  id: z.uuid().optional(), fields: coachingProgramFieldsSchema,
+  club_prices: z.array(z.strictObject({ ...clubPriceKey, amount: majorAmountSchema })).max(400).optional(),
+  removed_club_prices: z.array(z.strictObject(clubPriceKey)).max(400).optional(),
+}).superRefine((value, context) => {
+  const seen = new Set<string>();
+  value.club_prices?.forEach((price, index) => {
+    const key = clubPriceKeyText(price);
+    if (!value.fields.durations.includes(price.duration_minutes)) {
+      context.addIssue({ code: "custom", path: ["club_prices", index, "amount"], message: "Select this duration before setting its price." });
+    } else if (seen.has(key)) {
+      context.addIssue({ code: "custom", path: ["club_prices", index, "amount"], message: "Enter each price once." });
+    }
+    seen.add(key);
+  });
+  value.removed_club_prices?.forEach((price, index) => {
+    if (!value.id) context.addIssue({ code: "custom", path: ["removed_club_prices", index], message: "A new program has no prices to remove." });
+    else if (seen.has(clubPriceKeyText(price))) context.addIssue({ code: "custom", path: ["removed_club_prices", index], message: "A price cannot be both saved and removed." });
+  });
+});
 export const coachingProgramStatusSchema = z.strictObject({ id: z.uuid(), is_active: z.boolean() });
 
 const textList = (label: string) => z.array(z.string().trim().min(1).max(60, `Each ${label} must use at most 60 characters.`))
@@ -97,6 +125,11 @@ export type CoachingMutationResult =
 export function coachingFieldErrors(issues: readonly z.core.$ZodIssue[]) {
   const fieldErrors: Record<string, string> = {};
   for (const issue of issues) {
+    // Program club prices are reported per submitted entry, e.g. "club_prices.2".
+    if ((issue.path[0] === "club_prices" || issue.path[0] === "removed_club_prices") && typeof issue.path[1] === "number") {
+      fieldErrors[`${issue.path[0]}.${issue.path[1]}`] ??= issue.message;
+      continue;
+    }
     const field = issue.path.find((part) => typeof part === "string" && part !== "fields");
     fieldErrors[String(field ?? "form")] ??= issue.message;
   }

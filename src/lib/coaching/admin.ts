@@ -11,7 +11,7 @@ import { lockActiveAdminAccount, lockReservationActorFacts } from "@/lib/db/repo
 import { listLocationsWithCoachAvailability } from "@/lib/db/repositories/coach-availability.repository";
 import * as clubs from "@/lib/db/repositories/clubs.repository";
 import * as coaching from "@/lib/db/repositories/coaching.repository";
-import { inTransaction } from "@/lib/db/transaction";
+import { inTransaction, readIndependently } from "@/lib/db/transaction";
 import { logger } from "@/lib/logger";
 import type { LocationCurrency } from "@/lib/pricing/money";
 import { createClient } from "@/lib/supabase/server";
@@ -54,12 +54,16 @@ export function coachIneligibility(facts: { status: "active" | "suspended"; role
 
 export async function loadAdminCoaching(supabase?: Client): Promise<AdminCoaching> {
   await requireActiveAdmin(supabase ?? await createClient());
+  return readAdminCoaching((await getDataSource()).manager);
+}
+
+// Internal projection for already-authorized management reads, including list snapshots.
+export async function readAdminCoaching(manager: EntityManager, includePrices = true): Promise<AdminCoaching> {
   try {
-    const { manager } = await getDataSource();
-    const [programs, coaches, coachAccounts, locations, prices] = await Promise.all([
-      coaching.listCoachingPrograms(manager), coaching.listCoachProfiles(manager),
-      coaching.listCoachAccountsWithoutProfile(manager), clubs.listAdminLocations(manager, "current"),
-      coaching.listCoachingPrices(manager),
+    const [programs, coaches, coachAccounts, locations, prices] = await readIndependently(manager, [
+      () => coaching.listCoachingPrograms(manager), () => coaching.listCoachProfiles(manager),
+      () => coaching.listCoachAccountsWithoutProfile(manager), () => clubs.listAdminLocations(manager, "current"),
+      () => includePrices ? coaching.listCoachingPrices(manager) : Promise.resolve([]),
     ]);
     const currencies = new Map(locations.map((location) => [location.id, location.currency]));
     return {
@@ -128,12 +132,37 @@ export async function saveCoachingProgram(input: unknown, supabase?: Client): Pr
     minParticipants: fields.min_participants, maxParticipants: fields.max_participants,
     courtRentalIncluded: fields.court_rental_included, isActive: fields.is_active,
   };
+  const clubPrices = (parsed.data.club_prices ?? []).map((price) => ({
+    locationId: price.location_id.toLowerCase(), durationMinutes: price.duration_minutes, amount: price.amount,
+  }));
+  const removedPrices = (parsed.data.removed_club_prices ?? []).map((price) => ({
+    locationId: price.location_id.toLowerCase(), durationMinutes: price.duration_minutes,
+  }));
   return mutate(id ? "admin.coaching_program_updated" : "admin.coaching_program_created", actor.userId, async (manager) => {
+    // Configuration fence → price locations → Admin fence → program, the price-save order.
     await clubs.lockConfigurationForWrite(manager);
+    const locations = await clubs.lockLocationsForRead(manager, [...clubPrices, ...removedPrices].map((price) => price.locationId));
     await requireAdminFence(manager, actor.userId);
+    // Every check precedes the first write. New prices need a current location; removals may name an archived one.
+    if (clubPrices.some((price) => !locations.some((location) => location.id === price.locationId && location.archivedAt === null))
+      || removedPrices.some((price) => !locations.some((location) => location.id === price.locationId))) return { ok: false, reason: "invalid-location" };
+    // Club defaults reuse the price upsert; the location currency is server-authoritative.
+    async function savePrices(programId: string) {
+      const now = new Date();
+      for (const price of removedPrices) {
+        await coaching.deleteCoachingPrice(manager, { programId, durationMinutes: price.durationMinutes, locationId: price.locationId, coachUserId: null });
+      }
+      for (const price of clubPrices) {
+        const currency = locations.find((location) => location.id === price.locationId)?.currency;
+        if (!currency) throw new Error("Price location missing");
+        await coaching.upsertCoachingPrice(manager, { programId, durationMinutes: price.durationMinutes, locationId: price.locationId, coachUserId: null },
+          price.amount, currency, now);
+      }
+    }
     if (!id) {
       const created = await coaching.insertCoachingProgram(manager, values, new Date());
       await coaching.addCoachingProgramDurations(manager, created, fields.durations);
+      await savePrices(created);
       return { ok: true, id: created };
     }
     // Price saves hold the program FOR SHARE, so removed durations cannot gain prices.
@@ -145,6 +174,8 @@ export async function saveCoachingProgram(input: unknown, supabase?: Client): Pr
     await coaching.updateCoachingProgram(manager, program.id, values, new Date());
     await coaching.removeCoachingProgramDurations(manager, program.id, removed);
     await coaching.addCoachingProgramDurations(manager, program.id, added);
+    // A removal already applied by a removed duration or another Admin is a no-op.
+    await savePrices(program.id);
     return { ok: true, id: program.id };
   });
 }
@@ -183,10 +214,11 @@ export async function saveCoachProfile(input: unknown, supabase?: Client): Promi
     if (!create && !profile) return { ok: false, reason: "not-found" };
     const locations = await clubs.lockLocationsForRead(manager, [...locationIds, ...profile?.locationIds ?? []]);
     await requireAdminFence(manager, actor.userId);
-    const eligibility = coachIneligibility(await lockReservationActorFacts(manager, userId));
-    // A new profile needs a coach account; an existing one stays editable but
-    // can only be public while the account is an active coach.
-    if (create && eligibility) return { ok: false, reason: "not-eligible" };
+    const account = await lockReservationActorFacts(manager, userId);
+    const eligibility = coachIneligibility(account);
+    // Private configuration is allowed for suspended coaches; publishing still
+    // requires an active account. Creation always requires the authoritative role.
+    if (create && !account?.roles.includes("coach")) return { ok: false, reason: "not-eligible" };
     if (fields.is_public && eligibility) return { ok: false, reason: "not-eligible" };
     const retainedLocations = new Set(profile?.locationIds ?? []);
     // New assignments need a current location; existing ones may be kept after archiving.

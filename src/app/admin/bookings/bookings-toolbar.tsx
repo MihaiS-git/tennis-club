@@ -5,13 +5,23 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { AdminToolbar } from "@/components/admin-page-controls";
 import type { AdminBookingFilterCoach, AdminBookingFilterLocation } from "@/lib/bookings/admin-details";
-import { bookingTypeLabels } from "@/lib/bookings/booking-type";
-import { bookingStatusLabels, parseAdminBookingQuery } from "@/lib/bookings/admin-query";
+import { adminListStatusOptions, adminListTypeLabels, coachListStatusOptions, coachListTypeLabels, parseAdminBookingQuery,
+  parseCoachBookingQuery } from "@/lib/bookings/admin-query";
+import type { ListScope } from "./booking-row";
 
-export function BookingsToolbar({ locations, coaches = [] }: { locations: AdminBookingFilterLocation[]; coaches?: AdminBookingFilterCoach[] }) {
+// Coaches choose only between their own lessons and their own staff reservations.
+const scoped = {
+  admin: { parse: parseAdminBookingQuery, types: adminListTypeLabels, statuses: adminListStatusOptions, placeholder: "ID, customer, staff or reason" },
+  coach: { parse: parseCoachBookingQuery, types: coachListTypeLabels, statuses: coachListStatusOptions, placeholder: "ID, customer or reason" },
+};
+
+export function BookingsToolbar({ locations, coaches = [], scope = "admin" }: {
+  locations: AdminBookingFilterLocation[]; coaches?: AdminBookingFilterCoach[]; scope?: ListScope;
+}) {
+  const { parse, types, statuses, placeholder } = scoped[scope];
   const router = useRouter(), pathname = usePathname(), searchParams = useSearchParams();
   const queryString = searchParams.toString();
-  const filters = parseAdminBookingQuery(Object.fromEntries(["q", "type", "coach", "status", "location", "court", "from", "to"].map((key) => {
+  const filters = parse(Object.fromEntries(["q", "type", "coach", "status", "location", "court", "from", "to"].map((key) => {
     const values = searchParams.getAll(key); return [key, values.length === 1 ? values[0] : undefined];
   })));
   const location = locations.find((item) => item.id === filters.location);
@@ -28,6 +38,9 @@ export function BookingsToolbar({ locations, coaches = [] }: { locations: AdminB
     const params = new URLSearchParams(currentQuery.current);
     for (const [key, value] of Object.entries(changes)) if (value && value !== "all") params.set(key, value); else params.delete(key);
     if (changes.type && changes.type !== "coaching") params.delete("coach");
+    // A status outside the new Type's lifecycle would match nothing, so it is cleared.
+    const status = params.get("status");
+    if (changes.type && status && !statuses(parse({ type: changes.type }).type).some(([value]) => value === status)) params.delete("status");
     params.delete("page"); currentQuery.current = params.toString();
     router.replace(`${pathname}${params.size ? `?${params}` : ""}`, { scroll: false });
   }
@@ -35,7 +48,7 @@ export function BookingsToolbar({ locations, coaches = [] }: { locations: AdminB
   const field = "flex w-[calc(50%-0.375rem)] flex-col gap-1.5 font-medium text-primary sm:w-40";
   const hasFilters = Boolean(filters.q || filters.type !== "all" || filters.status !== "all" || filters.location || filters.from || filters.to);
   return <AdminToolbar primary={<label className="flex w-full flex-col gap-1.5 font-medium text-primary sm:w-72">
-    Search<input type="search" value={text} maxLength={200} placeholder="Booking ID, customer name or email" className={control}
+    Search<input type="search" value={text} maxLength={200} placeholder={placeholder} className={control}
       onChange={(event) => {
         const next = event.target.value; setDraft({ queryString, text: next }); cancelSearch();
         const scheduled = currentQuery.current;
@@ -43,15 +56,15 @@ export function BookingsToolbar({ locations, coaches = [] }: { locations: AdminB
       }} />
   </label>} filters={<>
     <label className={field}>Type<select value={filters.type} className={control} onChange={(event) => navigate({ type: event.target.value })}>
-      <option value="all">All</option>{Object.entries(bookingTypeLabels).map(([value, name]) => <option key={value} value={value}>{name}</option>)}
+      <option value="all">All</option>{Object.entries(types).map(([value, name]) => <option key={value} value={value}>{name}</option>)}
     </select></label>
-    {filters.type === "coaching" && <label className={field}>Coach<select
+    {filters.type === "coaching" && scope === "admin" && <label className={field}>Coach<select
       value={coaches.some((coach) => coach.id === filters.coach) ? filters.coach : ""} className={control}
       onChange={(event) => navigate({ coach: event.target.value })}>
       <option value="">All</option>{coaches.map((coach) => <option key={coach.id} value={coach.id}>{coach.name}</option>)}
     </select></label>}
     <label className={field}>Status<select value={filters.status} className={control} onChange={(event) => navigate({ status: event.target.value })}>
-      <option value="all">All</option>{Object.entries(bookingStatusLabels).map(([value, name]) => <option key={value} value={value}>{name}</option>)}
+      <option value="all">All</option>{statuses(filters.type).map(([value, name]) => <option key={value} value={value}>{name}</option>)}
     </select></label>
     <label className={field}>Location<select value={location?.id ?? ""} className={control} onChange={(event) => navigate({ location: event.target.value, court: "" })}>
       <option value="">All</option>{locations.map((item) => <option key={item.id} value={item.id}>{item.name}{item.archived ? " (archived)" : ""}</option>)}

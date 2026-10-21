@@ -1,5 +1,6 @@
 "use client";
 
+import { clearCoachingFiltersEvent } from "./calendar-controls";
 import type { CoachingSelection } from "./coaching-selection";
 import { toast } from "sonner";
 
@@ -71,6 +72,16 @@ function BookingCalendarContent({ day, date, locationName, currency, initialCont
     window.addEventListener(startAnotherBookingEvent, startAnotherBooking);
     return () => window.removeEventListener(startAnotherBookingEvent, startAnotherBooking);
   }, [committed]);
+  useEffect(() => {
+    if (!coaching) return;
+    const clearFilters = (event: Event) => {
+      if (confirming) { event.preventDefault(); return; }
+      setSelection(null);
+      setCommitted(null);
+    };
+    window.addEventListener(clearCoachingFiltersEvent, clearFilters);
+    return () => window.removeEventListener(clearCoachingFiltersEvent, clearFilters);
+  }, [coaching, confirming]);
   const hasSelection = selection !== null;
   useEffect(() => {
     const content = contentRef.current;

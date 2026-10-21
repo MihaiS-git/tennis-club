@@ -1,6 +1,6 @@
 import { readPublicCoaching, type PublicCoaching } from "@/lib/coaching/public";
 import { readPublicCoachingLessonAvailability } from "@/lib/coaching/lesson-availability";
-import { isOnlineCoachingProgramType } from "@/lib/coaching/validation";
+import { readCoachingBookingOptions } from "@/lib/coaching/booking-options";
 import { CoachingControls } from "./coaching-controls";
 import type { CoachingSelection } from "./coaching-selection";
 import { connection } from "next/server";
@@ -67,30 +67,32 @@ async function CoachingDay({ location, date, today, now, data, params }: {
   location: Awaited<ReturnType<typeof listPublicLocationsWithCourts>>[number];
   date: string; today: string; now: Date; data: PublicCoaching; params: BookParams;
 }) {
-  const localCoaches = data.coaches.filter(coach => coach.locations.some(item => item.id === location.id));
-  const preselectedCoach = localCoaches.find(coach => coach.id === params.coach);
-  const offersProgram = (coach: PublicCoaching["coaches"][number], program: PublicCoaching["programs"][number]) =>
-    coach.programs.some(item => item.id === program.id) && program.durations.some(duration => duration >= 60 && duration % 30 === 0
-      && [...coach.rates.filter(rate => rate.programId === program.id), ...program.prices]
-        .some(price => price.locationId === location.id && price.currency === location.currency && price.durationMinutes === duration));
-  const programs = data.programs.filter(program => isOnlineCoachingProgramType(program.type)
-    && (params.coach ? !!preselectedCoach && offersProgram(preselectedCoach, program)
-      : localCoaches.some(coach => offersProgram(coach, program))));
+  const options = await readCoachingBookingOptions(data, location, now);
+  const programs = data.programs.filter(program => options.some(option => option.programs.some(item => item.id === program.id)));
+  const requestedDuration = params.duration ? Number(params.duration) : undefined;
+  const preferred = options.find(option => option.coach.id === params.coach);
   const program = params.program ? programs.find(program => program.id === params.program)
-    : programs.find(program => !preselectedCoach || preselectedCoach.programs.some(item => item.id === program.id));
-  const coaches = localCoaches.filter(coach => program && offersProgram(coach, program));
+    : programs.find(program => preferred?.programs.some(item => item.id === program.id
+      && (requestedDuration === undefined || item.durations.includes(requestedDuration)))) ?? programs[0];
+  const eligibleOptions = options.filter(option => option.programs.some(item => item.id === program?.id
+    && (requestedDuration === undefined || item.durations.includes(requestedDuration))));
+  const coaches = eligibleOptions.map(option => option.coach);
   const coach = params.coach ? coaches.find(coach => coach.id === params.coach) : coaches[0];
+  const eligibleDurations = options.find(option => option.coach.id === coach?.id)?.programs.find(item => item.id === program?.id)?.durations ?? [];
+  const cleanParams = new URLSearchParams({ mode: "coaching", location: location.id, date });
+  if (params.program) cleanParams.set("program", params.program);
+  if (params.duration) cleanParams.set("duration", params.duration);
   let availability = null;
   let unavailable = false;
   try {
     if (program && coach) availability = await readPublicCoachingLessonAvailability({ locationId: location.id,
       programId: program.id, coachId: coach.id, date }, now);
   } catch { unavailable = true; }
-  const duration = params.duration ? availability?.durations.find(item => String(item.durationMinutes) === params.duration)
-    : availability?.durations[0];
+  const durations = availability?.durations.filter(item => eligibleDurations.includes(item.durationMinutes)) ?? [];
+  const duration = params.duration ? durations.find(item => String(item.durationMinutes) === params.duration) : durations[0];
   return <>
-    <CoachingControls locationId={location.id} date={date} programs={coach ? programs.filter(program => offersProgram(coach, program)) : programs} coaches={coaches}
-      durations={availability?.durations.map(item => item.durationMinutes) ?? []}
+    <CoachingControls locationId={location.id} date={date} programs={programs} invalidCoachUrl={params.coach && !coach ? `/book?${cleanParams}` : undefined} coaches={coaches}
+      durations={durations.map(item => item.durationMinutes)}
       programId={program?.id ?? ""} coachId={coach?.id ?? ""} durationMinutes={duration?.durationMinutes ?? 0} />
     {unavailable && <p role="alert" className="mt-3 text-danger">Unable to load lesson availability. Please try again.</p>}
     {!duration && !unavailable && <p role="status" className="mt-3 text-muted-foreground">Choose an eligible program, coach and priced lesson duration to see lesson times.</p>}

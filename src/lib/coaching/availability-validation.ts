@@ -30,12 +30,26 @@ function orderedRange(value: { start_minute: number | null; end_minute: number |
   }
 }
 
+// Working hours apply from valid_from (default: the location's today, or the edited
+// row's start) until the inclusive valid_until; null or "" means no end date.
+const validityFields = {
+  valid_from: z.iso.date("Select a start date.").optional(),
+  valid_until: z.union([z.iso.date("Select an end date."), z.literal(""), z.null()]).optional(),
+};
+
+function orderedValidity(value: { valid_from?: string; valid_until?: string | null }, context: z.RefinementCtx) {
+  if (value.valid_from && value.valid_until && value.valid_until < value.valid_from) {
+    context.addIssue({ code: "custom", path: ["valid_until"], message: "Until date must be on or after From date." });
+  }
+}
+
 export const weeklyAvailabilityFieldsSchema = z.strictObject({
   location_id: z.uuid("Select a location."),
   weekday: z.number().int().min(0).max(6, "Select a day."),
   start_minute: startMinute,
   end_minute: endMinute,
-}).superRefine(orderedRange);
+  ...validityFields,
+}).superRefine((value, context) => { orderedRange(value, context); orderedValidity(value, context); });
 
 // One interval added on several weekdays at once; any combination, at least one.
 export const weeklyAvailabilityBatchFieldsSchema = z.strictObject({
@@ -44,11 +58,13 @@ export const weeklyAvailabilityBatchFieldsSchema = z.strictObject({
     .refine((weekdays) => new Set(weekdays).size === weekdays.length, "Select each day once."),
   start_minute: startMinute,
   end_minute: endMinute,
-}).superRefine(orderedRange);
+  ...validityFields,
+}).superRefine((value, context) => { orderedRange(value, context); orderedValidity(value, context); });
 
 // A whole-day or interval absence is coach-wide; extra availability names its location.
 export const availabilityExceptionFieldsSchema = z.strictObject({
   date: z.iso.date("Select a date."),
+  until_date: z.iso.date("Select an until date.").optional(),
   kind: z.enum(coachAvailabilityExceptionKinds, "Select an exception type."),
   location_id: z.uuid("Select a location.").nullable(),
   start_minute: startMinute.nullable(),
@@ -56,6 +72,11 @@ export const availabilityExceptionFieldsSchema = z.strictObject({
   note: z.string().trim().max(200, "Use at most 200 characters."),
 }).superRefine((value, context) => {
   orderedRange(value, context);
+  const until = value.until_date ?? value.date;
+  if (until < value.date) context.addIssue({ code: "custom", path: ["until_date"], message: "Until date must be on or after From date." });
+  if (until !== value.date && (value.kind !== "unavailable" || value.start_minute !== null || value.end_minute !== null)) {
+    context.addIssue({ code: "custom", path: ["until_date"], message: "Multi-day periods must be whole-day time off." });
+  }
   if ((value.start_minute === null) !== (value.end_minute === null)) {
     context.addIssue({ code: "custom", path: [value.start_minute === null ? "start_minute" : "end_minute"], message: "Enter both times, or neither for the whole day." });
   }
@@ -84,9 +105,13 @@ export type AvailabilityMutationResult =
   | { ok: true; id: string; ids?: string[] }
   | { ok: false; reason: "invalid-input"; fieldErrors: Record<string, string> }
   | { ok: false; reason: "overlap"; weekdays?: number[] }
-  | { ok: false; reason: "not-found" | "not-eligible" | "invalid-location" | "out-of-range" };
+  // Working hours must lie inside the location's opening hours on every date they apply.
+  | { ok: false; reason: "outside-opening-hours"; weekdays: number[] }
+  | { ok: false; reason: "not-found" | "not-eligible" | "invalid-location" | "out-of-range" | "booking-conflict" };
 
 export const availabilityFailureMessages: Record<Exclude<AvailabilityMutationResult, { ok: true } | { reason: "invalid-input" }>["reason"], string> = {
+  "outside-opening-hours": "Working hours must be within the location's opening hours on every date they apply. Choose other times or end them earlier.",
+  "booking-conflict": "This period conflicts with an existing coaching booking or payment hold. Resolve the booking before changing availability. No bookings were changed.",
   "not-found": "This availability no longer exists. Refresh the page.",
   "not-eligible": "Availability can only be changed for an active account with the Coach role and a coaching profile.",
   "invalid-location": "Select a current location this coach is assigned to.",
@@ -97,6 +122,11 @@ export const availabilityFailureMessages: Record<Exclude<AvailabilityMutationRes
 export function availabilityOverlapMessage(weekdays: readonly number[] | undefined) {
   if (!weekdays?.length) return availabilityFailureMessages.overlap;
   return `This overlaps existing availability on ${weekdays.map((weekday) => availabilityWeekdays[weekday]).join(", ")}. Nothing was saved.`;
+}
+
+export function availabilityOutsideOpeningHoursMessage(weekdays: readonly number[]) {
+  if (!weekdays.length) return availabilityFailureMessages["outside-opening-hours"];
+  return `Outside the location's opening hours on ${weekdays.map((weekday) => availabilityWeekdays[weekday]).join(", ")} for the selected dates. Choose other times or end them earlier. Nothing was saved.`;
 }
 
 export function availabilityFieldErrors(issues: readonly z.core.$ZodIssue[]) {

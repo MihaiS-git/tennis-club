@@ -29,6 +29,7 @@ test("navigation follows the current account and protected routes enforce access
   expect(anchor.data?.length, "Local E2E setup requires an existing active admin").toBe(1);
   const password = "Navigation-password-123";
   const accounts: { id: string; email: string }[] = [];
+  const locationId = randomUUID(), courtId = randomUUID(), scheduleId = randomUUID(), ruleSetId = randomUUID();
   async function signIn(target: Page, email: string) {
     // Finish the preceding protected-route redirect before submitting a new form.
     await target.goto("/login");
@@ -53,7 +54,8 @@ test("navigation follows the current account and protected routes enforce access
     const navigation = page.getByRole("navigation", { name: "Main navigation" });
     await expect(navigation.getByRole("link", { name: "Matches" })).toHaveCount(0);
     await expect(navigation.getByRole("link", { name: "Admin" })).toHaveCount(0);
-    for (const route of ["/profile", "/admin", "/admin/users", "/admin/reservations", "/reservations?date=2099-10-15", "/admin/payments/transactions", "/admin/payments/settings", "/reset-password"]) {
+    for (const route of ["/profile", "/admin", "/admin/users", "/admin/reservations", "/reservations?date=2099-10-15", "/admin/payments/transactions", "/admin/payments/settings", "/reset-password",
+      "/coach/bookings", "/coach/bookings?view=calendar"]) {
       await page.goto(route);
       await expect(page).toHaveURL(/\/login(?:\?|$)/);
     }
@@ -85,7 +87,8 @@ test("navigation follows the current account and protected routes enforce access
     await expect(navigation.getByRole("link", { name: "Matches" })).toHaveCount(0);
     await expect(navigation.getByRole("link", { name: "Rankings" })).toHaveCount(0);
     await expect(navigation.getByRole("link", { name: "Admin" })).toHaveCount(0);
-    for (const route of ["/admin", "/admin/users", "/admin/reservations", "/admin/payments/transactions", "/admin/payments/settings"]) {
+    for (const route of ["/admin", "/admin/users", "/admin/reservations", "/admin/payments/transactions", "/admin/payments/settings",
+      "/coach/bookings", "/coach/bookings?view=calendar"]) {
       await page.goto(route);
       await expect(page.getByRole("heading", { name: /404|not found/i })).toBeVisible();
     }
@@ -100,7 +103,7 @@ test("navigation follows the current account and protected routes enforce access
     await navigation.getByRole("link", { name: "Admin" }).click();
     const adminNavigation = page.getByRole("navigation", { name: "Management navigation" });
     await expect(page).toHaveURL(/\/admin\/locations$/);
-    await expect(adminNavigation.getByRole("link")).toHaveText(["Locations", "Reservations", "Bookings", "Programs", "Coaches", "Prices", "Availability", "Transactions", "Settings", "Users"]);
+    await expect(adminNavigation.getByRole("link")).toHaveText(["Locations", "Bookings & Reservations", "Programs", "Coaches", "Prices", "Availability", "Transactions", "Settings", "Users"]);
     await expect(adminNavigation.getByRole("link", { name: "Locations" })).toHaveAttribute("aria-current", "page");
     await adminNavigation.getByRole("link", { name: "Users" }).click();
     await expect(page.getByRole("heading", { name: "Users", exact: true })).toBeVisible();
@@ -124,12 +127,37 @@ test("navigation follows the current account and protected routes enforce access
     await expect(page.getByRole("dialog")).toHaveCount(0);
     await page.goto("/admin");
     await expect(page).toHaveURL(/\/admin\/locations$/);
+    // The Calendar renders its date control only when a configured location exists.
+    // Own this prerequisite instead of depending on data left by another test.
+    expect((await service.from("locations").insert({ id: locationId, name: "Navigation Club", slug: `navigation-${locationId}`, timezone: "UTC", currency: "RON" })).error).toBeNull();
+    expect((await service.from("courts").insert({ id: courtId, location_id: locationId, name: "N1", slug: "n1", surface: "clay", environment: "outdoor" })).error).toBeNull();
+    expect((await service.from("opening_hours_schedules").insert({ id: scheduleId, location_id: locationId, starts_on: "0001-01-01" })).error).toBeNull();
+    expect((await service.from("location_opening_hours").insert({ schedule_id: scheduleId, location_id: locationId, weekday: 3, opens_at_minute: 480, closes_at_minute: 1200 })).error).toBeNull();
+    expect((await service.from("pricing_rule_sets").insert({ id: ruleSetId, location_id: locationId })).error).toBeNull();
+    expect((await service.from("location_pricing_rules").insert({ location_id: locationId, rule_set_id: ruleSetId, court_id: courtId, court_state: "outdoor", weekday: 3, starts_at_minute: 480, ends_at_minute: 1200, price_per_hour_minor: 5000 })).error).toBeNull();
+    // Legacy Reservations URLs open the Admin Calendar tab with their location and date.
     await page.goto("/reservations?date=2099-10-15&extra=one&extra=two");
-    await expect(page).toHaveURL(/\/admin\/reservations\?date=2099-10-15&extra=one&extra=two$/);
-    await expect(page.getByRole("heading", { name: "Reservations", exact: true })).toBeVisible();
+    await expect(page).toHaveURL(/\/admin\/bookings\?view=calendar&date=2099-10-15$/);
+    await expect(page.getByRole("heading", { name: "Bookings & Reservations", exact: true })).toBeVisible();
     await expect(navigation.getByRole("link", { name: "Reservations" })).toHaveCount(0);
     await expect(navigation.getByRole("link", { name: "Admin", exact: true })).toHaveAttribute("aria-current", "page");
-    await expect(adminNavigation.getByRole("link", { name: "Reservations" })).toHaveAttribute("aria-current", "page");
+    await expect(adminNavigation.getByRole("link", { name: "Bookings & Reservations" })).toHaveAttribute("aria-current", "page");
+    const views = page.getByRole("navigation", { name: "Bookings and reservations views" });
+    await expect(views.getByRole("link", { name: "Calendar" })).toHaveAttribute("aria-current", "page");
+    await expect(page.getByLabel("Date")).toHaveValue("2099-10-15");
+    await expect(page.getByRole("table", { name: "Bookings and reservations" })).toHaveCount(0);
+    await views.getByRole("link", { name: "List" }).click();
+    await expect(page).toHaveURL(/\/admin\/bookings$/);
+    await expect(views.getByRole("link", { name: "List" })).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("searchbox", { name: "Search" })).toBeVisible();
+    await expect(page.getByLabel("Date")).toHaveCount(0);
+    await page.goBack();
+    await expect(page).toHaveURL(/\/admin\/bookings\?view=calendar&date=2099-10-15$/);
+    await expect(views.getByRole("link", { name: "Calendar" })).toHaveAttribute("aria-current", "page");
+    await expect(page.getByLabel("Date")).toHaveValue("2099-10-15");
+    await page.goForward();
+    await expect(views.getByRole("link", { name: "List" })).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("searchbox", { name: "Search" })).toBeVisible();
     await page.goto("/admin/payments?status=due&q=A%20%26%20B&page=2");
     await expect(page).toHaveURL(/\/admin\/payments\/transactions\?/);
     expect(new URL(page.url()).searchParams.get("q")).toBe("A & B");
@@ -152,17 +180,21 @@ test("navigation follows the current account and protected routes enforce access
     await signIn(page, accounts[2].email);
     await expect(navigation.getByRole("link", { name: "Admin", exact: true })).toHaveAttribute("href", "/admin");
     await navigation.getByRole("link", { name: "Admin", exact: true }).click();
-    await expect(page).toHaveURL(/\/admin\/reservations$/);
-    await expect(adminNavigation.getByRole("link")).toHaveText(["Reservations", "My availability"]);
+    await expect(page).toHaveURL(/\/coach\/bookings$/);
+    await expect(adminNavigation.getByRole("link")).toHaveText(["Bookings & Reservations", "My availability"]);
+    await expect(adminNavigation.getByRole("link", { name: "Bookings & Reservations" })).toHaveAttribute("aria-current", "page");
     await page.goto("/admin");
-    await expect(page).toHaveURL(/\/admin\/reservations$/);
-    for (const route of ["/admin/locations", "/admin/locations/new", "/admin/courts", "/admin/pricing", "/admin/users", "/admin/payments", "/admin/payments/transactions", "/admin/payments/settings"]) {
+    await expect(page).toHaveURL(/\/coach\/bookings$/);
+    for (const route of ["/admin/locations", "/admin/locations/new", "/admin/courts", "/admin/pricing", "/admin/users", "/admin/payments", "/admin/payments/transactions", "/admin/payments/settings",
+      "/admin/bookings", "/admin/bookings?view=calendar"]) {
       await page.goto(route);
       await expect(page.getByRole("heading", { name: /404|not found/i })).toBeVisible();
     }
+    // Legacy Reservations URLs open the Coach Calendar tab with their date.
     await page.goto("/admin/reservations?date=2099-10-15");
-    await expect(page.getByRole("heading", { name: "Reservations", exact: true })).toBeVisible();
-    await expect(adminNavigation.getByRole("link")).toHaveText(["Reservations", "My availability"]);
+    await expect(page).toHaveURL(/\/coach\/bookings\?view=calendar&date=2099-10-15$/);
+    await expect(page.getByRole("heading", { name: "Bookings & Reservations", exact: true })).toBeVisible();
+    await expect(adminNavigation.getByRole("link")).toHaveText(["Bookings & Reservations", "My availability"]);
     await page.getByRole("link", { name: "Profile", exact: true }).click();
     await visitUserDestinations();
     await page.getByRole("button", { name: "Sign out", exact: true }).click();
@@ -239,6 +271,10 @@ test("navigation follows the current account and protected routes enforce access
     await expect(page.getByText("Personal information saved.", { exact: true })).toHaveCount(1);
   } finally {
     await page.close();
+    for (const table of ["location_pricing_rules", "pricing_rule_sets", "location_opening_hours", "opening_hours_schedules", "courts"]) {
+      expect((await service.from(table).delete().eq("location_id", locationId)).error).toBeNull();
+    }
+    expect((await service.from("locations").delete().eq("id", locationId)).error).toBeNull();
     for (const account of accounts.reverse()) {
       expect((await service.from("users").delete().eq("id", account.id)).error).toBeNull();
       expect((await service.auth.admin.deleteUser(account.id)).error).toBeNull();

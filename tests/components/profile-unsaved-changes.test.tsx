@@ -52,7 +52,14 @@ function unload() { const event = new Event("beforeunload", { cancelable: true }
 function leave() { fireEvent.click(screen.getByRole("link", { name: "Home" })); }
 
 beforeEach(() => { vi.resetAllMocks(); personal.mockResolvedValue({ success: "Personal saved." }); tennis.mockResolvedValue({ success: "Tennis saved." }); });
-afterEach(() => { cleanup(); act(() => { toast.dismiss(); }); });
+afterEach(async () => {
+  // Sonner defers insertion, then dismissal schedules an animation/removal timer.
+  // Let both finish with the Toaster mounted before unmounting or destroying jsdom.
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  act(() => { toast.dismiss(); });
+  await waitFor(() => expect(document.querySelector("[data-sonner-toast]")).toBeNull());
+  cleanup();
+});
 
 it("derives Tennis profile dirty state and removes unload protection when restored", () => {
   render(app("tennis"));

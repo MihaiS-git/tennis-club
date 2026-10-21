@@ -1395,3 +1395,13 @@ integrity migrations) retain original context and occurrence facts
 atomically with financial state; failure to persist that evidence fails the financial
 transaction. Admin sees failed, unresolved and reversed refunds through the existing
 Payments transaction views and financial history.
+
+
+Coaching time off uses one inclusive `exception_date`/`until_date` exception record per
+period. Multi-day periods must be whole-day coach-wide absences; extra availability is
+single-day and location-specific. Keep both workflows in the shared availability service,
+serialize against booking creation with the existing coach-profile fence, and reject
+conflicting active coaching reservations/live holds without changing bookings. The
+consolidated initial migration owns the range constraint and GiST date/minute exclusion.
+Programs and grouped Prices use server-side 20-row pagination and URL filters through
+the existing management controls; checkout price resolution is unchanged.

@@ -171,12 +171,12 @@ test("Admin opening-hours, pricing and reservation lifecycle survives sequential
       await page.getByRole("button",{ name:"Enable public booking",exact:true }).click();
       await expect(page.getByRole("button",{ name:"Disable public booking",exact:true })).toBeVisible();
       await page.goto(`/admin/reservations?location=${locationId}&date=${future}`);
-      await page.getByRole("button",{ name:`Audit Court One ${future} 08:00–08:30, Available`,exact:true }).click();
+      await page.getByRole("button",{ name:`Audit Court One ${future} 10:00–10:30, Available`,exact:true }).click();
       await page.getByLabel("Reason",{ exact:true }).fill("Preserved administrative session");
       await page.getByRole("button",{ name:"Reserve court",exact:true }).click();
       await expect(page.getByText("Court reserved.",{ exact:true })).toBeVisible();
       await page.goto(`/book?location=${locationId}&date=${future}`);
-      await page.getByRole("button",{ name:`Audit Court Two ${future} 14:00–14:30, RON 80/h`,exact:true }).click();
+      await page.getByRole("button",{ name:`Audit Court Two ${future} 16:00–16:30, RON 80/h`,exact:true }).click();
       await page.getByRole("button",{ name:"Continue",exact:true }).click();
       const dialog = page.getByRole("dialog",{ name:"Confirm your booking",exact:true });
       await dialog.getByLabel("Name",{ exact:true }).fill("Audit Customer");
@@ -203,10 +203,17 @@ test("Admin opening-hours, pricing and reservation lifecycle survives sequential
     });
     const beforeContracts = await contracts();
 
-    await test.step("Create a bounded future schedule with automatic cutoff and preserved grandfathered occupancy", async () => {
+    await test.step("Reject a future schedule excluding existing bookings, then create a bounded one with automatic cutoff", async () => {
       await page.goto(`${workspace}?tab=opening-hours`);
-      const form = await createSchedule(future,until,[["09:00","12:00"],["14:00","19:00"]]);
+      const form = await createSchedule(future,until,[["11:00","12:00"],["14:00","19:00"]]);
       await expect(form.getByRole("status")).toContainText(`on ${shift(future,-1)}`);
+      const unchangedSchedules = await schedules();
+      await form.getByRole("button",{ name:"Save changes",exact:true }).click();
+      await expect(page.locator('[data-sonner-toast][data-type="error"]').getByText(
+        `Existing bookings on ${future} would fall outside these opening hours. Move or cancel them first; no changes were saved.`, { exact: true })).toBeVisible();
+      expect(await schedules()).toEqual(unchangedSchedules);
+      expect(await contracts()).toEqual(beforeContracts);
+      await times(form,0,"09:00","12:00");
       await saveSchedule(form);
       await expect(page.getByRole("combobox", { name: "Schedule", exact: true })).toContainText(`Current · ${today} → ${shift(future,-1)}`);
       await expect(page.getByRole("combobox", { name: "Schedule", exact: true })).toContainText(`Scheduled · ${future} → ${until}`);
@@ -218,10 +225,10 @@ test("Admin opening-hours, pricing and reservation lifecycle survives sequential
       await expect(summary.getByText(`${future} – ${until} · Scheduled`,{ exact:true })).toBeVisible();
       await page.getByRole("dialog",{ name:"Add pricing",exact:true }).getByRole("button",{ name:"Close dialog",exact:true }).click();
       await page.goto(`/admin/reservations?location=${locationId}&date=${future}`);
-      await expect(page.getByRole("button",{ name:new RegExp(`Audit Court One ${future} 08:00–09:00, Reservation`) })).toBeVisible();
+      await expect(page.getByRole("button",{ name:new RegExp(`Audit Court One ${future} 10:00–11:00, Reservation`) })).toBeVisible();
       await expect(page.getByRole("button",{ name:`Audit Court One ${future} 09:00–09:30, Available`,exact:true })).toBeVisible();
       await page.goto(`/book?location=${locationId}&date=${future}`);
-      await expect(page.getByLabel(`Audit Court One ${future} 08:00–08:30, Booked`,{ exact:true })).toBeVisible();
+      await expect(page.getByLabel(`Audit Court One ${future} 10:00–10:30, Booked`,{ exact:true })).toBeVisible();
     });
 
     await test.step("Schedule a later policy, fill a bounded gap, reject overlap and preserve history", async () => {
