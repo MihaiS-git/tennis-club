@@ -132,10 +132,11 @@ test("Coaches list and open only their own lessons and staff reservations, enfor
     await expect(getCoachDirectReservation(ownCancelled, coachA)).rejects.toThrow();
   } finally {
     await cleanupBookingFixtures({ bookingIds: Object.values(lessons) });
-    await db.from("court_reservations").delete().in("id", [...Object.values(lessonReservations), ownActive, ownCancelled, otherActive]);
+    expect((await db.from("court_reservations").delete().in("id", [...Object.values(lessonReservations), ownActive, ownCancelled, otherActive])).error).toBeNull();
     await database.query("DELETE FROM public.coach_profiles WHERE user_id=ANY($1::uuid[])", [users]);
     await database.query("DELETE FROM public.coaching_programs WHERE id=$1", [program]);
-    await db.from("courts").delete().eq("id", court); await db.from("locations").delete().eq("id", location);
+    expect((await db.from("courts").delete().eq("id", court)).error).toBeNull();
+    expect((await db.from("locations").delete().eq("id", location)).error).toBeNull();
     await cleanupAuthFixtures(db, users);
   }
 }, 30000);

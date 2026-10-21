@@ -100,10 +100,10 @@ test("Admin and Coach share direct, customer and guest details while mutations r
     expect((await getReservationDay(location, date, now, admin.client)).adminOccupancy.map((item) => item.id)).toEqual([directId]);
   } finally {
     await cleanupBookingFixtures({ bookingIds: [bookingId, guestBookingId] });
-    await service.from("court_reservations").delete().in("id", [directId, reservationId, guestReservationId]);
-    await service.from("location_opening_hours").delete().eq("location_id", locationId);
-    await service.from("courts").delete().eq("id", courtId);
-    await service.from("locations").delete().eq("id", locationId);
+    expect((await service.from("court_reservations").delete().in("id", [directId, reservationId, guestReservationId])).error).toBeNull();
+    expect((await service.from("location_opening_hours").delete().eq("location_id", locationId)).error).toBeNull();
+    expect((await service.from("courts").delete().eq("id", courtId)).error).toBeNull();
+    expect((await service.from("locations").delete().eq("id", locationId)).error).toBeNull();
     await cleanupAuthFixtures(service, userIds);
   }
 });

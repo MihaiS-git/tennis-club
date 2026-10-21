@@ -343,14 +343,15 @@ test("verified webhook settles original hold once, keeps retryable failure, rele
     expect((await db.from("bookings").select("id").in("reservation_id", [held.reservation_id, failed.reservation_id, expired.reservation_id, replacement.reservation_id, mismatch.reservation_id])).data).toHaveLength(5);
   } finally {
     vi.unstubAllEnvs(); create.mockReset(); retrieve.mockReset(); cancel.mockReset(); refundCreate.mockReset(); refundList.mockReset(); refundRetrieve.mockReset();
-    await db.from("payment_provider_settings").update({ active_provider: previous }).eq("id", true);
+    expect((await db.from("payment_provider_settings").update({ active_provider: previous }).eq("id", true)).error).toBeNull();
     const reservations = (await db.from("court_reservations").select("id").eq("court_id", courtId)).data?.map(r => r.id) ?? [];
     const bookings = (await db.from("bookings").select("id").in("reservation_id", reservations)).data?.map(b => b.id) ?? [];
     await cleanupBookingFixtures({ bookingIds: bookings });
-    await db.from("court_reservations").delete().eq("court_id", courtId);
-    await db.from("pricing_rule_sets").delete().eq("location_id",locationId);
-    await db.from("location_opening_hours").delete().eq("location_id",locationId);
-    await db.from("courts").delete().eq("id", courtId); await db.from("locations").delete().eq("id", locationId);
+    expect((await db.from("court_reservations").delete().eq("court_id", courtId)).error).toBeNull();
+    expect((await db.from("pricing_rule_sets").delete().eq("location_id",locationId)).error).toBeNull();
+    expect((await db.from("location_opening_hours").delete().eq("location_id",locationId)).error).toBeNull();
+    expect((await db.from("courts").delete().eq("id", courtId)).error).toBeNull();
+    expect((await db.from("locations").delete().eq("id", locationId)).error).toBeNull();
     await cleanupAuthFixtures(db, userIds);
   }
 }, 30000);

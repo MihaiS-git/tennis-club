@@ -222,14 +222,19 @@ test("My Activity paid edit collects only the difference, X discards an unpaid m
     expect(browserErrors).toEqual([]);
 
   } finally {
-    await db.transaction(manager => cleanupBookingEvidence(manager, { bookingIds: [bookingId] }));
-    await db.query("DELETE FROM public.court_reservations WHERE court_id=$1",[courtId]);
-    await db.query("DELETE FROM public.location_pricing_rules WHERE location_id=$1",[locationId]);
-    await db.query("DELETE FROM public.pricing_rule_sets WHERE location_id=$1",[locationId]);
-    await db.query("DELETE FROM public.location_opening_hours WHERE location_id=$1",[locationId]);
-    await db.query("DELETE FROM public.opening_hours_schedules WHERE location_id=$1",[locationId]);
-    await db.query("DELETE FROM public.courts WHERE location_id=$1",[locationId]);
-    await db.query("DELETE FROM public.locations WHERE id=$1",[locationId]);
-    await auth.auth.admin.deleteUser(userId); await db.destroy();
+    try {
+      await db.transaction(manager => cleanupBookingEvidence(manager, { bookingIds: [bookingId] }));
+      await db.query("DELETE FROM public.court_reservations WHERE court_id=$1",[courtId]);
+      await db.query("DELETE FROM public.location_pricing_rules WHERE location_id=$1",[locationId]);
+      await db.query("DELETE FROM public.pricing_rule_sets WHERE location_id=$1",[locationId]);
+      await db.query("DELETE FROM public.location_opening_hours WHERE location_id=$1",[locationId]);
+      await db.query("DELETE FROM public.opening_hours_schedules WHERE location_id=$1",[locationId]);
+      await db.query("DELETE FROM public.courts WHERE location_id=$1",[locationId]);
+      await db.query("DELETE FROM public.locations WHERE id=$1",[locationId]);
+      await db.query("DELETE FROM public.users WHERE id=$1", [userId]);
+      expect((await auth.auth.admin.deleteUser(userId)).error).toBeNull();
+    } finally {
+      await db.destroy();
+    }
   }
 });

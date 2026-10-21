@@ -146,8 +146,8 @@ test("Late-capture compensation preserves payment identity, idempotency and occu
   } finally {
     vi.restoreAllMocks();
     create.mockReset();list.mockReset();retrieve.mockReset();
-    await db.from("users").update({ status:"active" }).in("id",users);
-    await db.from("payment_provider_settings").update({ active_provider:previous }).eq("id",true);
+    expect((await db.from("users").update({ status:"active" }).in("id",users)).error).toBeNull();
+    expect((await db.from("payment_provider_settings").update({ active_provider:previous }).eq("id",true)).error).toBeNull();
     const ids=cancelledRows.map(r => r.booking_id);
     await cleanupBookingFixtures({ bookingIds: ids });
     await cleanupBookingFixtures({ courtIds: [courtId] });

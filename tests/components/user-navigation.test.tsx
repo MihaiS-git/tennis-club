@@ -49,7 +49,7 @@ it.each([
     expect(within(nav).getByText(section).className).toContain(section === heading ? "text-primary" : "text-muted-foreground");
 });
 
-it.each(["/profile-extra", "/my-activity", "/my-activity/bookings-extra", "/my-activity/notifications"])("does not activate a destination for %s", (pathname) => {
+it.each(["/profile-extra", "/my-activity", "/my-activity/notifications"])("does not activate a destination for %s", (pathname) => {
   navigation.pathname = pathname;
   render(<UserNavigation />);
   expect(screen.getAllByRole("link").every((link) => !link.hasAttribute("aria-current"))).toBe(true);

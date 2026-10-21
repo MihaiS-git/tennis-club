@@ -115,152 +115,151 @@ afterAll(async () => {
   }
 });
 
-test("working hours are accepted only inside the applicable opening hours of every selected weekday", async () => {
-  // Inside: Monday and Tuesday 08:00–21:00, from today without an end.
-  const inside = await changeOwnCoachAvailability(addWeekly(locationA, [0, 1], 480, 1260), coach1.client);
-  assert.ok(inside.ok);
-  expect(shape(await hoursAt(locationA), coach1.id)).toEqual([[0, 480, 1260, today, null], [1, 480, 1260, today, null]]);
-  // Each weekday is validated independently; one invalid day saves nothing.
-  expect(await changeOwnCoachAvailability(addWeekly(locationA, [2, 5, 6], 540, 720), coach1.client))
-    .toEqual({ ok: false, reason: "outside-opening-hours", weekdays: [6] });
-  expect(await changeOwnCoachAvailability(addWeekly(locationA, [2, 5], 420, 540), coach1.client))
-    .toEqual({ ok: false, reason: "outside-opening-hours", weekdays: [5] });
-  expect(await changeCoachAvailability({ coach_user_id: coach1.id, change: { operation: "save-weekly",
-    fields: { location_id: locationA, weekday: 2, start_minute: 1260, end_minute: 1380 } } }, admin))
-    .toEqual({ ok: false, reason: "outside-opening-hours", weekdays: [2] });
-  // An edit is revalidated too.
-  const tuesday = (await hoursAt(locationA)).find((row) => row.coach === coach1.id && row.weekday === 1);
-  assert.ok(tuesday);
-  expect(await changeOwnCoachAvailability({ operation: "save-weekly", id: tuesday.id,
-    fields: { location_id: locationA, weekday: 1, start_minute: 360, end_minute: 1260 } }, coach1.client))
-    .toEqual({ ok: false, reason: "outside-opening-hours", weekdays: [1] });
-  expect(shape(await hoursAt(locationA), coach1.id)).toHaveLength(2);
-  // Dates are validated: no past start and an ordered range.
-  expect(await changeOwnCoachAvailability(addWeekly(locationA, [2], 540, 600, { valid_from: addDays(today, -1) }), coach1.client))
-    .toMatchObject({ ok: false, reason: "invalid-input", fieldErrors: { valid_from: expect.any(String) } });
-  expect(await changeOwnCoachAvailability(addWeekly(locationA, [2], 540, 600, { valid_from: addDays(today, 5), valid_until: addDays(today, 4) }), coach1.client))
-    .toMatchObject({ ok: false, reason: "invalid-input" });
+test("coach hours follow opening-hour validation, shrinkage, extension and future schedules", async () => {
+  {
+    // Inside: Monday and Tuesday 08:00–21:00, from today without an end.
+    const inside = await changeOwnCoachAvailability(addWeekly(locationA, [0, 1], 480, 1260), coach1.client);
+    assert.ok(inside.ok);
+    expect(shape(await hoursAt(locationA), coach1.id)).toEqual([[0, 480, 1260, today, null], [1, 480, 1260, today, null]]);
+    // Each weekday is validated independently; one invalid day saves nothing.
+    expect(await changeOwnCoachAvailability(addWeekly(locationA, [2, 5, 6], 540, 720), coach1.client))
+      .toEqual({ ok: false, reason: "outside-opening-hours", weekdays: [6] });
+    expect(await changeOwnCoachAvailability(addWeekly(locationA, [2, 5], 420, 540), coach1.client))
+      .toEqual({ ok: false, reason: "outside-opening-hours", weekdays: [5] });
+    expect(await changeCoachAvailability({ coach_user_id: coach1.id, change: { operation: "save-weekly",
+      fields: { location_id: locationA, weekday: 2, start_minute: 1260, end_minute: 1380 } } }, admin))
+      .toEqual({ ok: false, reason: "outside-opening-hours", weekdays: [2] });
+    // An edit is revalidated too.
+    const tuesday = (await hoursAt(locationA)).find((row) => row.coach === coach1.id && row.weekday === 1);
+    assert.ok(tuesday);
+    expect(await changeOwnCoachAvailability({ operation: "save-weekly", id: tuesday.id,
+      fields: { location_id: locationA, weekday: 1, start_minute: 360, end_minute: 1260 } }, coach1.client))
+      .toEqual({ ok: false, reason: "outside-opening-hours", weekdays: [1] });
+    expect(shape(await hoursAt(locationA), coach1.id)).toHaveLength(2);
+    // Dates are validated: no past start and an ordered range.
+    expect(await changeOwnCoachAvailability(addWeekly(locationA, [2], 540, 600, { valid_from: addDays(today, -1) }), coach1.client))
+      .toMatchObject({ ok: false, reason: "invalid-input", fieldErrors: { valid_from: expect.any(String) } });
+    expect(await changeOwnCoachAvailability(addWeekly(locationA, [2], 540, 600, { valid_from: addDays(today, 5), valid_until: addDays(today, 4) }), coach1.client))
+      .toMatchObject({ ok: false, reason: "invalid-input" });
 
-  // Another location has its own opening hours.
-  assert.ok((await changeOwnCoachAvailability(addWeekly(locationB, [2, 6], 1260, 1380), coach1.client)).ok);
-  // Coach 2: Monday 10:00–20:00, Friday 20:00–22:00, Saturday 10:00–12:00, and a
-  // Thursday interval that has applied since 2000 (history before today).
-  assert.ok((await changeCoachAvailability({ coach_user_id: coach2.id, change: addWeekly(locationA, [0], 600, 1200) }, admin)).ok);
-  assert.ok((await changeCoachAvailability({ coach_user_id: coach2.id, change: addWeekly(locationA, [4], 1200, 1320) }, admin)).ok);
-  assert.ok((await changeCoachAvailability({ coach_user_id: coach2.id, change: addWeekly(locationA, [5], 600, 720) }, admin)).ok);
-  await database.query(`INSERT INTO public.coach_weekly_availability(coach_user_id,location_id,weekday,start_minute,end_minute,valid_from)
-    VALUES($1,$2,3,420,1320,'2000-01-03')`, [coach2.id, locationA]);
-});
+    // Another location has its own opening hours.
+    assert.ok((await changeOwnCoachAvailability(addWeekly(locationB, [2, 6], 1260, 1380), coach1.client)).ok);
+    // Coach 2: Monday 10:00–20:00, Friday 20:00–22:00, Saturday 10:00–12:00, and a
+    // Thursday interval that has applied since 2000 (history before today).
+    assert.ok((await changeCoachAvailability({ coach_user_id: coach2.id, change: addWeekly(locationA, [0], 600, 1200) }, admin)).ok);
+    assert.ok((await changeCoachAvailability({ coach_user_id: coach2.id, change: addWeekly(locationA, [4], 1200, 1320) }, admin)).ok);
+    assert.ok((await changeCoachAvailability({ coach_user_id: coach2.id, change: addWeekly(locationA, [5], 600, 720) }, admin)).ok);
+    await database.query(`INSERT INTO public.coach_weekly_availability(coach_user_id,location_id,weekday,start_minute,end_minute,valid_from)
+      VALUES($1,$2,3,420,1320,'2000-01-03')`, [coach2.id, locationA]);
+  }
+  {
+    const monday = nextWeekday(today, 0);
+    const lesson = (start: number, end: number) => database.query(`INSERT INTO public.court_reservations(court_id,coach_user_id,booking_date,starts_at_minute,ends_at_minute)
+      VALUES($1,$2,$3,$4,$5) RETURNING id`, [court, coach1.id, monday, start, end]).then(([row]: { id: string }[]) => row.id);
+    const [early, inside] = [await lesson(480, 540), await lesson(600, 660)];
+    const booking = async () => database.query("SELECT to_jsonb(r) AS row FROM public.court_reservations r WHERE id=ANY($1::uuid[]) ORDER BY id", [[early, inside]]);
+    const atB = await hoursAt(locationB);
+    const before = await hoursAt(locationA);
+    const schedule = await baseline(locationA);
+    const openingHours = await clubs.listLocationOpeningHours(database.manager, locationA);
 
-test("shrinking opening hours trims, removes and closes coach hours atomically, preserving bookings and other locations", async () => {
-  const monday = nextWeekday(today, 0);
-  const lesson = (start: number, end: number) => database.query(`INSERT INTO public.court_reservations(court_id,coach_user_id,booking_date,starts_at_minute,ends_at_minute)
-    VALUES($1,$2,$3,$4,$5) RETURNING id`, [court, coach1.id, monday, start, end]).then(([row]: { id: string }[]) => row.id);
-  const [early, inside] = [await lesson(480, 540), await lesson(600, 660)];
-  const booking = async () => database.query("SELECT to_jsonb(r) AS row FROM public.court_reservations r WHERE id=ANY($1::uuid[]) ORDER BY id", [[early, inside]]);
-  const atB = await hoursAt(locationB);
-  const before = await hoursAt(locationA);
-  const schedule = await baseline(locationA);
-  const openingHours = await clubs.listLocationOpeningHours(database.manager, locationA);
+    // A live coaching lesson that the new hours would exclude rejects the whole change.
+    const unchangedBooking = await booking();
+    expect(await replaceHours(locationA, [0, 1, 2, 3, 4, 5], [{ weekdays: [0, 1, 2, 3, 4], opens_at: "09:00", closes_at: "20:00" }]))
+      .toEqual({ ok: false, reason: "booking-conflict", dates: [monday] });
+    expect(await booking()).toEqual(unchangedBooking);
+    expect(await hoursAt(locationA)).toEqual(before);
+    expect(await clubs.listLocationOpeningHours(database.manager, locationA)).toEqual(openingHours);
+    expect((await baseline(locationA)).revision).toBe(schedule.revision);
+    // Once that lesson is cancelled (its record stays), the change can proceed.
+    await database.query("UPDATE public.court_reservations SET status='cancelled',cancelled_at=now(),cancelled_by_user_id=$2 WHERE id=$1", [early, coach1.id]);
+    const bookingBefore = await booking();
 
-  // A live coaching lesson that the new hours would exclude rejects the whole change.
-  const unchangedBooking = await booking();
-  expect(await replaceHours(locationA, [0, 1, 2, 3, 4, 5], [{ weekdays: [0, 1, 2, 3, 4], opens_at: "09:00", closes_at: "20:00" }]))
-    .toEqual({ ok: false, reason: "booking-conflict", dates: [monday] });
-  expect(await booking()).toEqual(unchangedBooking);
-  expect(await hoursAt(locationA)).toEqual(before);
-  expect(await clubs.listLocationOpeningHours(database.manager, locationA)).toEqual(openingHours);
-  expect((await baseline(locationA)).revision).toBe(schedule.revision);
-  // Once that lesson is cancelled (its record stays), the change can proceed.
-  await database.query("UPDATE public.court_reservations SET status='cancelled',cancelled_at=now(),cancelled_by_user_id=$2 WHERE id=$1", [early, coach1.id]);
-  const bookingBefore = await booking();
+    // A failure after reconciliation rolls everything back.
+    const replace = coachAvailability.replaceCoachWeeklyAvailability;
+    const failure = vi.spyOn(coachAvailability, "replaceCoachWeeklyAvailability").mockImplementationOnce(async (...args) => {
+      await replace(...args);
+      throw new Error("Injected reconciliation failure");
+    });
+    try {
+      await expect(replaceHours(locationA, [0, 1, 2, 3, 4, 5], [{ weekdays: [0, 1, 2, 3, 4], opens_at: "09:00", closes_at: "20:00" }]))
+        .rejects.toThrow("Unable to change opening hours.");
+    } finally { failure.mockRestore(); }
+    expect(await hoursAt(locationA)).toEqual(before);
+    expect((await baseline(locationA)).revision).toBe(schedule.revision);
 
-  // A failure after reconciliation rolls everything back.
-  const replace = coachAvailability.replaceCoachWeeklyAvailability;
-  const failure = vi.spyOn(coachAvailability, "replaceCoachWeeklyAvailability").mockImplementationOnce(async (...args) => {
-    await replace(...args);
-    throw new Error("Injected reconciliation failure");
-  });
-  try {
-    await expect(replaceHours(locationA, [0, 1, 2, 3, 4, 5], [{ weekdays: [0, 1, 2, 3, 4], opens_at: "09:00", closes_at: "20:00" }]))
-      .rejects.toThrow("Unable to change opening hours.");
-  } finally { failure.mockRestore(); }
-  expect(await hoursAt(locationA)).toEqual(before);
-  expect((await baseline(locationA)).revision).toBe(schedule.revision);
+    // Mon–Fri 07:00–22:00 → 09:00–20:00 and Saturday closes.
+    const result = await replaceHours(locationA, [0, 1, 2, 3, 4, 5], [{ weekdays: [0, 1, 2, 3, 4], opens_at: "09:00", closes_at: "20:00" }]);
+    expect(result).toMatchObject({ ok: true, workingHoursAdjusted: true });
+    const after = await hoursAt(locationA);
+    // Coach 1: 08:00–21:00 → 09:00–20:00, keeping the row identity.
+    expect(shape(after, coach1.id)).toEqual([[0, 540, 1200, today, null], [1, 540, 1200, today, null]]);
+    expect(after.filter((row) => row.coach === coach1.id).map((row) => row.id)).toEqual(before.filter((row) => row.coach === coach1.id).map((row) => row.id));
+    // Coach 2: inside unchanged; entirely outside removed; closed Saturday removed; the
+    // interval since 2000 keeps its history before today and is trimmed from today.
+    expect(shape(after, coach2.id)).toEqual([
+      [0, 600, 1200, today, null],
+      [3, 420, 1320, "2000-01-03", addDays(today, -1)], [3, 540, 1200, today, null],
+    ]);
+    const unchanged = before.find((row) => row.coach === coach2.id && row.weekday === 0);
+    expect(after.find((row) => row.id === unchanged?.id)).toEqual(unchanged);
+    // Other locations, bookings and their records are untouched.
+    expect(await hoursAt(locationB)).toEqual(atB);
+    expect(await booking()).toEqual(bookingBefore);
+    // Booking availability resolves the reconciled hours.
+    const day = await coachAvailability.listCoachDayAvailability(database.manager, coach1.id, monday);
+    expect(day.weekly).toEqual([{ location_id: locationA, weekday: 0, start_minute: 540, end_minute: 1200 }]);
+    expect(resolveCoachAvailability({ date: monday, weekly: day.weekly, exceptions: day.exceptions, timezones: new Map([[locationA, "Europe/Bucharest"]]) })
+      .map((window) => [window.start_minute, window.end_minute])).toEqual([[540, 1200]]);
+  }
+  {
+    const before = await hoursAt(locationA);
+    const result = await replaceHours(locationA, [0, 1, 2, 3, 4], [{ weekdays: [0, 1, 2, 3, 4, 5], opens_at: "07:00", closes_at: "22:00" }]);
+    expect(result).toMatchObject({ ok: true, workingHoursAdjusted: false });
+    expect(await hoursAt(locationA)).toEqual(before);
+    // Only an explicit change extends them.
+    const monday = before.find((row) => row.coach === coach1.id && row.weekday === 0);
+    assert.ok(monday);
+    expect(await changeOwnCoachAvailability({ operation: "save-weekly", id: monday.id,
+      fields: { location_id: locationA, weekday: 0, start_minute: 480, end_minute: 1260 } }, coach1.client)).toEqual({ ok: true, id: monday.id });
+  }
+  {
+    const atB = await hoursAt(locationB);
+    const starts = addDays(today, 70);
+    const created = await mutateAdminOpeningHours({ operation: "create", location_id: locationA, starts_on: starts, replace_ids: [],
+      rows: [{ weekdays: [0, 1, 2, 3, 4, 5], opens_at: "10:00", closes_at: "18:00" }] }, admin);
+    expect(created).toMatchObject({ ok: true, workingHoursAdjusted: true });
+    const until = addDays(starts, -1);
+    expect(shape(await hoursAt(locationA), coach1.id)).toEqual([
+      [0, 480, 1260, today, until], [0, 600, 1080, starts, null],
+      [1, 540, 1200, today, until], [1, 600, 1080, starts, null],
+    ]);
+    expect(shape(await hoursAt(locationA), coach2.id)).toEqual([
+      [0, 600, 1200, today, until], [0, 600, 1080, starts, null],
+      [3, 420, 1320, "2000-01-03", addDays(today, -1)], [3, 540, 1200, today, until], [3, 600, 1080, starts, null],
+    ]);
+    expect(await hoursAt(locationB)).toEqual(atB);
+    // Booking availability uses the hours valid on each date.
+    const day = async (date: string) => (await coachAvailability.listCoachDayAvailability(database.manager, coach1.id, date)).weekly
+      .filter((row) => row.location_id === locationA).map((row) => [row.start_minute, row.end_minute]);
+    expect(await day(nextWeekday(today, 0))).toEqual([[480, 1260]]);
+    expect(await day(nextWeekday(until, 0))).toEqual([[600, 1080]]);
+    // New hours are checked against the period they apply in.
+    expect(await changeOwnCoachAvailability(addWeekly(locationA, [2], 480, 1260), coach1.client))
+      .toEqual({ ok: false, reason: "outside-opening-hours", weekdays: [2] });
+    const bounded = await changeOwnCoachAvailability(addWeekly(locationA, [2], 480, 1260, { valid_until: until }), coach1.client);
+    assert.ok(bounded.ok);
 
-  // Mon–Fri 07:00–22:00 → 09:00–20:00 and Saturday closes.
-  const result = await replaceHours(locationA, [0, 1, 2, 3, 4, 5], [{ weekdays: [0, 1, 2, 3, 4], opens_at: "09:00", closes_at: "20:00" }]);
-  expect(result).toMatchObject({ ok: true, workingHoursAdjusted: true });
-  const after = await hoursAt(locationA);
-  // Coach 1: 08:00–21:00 → 09:00–20:00, keeping the row identity.
-  expect(shape(after, coach1.id)).toEqual([[0, 540, 1200, today, null], [1, 540, 1200, today, null]]);
-  expect(after.filter((row) => row.coach === coach1.id).map((row) => row.id)).toEqual(before.filter((row) => row.coach === coach1.id).map((row) => row.id));
-  // Coach 2: inside unchanged; entirely outside removed; closed Saturday removed; the
-  // interval since 2000 keeps its history before today and is trimmed from today.
-  expect(shape(after, coach2.id)).toEqual([
-    [0, 600, 1200, today, null],
-    [3, 420, 1320, "2000-01-03", addDays(today, -1)], [3, 540, 1200, today, null],
-  ]);
-  const unchanged = before.find((row) => row.coach === coach2.id && row.weekday === 0);
-  expect(after.find((row) => row.id === unchanged?.id)).toEqual(unchanged);
-  // Other locations, bookings and their records are untouched.
-  expect(await hoursAt(locationB)).toEqual(atB);
-  expect(await booking()).toEqual(bookingBefore);
-  // Booking availability resolves the reconciled hours.
-  const day = await coachAvailability.listCoachDayAvailability(database.manager, coach1.id, monday);
-  expect(day.weekly).toEqual([{ location_id: locationA, weekday: 0, start_minute: 540, end_minute: 1200 }]);
-  expect(resolveCoachAvailability({ date: monday, weekly: day.weekly, exceptions: day.exceptions, timezones: new Map([[locationA, "Europe/Bucharest"]]) })
-    .map((window) => [window.start_minute, window.end_minute])).toEqual([[540, 1200]]);
-});
-
-test("extending opening hours never extends coach hours", async () => {
-  const before = await hoursAt(locationA);
-  const result = await replaceHours(locationA, [0, 1, 2, 3, 4], [{ weekdays: [0, 1, 2, 3, 4, 5], opens_at: "07:00", closes_at: "22:00" }]);
-  expect(result).toMatchObject({ ok: true, workingHoursAdjusted: false });
-  expect(await hoursAt(locationA)).toEqual(before);
-  // Only an explicit change extends them.
-  const monday = before.find((row) => row.coach === coach1.id && row.weekday === 0);
-  assert.ok(monday);
-  expect(await changeOwnCoachAvailability({ operation: "save-weekly", id: monday.id,
-    fields: { location_id: locationA, weekday: 0, start_minute: 480, end_minute: 1260 } }, coach1.client)).toEqual({ ok: true, id: monday.id });
-});
-
-test("a future schedule reconciles only its own dates, and deleting it closes them", async () => {
-  const atB = await hoursAt(locationB);
-  const starts = addDays(today, 70);
-  const created = await mutateAdminOpeningHours({ operation: "create", location_id: locationA, starts_on: starts, replace_ids: [],
-    rows: [{ weekdays: [0, 1, 2, 3, 4, 5], opens_at: "10:00", closes_at: "18:00" }] }, admin);
-  expect(created).toMatchObject({ ok: true, workingHoursAdjusted: true });
-  const until = addDays(starts, -1);
-  expect(shape(await hoursAt(locationA), coach1.id)).toEqual([
-    [0, 480, 1260, today, until], [0, 600, 1080, starts, null],
-    [1, 540, 1200, today, until], [1, 600, 1080, starts, null],
-  ]);
-  expect(shape(await hoursAt(locationA), coach2.id)).toEqual([
-    [0, 600, 1200, today, until], [0, 600, 1080, starts, null],
-    [3, 420, 1320, "2000-01-03", addDays(today, -1)], [3, 540, 1200, today, until], [3, 600, 1080, starts, null],
-  ]);
-  expect(await hoursAt(locationB)).toEqual(atB);
-  // Booking availability uses the hours valid on each date.
-  const day = async (date: string) => (await coachAvailability.listCoachDayAvailability(database.manager, coach1.id, date)).weekly
-    .filter((row) => row.location_id === locationA).map((row) => [row.start_minute, row.end_minute]);
-  expect(await day(nextWeekday(today, 0))).toEqual([[480, 1260]]);
-  expect(await day(nextWeekday(until, 0))).toEqual([[600, 1080]]);
-  // New hours are checked against the period they apply in.
-  expect(await changeOwnCoachAvailability(addWeekly(locationA, [2], 480, 1260), coach1.client))
-    .toEqual({ ok: false, reason: "outside-opening-hours", weekdays: [2] });
-  const bounded = await changeOwnCoachAvailability(addWeekly(locationA, [2], 480, 1260, { valid_until: until }), coach1.client);
-  assert.ok(bounded.ok);
-
-  // Deleting the future schedule leaves its dates without opening hours: the hours
-  // that applied there are removed, earlier dates keep theirs.
-  const schedule = created.ok ? created.schedules?.find((row) => row.id === created.scheduleId) : undefined;
-  assert.ok(schedule);
-  expect(await mutateAdminOpeningHours({ operation: "delete", location_id: locationA, schedule_id: schedule.id, revision: schedule.revision }, admin))
-    .toMatchObject({ ok: true, workingHoursAdjusted: true });
-  expect(shape(await hoursAt(locationA), coach1.id)).toEqual([[0, 480, 1260, today, until], [1, 540, 1200, today, until], [2, 480, 1260, today, until]]);
-  expect(await day(nextWeekday(until, 0))).toEqual([]);
-  expect(await hoursAt(locationB)).toEqual(atB);
+    // Deleting the future schedule leaves its dates without opening hours: the hours
+    // that applied there are removed, earlier dates keep theirs.
+    const schedule = created.ok ? created.schedules?.find((row) => row.id === created.scheduleId) : undefined;
+    assert.ok(schedule);
+    expect(await mutateAdminOpeningHours({ operation: "delete", location_id: locationA, schedule_id: schedule.id, revision: schedule.revision }, admin))
+      .toMatchObject({ ok: true, workingHoursAdjusted: true });
+    expect(shape(await hoursAt(locationA), coach1.id)).toEqual([[0, 480, 1260, today, until], [1, 540, 1200, today, until], [2, 480, 1260, today, until]]);
+    expect(await day(nextWeekday(until, 0))).toEqual([]);
+    expect(await hoursAt(locationB)).toEqual(atB);
+  }
 });
 
 test("PostgreSQL keeps dated intervals ordered and lets one coach's periods follow each other", async () => {

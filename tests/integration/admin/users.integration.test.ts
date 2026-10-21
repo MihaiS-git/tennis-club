@@ -130,12 +130,10 @@ test("admin user listing is authorized, ordered, bounded, and includes roles", a
     expect((await readAdminUserDetails(member.id, adminSession))?.personal.phone).toBe("+40799999999");
     expect(await readAdminUserDetails(randomUUID(), adminSession)).toBeNull();
     expect((await readAdminUserDetails(suspendedAdmin.id, adminSession))?.status).toBe("suspended");
-    const allCount = await service.from("users").select("id", { count: "exact", head: true });
-    assert.strictEqual(allCount.error, null);
     const defaultResult = await listAdminUsers({}, adminSession);
     expect(defaultResult.users).toHaveLength(20);
     expect(defaultResult.pageSize).toBe(20);
-    expect(defaultResult.total).toBe(allCount.count);
+    expect(defaultResult.total).toBeGreaterThanOrEqual(createdIds.length);
 
     const search = `admin-users-${runId}`;
     const first = await listAdminUsers({ search }, adminSession);

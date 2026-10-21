@@ -51,12 +51,12 @@ afterAll(async () => {
   const db = localFixtureClient();
   await cleanupBookingFixtures({ bookingIds });
   expect((await db.from("court_reservations").delete().eq("court_id", courtId)).error).toBeNull();
-  await db.from("location_pricing_rules").delete().eq("location_id", locationId);
-  await db.from("pricing_rule_sets").delete().eq("location_id", locationId);
-  await db.from("location_opening_hours").delete().eq("location_id", locationId);
-  await db.from("opening_hours_schedules").delete().eq("location_id", locationId);
-  await db.from("courts").delete().eq("id", courtId);
-  await db.from("locations").delete().eq("id", locationId);
+  expect((await db.from("location_pricing_rules").delete().eq("location_id", locationId)).error).toBeNull();
+  expect((await db.from("pricing_rule_sets").delete().eq("location_id", locationId)).error).toBeNull();
+  expect((await db.from("location_opening_hours").delete().eq("location_id", locationId)).error).toBeNull();
+  expect((await db.from("opening_hours_schedules").delete().eq("location_id", locationId)).error).toBeNull();
+  expect((await db.from("courts").delete().eq("id", courtId)).error).toBeNull();
+  expect((await db.from("locations").delete().eq("id", locationId)).error).toBeNull();
   await cleanupAuthFixtures(db, users);
 });
 

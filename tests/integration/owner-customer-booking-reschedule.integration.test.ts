@@ -159,12 +159,12 @@ test("Owner rescheduling preserves rows, enforces notice/ownership and shares pr
       .toEqual({ status: "cancelled", account_user_id: owner.id });
   } finally {
     await cleanupBookingFixtures({ bookingIds: [bookingId, guestBookingId] });
-    await service.from("court_reservations").delete().in("id", [reservationId, guestReservationId]);
-    await service.from("location_opening_hours").delete().eq("location_id", locationId);
-    await service.from("location_pricing_rules").delete().eq("location_id", locationId);
-    await service.from("pricing_rule_sets").delete().eq("location_id", locationId);
-    await service.from("courts").delete().eq("id", courtId);
-    await service.from("locations").delete().eq("id", locationId);
+    expect((await service.from("court_reservations").delete().in("id", [reservationId, guestReservationId])).error).toBeNull();
+    expect((await service.from("location_opening_hours").delete().eq("location_id", locationId)).error).toBeNull();
+    expect((await service.from("location_pricing_rules").delete().eq("location_id", locationId)).error).toBeNull();
+    expect((await service.from("pricing_rule_sets").delete().eq("location_id", locationId)).error).toBeNull();
+    expect((await service.from("courts").delete().eq("id", courtId)).error).toBeNull();
+    expect((await service.from("locations").delete().eq("id", locationId)).error).toBeNull();
     await cleanupAuthFixtures(service, users);
   }
 }, 60000);

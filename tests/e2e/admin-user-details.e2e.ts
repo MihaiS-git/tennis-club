@@ -151,7 +151,7 @@ test("Admin Users shows live profiles and private avatars while preserving manag
     finally { await anonymous.close(); }
   } finally {
     for (const id of ids.reverse()) {
-      await service.storage.from("profile-avatars").remove([`${id}/avatar.webp`]);
+      expect((await service.storage.from("profile-avatars").remove([`${id}/avatar.webp`])).error).toBeNull();
       expect((await service.from("player_profiles").delete().eq("user_id", id)).error).toBeNull();
       expect((await service.from("user_roles").delete().eq("user_id", id)).error).toBeNull();
       expect((await service.from("users").delete().eq("id", id)).error).toBeNull();

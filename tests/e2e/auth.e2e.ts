@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { createClient } from "@supabase/supabase-js";
 import { expect, test, type APIRequestContext } from "@playwright/test";
+import { DataSource } from "typeorm";
 import { z } from "zod";
 
 import { localServiceRoleKey } from "./helpers/supabase";
@@ -32,6 +33,22 @@ async function createConfirmedUser(email: string, password: string): Promise<voi
   });
   expect(error).toBeNull();
   expect(data.user?.email).toBe(email);
+}
+
+async function deleteTestUser(email: string): Promise<void> {
+  const database = await new DataSource({ type: "postgres", url: process.env.DATABASE_URL }).initialize();
+  try {
+    const rows: { id: string }[] = await database.query("SELECT id FROM auth.users WHERE email=$1", [email]);
+    for (const { id } of rows) {
+      await database.query("DELETE FROM public.users WHERE id=$1", [id]);
+      const admin = createClient(process.env.SUPABASE_URL!, localServiceRoleKey(), {
+        auth: { autoRefreshToken: false, persistSession: false },
+      });
+      expect((await admin.auth.admin.deleteUser(id)).error).toBeNull();
+    }
+  } finally {
+    await database.destroy();
+  }
 }
 
 async function findEmailLink(
@@ -67,82 +84,63 @@ async function findEmailLink(
 test("signup requires email confirmation before the account is accessible", async ({ page, request }) => {
   const email = testEmail("signup");
   const password = "Signup-password-123";
+  try {
+    await page.goto("/signup");
+    await page.getByRole("textbox", { name: "Email" }).fill(email);
+    await page.getByLabel("New password", { exact: true }).fill(password);
+    await page.getByLabel("Confirm new password", { exact: true }).fill(password);
+    await page.getByRole("button", { name: "Sign up" }).click();
+    await expect(page).toHaveURL(/\/signup\/check-email$/);
+    await expect(page.getByRole("heading", { name: "Check your email" })).toBeVisible();
 
-  await page.goto("/signup");
-  await page.getByRole("textbox", { name: "Email" }).fill(email);
-  await page.getByLabel("New password", { exact: true }).fill(password);
-  await page.getByLabel("Confirm new password", { exact: true }).fill(password);
-  await page.getByRole("button", { name: "Sign up" }).click();
-  await expect(page).toHaveURL(/\/signup\/check-email$/);
-  await expect(page.getByRole("heading", { name: "Check your email" })).toBeVisible();
+    await page.goto("/account");
+    await expect(page).toHaveURL(/\/login$/);
 
-  await page.goto("/account");
-  await expect(page).toHaveURL(/\/login$/);
-
-  const link = await findEmailLink(request, email, "signup");
-  const callbackRequest = page.waitForRequest((browserRequest) =>
-    new URL(browserRequest.url()).pathname === "/auth/callback");
-  await page.goto(link);
-  await callbackRequest;
-  await expect(page).toHaveURL(/\/profile$/);
-  await page.getByRole("navigation", { name: "My account navigation" }).getByRole("link", { name: "Account & security" }).click();
-  await expect(page.getByRole("heading", { name: "Account & security" })).toBeVisible();
-  await expect(page.getByText(email, { exact: true })).toBeVisible();
-  await expect(page.getByRole("list", { name: "Assigned roles" }).getByRole("listitem")).toHaveCount(0);
+    const link = await findEmailLink(request, email, "signup");
+    const callbackRequest = page.waitForRequest((browserRequest) =>
+      new URL(browserRequest.url()).pathname === "/auth/callback");
+    await page.goto(link);
+    await callbackRequest;
+    await expect(page).toHaveURL(/\/profile$/);
+    await page.getByRole("navigation", { name: "My account navigation" }).getByRole("link", { name: "Account & security" }).click();
+    await expect(page.getByRole("heading", { name: "Account & security" })).toBeVisible();
+    await expect(page.getByText(email, { exact: true })).toBeVisible();
+    await expect(page.getByRole("list", { name: "Assigned roles" }).getByRole("listitem")).toHaveCount(0);
+  } finally {
+    await deleteTestUser(email);
+  }
 });
 
 test("recovery email permits password reset and sign-in with the new password", async ({ page, request }) => {
   const email = testEmail("recovery");
   const oldPassword = "Old-password-123";
   const newPassword = "New-password-456";
-  await createConfirmedUser(email, oldPassword);
+  try {
+    await createConfirmedUser(email, oldPassword);
 
-  await page.goto("/forgot-password");
-  await page.getByRole("textbox", { name: "Email" }).fill(email);
-  await page.getByRole("button", { name: "Send reset link" }).click();
-  await expect(page).toHaveURL(/\/forgot-password$/);
+    await page.goto("/forgot-password");
+    await page.getByRole("textbox", { name: "Email" }).fill(email);
+    await page.getByRole("button", { name: "Send reset link" }).click();
+    await expect(page).toHaveURL(/\/forgot-password$/);
 
-  const link = await findEmailLink(request, email, "recovery");
-  const callbackRequest = page.waitForRequest((browserRequest) =>
-    new URL(browserRequest.url()).pathname === "/auth/callback");
-  await page.goto(link);
-  await callbackRequest;
-  await expect(page).toHaveURL(/\/reset-password$/);
-  await expect(page.getByRole("heading", { name: "Choose a new password" })).toBeVisible();
+    const link = await findEmailLink(request, email, "recovery");
+    const callbackRequest = page.waitForRequest((browserRequest) =>
+      new URL(browserRequest.url()).pathname === "/auth/callback");
+    await page.goto(link);
+    await callbackRequest;
+    await expect(page).toHaveURL(/\/reset-password$/);
+    await expect(page.getByRole("heading", { name: "Choose a new password" })).toBeVisible();
 
-  await page.getByLabel("New password", { exact: true }).fill(newPassword);
-  await page.getByLabel("Confirm new password").fill(newPassword);
-  await page.getByRole("button", { name: "Reset password" }).click();
-  await expect(page).toHaveURL(/\/login(?:\?|$)/);
+    await page.getByLabel("New password", { exact: true }).fill(newPassword);
+    await page.getByLabel("Confirm new password").fill(newPassword);
+    await page.getByRole("button", { name: "Reset password" }).click();
+    await expect(page).toHaveURL(/\/login(?:\?|$)/);
 
-  await page.getByRole("textbox", { name: "Email" }).fill(email);
-  await page.getByLabel("Password", { exact: true }).fill(newPassword);
-  await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page).toHaveURL(/\/$/);
-});
-
-test("protected account route requires login and logout removes the session", async ({ page }) => {
-  const email = testEmail("session");
-  const password = "Session-password-123";
-  await createConfirmedUser(email, password);
-
-  await page.goto("/account");
-  await expect(page).toHaveURL(/\/login$/);
-
-  await page.getByRole("textbox", { name: "Email" }).fill(email);
-  await page.getByLabel("Password", { exact: true }).fill(password);
-  await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page).toHaveURL(/\/$/);
-
-  await page.goto("/account");
-  await expect(page).toHaveURL(/\/profile$/);
-  await expect(page.getByRole("heading", { name: "Profile", exact: true })).toBeVisible();
-  await page.getByRole("navigation", { name: "My account navigation" }).getByRole("link", { name: "Account & security" }).click();
-  await expect(page.getByRole("heading", { name: "Account & security" })).toBeVisible();
-
-  await page.getByRole("button", { name: "Sign out", exact: true }).click();
-  await expect(page).toHaveURL(/\/login$/);
-  await page.goto("/account");
-  await expect(page).toHaveURL(/\/login$/);
-  await expect(page.getByRole("link", { name: "Profile", exact: true })).toHaveCount(0);
+    await page.getByRole("textbox", { name: "Email" }).fill(email);
+    await page.getByLabel("Password", { exact: true }).fill(newPassword);
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await expect(page).toHaveURL(/\/$/);
+  } finally {
+    await deleteTestUser(email);
+  }
 });

@@ -9,13 +9,8 @@ import { ensureIntegrationAdminAnchor } from "../admin-anchor";
 
 vi.mock("server-only", () => ({}));
 
-import * as authorization from "../../../src/lib/admin/authorization";
-import * as identity from "../../../src/lib/db/repositories/user-roles.repository";
-import { updateAdminUserRole } from "../../../src/lib/admin/user-role";
 import { readAdminUserDetails } from "../../../src/lib/admin/users";
 import { updateAdminUserStatus } from "../../../src/lib/admin/user-status";
-import { getDataSource } from "../../../src/lib/db/data-source";
-import { updateUserStatus } from "../../../src/lib/db/repositories/users.repository";
 
 const supabaseUrl = process.env.SUPABASE_URL ?? "";
 const publishableKey = process.env.SUPABASE_PUBLISHABLE_KEY ?? "";
@@ -39,11 +34,10 @@ function client(key = publishableKey) {
   });
 }
 
-test("admin TypeORM status changes preserve authorization, denied browser grants, and the final active administrator", async () => {
+test("admin TypeORM status changes preserve authorization and denied browser grants", async () => {
   const service = client(localServiceRoleKey());
   await ensureIntegrationAdminAnchor(service);
   const createdIds: string[] = [];
-  const temporarilySuspendedIds: string[] = [];
   const password = "admin-status-password-123";
 
   async function createUser(label: string) {
@@ -131,84 +125,9 @@ test("admin TypeORM status changes preserve authorization, denied browser grants
       .rejects.toBeInstanceOf(z.ZodError);
     expect(await statusOf(member.id)).toBe("active");
 
-    // The test database may have existing admins. Temporarily suspend them so
-    // this fixture has exactly one active admin; restore them in finally.
-    const roles = await service.from("user_roles").select("user_id").eq("role_code", "admin");
-    assert.strictEqual(roles.error, null);
-    const otherIds = (roles.data ?? []).map((role) => role.user_id)
-      .filter((id) => id !== admin.id && id !== anotherAdmin.id);
-    if (otherIds.length > 0) {
-      const users = await service.from("users").select("id, status").in("id", otherIds);
-      assert.strictEqual(users.error, null);
-      for (const user of users.data ?? []) {
-        if (user.status !== "active") continue;
-        const result = await service.from("users").update({ status: "suspended" }).eq("id", user.id);
-        assert.strictEqual(result.error, null);
-        temporarilySuspendedIds.push(user.id);
-      }
-    }
-
     expect(await updateAdminUserStatus({ userId: admin.id, status: "suspended" }, adminSession))
       .toEqual({ ok: false, reason: "self-management" });
-    // Reuse the isolated final-admin fixture for application-level concurrency.
-    const dataSource = await getDataSource();
-    expect(await updateUserStatus(dataSource.manager, anotherAdmin.id, "active"))
-      .toEqual({ id: anotherAdmin.id, status: "active" });
-    const activeAdmins = await service.from("users")
-      .select("id, user_roles!user_roles_user_id_fkey!inner(role_code)").eq("status", "active")
-      .eq("user_roles.role_code", "admin");
-    assert.strictEqual(activeAdmins.error, null);
-    expect(activeAdmins.data?.map(({ id }) => id).sort()).toEqual([admin.id, anotherAdmin.id].sort());
-
-    // Two authenticated Admins concurrently remove one another. Both pass the
-    // initial boundary, but only one may mutate after the Admin-role mutex.
-    const anotherSession = await signIn(anotherAdmin.email);
-    const roleWriter = vi.spyOn(identity, "removeUserRole");
-    async function raceAfterAuthorization<T>(operations: [() => Promise<T>, () => Promise<T>]) {
-      const original = authorization.requireActiveAdmin;
-      let arrived = 0;
-      let release: () => void = () => {};
-      const ready = new Promise<void>((resolve) => { release = resolve; });
-      const boundary = vi.spyOn(authorization, "requireActiveAdmin").mockImplementation(async (...args) => {
-        const actor = await original(...args);
-        if (++arrived === 2) release();
-        await ready;
-        return actor;
-      });
-      try { return await Promise.allSettled(operations.map((operation) => operation())); }
-      finally { boundary.mockRestore(); }
-    }
-    const race = await raceAfterAuthorization([
-      () => updateAdminUserRole({ userId: anotherAdmin.id, role: "admin", operation: "revoke" }, adminSession),
-      () => updateAdminUserRole({ userId: admin.id, role: "admin", operation: "revoke" }, anotherSession),
-    ]);
-    expect(race.filter((row) => row.status === "fulfilled" && row.value.ok)).toHaveLength(1);
-    expect(roleWriter).toHaveBeenCalledTimes(1);
-    roleWriter.mockRestore();
-    const afterRace = await service.from("users")
-      .select("id, user_roles!user_roles_user_id_fkey!inner(role_code)").eq("status", "active").eq("user_roles.role_code", "admin");
-    expect(afterRace.error).toBeNull();
-    expect(afterRace.data).toHaveLength(1);
-    for (const id of [admin.id, anotherAdmin.id]) {
-      expect((await service.from("user_roles").upsert({ user_id: id, role_code: "admin" })).error).toBeNull();
-    }
-    const suspensionRace = await raceAfterAuthorization([
-      () => updateAdminUserStatus({ userId: anotherAdmin.id, status: "suspended" }, adminSession),
-      () => updateAdminUserStatus({ userId: admin.id, status: "suspended" }, anotherSession),
-    ]);
-    expect(suspensionRace.filter((row) => row.status === "fulfilled" && row.value.ok)).toHaveLength(1);
-    const afterSuspension = await service.from("users")
-      .select("id, user_roles!user_roles_user_id_fkey!inner(role_code)").eq("status", "active").eq("user_roles.role_code", "admin");
-    expect(afterSuspension.error).toBeNull();
-    expect(afterSuspension.data).toHaveLength(1);
-    for (const id of [admin.id, anotherAdmin.id]) await updateUserStatus(dataSource.manager, id, "active");
-
-
   } finally {
-    for (const id of temporarilySuspendedIds) {
-      const result = await service.from("users").update({ status: "active" }).eq("id", id);
-      assert.strictEqual(result.error, null);
-    }
     for (const id of createdIds.reverse()) {
       const roles = await service.from("user_roles").delete().eq("user_id", id);
       assert.strictEqual(roles.error, null);

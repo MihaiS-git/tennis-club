@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
-import { afterAll, assert, expect, test, vi } from "vitest";
+import { afterAll, afterEach, assert, beforeAll, expect, test, vi } from "vitest";
 import { getDataSource } from "../../../src/lib/db/data-source";
 import * as coachingRepository from "../../../src/lib/db/repositories/coaching.repository";
 import {
@@ -22,6 +22,17 @@ const publicClient = () => createClient(process.env.SUPABASE_URL!, process.env.S
   auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
 });
 
+beforeAll(async () => {
+  assert.strictEqual((await service.from("locations").insert([
+    { id: locationIds[0], name: "Coaching East", slug: `coaching-east-${locationIds[0]}`, timezone: "UTC", currency: "RON" },
+    { id: locationIds[1], name: "Coaching West", slug: `coaching-west-${locationIds[1]}`, timezone: "UTC", currency: "EUR" },
+  ])).error, null);
+});
+
+afterEach(async () => {
+  assert.strictEqual((await service.from("locations").update({ currency: "RON" }).eq("id", locationIds[0])).error, null);
+});
+
 async function account(roles: ("admin" | "coach")[] = []) {
   const email = `coaching-${randomUUID()}@example.test`;
   const { data, error } = await service.auth.admin.createUser({ email, password, email_confirm: true });
@@ -33,7 +44,7 @@ async function account(roles: ("admin" | "coach")[] = []) {
   return { client, id: data.user.id, email };
 }
 
-const programFields = { name: "Integration private", description: "One player.", program_type: "private", durations: [60, 90],
+const programFields = { name: `Integration private ${randomUUID()}`, description: "One player.", program_type: "private", durations: [60, 90],
   min_participants: 1, max_participants: 1, court_rental_included: true, is_active: true };
 const coachFields = (overrides: Record<string, unknown> = {}) => ({ display_name: "Integration Coach", bio: "Bio.", qualifications: "Level 1",
   specialties: ["Serve"], languages: ["English"], location_ids: [locationIds[0]], program_ids: programIds, is_public: false, ...overrides });
@@ -56,10 +67,6 @@ afterAll(async () => {
 
 test("coaching administration enforces Admin authorization, coach eligibility, constraints and price resolution", async () => {
   await ensureIntegrationAdminAnchor(service);
-  assert.strictEqual((await service.from("locations").insert([
-    { id: locationIds[0], name: "Coaching East", slug: `coaching-east-${locationIds[0]}`, timezone: "UTC", currency: "RON" },
-    { id: locationIds[1], name: "Coaching West", slug: `coaching-west-${locationIds[1]}`, timezone: "UTC", currency: "EUR" },
-  ])).error, null);
   const admin = await account(["admin"]);
   const coach = await account(["coach"]);
   const adminCoach = await account(["admin", "coach"]);

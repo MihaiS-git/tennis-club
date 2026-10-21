@@ -35,19 +35,22 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!database) return;
-  for (const id of locationIds) {
-    await database.query("DELETE FROM public.location_pricing_rules WHERE location_id=$1", [id]);
-    await database.query("DELETE FROM public.pricing_rule_sets WHERE location_id=$1", [id]);
-    await database.query("DELETE FROM public.location_opening_hours WHERE location_id=$1", [id]);
-    await database.query("DELETE FROM public.courts WHERE location_id=$1", [id]);
-    await database.query("DELETE FROM public.locations WHERE id=$1", [id]);
+  try {
+    for (const id of locationIds) {
+      await database.query("DELETE FROM public.location_pricing_rules WHERE location_id=$1", [id]);
+      await database.query("DELETE FROM public.pricing_rule_sets WHERE location_id=$1", [id]);
+      await database.query("DELETE FROM public.location_opening_hours WHERE location_id=$1", [id]);
+      await database.query("DELETE FROM public.courts WHERE location_id=$1", [id]);
+      await database.query("DELETE FROM public.locations WHERE id=$1", [id]);
+    }
+    for (const id of userIds) {
+      await database.query("DELETE FROM public.user_roles WHERE user_id=$1", [id]);
+      await database.query("DELETE FROM public.users WHERE id=$1", [id]);
+      expect((await localFixtureClient().auth.admin.deleteUser(id)).error).toBeNull();
+    }
+  } finally {
+    await database.destroy();
   }
-  for (const id of userIds) {
-    await database.query("DELETE FROM public.user_roles WHERE user_id=$1", [id]);
-    await database.query("DELETE FROM public.users WHERE id=$1", [id]);
-    expect((await localFixtureClient().auth.admin.deleteUser(id)).error).toBeNull();
-  }
-  await database.destroy();
 });
 
 test("registered migrations match application metadata without schema changes", async () => {
@@ -270,26 +273,26 @@ smoke("native overlap, partial payment uniqueness and refund constraints reject 
     await rejects(reservation, [courtId, 540, 660], "23P01");
     await runner.query(reservation, [courtId, 600, 720]);
     await insertBookingRecords(runner.manager, { id: bookingId, reservation_id: reservationId, customer_name: "Customer", customer_email: "customer@example.test", customer_phone: "123", total_amount_minor: 5000, currency: "EUR", cancellation_notice_minutes: 1440, status: "pending_payment", payment_method: "online" });
-    const attemptId = randomUUID();
+    const attemptId = randomUUID(), providerPaymentId = `pi_cutover_${randomUUID()}`;
     const attempt = `INSERT INTO public.payment_attempts(id,booking_id,method,provider,provider_payment_id,amount_minor,currency,status,expires_at,checkout_token_hash)
-      VALUES($1,$2,'online','stripe','pi_cutover_integrity',5000,'EUR','pending',clock_timestamp()+interval '10 minutes','cutover-token')`;
-    await runner.query(attempt, [attemptId, bookingId]);
-    await rejects(attempt, [randomUUID(), bookingId], "23505");
+      VALUES($1,$2,'online','stripe',$3,5000,'EUR','pending',clock_timestamp()+interval '10 minutes','cutover-token')`;
+    await runner.query(attempt, [attemptId, bookingId, providerPaymentId]);
+    await rejects(attempt, [randomUUID(), bookingId, providerPaymentId], "23505");
     await rejects("UPDATE public.payment_attempts SET amount_minor=0 WHERE id=$1", [attemptId], "23514");
     await rejects("UPDATE public.payment_attempts SET provider_payment_id='pi_changed' WHERE id=$1", [attemptId], "23514");
     await runner.query("UPDATE public.payment_attempts SET status='failed',completed_at=clock_timestamp(),updated_at=now() WHERE id=$1", [attemptId]);
     const captureId = randomUUID(), eventId = `evt_${randomUUID()}`;
     await runner.query(`INSERT INTO public.payment_capture_receipts(id,payment_attempt_id,provider,provider_payment_id,provider_capture_id,amount_minor,currency)
-      VALUES($1,$2,'stripe','pi_cutover_integrity','pi_cutover_integrity',5000,'EUR')`, [captureId, attemptId]);
+      VALUES($1,$2,'stripe',$3,$3,5000,'EUR')`, [captureId, attemptId, providerPaymentId]);
     await runner.query(`INSERT INTO public.payment_capture_receipts(payment_attempt_id,provider,provider_payment_id,provider_capture_id,amount_minor,currency)
-      VALUES($1,'stripe','pi_cutover_integrity','pi_cutover_integrity',5000,'EUR')
-      ON CONFLICT(provider,provider_capture_id) DO UPDATE SET last_observed_at=clock_timestamp()`, [attemptId]);
+      VALUES($1,'stripe',$2,$2,5000,'EUR')
+      ON CONFLICT(provider,provider_capture_id) DO UPDATE SET last_observed_at=clock_timestamp()`, [attemptId, providerPaymentId]);
     expect(await runner.query("SELECT count(*)::integer AS total FROM public.payment_capture_receipts WHERE payment_attempt_id=$1", [attemptId]))
       .toEqual([{ total: 1 }]);
     await rejects("UPDATE public.payment_capture_receipts SET amount_minor=4999 WHERE id=$1", [captureId], "23514");
     await runner.query(`INSERT INTO public.payment_provider_events(provider,event_id,attempt_id,capture_receipt_id,provider_payment_id,
       outcome,settlement_result,reconciliation_required,amount_minor,currency)
-      VALUES('stripe',$1,$2,$3,'pi_cutover_integrity','succeeded','failed',true,5000,'EUR')`, [eventId, attemptId, captureId]);
+      VALUES('stripe',$1,$2,$3,$4,'succeeded','failed',true,5000,'EUR')`, [eventId, attemptId, captureId, providerPaymentId]);
     await rejects("UPDATE public.payment_provider_events SET amount_minor=4999 WHERE event_id=$1", [eventId], "23514");
     await runner.query(`UPDATE public.payment_provider_events SET reconciliation_required=false,resolved_at=clock_timestamp()
       WHERE provider='stripe' AND event_id=$1`, [eventId]);
@@ -297,16 +300,16 @@ smoke("native overlap, partial payment uniqueness and refund constraints reject 
     await rejects("DELETE FROM public.payment_capture_receipts WHERE id=$1", [captureId], "23514");
     await rejects("TRUNCATE public.payment_capture_receipts CASCADE", [], "23514");
     const refund = `INSERT INTO public.payment_refunds(booking_id,payment_attempt_id,provider,provider_payment_id,amount_minor,captured_amount_minor,currency,reason,context_revision_id)
-      VALUES($1,$2,'stripe','pi_cutover_integrity',$3,5000,'EUR','late_capture_compensation',(SELECT current_revision_id FROM public.bookings WHERE id=$1))`;
-    await rejects(refund.replace("$3,5000,'EUR'", "$3,NULL,'EUR'"), [bookingId, attemptId, 5000], "23502");
+      VALUES($1,$2,'stripe',$4,$3,5000,'EUR','late_capture_compensation',(SELECT current_revision_id FROM public.bookings WHERE id=$1))`;
+    await rejects(refund.replace("$3,5000,'EUR'", "$3,NULL,'EUR'"), [bookingId, attemptId, 5000, providerPaymentId], "23502");
     await rejects(refund.replace("amount_minor,captured_amount_minor,", "amount_minor,")
-      .replace("$3,5000,'EUR'", "$3,'EUR'"), [bookingId, attemptId, 5000], "23502");
-    await rejects(refund.replace("$3,5000,'EUR'", "$3,0,'EUR'"), [bookingId, attemptId, 5000], "23514");
-    await rejects(refund, [bookingId, attemptId, 5001], "23514");
-    await rejects(refund, [bookingId, attemptId, 0], "23514");
-    await rejects(refund, [bookingId, randomUUID(), 5000], "23503");
-    await runner.query(refund, [bookingId, attemptId, 5000]);
-    await rejects(refund, [bookingId, attemptId, 5000], "23505");
+      .replace("$3,5000,'EUR'", "$3,'EUR'"), [bookingId, attemptId, 5000, providerPaymentId], "23502");
+    await rejects(refund.replace("$3,5000,'EUR'", "$3,0,'EUR'"), [bookingId, attemptId, 5000, providerPaymentId], "23514");
+    await rejects(refund, [bookingId, attemptId, 5001, providerPaymentId], "23514");
+    await rejects(refund, [bookingId, attemptId, 0, providerPaymentId], "23514");
+    await rejects(refund, [bookingId, randomUUID(), 5000, providerPaymentId], "23503");
+    await runner.query(refund, [bookingId, attemptId, 5000, providerPaymentId]);
+    await rejects(refund, [bookingId, attemptId, 5000, providerPaymentId], "23505");
     await rejects("DELETE FROM public.bookings WHERE id=$1", [bookingId], "23503");
     await rejects("DELETE FROM public.payment_attempts WHERE id=$1", [attemptId], "23514");
     await rejects("UPDATE public.payment_refunds SET captured_amount_minor=4999 WHERE payment_attempt_id=$1", [attemptId], "23514");
@@ -342,7 +345,7 @@ smoke("native overlap, partial payment uniqueness and refund constraints reject 
     await rejects("DELETE FROM public.booking_adjustments WHERE id=$1", [adjustmentId], "23503");
     await rejects("UPDATE public.payment_refunds SET adjustment_id=$1,captured_amount_minor=5000 WHERE payment_attempt_id=$2", [adjustmentId, attemptId], "23514");
     await runner.query(`INSERT INTO public.payment_refunds(booking_id,payment_attempt_id,adjustment_id,operation_key,provider,provider_payment_id,amount_minor,captured_amount_minor,currency,reason,context_revision_id)
-      VALUES($1,$2,$3,'adjustment','stripe','pi_cutover_integrity',1000,5000,'EUR','failed_adjustment_compensation',(SELECT current_revision_id FROM public.bookings WHERE id=$1))`, [bookingId, attemptId, adjustmentId]);
+      VALUES($1,$2,$3,'adjustment','stripe',$4,1000,5000,'EUR','failed_adjustment_compensation',(SELECT current_revision_id FROM public.bookings WHERE id=$1))`, [bookingId, attemptId, adjustmentId, providerPaymentId]);
     await runner.query("UPDATE public.court_reservations SET status='released',hold_expires_at=NULL WHERE id=$1", [fragmentId]);
 
   } finally { await runner.rollbackTransaction(); await runner.release(); }

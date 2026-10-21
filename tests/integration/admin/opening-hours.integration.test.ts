@@ -17,8 +17,11 @@ import { ensureIntegrationAdminAnchor } from "../admin-anchor";
 
 beforeAll(() => { vi.stubEnv("DATABASE_POOL_MAX", "6"); });
 afterAll(async () => {
-  await (await getDataSource()).destroy();
-  vi.unstubAllEnvs();
+  try {
+    await (await getDataSource()).destroy();
+  } finally {
+    vi.unstubAllEnvs();
+  }
 });
 
 function scheduleUpdate(result: Awaited<ReturnType<typeof mutateAdminOpeningHours>>) {
@@ -110,33 +113,39 @@ async function hoursFixture() {
   const actor = await service.auth.admin.createUser({ email, password, email_confirm: true });
   assert.strictEqual(actor.error, null); assert.ok(actor.data.user);
   const userId = actor.data.user.id;
-  assert.strictEqual((await service.from("user_roles").insert({ user_id: userId, role_code: "admin" })).error, null);
-  const admin = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_PUBLISHABLE_KEY!, {
-    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-  });
-  assert.strictEqual((await admin.auth.signInWithPassword({ email, password })).error, null);
   const location_id = randomUUID(); const courtId = randomUUID();
-  assert.strictEqual((await service.from("locations").insert({ id: location_id, name: "Hours transaction", slug: `hours-${location_id}`, timezone: "Pacific/Kiritimati" })).error, null);
-  assert.strictEqual((await service.from("courts").insert({ id: courtId, location_id, name: "Hours court", slug: `hours-${courtId}`, surface: "clay", environment: "outdoor" })).error, null);
-  const hours = await mutateAdminOpeningHours({ operation: "create", starts_on: "0001-01-01", location_id, replace_ids: [], rows: [{ weekdays: [0, 1, 2, 3, 4, 5, 6], opens_at: "07:00", closes_at: "24:00" }] }, admin);
-  assert.ok(hours.ok); assert.ok(hours.scheduleId);
-  const scheduleId = hours.scheduleId;
-  const price = { location_id, court_ids: [courtId], court_state: "outdoor", weekdays: [0],
-    starts_at: "10:00", ends_at: "14:00", starts_on: "", ends_on: "", price_per_hour: "12.00" };
-  return { service, database, admin, userId, location_id, courtId, hours: hours.intervals, price,
-    updateFields: async () => {
-      const schedule = (await clubs.listOpeningHoursSchedules(database.manager, location_id)).find((row) => row.id === scheduleId);
-      assert.ok(schedule);
-      return { operation: "update" as const, schedule_id: schedule.id, revision: schedule.revision };
-    },
-    cleanup: async () => {
-      assert.strictEqual((await service.from("pricing_rule_sets").delete().eq("location_id", location_id)).error, null);
-      assert.strictEqual((await service.from("location_opening_hours").delete().eq("location_id", location_id)).error, null);
-      assert.strictEqual((await service.from("courts").delete().eq("id", courtId)).error, null);
-      assert.strictEqual((await service.from("locations").delete().eq("id", location_id)).error, null);
-      await cleanupAuthFixtures(service, [userId]);
-    },
+  const cleanup = async () => {
+    assert.strictEqual((await service.from("pricing_rule_sets").delete().eq("location_id", location_id)).error, null);
+    assert.strictEqual((await service.from("location_opening_hours").delete().eq("location_id", location_id)).error, null);
+    assert.strictEqual((await service.from("courts").delete().eq("id", courtId)).error, null);
+    assert.strictEqual((await service.from("locations").delete().eq("id", location_id)).error, null);
+    await cleanupAuthFixtures(service, [userId]);
   };
+  try {
+    assert.strictEqual((await service.from("user_roles").insert({ user_id: userId, role_code: "admin" })).error, null);
+    const admin = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_PUBLISHABLE_KEY!, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    });
+    assert.strictEqual((await admin.auth.signInWithPassword({ email, password })).error, null);
+    assert.strictEqual((await service.from("locations").insert({ id: location_id, name: "Hours transaction", slug: `hours-${location_id}`, timezone: "Pacific/Kiritimati" })).error, null);
+    assert.strictEqual((await service.from("courts").insert({ id: courtId, location_id, name: "Hours court", slug: `hours-${courtId}`, surface: "clay", environment: "outdoor" })).error, null);
+    const hours = await mutateAdminOpeningHours({ operation: "create", starts_on: "0001-01-01", location_id, replace_ids: [], rows: [{ weekdays: [0, 1, 2, 3, 4, 5, 6], opens_at: "07:00", closes_at: "24:00" }] }, admin);
+    assert.ok(hours.ok); assert.ok(hours.scheduleId);
+    const scheduleId = hours.scheduleId;
+    const price = { location_id, court_ids: [courtId], court_state: "outdoor", weekdays: [0],
+      starts_at: "10:00", ends_at: "14:00", starts_on: "", ends_on: "", price_per_hour: "12.00" };
+    return { service, database, admin, userId, location_id, courtId, hours: hours.intervals, price,
+      updateFields: async () => {
+        const schedule = (await clubs.listOpeningHoursSchedules(database.manager, location_id)).find((row) => row.id === scheduleId);
+        assert.ok(schedule);
+        return { operation: "update" as const, schedule_id: schedule.id, revision: schedule.revision };
+      },
+      cleanup,
+    };
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
 }
 
 test("adding a second Daily interval retains all saved intervals and revisions after database reload", async () => {
@@ -277,8 +286,8 @@ test("interior gap uses maximum adjacent price across courts, states, weekdays a
     for (const row of added) expect(row.price_per_hour_minor).toBe((row.starts_on === "2030-01-01" ? 8011 : 5029) + (row.court_id === secondCourt ? 1000 : 0));
     expect(await listAdminPricingRules(location_id, admin)).toHaveLength(new Set(after.map((r) => r.rule_set_id)).size);
   } finally {
-    await service.from("pricing_rule_sets").delete().eq("location_id", location_id);
-    await service.from("courts").delete().eq("id", secondCourt);
+    expect((await service.from("pricing_rule_sets").delete().eq("location_id", location_id)).error).toBeNull();
+    expect((await service.from("courts").delete().eq("id", secondCourt)).error).toBeNull();
     await fixture.cleanup();
   }
 }, 30000);
@@ -304,8 +313,8 @@ test("date-limited gap pricing uses only simultaneous adjacent prices and isolat
     ]);
     expect(added.find((r) => r.court_state === "indoor")).toMatchObject({ court_id: indoorCourt, starts_on: localToday("Pacific/Kiritimati", await clubs.readOpeningHoursConfigurationTime(fixture.database.manager)), ends_on: null, price_per_hour_minor: 9123, starts_at_minute: 600, ends_at_minute: 720 });
   } finally {
-    await service.from("pricing_rule_sets").delete().eq("location_id",location_id);
-    await service.from("courts").delete().eq("id",indoorCourt);
+    expect((await service.from("pricing_rule_sets").delete().eq("location_id",location_id)).error).toBeNull();
+    expect((await service.from("courts").delete().eq("id",indoorCourt)).error).toBeNull();
     await fixture.cleanup();
   }
 }, 30000);
@@ -324,8 +333,8 @@ test("splits partial multi-court and weekday definitions without losing associat
     expect(after.filter((r) => r.weekday === 0 && r.court_id === courtId && r.ends_on === null).map((r) => [r.starts_at_minute,r.ends_at_minute])).toEqual([[480,600],[720,1200]]);
     expect(await listAdminPricingRules(location_id, admin)).toHaveLength(new Set(after.map((r) => r.rule_set_id)).size);
   } finally {
-    await service.from("pricing_rule_sets").delete().eq("location_id", location_id);
-    await service.from("courts").delete().eq("id", secondCourt);
+    expect((await service.from("pricing_rule_sets").delete().eq("location_id", location_id)).error).toBeNull();
+    expect((await service.from("courts").delete().eq("id", secondCourt)).error).toBeNull();
     await fixture.cleanup();
   }
 }, 30000);

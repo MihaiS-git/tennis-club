@@ -81,14 +81,19 @@ test("Admin opens one booking from Calendar and List, returns to each origin and
     await page.goto(calendarUrl);
     await expect(page.getByRole("button", { name: new RegExp(`Booking · ${customer}`) })).toHaveCount(0);
   } finally {
-    await db.transaction(manager => cleanupBookingEvidence(manager, { bookingIds: [bookingId] }));
-    await db.query("DELETE FROM public.court_reservations WHERE court_id=$1", [courtId]);
-    await db.query("DELETE FROM public.location_opening_hours WHERE location_id=$1", [locationId]);
-    await db.query("DELETE FROM public.opening_hours_schedules WHERE location_id=$1", [locationId]);
-    await db.query("DELETE FROM public.courts WHERE location_id=$1", [locationId]);
-    await db.query("DELETE FROM public.locations WHERE id=$1", [locationId]);
-    await db.query("DELETE FROM public.user_roles WHERE user_id=$1", [userId]);
-    await auth.auth.admin.deleteUser(userId); await db.destroy();
+    try {
+      await db.transaction(manager => cleanupBookingEvidence(manager, { bookingIds: [bookingId] }));
+      await db.query("DELETE FROM public.court_reservations WHERE court_id=$1", [courtId]);
+      await db.query("DELETE FROM public.location_opening_hours WHERE location_id=$1", [locationId]);
+      await db.query("DELETE FROM public.opening_hours_schedules WHERE location_id=$1", [locationId]);
+      await db.query("DELETE FROM public.courts WHERE location_id=$1", [locationId]);
+      await db.query("DELETE FROM public.locations WHERE id=$1", [locationId]);
+      await db.query("DELETE FROM public.user_roles WHERE user_id=$1", [userId]);
+      await db.query("DELETE FROM public.users WHERE id=$1", [userId]);
+      expect((await auth.auth.admin.deleteUser(userId)).error).toBeNull();
+    } finally {
+      await db.destroy();
+    }
   }
 });
 
@@ -161,16 +166,21 @@ test("Admin edits their own booking from Booking Details; other customers' booki
       JOIN public.court_reservations r ON r.id=b.reservation_id JOIN public.booking_revisions v ON v.id=b.current_revision_id WHERE b.id=$1`, [ownBooking]);
     expect(row).toEqual({ status: "confirmed", starts_at_minute: 600, ends_at_minute: 690, total_amount_minor: 7500 });
   } finally {
-    await db.transaction(manager => cleanupBookingEvidence(manager, { bookingIds: [ownBooking, guestBooking] }));
-    await db.query("DELETE FROM public.court_reservations WHERE court_id=$1", [courtId]);
-    await db.query("DELETE FROM public.location_pricing_rules WHERE location_id=$1", [locationId]);
-    await db.query("DELETE FROM public.pricing_rule_sets WHERE location_id=$1", [locationId]);
-    await db.query("DELETE FROM public.location_opening_hours WHERE location_id=$1", [locationId]);
-    await db.query("DELETE FROM public.opening_hours_schedules WHERE location_id=$1", [locationId]);
-    await db.query("DELETE FROM public.courts WHERE location_id=$1", [locationId]);
-    await db.query("DELETE FROM public.locations WHERE id=$1", [locationId]);
-    await db.query("DELETE FROM public.user_roles WHERE user_id=$1", [userId]);
-    await auth.auth.admin.deleteUser(userId); await db.destroy();
+    try {
+      await db.transaction(manager => cleanupBookingEvidence(manager, { bookingIds: [ownBooking, guestBooking] }));
+      await db.query("DELETE FROM public.court_reservations WHERE court_id=$1", [courtId]);
+      await db.query("DELETE FROM public.location_pricing_rules WHERE location_id=$1", [locationId]);
+      await db.query("DELETE FROM public.pricing_rule_sets WHERE location_id=$1", [locationId]);
+      await db.query("DELETE FROM public.location_opening_hours WHERE location_id=$1", [locationId]);
+      await db.query("DELETE FROM public.opening_hours_schedules WHERE location_id=$1", [locationId]);
+      await db.query("DELETE FROM public.courts WHERE location_id=$1", [locationId]);
+      await db.query("DELETE FROM public.locations WHERE id=$1", [locationId]);
+      await db.query("DELETE FROM public.user_roles WHERE user_id=$1", [userId]);
+      await db.query("DELETE FROM public.users WHERE id=$1", [userId]);
+      expect((await auth.auth.admin.deleteUser(userId)).error).toBeNull();
+    } finally {
+      await db.destroy();
+    }
   }
 });
 
@@ -255,12 +265,17 @@ test("Admin manages a staff reservation from Calendar and List through its own d
     await page.goto(calendarUrl);
     await expect(page.getByRole("button", { name: new RegExp(`Reservation · ${email}`) })).toHaveCount(0);
   } finally {
-    await db.query("DELETE FROM public.court_reservations WHERE court_id = ANY($1::uuid[])", [[courtId, otherCourtId]]);
-    await db.query("DELETE FROM public.location_opening_hours WHERE location_id=$1", [locationId]);
-    await db.query("DELETE FROM public.opening_hours_schedules WHERE location_id=$1", [locationId]);
-    await db.query("DELETE FROM public.courts WHERE location_id=$1", [locationId]);
-    await db.query("DELETE FROM public.locations WHERE id=$1", [locationId]);
-    await db.query("DELETE FROM public.user_roles WHERE user_id=$1", [userId]);
-    await auth.auth.admin.deleteUser(userId); await db.destroy();
+    try {
+      await db.query("DELETE FROM public.court_reservations WHERE court_id = ANY($1::uuid[])", [[courtId, otherCourtId]]);
+      await db.query("DELETE FROM public.location_opening_hours WHERE location_id=$1", [locationId]);
+      await db.query("DELETE FROM public.opening_hours_schedules WHERE location_id=$1", [locationId]);
+      await db.query("DELETE FROM public.courts WHERE location_id=$1", [locationId]);
+      await db.query("DELETE FROM public.locations WHERE id=$1", [locationId]);
+      await db.query("DELETE FROM public.user_roles WHERE user_id=$1", [userId]);
+      await db.query("DELETE FROM public.users WHERE id=$1", [userId]);
+      expect((await auth.auth.admin.deleteUser(userId)).error).toBeNull();
+    } finally {
+      await db.destroy();
+    }
   }
 });

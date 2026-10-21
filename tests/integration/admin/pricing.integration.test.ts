@@ -14,8 +14,11 @@ import { ensureIntegrationAdminAnchor } from "../admin-anchor";
 
 beforeAll(() => { vi.stubEnv("DATABASE_POOL_MAX", "6"); });
 afterAll(async () => {
-  await (await getDataSource()).destroy();
-  vi.unstubAllEnvs();
+  try {
+    await (await getDataSource()).destroy();
+  } finally {
+    vi.unstubAllEnvs();
+  }
 });
 
 async function revision(locationId: string, setId: string, admin: Parameters<typeof listAdminPricingRules>[1]) {
@@ -158,30 +161,34 @@ async function pricingLockFixture() {
   const actor = await service.auth.admin.createUser({ email, password, email_confirm: true });
   assert.strictEqual(actor.error, null); assert.ok(actor.data.user);
   const userId = actor.data.user.id;
-  assert.strictEqual((await service.from("user_roles").insert({ user_id: userId, role_code: "admin" })).error, null);
-  const admin = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_PUBLISHABLE_KEY!, {
-    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-  });
-  assert.strictEqual((await admin.auth.signInWithPassword({ email, password })).error, null);
   const location_id = randomUUID(); const otherLocationId = randomUUID(); const courtId = randomUUID();
-  assert.strictEqual((await service.from("locations").insert([location_id, otherLocationId].map((id) => ({
-    id, name: "Pricing lock", slug: `pricing-lock-${id}`, timezone: "UTC", is_active: false,
-  })))).error, null);
-  assert.strictEqual((await service.from("courts").insert({ id: courtId, location_id, name: "Pricing lock court",
-    slug: `pricing-lock-${courtId}`, surface: "clay", environment: "outdoor", is_active: false })).error, null);
-  assert.strictEqual((await insertOpeningHoursFixture(service, { location_id, weekday: 0, opens_at_minute: 420, closes_at_minute: 1440 })).error, null);
-  assert.strictEqual((await service.from("locations").update({ archived_at: new Date().toISOString() }).eq("id", location_id)).error, null);
-  const definition = { location_id, court_ids: [courtId], court_state: "outdoor", weekdays: [0], starts_at: "07:00", ends_at: "12:00",
-    starts_on: "2099-01-01", ends_on: "2099-12-31", price_per_hour: "12.34" };
-  return { service, database, admin, userId, location_id, otherLocationId, definition,
-    cleanup: async () => {
-      assert.strictEqual((await service.from("pricing_rule_sets").delete().eq("location_id", location_id)).error, null);
-      assert.strictEqual((await service.from("location_opening_hours").delete().eq("location_id", location_id)).error, null);
-      assert.strictEqual((await service.from("courts").delete().eq("id", courtId)).error, null);
-      assert.strictEqual((await service.from("locations").delete().in("id", [location_id, otherLocationId])).error, null);
-      await cleanupAuthFixtures(service, [userId]);
-    },
+  const cleanup = async () => {
+    assert.strictEqual((await service.from("pricing_rule_sets").delete().eq("location_id", location_id)).error, null);
+    assert.strictEqual((await service.from("location_opening_hours").delete().eq("location_id", location_id)).error, null);
+    assert.strictEqual((await service.from("courts").delete().eq("id", courtId)).error, null);
+    assert.strictEqual((await service.from("locations").delete().in("id", [location_id, otherLocationId])).error, null);
+    await cleanupAuthFixtures(service, [userId]);
   };
+  try {
+    assert.strictEqual((await service.from("user_roles").insert({ user_id: userId, role_code: "admin" })).error, null);
+    const admin = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_PUBLISHABLE_KEY!, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    });
+    assert.strictEqual((await admin.auth.signInWithPassword({ email, password })).error, null);
+    assert.strictEqual((await service.from("locations").insert([location_id, otherLocationId].map((id) => ({
+      id, name: "Pricing lock", slug: `pricing-lock-${id}`, timezone: "UTC", is_active: false,
+    })))).error, null);
+    assert.strictEqual((await service.from("courts").insert({ id: courtId, location_id, name: "Pricing lock court",
+      slug: `pricing-lock-${courtId}`, surface: "clay", environment: "outdoor", is_active: false })).error, null);
+    assert.strictEqual((await insertOpeningHoursFixture(service, { location_id, weekday: 0, opens_at_minute: 420, closes_at_minute: 1440 })).error, null);
+    assert.strictEqual((await service.from("locations").update({ archived_at: new Date().toISOString() }).eq("id", location_id)).error, null);
+    const definition = { location_id, court_ids: [courtId], court_state: "outdoor", weekdays: [0], starts_at: "07:00", ends_at: "12:00",
+      starts_on: "2099-01-01", ends_on: "2099-12-31", price_per_hour: "12.34" };
+    return { service, database, admin, userId, location_id, otherLocationId, definition, cleanup };
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
 }
 
 async function pricingBackendPid(runner: QueryRunner) {

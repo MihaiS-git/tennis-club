@@ -7,13 +7,21 @@ import { cleanupAuthFixtures, localFixtureClient } from "../auth-fixtures";
 
 const service = localFixtureClient();
 const users: string[] = [];
-afterAll(async () => { await cleanupAuthFixtures(service, users); await (await getDataSource()).destroy(); });
+afterAll(async () => {
+  const database = await getDataSource();
+  try {
+    await cleanupAuthFixtures(service, users);
+  } finally {
+    await database.destroy();
+  }
+});
 
 test("Coach-role population includes optional/archived profiles and suspended accounts with stable, duplicate-free pages", async () => {
   const prefix = `coach-list-${randomUUID()}`;
   for (let i = 0; i < 24; i++) {
     const result = await service.auth.admin.createUser({ email: `${prefix}-${String(i).padStart(2, "0")}@example.test`,
       password: "coaches-list-password-123", email_confirm: true });
+    assert.strictEqual(result.error, null);
     assert.ok(result.data.user); users.push(result.data.user.id);
   }
   const runner = (await getDataSource()).createQueryRunner();

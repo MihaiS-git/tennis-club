@@ -315,15 +315,18 @@ test("Admin opening-hours, pricing and reservation lifecycle survives sequential
   } finally {
     await other?.close();
     await page.close();
-    await database.transaction(manager => cleanupBookingEvidence(manager, { courtIds: [court1,court2] }));
-    await database.query("DELETE FROM public.court_reservations WHERE court_id=ANY($1::uuid[])",[[court1,court2]]);
-    await database.query("DELETE FROM public.pricing_rule_sets WHERE location_id=$1",[locationId]);
-    await database.query("DELETE FROM public.opening_hours_schedules WHERE location_id=$1",[locationId]);
-    await database.query("DELETE FROM public.courts WHERE location_id=$1",[locationId]);
-    await database.query("DELETE FROM public.locations WHERE id=$1",[locationId]);
-    expect((await service.from("user_roles").delete().eq("user_id",userId)).error).toBeNull();
-    expect((await service.from("users").delete().eq("id",userId)).error).toBeNull();
-    expect((await service.auth.admin.deleteUser(userId)).error).toBeNull();
-    await database.destroy();
+    try {
+      await database.transaction(manager => cleanupBookingEvidence(manager, { courtIds: [court1,court2] }));
+      await database.query("DELETE FROM public.court_reservations WHERE court_id=ANY($1::uuid[])",[[court1,court2]]);
+      await database.query("DELETE FROM public.pricing_rule_sets WHERE location_id=$1",[locationId]);
+      await database.query("DELETE FROM public.opening_hours_schedules WHERE location_id=$1",[locationId]);
+      await database.query("DELETE FROM public.courts WHERE location_id=$1",[locationId]);
+      await database.query("DELETE FROM public.locations WHERE id=$1",[locationId]);
+      expect((await service.from("user_roles").delete().eq("user_id",userId)).error).toBeNull();
+      expect((await service.from("users").delete().eq("id",userId)).error).toBeNull();
+      expect((await service.auth.admin.deleteUser(userId)).error).toBeNull();
+    } finally {
+      await database.destroy();
+    }
   }
 });

@@ -22,11 +22,6 @@ test("navigation follows the current account and protected routes enforce access
   expect(["127.0.0.1", "localhost", "[::1]"]).toContain(new URL(url).hostname);
   const key = localServiceRoleKey();
   const service = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
-  // Retain the database's last-active-admin invariant during fixture cleanup.
-  const anchor = await service.from("user_roles").select("user_id, users!user_roles_user_id_fkey!inner(status)")
-    .eq("role_code", "admin").eq("users.status", "active").limit(1);
-  expect(anchor.error).toBeNull();
-  expect(anchor.data?.length, "Local E2E setup requires an existing active admin").toBe(1);
   const password = "Navigation-password-123";
   const accounts: { id: string; email: string }[] = [];
   const locationId = randomUUID(), courtId = randomUUID(), scheduleId = randomUUID(), ruleSetId = randomUUID();

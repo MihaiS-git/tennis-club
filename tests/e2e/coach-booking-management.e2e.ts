@@ -15,17 +15,18 @@ test("Coach opens own lessons and reservations from Calendar and List, managing 
   const run = randomUUID().slice(0, 8), password = "Coach-bookings-123";
   const emails = [`coach-a-${run}@example.test`, `coach-b-${run}@example.test`];
   const coaches: string[] = [];
-  for (const email of emails) {
-    const account = await auth.auth.admin.createUser({ email, password, email_confirm: true }); expect(account.error).toBeNull();
-    coaches.push(account.data.user!.id);
-  }
-  const [coachA, coachB] = coaches;
   const locationId = randomUUID(), s1 = randomUUID(), s2 = randomUUID(), program = randomUUID(), date = "2099-10-15";
   const [lessonA, lessonB, courtBooking] = [randomUUID(), randomUUID(), randomUUID()];
   const [lessonARes, lessonBRes, courtRes, ownRes, otherRes] = [randomUUID(), randomUUID(), randomUUID(), randomUUID(), randomUUID()];
   const studentA = `Student A ${run}`, studentB = `Student B ${run}`, courtCustomer = `Court customer ${run}`;
   const reason = `A clinic ${run}`;
   try {
+    for (const email of emails) {
+      const account = await auth.auth.admin.createUser({ email, password, email_confirm: true });
+      expect(account.error).toBeNull();
+      coaches.push(account.data.user!.id);
+    }
+    const [coachA, coachB] = coaches;
     await db.query("INSERT INTO public.user_roles(user_id,role_code) VALUES($1,'coach'),($2,'coach')", [coachA, coachB]);
     await db.query(`INSERT INTO public.coaching_programs(id,name,description,program_type,court_rental_included,is_active)
       VALUES($1,'E2E private','','private',false,true)`, [program]);
@@ -146,16 +147,22 @@ test("Coach opens own lessons and reservations from Calendar and List, managing 
     const [untouched] = await db.query("SELECT status FROM public.court_reservations WHERE id=$1", [otherRes]);
     expect(untouched).toEqual({ status: "active" });
   } finally {
-    await db.transaction(manager => cleanupBookingEvidence(manager, { bookingIds: [lessonA, lessonB, courtBooking] }));
-    await db.query("DELETE FROM public.court_reservations WHERE court_id = ANY($1::uuid[])", [[s1, s2]]);
-    await db.query("DELETE FROM public.location_opening_hours WHERE location_id=$1", [locationId]);
-    await db.query("DELETE FROM public.opening_hours_schedules WHERE location_id=$1", [locationId]);
-    await db.query("DELETE FROM public.courts WHERE location_id=$1", [locationId]);
-    await db.query("DELETE FROM public.locations WHERE id=$1", [locationId]);
-    await db.query("DELETE FROM public.coach_profiles WHERE user_id = ANY($1::uuid[])", [coaches]);
-    await db.query("DELETE FROM public.coaching_programs WHERE id=$1", [program]);
-    await db.query("DELETE FROM public.user_roles WHERE user_id = ANY($1::uuid[])", [coaches]);
-    for (const id of coaches) await auth.auth.admin.deleteUser(id);
-    await db.destroy();
+    try {
+      await db.transaction(manager => cleanupBookingEvidence(manager, { bookingIds: [lessonA, lessonB, courtBooking] }));
+      await db.query("DELETE FROM public.court_reservations WHERE court_id = ANY($1::uuid[])", [[s1, s2]]);
+      await db.query("DELETE FROM public.location_opening_hours WHERE location_id=$1", [locationId]);
+      await db.query("DELETE FROM public.opening_hours_schedules WHERE location_id=$1", [locationId]);
+      await db.query("DELETE FROM public.courts WHERE location_id=$1", [locationId]);
+      await db.query("DELETE FROM public.locations WHERE id=$1", [locationId]);
+      await db.query("DELETE FROM public.coach_profiles WHERE user_id = ANY($1::uuid[])", [coaches]);
+      await db.query("DELETE FROM public.coaching_programs WHERE id=$1", [program]);
+      await db.query("DELETE FROM public.user_roles WHERE user_id = ANY($1::uuid[])", [coaches]);
+      for (const id of coaches) {
+        await db.query("DELETE FROM public.users WHERE id=$1", [id]);
+        expect((await auth.auth.admin.deleteUser(id)).error).toBeNull();
+      }
+    } finally {
+      await db.destroy();
+    }
   }
 });

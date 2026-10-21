@@ -115,10 +115,10 @@ test("Admin cancellation atomically preserves snapshots, frees occupancy and mov
     expect((await service.from("court_reservations").select("*").eq("id", pastDirectId).single()).data).toEqual(directBefore);
   } finally {
     await cleanupBookingFixtures({ bookingIds: [bookingId, guestBookingId, pastBookingId, startedBookingId] });
-    await service.from("court_reservations").delete().in("id", [reservationId, guestReservationId, pastReservationId, startedReservationId, pastDirectId]);
-    await service.from("location_opening_hours").delete().eq("location_id", locationId);
-    await service.from("courts").delete().eq("id", courtId);
-    await service.from("locations").delete().eq("id", locationId);
+    expect((await service.from("court_reservations").delete().in("id", [reservationId, guestReservationId, pastReservationId, startedReservationId, pastDirectId])).error).toBeNull();
+    expect((await service.from("location_opening_hours").delete().eq("location_id", locationId)).error).toBeNull();
+    expect((await service.from("courts").delete().eq("id", courtId)).error).toBeNull();
+    expect((await service.from("locations").delete().eq("id", locationId)).error).toBeNull();
     await cleanupAuthFixtures(service, users);
   }
 }, 60000);

@@ -115,15 +115,15 @@ test("payment lifecycle keeps one reservation, protects overlap and releases exp
     expect(online).toMatchObject({ ok: false, message: "Online payment is unavailable. Choose Pay at club if offered, or try again later." });
   } finally {
     vi.unstubAllEnvs();
-    await db.from("payment_provider_settings").update({ active_provider: previousProvider }).eq("id", true);
+    expect((await db.from("payment_provider_settings").update({ active_provider: previousProvider }).eq("id", true)).error).toBeNull();
     const ids = (await db.from("court_reservations").select("id").eq("court_id", courtId)).data?.map((r) => r.id) ?? [];
     const bookings = (await db.from("bookings").select("id").in("reservation_id", ids)).data?.map((b) => b.id) ?? [];
     await cleanupBookingFixtures({ bookingIds: bookings });
-    await db.from("court_reservations").delete().eq("court_id", courtId);
-    await db.from("location_pricing_rules").delete().eq("location_id", locationId);
-    await db.from("pricing_rule_sets").delete().eq("id", ruleId);
-    await db.from("location_opening_hours").delete().eq("location_id", locationId);
-    await db.from("courts").delete().eq("id", courtId);
-    await db.from("locations").delete().eq("id", locationId);
+    expect((await db.from("court_reservations").delete().eq("court_id", courtId)).error).toBeNull();
+    expect((await db.from("location_pricing_rules").delete().eq("location_id", locationId)).error).toBeNull();
+    expect((await db.from("pricing_rule_sets").delete().eq("id", ruleId)).error).toBeNull();
+    expect((await db.from("location_opening_hours").delete().eq("location_id", locationId)).error).toBeNull();
+    expect((await db.from("courts").delete().eq("id", courtId)).error).toBeNull();
+    expect((await db.from("locations").delete().eq("id", locationId)).error).toBeNull();
   }
 }, 30000);

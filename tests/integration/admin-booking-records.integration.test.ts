@@ -123,8 +123,9 @@ test("Admin booking records show persisted history and verified financial operat
     await expect(getAdminBookingRecords(paid, { supabase: admin })).rejects.toThrow();
   } finally {
     await cleanupBookingFixtures({ bookingIds: [paid, club, expired] });
-    await db.from("court_reservations").delete().in("id", reservationIds);
-    await db.from("courts").delete().eq("id", courtId); await db.from("locations").delete().eq("id", locationId);
+    expect((await db.from("court_reservations").delete().in("id", reservationIds)).error).toBeNull();
+    expect((await db.from("courts").delete().eq("id", courtId)).error).toBeNull();
+    expect((await db.from("locations").delete().eq("id", locationId)).error).toBeNull();
     await cleanupAuthFixtures(db, users);
   }
 }, 30000);
@@ -149,8 +150,9 @@ async function onlineBookingFixture(marker: string) {
     cancellation_notice_minutes: 1440, payment_method: "online", created_at: "2026-10-01T10:00:00Z" }])).error).toBeNull();
   const cleanup = async () => {
     await cleanupBookingFixtures({ bookingIds: [ids.booking] });
-    await db.from("court_reservations").delete().eq("id", ids.reservation);
-    await db.from("courts").delete().eq("id", ids.court); await db.from("locations").delete().eq("id", ids.location);
+    expect((await db.from("court_reservations").delete().eq("id", ids.reservation)).error).toBeNull();
+    expect((await db.from("courts").delete().eq("id", ids.court)).error).toBeNull();
+    expect((await db.from("locations").delete().eq("id", ids.location)).error).toBeNull();
     await cleanupAuthFixtures(db, [ids.user]);
   };
   return { db, admin, ids, cleanup };

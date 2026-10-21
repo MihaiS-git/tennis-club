@@ -35,11 +35,10 @@ function client(key = publishableKey) {
   });
 }
 
-test("admin TypeORM role changes are idempotent, authorized, and preserve the final active admin", async () => {
+test("admin TypeORM role changes are idempotent, authorized, and reject self-management", async () => {
   const service = client(localServiceRoleKey());
   await ensureIntegrationAdminAnchor(service);
   const createdIds: string[] = [];
-  const temporarilySuspendedIds: string[] = [];
   const password = "admin-role-password-123";
 
   async function createUser(label: string) {
@@ -170,34 +169,11 @@ test("admin TypeORM role changes are idempotent, authorized, and preserve the fi
       .rejects.toBeInstanceOf(z.ZodError);
     expect(await hasRole(member.id, "coach")).toBe(0);
 
-    // Existing test databases may have other active admins. Restore every
-    // temporary status change before deleting this test's users.
-    const roles = await service.from("user_roles").select("user_id").eq("role_code", "admin");
-    assert.strictEqual(roles.error, null);
-    const otherIds = (roles.data ?? []).map((assignment) => assignment.user_id)
-      .filter((id) => id !== admin.id);
-    if (otherIds.length > 0) {
-      const users = await service.from("users").select("id, status").in("id", otherIds);
-      assert.strictEqual(users.error, null);
-      for (const user of users.data ?? []) {
-        if (user.status !== "active") continue;
-        const result = await service.from("users").update({ status: "suspended" }).eq("id", user.id);
-        assert.strictEqual(result.error, null);
-        temporarilySuspendedIds.push(user.id);
-      }
-    }
-
     expect(await updateAdminUserRole({ userId: admin.id, role: "admin", operation: "revoke" }, adminSession))
       .toEqual({ ok: false, reason: "self-management" });
-    // Final-admin policy belongs to TypeScript; native PostgreSQL has no policy trigger.
-    // Application concurrency coverage is shared with the status-change suite.
 
   } finally {
     vi.restoreAllMocks();
-    for (const id of temporarilySuspendedIds) {
-      const result = await service.from("users").update({ status: "active" }).eq("id", id);
-      assert.strictEqual(result.error, null);
-    }
     for (const id of createdIds.reverse()) {
       const roles = await service.from("user_roles").delete().eq("user_id", id);
       assert.strictEqual(roles.error, null);

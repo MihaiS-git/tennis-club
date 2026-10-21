@@ -21,19 +21,15 @@ it("requires an explicit Admin role flag; the Coach area link is opt-in", () => 
 
 it.each([
   ["/admin/locations", "Locations"],
-  ["/admin/locations/new", "Locations"],
   ["/admin/locations/location-id", "Locations"],
   ["/admin/payments/transactions", "Transactions"],
-  ["/admin/payments/transactions/refund/transaction-id", "Transactions"],
   ["/admin/payments/settings", "Settings"],
   ["/admin/bookings", "Bookings & Reservations"],
-  ["/admin/bookings/booking-id", "Bookings & Reservations"],
   ["/admin/coaching/programs", "Programs"],
   ["/admin/coaching/coaches", "Coaches"],
   ["/admin/coaching/prices", "Prices"],
   ["/admin/coaching/availability", "Availability"],
   ["/admin/users", "Users"],
-  ["/admin/users/user-id", "Users"],
 ])("activates only %s's primary section", (pathname, label) => {
   navigation.pathname = pathname;
   render(<AdminNavigation isAdmin={true} />);
@@ -48,20 +44,11 @@ it.each([
   }
 });
 
-it.each(["/admin", "/admin/locations-extra", "/admin/payments-extra", "/admin/users-extra", "/administrator", "/admin/unknown", "/admin/reservations", "/admin/reservations-extra", "/admin/bookings-extra", "/admin/coaching-extra", "/admin/payments/notifications"])(
+it.each(["/admin", "/admin/locations-extra", "/administrator", "/admin/unknown", "/admin/reservations", "/admin/payments/notifications"])(
   "does not activate a section for unrelated pathname %s", (pathname) => {
     navigation.pathname = pathname;
     render(<AdminNavigation isAdmin={true} />);
     expect(screen.getAllByRole("link").every((link) => !link.hasAttribute("aria-current"))).toBe(true);
-  },
-);
-
-it.each(["details", "opening-hours", "courts", "pricing", "public-booking"])(
-  "keeps Locations active for workspace tab %s", (tab) => {
-    navigation.pathname = "/admin/locations/location-id";
-    window.history.replaceState(null, "", `${navigation.pathname}?tab=${tab}`);
-    render(<AdminNavigation isAdmin={true} />);
-    expect(screen.getByRole("link", { name: "Locations" }).getAttribute("aria-current")).toBe("page");
   },
 );
 

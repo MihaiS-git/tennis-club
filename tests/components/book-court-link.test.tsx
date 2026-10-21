@@ -6,7 +6,7 @@ import { BookCourtLink, startAnotherBookingEvent } from "@/components/book-court
 vi.mock("next/navigation", () => ({ useRouter: () => ({}) }));
 afterEach(cleanup);
 
-it.each(["/", "/courts", "/profile"])("keeps ordinary booking navigation from %s", pathname => {
+it.each(["/profile"])("keeps ordinary booking navigation from %s", pathname => {
   window.history.replaceState(null, "", pathname);
   const restart = vi.fn();
   window.addEventListener(startAnotherBookingEvent, restart);

@@ -137,14 +137,15 @@ test("customer/Admin refunds preserve occupancy until verified, complete on a la
     expect((await rows("payment_attempts", own.booking_id))[0]).toMatchObject({ status: "succeeded", amount_minor: 5000, provider: "stripe" });
   } finally {
     refundPayment.mockReset();
-    await db.from("payment_provider_settings").update({ active_provider: previous }).eq("id", true);
+    expect((await db.from("payment_provider_settings").update({ active_provider: previous }).eq("id", true)).error).toBeNull();
     const ids = (await db.from("court_reservations").select("id").eq("court_id", courtId)).data?.map(r => r.id) ?? [];
     const bookings = (await db.from("bookings").select("id").in("reservation_id", ids)).data?.map(b => b.id) ?? [];
     await cleanupBookingFixtures({ bookingIds: bookings });
-    await db.from("court_reservations").delete().eq("court_id", courtId);
-    await db.from("pricing_rule_sets").delete().eq("location_id",locationId);
-    await db.from("location_opening_hours").delete().eq("location_id",locationId);
-    await db.from("courts").delete().eq("id", courtId); await db.from("locations").delete().eq("id", locationId);
+    expect((await db.from("court_reservations").delete().eq("court_id", courtId)).error).toBeNull();
+    expect((await db.from("pricing_rule_sets").delete().eq("location_id",locationId)).error).toBeNull();
+    expect((await db.from("location_opening_hours").delete().eq("location_id",locationId)).error).toBeNull();
+    expect((await db.from("courts").delete().eq("id", courtId)).error).toBeNull();
+    expect((await db.from("locations").delete().eq("id", locationId)).error).toBeNull();
     await cleanupAuthFixtures(db, users);
   }
 }, 30000);

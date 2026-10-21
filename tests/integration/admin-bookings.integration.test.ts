@@ -89,8 +89,9 @@ test("Admin bookings list guest, account, cancelled and historical bookings with
   } finally {
     await db.from("users").update({ status: "active" }).in("id", users);
     await cleanupBookingFixtures({ bookingIds });
-    await db.from("court_reservations").delete().in("id", reservationIds);
-    await db.from("courts").delete().in("id", [courtA, courtB, oldCourt]); await db.from("locations").delete().in("id", [central, archived]);
+    expect((await db.from("court_reservations").delete().in("id", reservationIds)).error).toBeNull();
+    expect((await db.from("courts").delete().in("id", [courtA, courtB, oldCourt])).error).toBeNull();
+    expect((await db.from("locations").delete().in("id", [central, archived])).error).toBeNull();
     await cleanupAuthFixtures(db, users);
   }
 }, 30000);
@@ -177,8 +178,9 @@ test("the unified List includes direct staff reservations as separate records, w
     await expect(listAdminBookings(query(), admin)).rejects.toThrow();
   } finally {
     await cleanupBookingFixtures({ bookingIds: [bookingId] });
-    await db.from("court_reservations").delete().in("id", [active, cancelled, historic, linked]);
-    await db.from("courts").delete().in("id", [court, oldCourt]); await db.from("locations").delete().in("id", [location, archived]);
+    expect((await db.from("court_reservations").delete().in("id", [active, cancelled, historic, linked])).error).toBeNull();
+    expect((await db.from("courts").delete().in("id", [court, oldCourt])).error).toBeNull();
+    expect((await db.from("locations").delete().in("id", [location, archived])).error).toBeNull();
     await cleanupAuthFixtures(db, users);
   }
 }, 30000);

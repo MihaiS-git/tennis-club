@@ -64,6 +64,7 @@ const reader = () => createClient(process.env.SUPABASE_URL!, process.env.SUPABAS
 const guest = reader(), member = reader();
 let database: DataSource;
 let previousProvider: string | null = null;
+let providerCaptured = false;
 const userIds: string[] = [];
 const removalCoachIds: string[] = [];
 const [locationA, locationB] = [randomUUID(), randomUUID()];
@@ -154,6 +155,7 @@ beforeAll(async () => {
   memberId = customer.id;
   assert.strictEqual((await member.auth.signInWithPassword({ email: customer.email, password: customer.password })).error, null);
   previousProvider = (await database.query("SELECT active_provider FROM public.payment_provider_settings WHERE id=true"))[0].active_provider;
+  providerCaptured = true;
   await database.query("UPDATE public.payment_provider_settings SET active_provider='stripe' WHERE id=true");
 
   await database.query(`INSERT INTO public.locations(id,name,slug,timezone,currency,is_active,is_public,customer_cancellation_notice_minutes) VALUES
@@ -209,7 +211,7 @@ beforeAll(async () => {
 // failed test may still briefly hold a lock or commit a late row, so a fresh attempt
 // (which reselects bookings by court) is retried a bounded number of times.
 async function removeFixtures() {
-  const locations = [locationA, locationB], coaches = [coach, coach2, hiddenCoach, formerCoach, ...removalCoachIds];
+  const locations = [locationA, locationB], coaches = [...userIds, ...removalCoachIds];
   for (let attempt = 1; ; attempt++) {
     try {
       return await inTransaction(async manager => {
@@ -242,7 +244,7 @@ afterAll(async () => {
   if (!database) return;
   try {
     await Promise.all([...sessions].map(end => end()));
-    await database.query("UPDATE public.payment_provider_settings SET active_provider=$1 WHERE id=true", [previousProvider]);
+    if (providerCaptured) await database.query("UPDATE public.payment_provider_settings SET active_provider=$1 WHERE id=true", [previousProvider]);
     await removeFixtures();
     await cleanupAuthFixtures(service, userIds);
   } finally {
