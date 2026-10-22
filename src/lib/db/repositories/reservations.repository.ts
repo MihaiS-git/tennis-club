@@ -340,23 +340,27 @@ export async function updateSettlementReservationStatus(manager: EntityManager, 
   await manager.query("UPDATE public.court_reservations SET status=$2,hold_expires_at=NULL WHERE id=$1", [id,status]);
 }
 
-export async function listPublicDayOccupancy(manager: EntityManager, locationId: string, courtIds: string[], date: string): Promise<unknown> {
+// excludeReservationId omits only that row (a lesson being rescheduled); its
+// adjustment holds and every other reservation still occupy their courts.
+export async function listPublicDayOccupancy(manager: EntityManager, locationId: string, courtIds: string[], date: string,
+  excludeReservationId?: string): Promise<unknown> {
   return manager.query(`SELECT r.court_id,r.booking_date::text,r.starts_at_minute,r.ends_at_minute
     FROM public.court_reservations r JOIN public.courts c ON c.id=r.court_id AND c.is_active
     JOIN public.locations l ON l.id=c.location_id AND l.is_active AND l.archived_at IS NULL AND l.is_public
-    WHERE l.id=$1 AND r.court_id=ANY($2::uuid[]) AND r.booking_date=$3::date
+    WHERE l.id=$1 AND r.court_id=ANY($2::uuid[]) AND r.booking_date=$3::date AND ($4::uuid IS NULL OR r.id<>$4)
       AND (r.status='active' OR (r.status='held' AND (r.hold_expires_at>statement_timestamp() OR ${acceptedCaptureOccupancy})))`,
-    [locationId,courtIds,date]);
+    [locationId,courtIds,date,excludeReservationId ?? null]);
 }
 
 // Lesson times occupying one coach on a local date at every court and location, as
 // court_reservation_coach_no_overlap compares them; expired holds follow the public
-// occupancy rule. Times only: no court, customer or booking facts.
-export async function listCoachDayOccupancy(manager: EntityManager, coachUserId: string, date: string) {
+// occupancy rule. Times only: no court, customer or booking facts. As for courts,
+// excludeReservationId omits only the lesson being rescheduled.
+export async function listCoachDayOccupancy(manager: EntityManager, coachUserId: string, date: string, excludeReservationId?: string) {
   const rows: unknown = await manager.query(`SELECT r.booking_date::text,r.starts_at_minute,r.ends_at_minute
-    FROM public.court_reservations r WHERE r.coach_user_id=$1 AND r.booking_date=$2::date
+    FROM public.court_reservations r WHERE r.coach_user_id=$1 AND r.booking_date=$2::date AND ($3::uuid IS NULL OR r.id<>$3)
       AND (r.status='active' OR (r.status='held' AND (r.hold_expires_at>statement_timestamp() OR ${acceptedCaptureOccupancy})))
-    ORDER BY r.starts_at_minute,r.ends_at_minute`, [coachUserId.toLowerCase(), date]);
+    ORDER BY r.starts_at_minute,r.ends_at_minute`, [coachUserId.toLowerCase(), date, excludeReservationId ?? null]);
   return z.array(z.object({ booking_date: z.iso.date(), starts_at_minute: z.number().int(), ends_at_minute: z.number().int() })).parse(rows);
 }
 

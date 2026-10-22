@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { locationCurrencies } from "@/lib/admin/locations-validation";
 import { majorAmountSchema } from "@/lib/pricing/money";
 
 export const coachingProgramTypes = ["private", "semi_private", "group", "junior"] as const;
@@ -64,10 +65,12 @@ export const coachingProgramFieldsSchema = z.strictObject({
   }
 });
 
-// Club-default prices saved with the program, per location and selected duration. Omitted
+const coachingCurrencySchema = z.enum(locationCurrencies, "Select a supported currency.");
+
+// Club-default prices saved with the program, per currency and selected duration. Omitted
 // prices are unchanged; an empty amount is never sent, and removal is always explicit.
-const clubPriceKey = { location_id: z.uuid(), duration_minutes: z.number().int() };
-const clubPriceKeyText = (price: { location_id: string; duration_minutes: number }) => `${price.location_id.toLowerCase()}:${price.duration_minutes}`;
+const clubPriceKey = { currency: coachingCurrencySchema, duration_minutes: z.number().int() };
+const clubPriceKeyText = (price: { currency: string; duration_minutes: number }) => `${price.currency}:${price.duration_minutes}`;
 export const coachingProgramMutationSchema = z.strictObject({
   id: z.uuid().optional(), fields: coachingProgramFieldsSchema,
   club_prices: z.array(z.strictObject({ ...clubPriceKey, amount: majorAmountSchema })).max(400).optional(),
@@ -110,10 +113,11 @@ export const coachProfileMutationSchema = z.strictObject({
 });
 export const coachVisibilitySchema = z.strictObject({ user_id: z.uuid(), is_public: z.boolean() });
 
-// A null coach is the club default; a coach is that coach's override.
+// One price for a program duration in a currency. The input never names a coach:
+// Admin operations set the club default, Coach operations the signed-in coach's override.
 export const coachingPriceMutationSchema = z.strictObject({
   program_id: z.uuid(), duration_minutes: z.number().int().min(coachingDurationLimits.min).max(coachingDurationLimits.max),
-  location_id: z.uuid(), coach_user_id: z.uuid().nullable(), amount: majorAmountSchema,
+  currency: coachingCurrencySchema, amount: majorAmountSchema,
 });
 export const coachingPriceRemovalSchema = coachingPriceMutationSchema.omit({ amount: true });
 

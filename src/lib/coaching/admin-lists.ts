@@ -5,14 +5,15 @@ import { listCoachingPrices, listCoachingPrograms } from "@/lib/db/repositories/
 import { listAdminLocations } from "@/lib/db/repositories/clubs.repository";
 import { inReadSnapshot, readIndependently } from "@/lib/db/transaction";
 import { listCoachesPage, listPriceGroupsPage, listProgramsPage } from "@/lib/db/repositories/coaching-lists.repository";
-import { readAdminCoaching, type AdminCoach, type AdminCoachingLocation, type AdminCoachingPrice, type AdminCoachingProgram } from "./admin";
+import {
+  adminCoachingCurrencies, adminCoachingPrice, readAdminCoaching, type AdminCoach, type AdminCoachingLocation, type AdminCoachingProgram,
+} from "./admin";
 import { coachFiltersSchema, priceFiltersSchema, programFiltersSchema } from "./admin-filters";
-import { isCurrentCoachingPrice } from "./pricing";
 
 export async function loadProgramsPage(input: unknown, supabase?: Parameters<typeof requireActiveAdmin>[0]) {
   await requireActiveAdmin(supabase);
   const filters = programFiltersSchema.parse(input);
-  // The Program dialog edits club prices for every current location; coach prices are
+  // The Program dialog edits club prices in every pricing currency; coach prices are
   // included only so removing a duration can state what it deletes.
   const { result, locations, prices } = await inReadSnapshot(async manager => {
     const result = await listProgramsPage(manager, filters);
@@ -27,15 +28,9 @@ export async function loadProgramsPage(input: unknown, supabase?: Parameters<typ
     durations: program.durations, min_participants: program.minParticipants, max_participants: program.maxParticipants,
     court_rental_included: program.courtRentalIncluded, is_active: program.isActive,
   }));
-  const currencies = new Map(locations.map(location => [location.id, location.currency]));
-  return { ...result, programs, filters,
-    locations: locations.map((location): AdminCoachingLocation => ({ id: location.id, name: location.name, currency: location.currency, is_active: location.isActive })),
-    prices: prices.map((price): AdminCoachingPrice => ({
-      id: price.id, program_id: price.programId, duration_minutes: price.durationMinutes, location_id: price.locationId,
-      coach_user_id: price.coachUserId, amount_minor: price.amountMinor, currency: price.currency,
-      current: isCurrentCoachingPrice(price, currencies.get(price.locationId) ?? price.currency),
-    })),
-  };
+  const adminLocations = locations.map((location): AdminCoachingLocation => ({ id: location.id, name: location.name, currency: location.currency, is_active: location.isActive }));
+  const adminPrices = prices.map(adminCoachingPrice);
+  return { ...result, programs, filters, prices: adminPrices, currencies: adminCoachingCurrencies(adminLocations, adminPrices) };
 }
 
 export async function loadPricesPage(input: unknown, supabase?: Parameters<typeof requireActiveAdmin>[0]) {
@@ -44,12 +39,8 @@ export async function loadPricesPage(input: unknown, supabase?: Parameters<typeo
   return inReadSnapshot(async manager => {
     const data = await readAdminCoaching(manager, false);
     const result = await listPriceGroupsPage(manager, filters);
-    const currencies = new Map(data.locations.map(location => [location.id, location.currency]));
-    return { ...data, ...result, filters, prices: result.prices.map(price => ({
-      id: price.id, program_id: price.programId, duration_minutes: price.durationMinutes, location_id: price.locationId,
-      coach_user_id: price.coachUserId, amount_minor: price.amountMinor, currency: price.currency,
-      current: isCurrentCoachingPrice(price, currencies.get(price.locationId) ?? price.currency),
-    })) };
+    const prices = result.prices.map(adminCoachingPrice);
+    return { ...data, ...result, filters, prices, currencies: adminCoachingCurrencies(data.locations, prices) };
   });
 }
 

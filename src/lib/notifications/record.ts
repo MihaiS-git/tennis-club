@@ -1,0 +1,39 @@
+import "server-only";
+
+import { randomUUID } from "node:crypto";
+import type { EntityManager } from "typeorm";
+import { insertEmailDelivery, insertUserMessage } from "@/lib/db/repositories/notifications.repository";
+import { resolveNotificationChannels } from "./policy";
+import { resolveNotificationAccounts } from "./recipient-resolution";
+import type { NotificationPurpose } from "./types";
+
+export type NotificationRecord = {
+  eventKey: string;
+  purpose: NotificationPurpose;
+  recipientEmail: string;
+  kind: string;
+  subject: string;
+  bodyText: string;
+  bodyHtml: string;
+  href?: string | null;
+  occurredAt: Date;
+};
+
+// The caller owns the transaction. A stable eventKey plus each database unique key
+// makes replay safe after a domain operation is retried.
+export async function recordNotification(manager: EntityManager, notification: NotificationRecord) {
+  const accounts = await resolveNotificationAccounts(manager, notification.recipientEmail);
+  const channels = resolveNotificationChannels(notification.recipientEmail, accounts, notification.purpose);
+  for (const userId of channels.userIds) {
+    await insertUserMessage(manager, { id: randomUUID(), userId, eventKey: notification.eventKey,
+      kind: notification.kind, subject: notification.subject, bodyText: notification.bodyText,
+      href: notification.href ?? null, createdAt: notification.occurredAt });
+  }
+  if (channels.email) {
+    await insertEmailDelivery(manager, { id: randomUUID(), eventKey: notification.eventKey,
+      recipientEmail: notification.recipientEmail.trim(), subject: notification.subject,
+      bodyText: notification.bodyText, bodyHtml: notification.bodyHtml, status: "pending", attempts: 0,
+      nextAttemptAt: notification.occurredAt, lockedUntil: null, providerMessageId: null,
+      lastError: null, createdAt: notification.occurredAt, updatedAt: notification.occurredAt });
+  }
+}

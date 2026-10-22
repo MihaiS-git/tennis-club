@@ -7,49 +7,90 @@ const { push, replace, refresh } = vi.hoisted(() => ({ push: vi.fn(), replace: v
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push, replace, refresh }) }));
 afterEach(() => { cleanup(); push.mockClear(); replace.mockClear(); refresh.mockClear(); window.history.replaceState(null, "", "/book"); });
 
-it("switches court/coaching modes and preserves choices for server revalidation on location changes", () => {
+const club = (amountMinor: number) => ({ amountMinor, currency: "RON" as const, source: "club" as const });
+const controls = (props: Partial<Parameters<typeof CoachingControls>[0]> = {}) => render(<CoachingControls locationId="one" date="2099-10-15"
+  coaches={[{ id: "ana", displayName: "Ana" }, { id: "dan", displayName: "Dan" }]} coachId="ana" programId="private" durationMinutes={60}
+  programs={[{ id: "private", name: "Private", bookable: true }, { id: "technique", name: "Technique", bookable: true }]}
+  durations={[{ durationMinutes: 60, price: club(20000) }, { durationMinutes: 90, price: { amountMinor: 35000, currency: "RON", source: "coach" } }]}
+  courtRentalIncluded={false} {...props} />);
+const lastPush = () => Object.fromEntries(new URL(push.mock.calls.at(-1)![0], "http://localhost").searchParams);
+
+it("keeps lesson choices on date changes and clears them on location changes", () => {
   render(<CalendarControls locations={[{ id: "one", name: "One" }, { id: "two", name: "Two" }]} locationId="one"
     date="2099-10-15" today="2099-10-15" coaching={{ program: "private", coach: "ana", duration: "90" }} />);
   expect(screen.getByRole("link", { name: "Court booking" }).getAttribute("href")).toBe("/book");
   expect(screen.getByRole("link", { name: "Coaching" }).getAttribute("aria-current")).toBe("page");
   fireEvent.click(screen.getByRole("button", { name: "Next day" }));
-  const dateUrl = new URL(push.mock.calls.at(-1)![0], "http://localhost");
-  expect(Object.fromEntries(dateUrl.searchParams)).toEqual({ location: "one", mode: "coaching", program: "private", coach: "ana", duration: "90", date: "2099-10-16" });
+  expect(lastPush()).toEqual({ location: "one", mode: "coaching", program: "private", coach: "ana", duration: "90", date: "2099-10-16" });
   fireEvent.change(screen.getByRole("combobox", { name: "Location" }), { target: { value: "two" } });
-  expect(new URL(push.mock.calls.at(-1)![0], "http://localhost").search).toBe("?location=two&mode=coaching&program=private&coach=ana&duration=90");
+  expect(lastPush()).toEqual({ location: "two", mode: "coaching" });
 });
 
-it.each(["Program", "Coach", "Lesson duration"])("updates %s and drops dependent selections", label => {
-  render(<CoachingControls locationId="one" date="2099-10-15" programId="private" coachId="ana" durationMinutes={60}
-    programs={[{ id: "private", name: "Private" }, { id: "technique", name: "Technique" }]}
-    coaches={[{ id: "ana", displayName: "Ana" }, { id: "dan", displayName: "Dan" }]} durations={[60, 90]} />);
-  fireEvent.change(screen.getByRole("combobox", { name: label }), { target: { value: label === "Program" ? "technique" : label === "Coach" ? "dan" : "90" } });
-  const params = new URL(push.mock.calls[0][0], "http://localhost").searchParams;
-  expect(params.get("mode")).toBe("coaching");
-  expect(params.get("date")).toBe("2099-10-15");
-  if (label === "Program") { expect(params.get("coach")).toBe("ana"); expect(params.get("duration")).toBeNull(); }
-  if (label === "Coach") expect(params.get("duration")).toBeNull();
-  if (label === "Lesson duration") expect(params.get("duration")).toBe("90");
+it("clears lesson choices when recovering from an invalid location", () => {
+  render(<CalendarControls locations={[{ id: "one", name: "One" }, { id: "two", name: "Two" }]} date={null} today="" coaching={{ coach: "ana" }} />);
+  const location = screen.getByRole("combobox", { name: "Location" }) as HTMLSelectElement;
+  expect(location.value).toBe("");
+  expect([...location.options].map(option => option.text)).toEqual(["Choose a location", "One", "Two"]);
+  expect(screen.queryByRole("button", { name: "Next day" })).toBeNull();
+  fireEvent.change(location, { target: { value: "two" } });
+  expect(lastPush()).toEqual({ location: "two", mode: "coaching" });
 });
 
-
-it("lists configured programs without a redundant placeholder", () => {
-  render(<CoachingControls locationId="one" date="2099-10-15" programId="semi" coachId="ana" durationMinutes={90}
-    programs={[{ id: "private", name: "Private coaching" }, { id: "semi", name: "Semi-private coaching" }]}
-    coaches={[{ id: "ana", displayName: "Ana" }]} durations={[60, 90]} />);
-  const select = screen.getByRole("combobox", { name: "Program" }) as HTMLSelectElement;
-  expect([...select.options].map(option => option.text)).toEqual(["Private coaching", "Semi-private coaching"]);
-  expect(select.value).toBe("semi");
+it.each([
+  ["Coach", "dan", { coach: "dan" }],
+  ["Program", "technique", { coach: "ana", program: "technique" }],
+  ["Lesson duration", "90", { coach: "ana", program: "private", duration: "90" }],
+] as const)("changing %s sends only the valid upstream selections for server defaults", (label, value, expected) => {
+  controls();
+  fireEvent.change(screen.getByRole("combobox", { name: label }), { target: { value } });
+  expect(lastPush()).toEqual({ mode: "coaching", location: "one", date: "2099-10-15", ...expected });
 });
 
-it("cleans an ineligible URL coach with replace and never renders that coach as an option", () => {
-  render(<CoachingControls locationId="central" date="2026-10-20" programId="private" coachId="" durationMinutes={0}
-    programs={[{ id: "private", name: "Private" }]} coaches={[]} durations={[]}
-    invalidCoachUrl="/book?mode=coaching&location=central&program=private" />);
-  expect(screen.getByRole("combobox", { name: "Coach" }).textContent).toBe("Choose a coach");
-  expect(replace).toHaveBeenCalledWith("/book?mode=coaching&location=central&program=private", { scroll: false });
+it("renders resolved defaults without navigation or a selected time", () => {
+  controls();
+  expect((screen.getByRole("combobox", { name: "Coach" }) as HTMLSelectElement).value).toBe("ana");
+  expect((screen.getByRole("combobox", { name: "Program" }) as HTMLSelectElement).value).toBe("private");
+  expect((screen.getByRole("combobox", { name: "Lesson duration" }) as HTMLSelectElement).value).toBe("60");
+  expect(push).not.toHaveBeenCalled();
+  expect(screen.queryByRole("region", { name: "Selected interval" })).toBeNull();
 });
 
+it("orders Coach → Program → Duration and disables each selector until its prerequisite is chosen", () => {
+  controls({ coachId: "", programId: "", durationMinutes: 0, programs: [], durations: [] });
+  expect(screen.getAllByRole("combobox").map(select => select.getAttribute("aria-label"))).toEqual(["Coach", "Program", "Lesson duration"]);
+  expect((screen.getByRole("combobox", { name: "Coach" }) as HTMLSelectElement).disabled).toBe(false);
+  expect((screen.getByRole("combobox", { name: "Program" }) as HTMLSelectElement).disabled).toBe(true);
+  expect(screen.getByRole("combobox", { name: "Program" }).textContent).toBe("Choose a coach first");
+  expect((screen.getByRole("combobox", { name: "Lesson duration" }) as HTMLSelectElement).disabled).toBe(true);
+  cleanup();
+  controls({ coaches: [], coachId: "", programId: "", durationMinutes: 0, programs: [], durations: [] });
+  expect((screen.getByRole("combobox", { name: "Coach" }) as HTMLSelectElement).disabled).toBe(true);
+  expect(screen.getByRole("combobox", { name: "Coach" }).textContent).toBe("No coaches at this location");
+});
+
+it("lists the coach's programs, marking those that cannot be booked online", () => {
+  controls({ programId: "", durationMinutes: 0, durations: [],
+    programs: [{ id: "private", name: "Private", bookable: true }, { id: "group", name: "Group", bookable: false }] });
+  const options = [...(screen.getByRole("combobox", { name: "Program" }) as HTMLSelectElement).options];
+  expect(options.map(option => [option.text, option.disabled])).toEqual([["Choose a program", true], ["Private", false], ["Group (not bookable online)", true]]);
+  cleanup();
+  controls({ programId: "", durationMinutes: 0, durations: [], programs: [] });
+  expect((screen.getByRole("combobox", { name: "Program" }) as HTMLSelectElement).disabled).toBe(true);
+  expect(screen.getByRole("combobox", { name: "Program" }).textContent).toBe("No programs assigned");
+});
+
+it("shows each duration's effective price, the selected price source and court rental terms", () => {
+  controls({ durations: [{ durationMinutes: 60, price: club(20000) }, { durationMinutes: 90, price: null }] });
+  expect([...(screen.getByRole("combobox", { name: "Lesson duration" }) as HTMLSelectElement).options].map(option => option.text.replace(/\s/g, " ")))
+    .toEqual(["Choose a lesson length", "60 min · RON 200.00", "90 min · price unavailable"]);
+  expect(screen.getByText(/Coaching price:/).textContent?.replace(/\s/g, " ")).toBe("Coaching price: RON 200.00 (club price) · Court rental charged separately at the court’s rate");
+  cleanup();
+  controls({ durationMinutes: 90, courtRentalIncluded: true });
+  expect(screen.getByText(/Coaching price:/).textContent?.replace(/\s/g, " ")).toBe("Coaching price: RON 350.00 (coach’s price) · Court rental included");
+  cleanup();
+  controls({ durations: [{ durationMinutes: 60, price: null }] });
+  expect(screen.queryByText(/Coaching price:/)).toBeNull();
+});
 
 it("exposes Clear filters in coaching mode and navigates to initialization defaults with clean URL state", () => {
   window.history.replaceState(null, "", "/book?mode=coaching&location=two&date=2099-10-15&program=semi&coach=stale&duration=90");

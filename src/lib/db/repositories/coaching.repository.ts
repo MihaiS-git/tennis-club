@@ -16,6 +16,7 @@ import { CoachingPriceEntity } from "../entities/coaching-price.entity";
 import { CoachingProgramDurationEntity } from "../entities/coaching-program-duration.entity";
 import { CoachingProgramEntity } from "../entities/coaching-program.entity";
 import { readIndependently } from "../transaction";
+import type { LocationCurrency } from "@/lib/pricing/money";
 
 // ---- Programs ----
 
@@ -132,6 +133,19 @@ export async function lockCoachProfileForBooking(manager: EntityManager, userId:
     select: { userId: true }, lock: { mode: "pessimistic_read" } });
 }
 
+// A booked lesson's current authorization: the coach's unarchived profile and its
+// assignment to the lesson's location and program. Publication is not required.
+// Writers already hold the profile FOR SHARE; read-only callers need no lock.
+export async function findCoachLessonAssignment(manager: EntityManager, coachUserId: string, locationId: string, programId: string) {
+  const userId = coachUserId.toLowerCase();
+  const [profile, location, program] = await readIndependently(manager, [
+    () => manager.getRepository(CoachProfileEntity).findOne({ where: { userId, archivedAt: IsNull() }, select: { userId: true } }),
+    () => manager.getRepository(CoachLocationEntity).findOneBy({ coachUserId: userId, locationId: locationId.toLowerCase() }),
+    () => manager.getRepository(CoachProgramEntity).findOneBy({ coachUserId: userId, programId: programId.toLowerCase() }),
+  ]);
+  return { profile: profile !== null, location: location !== null, program: program !== null };
+}
+
 export type CoachProfileValues = Pick<CoachProfileEntity,
   "displayName" | "bio" | "qualifications" | "specialties" | "languages" | "isPublic">;
 
@@ -149,6 +163,11 @@ export async function changeCoachLocations(manager: EntityManager, coachUserId: 
     .values(add.map((locationId) => ({ coachUserId, locationId }))).execute();
 }
 
+export async function listCoachProgramIds(manager: EntityManager, coachUserId: string) {
+  const rows = await manager.getRepository(CoachProgramEntity).find({ where: { coachUserId: coachUserId.toLowerCase() } });
+  return rows.map((row) => row.programId);
+}
+
 export async function changeCoachPrograms(manager: EntityManager, coachUserId: string, add: readonly string[], remove: readonly string[]) {
   if (remove.length) await manager.getRepository(CoachProgramEntity).delete({ coachUserId, programId: In([...remove]) });
   if (add.length) await manager.createQueryBuilder().insert().into(CoachProgramEntity)
@@ -157,39 +176,46 @@ export async function changeCoachPrograms(manager: EntityManager, coachUserId: s
 
 // ---- Prices ----
 
-export async function listCoachingPrices(manager: EntityManager, filter: { locationId?: string; programId?: string; programIds?: readonly string[]; coachUserId?: string } = {}) {
+export async function listCoachingPrices(manager: EntityManager, filter: { programId?: string; programIds?: readonly string[]; coachUserId?: string } = {}) {
   return manager.getRepository(CoachingPriceEntity).find({
     where: {
-      ...(filter.locationId ? { locationId: filter.locationId.toLowerCase() } : {}),
       ...(filter.programId ? { programId: filter.programId.toLowerCase() } : {}),
       ...(filter.programIds ? { programId: In(filter.programIds.map((id) => id.toLowerCase())) } : {}),
       ...(filter.coachUserId ? { coachUserId: filter.coachUserId.toLowerCase() } : {}),
     },
-    order: { programId: "ASC", durationMinutes: "ASC", locationId: "ASC", coachUserId: "ASC" },
+    order: { programId: "ASC", durationMinutes: "ASC", currency: "ASC", coachUserId: "ASC" },
   });
 }
 
-export type CoachingPriceKey = { programId: string; durationMinutes: number; locationId: string; coachUserId: string | null };
+// A null coach is the club default; a coach is that coach's own override.
+export type CoachingPriceKey = { programId: string; durationMinutes: number; currency: LocationCurrency; coachUserId: string | null };
 
 // One statement per scope: the partial unique index of that scope arbitrates.
-export async function upsertCoachingPrice(manager: EntityManager, key: CoachingPriceKey, amountMinor: number, currency: string, updatedAt: Date) {
+export async function upsertCoachingPrice(manager: EntityManager, key: CoachingPriceKey, amountMinor: number, updatedAt: Date) {
   const conflict = key.coachUserId
-    ? "(program_id,duration_minutes,location_id,coach_user_id) WHERE coach_user_id IS NOT NULL"
-    : "(program_id,duration_minutes,location_id) WHERE coach_user_id IS NULL";
+    ? "(coach_user_id,program_id,duration_minutes,currency) WHERE coach_user_id IS NOT NULL"
+    : "(program_id,duration_minutes,currency) WHERE coach_user_id IS NULL";
   const rows: unknown = await manager.query(`INSERT INTO public.coaching_prices
-    (program_id,duration_minutes,location_id,coach_user_id,amount_minor,currency,updated_at)
-    VALUES ($1,$2,$3,$4,$5,$6,$7)
-    ON CONFLICT ${conflict} DO UPDATE SET amount_minor=EXCLUDED.amount_minor,currency=EXCLUDED.currency,updated_at=EXCLUDED.updated_at
-    RETURNING id`, [key.programId, key.durationMinutes, key.locationId, key.coachUserId, amountMinor, currency, updatedAt]);
+    (program_id,duration_minutes,coach_user_id,amount_minor,currency,updated_at)
+    VALUES ($1,$2,$3,$4,$5,$6)
+    ON CONFLICT ${conflict} DO UPDATE SET amount_minor=EXCLUDED.amount_minor,updated_at=EXCLUDED.updated_at
+    RETURNING id`, [key.programId, key.durationMinutes, key.coachUserId, amountMinor, key.currency, updatedAt]);
   return returnedIds.parse(rows)[0].id;
 }
 
 export async function deleteCoachingPrice(manager: EntityManager, key: CoachingPriceKey) {
   const result = await manager.createQueryBuilder().delete().from(CoachingPriceEntity)
-    .where({ programId: key.programId, durationMinutes: key.durationMinutes, locationId: key.locationId,
+    .where({ programId: key.programId, durationMinutes: key.durationMinutes, currency: key.currency,
       coachUserId: key.coachUserId ?? IsNull() })
     .returning("id").execute();
   return returnedIds.parse(result.raw)[0]?.id ?? null;
+}
+
+// One coach's overrides for programs that coach no longer offers. Club defaults,
+// other coaches' overrides and booking snapshots are never addressed.
+export async function deleteCoachProgramPrices(manager: EntityManager, coachUserId: string, programIds: readonly string[]) {
+  if (!programIds.length) return;
+  await manager.getRepository(CoachingPriceEntity).delete({ coachUserId, programId: In([...programIds]) });
 }
 
 // ---- Public projection ----
@@ -206,8 +232,7 @@ const publicFactsSchema = z.object({
     location_ids: z.array(z.uuid()), program_ids: z.array(z.uuid()),
   })),
   prices: z.array(z.object({
-    program_id: z.uuid(), duration_minutes: z.number().int(), location_id: z.uuid(),
-    coach_user_id: z.uuid().nullable(), amount_minor: z.number().int(), currency: z.string(),
+    program_id: z.uuid(), duration_minutes: z.number().int(), coach_user_id: z.uuid().nullable(), amount_minor: z.number().int(), currency: z.string(),
   })),
 });
 export type PublicCoachingFacts = z.infer<typeof publicFactsSchema>;
@@ -231,7 +256,7 @@ export async function readPublicCoachingFacts(manager: EntityManager): Promise<P
       coalesce((SELECT jsonb_agg(to_jsonb(p) ORDER BY lower(p.name),p.id) FROM programs p),'[]'::jsonb) AS programs,
       coalesce((SELECT jsonb_agg(to_jsonb(c) ORDER BY lower(c.display_name),c.user_id) FROM coaches c),'[]'::jsonb) AS coaches,
       coalesce((SELECT jsonb_agg(jsonb_build_object('program_id',x.program_id,'duration_minutes',x.duration_minutes,
-          'location_id',x.location_id,'coach_user_id',x.coach_user_id,'amount_minor',x.amount_minor,'currency',x.currency))
+          'coach_user_id',x.coach_user_id,'amount_minor',x.amount_minor,'currency',x.currency))
         FROM public.coaching_prices x JOIN programs p ON p.id=x.program_id
         WHERE x.coach_user_id IS NULL OR x.coach_user_id IN (SELECT user_id FROM coaches)),'[]'::jsonb) AS prices`);
   return z.array(publicFactsSchema).length(1).parse(rows)[0];

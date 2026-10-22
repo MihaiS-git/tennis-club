@@ -42,15 +42,26 @@ export const customerBookingInputSchema = z.strictObject({
   && value.endMinute - value.startMinute >= 60,
 { path: ["startMinute"], message: "Choose at least 60 minutes in 30-minute steps." });
 
-// Reserve only the target pieces outside the already-confirmed occupancy.
-export function adjustmentHoldFragments(original: { courtId: string; date: string; startMinute: number; endMinute: number },
-  target: { courtId: string; date: string; startMinute: number; endMinute: number }) {
-  const same = original.courtId === target.courtId && original.date === target.date;
-  const intervals = same ? [[target.startMinute, Math.min(target.endMinute, original.startMinute)],
+type HoldInterval = { courtId: string; date: string; startMinute: number; endMinute: number };
+type AdjustmentHoldFragment = HoldInterval & { coachUserId?: string };
+
+// Reserve only the target pieces outside the already-confirmed occupancy. The
+// original lesson keeps protecting its coach at its own date and time on any
+// court, so a coaching target holds the coach only outside that time; inside
+// it a different court is held without the coach, the same court not at all.
+export function adjustmentHoldFragments(original: HoldInterval, target: HoldInterval, coachUserId?: string | null): AdjustmentHoldFragment[] {
+  const outside = (excluded: boolean) => excluded ? [[target.startMinute, Math.min(target.endMinute, original.startMinute)],
     [Math.max(target.startMinute, original.endMinute), target.endMinute]] : [[target.startMinute, target.endMinute]];
-  return intervals.filter(([start, end]) => end > start).map(([startMinute, endMinute]) => ({
-    courtId: target.courtId, date: target.date, startMinute, endMinute,
-  }));
+  const fragment = ([startMinute, endMinute]: number[], coach?: string) => ({
+    courtId: target.courtId, date: target.date, startMinute, endMinute, ...(coach ? { coachUserId: coach } : {}),
+  });
+  const sameDate = original.date === target.date, sameCourt = original.courtId === target.courtId;
+  if (!coachUserId) return outside(sameDate && sameCourt).filter(([start, end]) => end > start).map((interval) => fragment(interval));
+  const overlap = sameDate && !sameCourt
+    ? [[Math.max(target.startMinute, original.startMinute), Math.min(target.endMinute, original.endMinute)]] : [];
+  return [...outside(sameDate).filter(([start, end]) => end > start).map((interval) => fragment(interval, coachUserId)),
+    ...overlap.filter(([start, end]) => end > start).map((interval) => fragment(interval))]
+    .sort((a, b) => a.startMinute - b.startMinute);
 }
 
 // Changes that return money keep the original booking until every refund is

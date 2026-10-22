@@ -25,18 +25,18 @@ const coach: PublicCoachProfile = {
   qualifications: "Level 3 coach", specialties: ["Serve", "Doubles", "Footwork", "Fitness"], languages: ["Romanian", "English"],
   locations: [east, west], programs: [privateLesson],
   lessons: [
-    { locationId: east.id, locationName: east.name, programId: privateLesson.id, programName: privateLesson.name, durationMinutes: 60,
+    { currency: "RON", programId: privateLesson.id, programName: privateLesson.name, durationMinutes: 60,
       price: { amountMinor: 25000, currency: "RON", source: "coach" } },
-    { locationId: east.id, locationName: east.name, programId: privateLesson.id, programName: privateLesson.name, durationMinutes: 90,
+    { currency: "RON", programId: privateLesson.id, programName: privateLesson.name, durationMinutes: 90,
       price: { amountMinor: 28000, currency: "RON", source: "club" } },
-    { locationId: west.id, locationName: west.name, programId: privateLesson.id, programName: privateLesson.name, durationMinutes: 60,
+    { currency: "EUR", programId: privateLesson.id, programName: privateLesson.name, durationMinutes: 60,
       price: { amountMinor: 5000, currency: "EUR", source: "club" } },
-    { locationId: west.id, locationName: west.name, programId: privateLesson.id, programName: privateLesson.name, durationMinutes: 90, price: null },
+    { currency: "EUR", programId: privateLesson.id, programName: privateLesson.name, durationMinutes: 90, price: null },
   ],
 };
 
 const page = async (id = coachId) => render(await CoachPage({ params: Promise.resolve({ coachId: id }) }));
-const priceRow = (location: string, text: string) => within(screen.getByRole("region", { name: `Lesson prices at ${location}` }))
+const priceRow = (currency: string, text: string) => within(screen.getByRole("region", { name: `Lesson prices in ${currency}` }))
   .getAllByRole("listitem").find((item) => item.textContent?.includes(text))!;
 
 beforeEach(() => {
@@ -75,13 +75,13 @@ it("shows qualifications, languages, programs and location links", async () => {
   expect(screen.getByRole("link", { name: "Opening hours and directions for East Club" }).getAttribute("href")).toBe("/club#visit");
 });
 
-it("labels coach and club prices in the location currency and leaves missing prices unpublished", async () => {
+it("labels coach and club prices per currency and leaves missing prices unpublished", async () => {
   await page();
-  expect(priceRow("East Club", "60 min").textContent).toContain("Ana’s price");
-  expect(priceRow("East Club", "60 min").textContent).toMatch(/250[.,]00/);
-  expect(priceRow("East Club", "90 min").textContent).toContain("Club price");
-  expect(priceRow("West Club", "60 min").textContent).toMatch(/€|EUR/);
-  expect(priceRow("West Club", "90 min").textContent).toContain("Price not published");
+  expect(priceRow("RON", "60 min").textContent).toContain("Ana’s price");
+  expect(priceRow("RON", "60 min").textContent).toMatch(/250[.,]00/);
+  expect(priceRow("RON", "90 min").textContent).toContain("Club price");
+  expect(priceRow("EUR", "60 min").textContent).toMatch(/€|EUR/);
+  expect(priceRow("EUR", "90 min").textContent).toContain("Price not published");
 });
 
 it("links to the shared coaching timetable with the coach preselected", async () => {

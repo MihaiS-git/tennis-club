@@ -7,7 +7,7 @@ import { z } from "zod";
 import { locationCurrencies } from "@/lib/admin/locations-validation";
 import { readCurrentAccount } from "@/lib/auth/account";
 import { bookingContactShape } from "@/lib/bookings/domain";
-import { buildBookingRevision } from "@/lib/bookings/revision";
+import { buildBookingRevision, lessonPricingEvidence } from "@/lib/bookings/revision";
 import { findPublicLocationWithCourts } from "@/lib/courts/public";
 import { normalizeDatabaseError } from "@/lib/db/errors";
 import { lockCheckoutAccountStatus, lockReservationActorFacts } from "@/lib/db/repositories/accounts.repository";
@@ -135,11 +135,10 @@ async function reserveLesson(manager: EntityManager, intent: Intent, customerId:
     endMinute: quote.endMinute, customerName: intent.customerName, customerEmail: intent.customerEmail,
     customerPhone: intent.customerPhone, totalAmountMinor: quote.totalAmountMinor, currency: quote.currency,
     paymentMethod: "online", cancellationNoticeMinutes: location.customerCancellationNoticeMinutes,
-    pricingEvidence: { ...quote.evidence.courtPricing, coaching: { programId: quote.program.id, coachUserId: quote.coach.userId,
+    pricingEvidence: lessonPricingEvidence(quote.evidence.courtPricing, { programId: quote.program.id, coachUserId: quote.coach.userId,
       locationId: quote.location.id, durationMinutes: quote.durationMinutes, source: quote.evidence.coachingPrice.source,
       amountMinor: quote.coachingAmountMinor, currency: quote.currency, courtRentalIncluded: quote.program.courtRentalIncluded,
-      courtRentalMinor: quote.evidence.courtRentalMinor, courtAmountMinor: quote.courtAmountMinor,
-      participantCount: quote.program.participantCount } },
+      participantCount: quote.program.participantCount }, quote.evidence.courtRentalMinor),
     coachUserId: quote.coach.userId, coachingProgramId: quote.program.id, coachName: quote.coach.displayName,
     coachingProgramName: quote.program.name,
   }, { id: randomUUID(), bookingId, kind: "created", operationKey: "created", intentHash: "created",

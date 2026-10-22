@@ -27,7 +27,7 @@ export default defineConfig({
     channel: "chrome",
   },
   webServer: [{ command: "node tests/e2e/fixtures/stripe-server.mjs", url: "http://127.0.0.1:3111/health", reuseExistingServer: false }, {
-    command: "npm run --silent build && npm run --silent start -- --port 3100",
+    command: "node tests/local/assert-next-server-environment.mjs production && npm run --silent build && npm run --silent start -- --port 3100",
     url: appUrl,
     reuseExistingServer: false,
     stdout: "pipe",

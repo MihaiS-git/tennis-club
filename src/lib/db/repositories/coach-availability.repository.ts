@@ -169,21 +169,3 @@ export async function listCoachLocationOpeningHours(manager: EntityManager, loca
   ]);
   return { schedules, hours };
 }
-
-// Batched selector facts, without private notes or occupancy. Exceptions at other
-// locations must remain present: extra hours there override regular local hours.
-export async function listCoachingSelectorAvailability(manager: EntityManager, coachIds: readonly string[], locationId: string, today: string) {
-  if (!coachIds.length) return { weekly: [], exceptions: [], schedules: [], hours: [] };
-  const [weekly, exceptions, opening] = await readIndependently(manager, [
-    () => manager.getRepository(CoachWeeklyAvailabilityEntity).find({
-      select: { coachUserId: true, locationId: true, weekday: true, startMinute: true, endMinute: true, validFrom: true, validUntil: true },
-      where: [IsNull(), MoreThanOrEqual(today)].map(validUntil => ({ coachUserId: In([...coachIds]), locationId, validUntil })),
-    }),
-    () => manager.getRepository(CoachAvailabilityExceptionEntity).find({
-      select: { coachUserId: true, exceptionDate: true, untilDate: true, kind: true, locationId: true, startMinute: true, endMinute: true },
-      where: { coachUserId: In([...coachIds]), untilDate: MoreThanOrEqual(today) },
-    }),
-    () => listCoachLocationOpeningHours(manager, [locationId], today),
-  ]);
-  return { weekly, exceptions, ...opening };
-}

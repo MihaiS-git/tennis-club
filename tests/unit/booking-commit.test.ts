@@ -36,6 +36,11 @@ vi.mock("@/lib/db/repositories/booking-revisions.repository");
 vi.mock("@/lib/db/repositories/reservations.repository");
 vi.mock("@/lib/db/repositories/clubs.repository");
 vi.mock("@/lib/reservations/occupancy");
+vi.mock("@/lib/notifications/events", () => ({
+  recordBookingTransition: vi.fn(),
+  recordBookingFinancialException: vi.fn(),
+  recordSuccessfulRefund: vi.fn(),
+}));
 vi.mock("@/lib/logger", () => ({ logger: { error: vi.fn(), warn: vi.fn() } }));
 
 const id = "00000000-0000-4000-8000-000000000001";
@@ -123,7 +128,7 @@ test("duplicate webhook receipt returns success without another revision", async
 });
 
 async function confirmedBooking() {
-  vi.mocked(bookings.discoverBookingLocation).mockResolvedValue({ location_id: id });
+  vi.mocked(bookings.discoverBookingLocation).mockResolvedValue({ location_id: id, coach_user_id: null });
   vi.mocked(lockLocations).mockResolvedValue([Object.assign(new LocationEntity(), {
     id, name: "Club", timezone: "UTC", currency: "RON", isActive: true, archivedAt: null,
   })]);

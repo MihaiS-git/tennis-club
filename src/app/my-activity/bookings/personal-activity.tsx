@@ -10,7 +10,7 @@ import { BookingDetails } from "@/components/booking-details";
 import { ModalDialog } from "@/components/modal-dialog";
 import { ReservationDetailsView } from "@/components/reservation-details";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
-import { parseActivityQuery, type ActivitySearchParams } from "@/lib/bookings/activity-query";
+import { activityBookingHref, activityHref, parseActivityQuery, type ActivitySearchParams } from "@/lib/bookings/activity-query";
 import type { UpcomingActivity as Activity, UpcomingCourtActivity as CourtActivity } from "@/lib/bookings/activity-service";
 import { upcomingBookingStatus, type PersonalCustomerBooking } from "@/lib/bookings/personal";
 import { StatusBadge } from "@/components/status-badge";
@@ -50,8 +50,9 @@ export function ReservationDetails({ reservation: selected }: { reservation: Per
   </ReservationDetailsView>;
 }
 
-export function PersonalActivity({ staff, userId, initialActivity, initialError, listQuery }: {
+export function PersonalActivity({ staff, userId, initialActivity, initialError, listQuery, deepLinkedBooking = null }: {
   staff: boolean; userId?: string; initialActivity: Activity | null; initialError: string; listQuery?: ActivitySearchParams;
+  deepLinkedBooking?: PersonalCustomerBooking | null;
 }) {
   const [activity, setActivity] = useState(initialActivity);
   const [error, setError] = useState(initialError);
@@ -64,7 +65,12 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
     setError(initialError);
   }
   const [selected, setSelected] = useState<PersonalReservation | null>(null);
-  const [selectedBooking, setSelectedBooking] = useState<PersonalCustomerBooking | null>(null);
+  const [selectedBooking, setSelectedBooking] = useState<PersonalCustomerBooking | null>(deepLinkedBooking);
+  const [deepLinkedBookingId, setDeepLinkedBookingId] = useState(deepLinkedBooking?.id ?? null);
+  if (deepLinkedBookingId !== (deepLinkedBooking?.id ?? null)) {
+    setDeepLinkedBookingId(deepLinkedBooking?.id ?? null);
+    setSelectedBooking(deepLinkedBooking);
+  }
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [pending, setPending] = useState(false);
@@ -129,6 +135,7 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
   }
 
   async function refreshCancelledBooking() {
+    window.history.replaceState(null, "", activityHref("upcoming", parseActivityQuery(listQuery ?? {}, "upcoming", staff)));
     bookingDialogRef.current?.close();
     setSelectedBooking(null);
     try { setActivity(await loadPersonalActivityAction(listQuery)); }
@@ -155,7 +162,10 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
 
   function openDetails(item: CourtActivity, row: HTMLTableRowElement) {
     returnFocusRef.current = row; setEditing(false);
-    if (item.kind === "booking") setSelectedBooking(item.row); else setSelected(item.row);
+    if (item.kind === "booking") {
+      window.history.replaceState(null, "", activityBookingHref("upcoming", query, item.row.id));
+      setSelectedBooking(item.row);
+    } else setSelected(item.row);
   }
 
   const list = (rows: CourtActivity[]) => <section aria-label="Upcoming">
@@ -187,6 +197,7 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
         onCancel={(event) => { if (pending) event.preventDefault(); }}
         onClose={() => {
           setSelectedBooking(null);
+          window.history.replaceState(null, "", activityHref("upcoming", query));
           if (editing) {
             setEditing(false);
             // X discards an unpaid modification; a processing payment is left to the webhook.
@@ -201,7 +212,7 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
           returnFocusRef.current?.focus();
         }}
         className={`fixed inset-0 m-auto max-h-[90vh] w-[calc(100%-2rem)] overflow-y-auto rounded-card border border-border bg-surface p-5 text-foreground shadow-floating backdrop:bg-foreground/50 has-[[data-booking-modification]]:max-w-lg ${editing ? "max-w-6xl" : "max-w-md"}`}>
-        <DialogHeader titleId={`${titleId}-booking`} title={editing ? "Edit booking" : "Booking"} status={editing ? undefined : upcomingBookingStatus(selectedBooking).label}
+        <DialogHeader titleId={`${titleId}-booking`} title={editing ? selectedBooking.includes_coaching ? "Reschedule lesson" : "Edit booking" : "Booking"} status={editing ? undefined : upcomingBookingStatus(selectedBooking).label}
           statusTone={upcomingBookingStatus(selectedBooking).tone} disabled={pending} onClose={() => bookingDialogRef.current?.close()} />
         {editing ? <BookingEditForm booking={selectedBooking}
           actions={ownBookingActions} onCancel={() => setEditing(false)} onPendingChange={setPending}

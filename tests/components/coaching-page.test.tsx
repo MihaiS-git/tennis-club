@@ -14,7 +14,7 @@ vi.mock("@/app/coaching/coaching-sections", async (original) => ({
 }));
 
 import CoachingPage, { metadata } from "@/app/coaching/page";
-import { pricesByLocation, startingPrices } from "@/app/coaching/coaching-sections";
+import { pricesByCurrency, startingPrices } from "@/app/coaching/coaching-sections";
 
 const { CoachingCoaches, CoachingPrices, CoachingPrograms } =
   await vi.importActual<typeof import("@/app/coaching/coaching-sections")>("@/app/coaching/coaching-sections");
@@ -22,16 +22,16 @@ const { CoachingCoaches, CoachingPrices, CoachingPrograms } =
 const program = { id: "a1000000-0000-4000-8000-000000000001", name: "Private lesson", description: "One player, one coach.",
   type: "private" as const, durations: [60, 90], minParticipants: 1, maxParticipants: 1, courtRentalIncluded: true,
   prices: [
-    { locationId: "b1", locationName: "East Club", durationMinutes: 60, amountMinor: 12000, currency: "RON" as const },
-    { locationId: "b2", locationName: "West Club", durationMinutes: 60, amountMinor: 3000, currency: "EUR" as const },
-    { locationId: "b1", locationName: "East Club", durationMinutes: 90, amountMinor: 17000, currency: "RON" as const },
+    { durationMinutes: 60, amountMinor: 12000, currency: "RON" as const },
+    { durationMinutes: 60, amountMinor: 3000, currency: "EUR" as const },
+    { durationMinutes: 90, amountMinor: 17000, currency: "RON" as const },
   ] };
 const group = { ...program, id: "a1000000-0000-4000-8000-000000000002", name: "Group drills", type: "group" as const, description: "",
   durations: [90], minParticipants: 3, maxParticipants: 6, courtRentalIncluded: false, prices: [] };
 const coach = { id: "c1", displayName: "Ana Pop", bio: "Former junior champion.", qualifications: "Level 2 coach",
   specialties: ["Serve", "Footwork"], languages: ["Romanian", "English"],
   locations: [{ id: "b1", name: "East Club" }], programs: [{ id: program.id, name: "Private lesson" }],
-  rates: [{ programId: program.id, programName: "Private lesson", courtRentalIncluded: true, locationId: "b1", locationName: "East Club",
+  rates: [{ programId: program.id, programName: "Private lesson", courtRentalIncluded: true,
     durationMinutes: 60, amountMinor: 15000, currency: "RON" as const }] };
 const data: PublicCoaching = { programs: [program, group], coaches: [coach] };
 const empty: PublicCoaching = { programs: [], coaches: [] };
@@ -95,14 +95,15 @@ it("shows public coach profiles with individual prices and no account details", 
   expect(within(card).getByRole("link", { name: "View Ana Pop’s profile" }).getAttribute("href")).toBe("/coaching/coaches/c1");
 });
 
-it("lists club prices per location with coach prices beneath", async () => {
+it("lists club-wide prices per currency with coach prices beneath", async () => {
   await show(CoachingPrices, data);
-  const east = screen.getByRole("region", { name: "Coaching prices at East Club" });
-  expect(east.textContent).toContain(`Private lesson · 60 minCourt rental includedAna Pop: ${formatMoney(15000, "RON")}${formatMoney(12000, "RON")}Club price`);
-  expect(screen.getByRole("region", { name: "Coaching prices at West Club" }).textContent).toContain(formatMoney(3000, "EUR"));
+  const ron = screen.getByRole("region", { name: "Coaching prices in RON" });
+  expect(ron.textContent).toContain(`Private lesson · 60 minCourt rental includedAna Pop: ${formatMoney(15000, "RON")}${formatMoney(12000, "RON")}Club price`);
+  expect(screen.getByRole("region", { name: "Coaching prices in EUR" }).textContent).toContain(formatMoney(3000, "EUR"));
+  expect(document.body.textContent).not.toContain("East Club");
   // A coach-only price is listed without inventing a club price.
-  const coachOnly = pricesByLocation({ programs: [group], coaches: [{ ...coach, rates: [{ ...coach.rates[0], programId: group.id, programName: group.name, durationMinutes: 90 }] }] });
-  expect(coachOnly).toMatchObject([{ name: "East Club", rows: [{ amount: null, coaches: [{ name: "Ana Pop", amount: formatMoney(15000, "RON") }] }] }]);
+  const coachOnly = pricesByCurrency({ programs: [group], coaches: [{ ...coach, rates: [{ ...coach.rates[0], programId: group.id, programName: group.name, durationMinutes: 90 }] }] });
+  expect(coachOnly).toMatchObject([{ currency: "RON", rows: [{ amount: null, coaches: [{ name: "Ana Pop", amount: formatMoney(15000, "RON") }] }] }]);
 });
 
 it("renders empty and unavailable states without invented data", async () => {

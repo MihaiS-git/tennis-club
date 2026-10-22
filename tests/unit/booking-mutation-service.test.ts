@@ -17,4 +17,10 @@ test.each([
     ? "That court is no longer available. The booking has not changed." : "Unable to reschedule this booking. Try again."});
   expect(transaction).toHaveBeenCalledTimes(1);
 });
+test("maps the coach exclusion to a controlled coach conflict", async () => {
+  transaction.mockRejectedValue(new QueryFailedError("command",[],Object.assign(new Error("private database details"),
+    {code:"23P01",constraint:"court_reservation_coach_no_overlap"})));
+  expect(await runBookingReschedule(input, id)).toEqual({ok:false,
+    message:"The coach is no longer available at that time. The booking has not changed."});
+});
 

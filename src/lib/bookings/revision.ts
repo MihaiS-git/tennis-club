@@ -59,6 +59,16 @@ export type RevisionSnapshot = RevisionTerms & {
 
 // Captures the rule facts already used by the authoritative quote. No live pricing FK:
 // configuration replacement must not erase contractual evidence.
+export type CoachingEvidence = z.infer<typeof coachingEvidenceSchema>;
+
+// A lesson's revision evidence: the court slots behind its rental value and the
+// agreed coaching terms. The rental is charged unless the program includes it.
+export function lessonPricingEvidence(courtPricing: PricingEvidence,
+  coaching: Omit<CoachingEvidence, "courtRentalMinor" | "courtAmountMinor">, courtRentalMinor: number): PricingEvidence {
+  return { ...courtPricing, coaching: { ...coaching, courtRentalMinor,
+    courtAmountMinor: coaching.courtRentalIncluded ? 0 : courtRentalMinor } };
+}
+
 export function capturePricingEvidence(rules: readonly PricingRule[], terms: {
   courtId: string; courtState: PricingEvidence["courtState"]; date: string; startMinute: number; endMinute: number; total: number;
 }): PricingEvidence {

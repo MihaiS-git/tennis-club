@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import { afterAll, assert, beforeAll, expect, test, vi } from "vitest";
 import type { DataSource, QueryRunner } from "typeorm";
 import { getDataSource } from "@/lib/db/data-source";
-import { insertCustomerReservation } from "@/lib/db/repositories/reservations.repository";
+import { insertCustomerReservation, listCoachDayOccupancy, listExpiredCoachHoldCourts, updateCustomerReservationSchedule } from "@/lib/db/repositories/reservations.repository";
+import * as adjustments from "@/lib/db/repositories/booking-adjustments.repository";
+import { insertAdjustmentAttempt } from "@/lib/db/repositories/payments.repository";
+import { adjustmentHoldFragments } from "@/lib/bookings/domain";
+import { expireAdjustmentsAtLocation } from "@/lib/payments/hold-expiry";
 import { insertBookingRecords } from "../../local/booking-fixtures";
 import { cleanupAuthFixtures, localFixtureClient } from "../auth-fixtures";
 
@@ -233,4 +237,85 @@ test("coaching references and historical snapshots are structurally complete", (
     "23514");
   await rejects(runner, () => runner.query("DELETE FROM public.coaching_programs WHERE id=$1", [program]),
     "23503", "booking_revisions_coaching_program_fkey");
+}));
+
+// Pending coaching reschedule proposals: a confirmed lesson on A1 10:00–11:00 and
+// its adjustment holds for a target, built by the production fragment rules.
+type Target = { court: string; start: number; end: number; day?: string };
+async function proposal(runner: QueryRunner, target: Target, expiresAt = new Date(Date.now() + 600_000)) {
+  const reservation = await occupy(runner, { court: courtA1, start: 600, end: 660, coach });
+  const booking = randomUUID();
+  await insertBookingRecords(runner.manager, { id: booking, reservation_id: reservation, account_user_id: member, customer_name: "Customer",
+    customer_email: "lesson@example.test", customer_phone: "123", total_amount_minor: 9000, currency: "EUR",
+    payment_method: "online", cancellation_notice_minutes: 1440, coaching: { coach_user_id: coach, coaching_program_id: program,
+      coach_name: "Occupancy Coach", coaching_program_name: "Private lesson" } });
+  const [{ current_revision_id: revision }] = await runner.query("SELECT current_revision_id FROM public.bookings WHERE id=$1", [booking]);
+  const edit = { courtId: target.court, date: target.day ?? date, startMinute: target.start, endMinute: target.end };
+  const adjustment = await adjustments.insertAdjustment(runner.manager, { bookingId: booking, baseRevisionId: revision, actorId: member,
+    scope: "owner", requestKey: randomUUID(), target: { ...edit, expectedUpdatedAt: new Date().toISOString(), courtName: "Target",
+      locationName: "Coaching occupancy A", timezone: "UTC" }, originalTotal: 9000, newTotal: 9500, currency: "EUR", expiresAt });
+  const fragments = adjustmentHoldFragments({ courtId: courtA1, date, startMinute: 600, endMinute: 660 }, edit, coach);
+  await adjustments.insertAdjustmentHolds(runner.manager, { adjustmentId: adjustment.id, expiresAt, fragments });
+  const holds: unknown[] = await runner.query(`SELECT court_id,booking_date::text,starts_at_minute,ends_at_minute,coach_user_id
+    FROM public.court_reservations WHERE adjustment_id=$1 AND status='held' ORDER BY starts_at_minute`, [adjustment.id]);
+  return { reservation, booking, adjustment, edit, holds };
+}
+const hold = (court: string, start: number, end: number, coachUserId: string | null, day = date) =>
+  ({ court_id: court, booking_date: day, starts_at_minute: start, ends_at_minute: end, coach_user_id: coachUserId });
+
+test("a different-date proposal holds both the target court and the coach", () => inRollback(async (runner) => {
+  const day = "2099-11-03";
+  const { holds } = await proposal(runner, { court: courtA2, start: 600, end: 660, day });
+  expect(holds).toEqual([hold(courtA2, 600, 660, coach, day)]);
+  await rejects(runner, () => occupy(runner, { court: courtB1, start: 630, end: 690, coach, day }), "23P01", "court_reservation_coach_no_overlap");
+  await rejects(runner, () => occupy(runner, { court: courtA2, start: 600, end: 660, day }), "23P01", "court_reservation_no_overlap");
+  // Another coach and other courts at the same time stay available.
+  await occupy(runner, { court: courtB1, start: 600, end: 660, coach: otherCoach, day });
+}));
+
+test("a same-court overlapping proposal holds only the outside pieces, without conflicting with itself", () => inRollback(async (runner) => {
+  const { holds, reservation, adjustment, edit } = await proposal(runner, { court: courtA1, start: 570, end: 690 });
+  expect(holds).toEqual([hold(courtA1, 570, 600, coach), hold(courtA1, 660, 690, coach)]);
+  await rejects(runner, () => occupy(runner, { court: courtB1, start: 660, end: 720, coach }), "23P01", "court_reservation_coach_no_overlap");
+  await rejects(runner, () => occupy(runner, { court: courtB1, start: 540, end: 600, coach }), "23P01", "court_reservation_coach_no_overlap");
+  await rejects(runner, () => occupy(runner, { court: courtA1, start: 660, end: 720 }), "23P01", "court_reservation_no_overlap");
+  // Applying releases the holds and moves the original row onto them in one transaction.
+  await adjustments.releaseAdjustmentHolds(runner.manager, adjustment.id);
+  expect(await updateCustomerReservationSchedule(runner.manager, reservation, edit)).toBe(true);
+  expect(await runner.query("SELECT court_id,starts_at_minute,ends_at_minute,coach_user_id,status FROM public.court_reservations WHERE id=$1",
+    [reservation])).toEqual([{ court_id: courtA1, starts_at_minute: 570, ends_at_minute: 690, coach_user_id: coach, status: "active" }]);
+}));
+
+test("a different-court overlapping proposal holds the overlap court-only and the rest with the coach", () => inRollback(async (runner) => {
+  const { holds, reservation, adjustment, edit } = await proposal(runner, { court: courtA2, start: 630, end: 690 });
+  expect(holds).toEqual([hold(courtA2, 630, 660, null), hold(courtA2, 660, 690, coach)]);
+  await rejects(runner, () => occupy(runner, { court: courtA2, start: 600, end: 660 }), "23P01", "court_reservation_no_overlap");
+  await rejects(runner, () => occupy(runner, { court: courtB1, start: 660, end: 720, coach }), "23P01", "court_reservation_coach_no_overlap");
+  // The original lesson keeps the coach during the overlap; a coach hold there would conflict with it.
+  await rejects(runner, () => adjustments.insertAdjustmentHolds(runner.manager, { adjustmentId: adjustment.id,
+    expiresAt: new Date(Date.now() + 600_000), fragments: [{ courtId: courtB1, date, startMinute: 630, endMinute: 660, coachUserId: coach }] }),
+  "23P01", "court_reservation_coach_no_overlap");
+  await adjustments.releaseAdjustmentHolds(runner.manager, adjustment.id);
+  expect(await updateCustomerReservationSchedule(runner.manager, reservation, edit)).toBe(true);
+  expect(await runner.query("SELECT court_id,starts_at_minute,ends_at_minute,coach_user_id FROM public.court_reservations WHERE id=$1",
+    [reservation])).toEqual([{ court_id: courtA2, starts_at_minute: 630, ends_at_minute: 690, coach_user_id: coach }]);
+  // The vacated original time is free for the coach again.
+  await occupy(runner, { court: courtB1, start: 570, end: 630, coach });
+}));
+
+test("expired coaching holds follow the existing adjustment expiry and then free the coach", () => inRollback(async (runner) => {
+  const day = "2099-11-03";
+  // The proposal's payment lease (adjustment and hold expiry) has already passed.
+  const { booking, adjustment } = await proposal(runner, { court: courtA2, start: 600, end: 660, day }, new Date(Date.now() - 60_000));
+  await insertAdjustmentAttempt(runner.manager, { id: randomUUID(), bookingId: booking, adjustmentId: adjustment.id, method: "online",
+    provider: "stripe", amountMinor: 500, currency: "EUR", status: "pending", expiresAt: new Date(Date.now() + 600_000) });
+  // Expired, the hold no longer occupies the coach for quoting, yet coaching writers find its location to lock and expire.
+  expect(await listCoachDayOccupancy(runner.manager, coach, day)).toEqual([]);
+  expect(await listExpiredCoachHoldCourts(runner.manager, coach, day)).toEqual([{ location_id: locationA, court_id: courtA2 }]);
+  await rejects(runner, () => occupy(runner, { court: courtB1, start: 600, end: 660, coach, day }), "23P01", "court_reservation_coach_no_overlap");
+  expect(await expireAdjustmentsAtLocation(runner.manager, locationA)).toBe(1);
+  expect(await runner.query("SELECT status FROM public.booking_adjustments WHERE id=$1", [adjustment.id])).toEqual([{ status: "expired" }]);
+  expect(await runner.query("SELECT DISTINCT status FROM public.court_reservations WHERE adjustment_id=$1", [adjustment.id])).toEqual([{ status: "released" }]);
+  expect(await listExpiredCoachHoldCourts(runner.manager, coach, day)).toEqual([]);
+  await occupy(runner, { court: courtB1, start: 600, end: 660, coach, day });
 }));

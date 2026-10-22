@@ -55,15 +55,18 @@ test("Admin and Coach share direct, customer and guest details while mutations r
     expect(adminDay.adminOccupancy).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: "reservation", id: directId, creator_name: "Mihai Stan", reason: "Training", payment_method: null }),
       expect.objectContaining({ kind: "booking", id: bookingId, account_user_id: member.id, payment_method: "pay_at_club", stripe_refund_available: false, customer_name: "Ana Pop",
-        customer_email: "ana@example.test", customer_phone: "+40 123", cancellation_notice_minutes: 120, total_amount_minor: 7500, currency: "RON", payments: [{ id: paymentId, method: "pay_at_club", provider: null, status: "due" }],
+        customer_email: "ana@example.test", customer_phone: "+40 123", cancellation_notice_minutes: 120, total_amount_minor: 7500, currency: "RON", payment_status: { operation: "payment", status: "due", provider: null },
         starts_at_minute: 660, ends_at_minute: 750 }),
     ]));
     assert.strictEqual((await service.from("users").update({ first_name: "Different", last_name: "Profile" }).eq("id", member.id)).error, null);
     expect((await getReservationDay(location, date, now, admin.client)).adminOccupancy.find((row) => row.kind === "booking")).toMatchObject({ customer_name: "Ana Pop" });
     const coachDay = await getReservationDay(location, date, now, coach.client);
     // Coaches keep staff reservations but receive another customer's booking as a bare interval.
-    expect(coachDay.adminOccupancy).toEqual([adminDay.adminOccupancy.find((row) => row.kind === "reservation"),
-      { kind: "occupied", id: `occupied:${courtId}:660`, court_id: courtId, booking_date: date, starts_at_minute: 660, ends_at_minute: 750 }]);
+    expect(coachDay.adminOccupancy).toHaveLength(2);
+    expect(coachDay.adminOccupancy).toEqual(expect.arrayContaining([
+      adminDay.adminOccupancy.find((row) => row.kind === "reservation"),
+      { kind: "occupied", id: `occupied:${courtId}:660`, court_id: courtId, booking_date: date, starts_at_minute: 660, ends_at_minute: 750 },
+    ]));
     for (const leaked of [bookingId, member.id, paymentId, "Ana Pop", "ana@example.test", "+40 123", "pay_at_club", "7500", "RON"])
       expect(JSON.stringify(coachDay)).not.toContain(leaked);
     expect(adminDay.canManage).toBe(true);
@@ -93,7 +96,7 @@ test("Admin and Coach share direct, customer and guest details while mutations r
       expect(JSON.stringify(guestCoachDay)).not.toContain(leaked);
     expect(guestAdminDay.adminOccupancy.find((row) => row.kind === "booking")).toMatchObject({
       account_user_id: null, customer_name: "Ana Pop", customer_email: "ana@example.test", customer_phone: "+40 123", payment_method: "online", stripe_refund_available: true,
-      payments: [{ id: guestPaymentId, method: "online", provider: "stripe", status: "succeeded" }] });
+      payment_status: { operation: "payment", status: "succeeded", provider: "stripe" } });
     expect(coachDay.courts[0].cells).toEqual(["booked", "booked", "booked", "booked", "booked", "available"]);
     expect((await admin.client.from("booking_revisions").select("customer_email")).error?.code).toBe("42501");
     expect((await service.from("bookings").update({ status: "cancelled" }).eq("id", guestBookingId)).error).toBeNull();

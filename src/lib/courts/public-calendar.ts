@@ -38,9 +38,10 @@ export async function readPublicDayConfiguration(manager: EntityManager, locatio
 }
 
 // Live court occupancy of one public location date; null when a row is malformed.
-export async function readPublicDayReservations(manager: EntityManager, location: PublicLocation, date: string) {
+export async function readPublicDayReservations(manager: EntityManager, location: PublicLocation, date: string,
+  excludeReservationId?: string) {
   const reservations = z.array(calendarReservationSchema)
-    .safeParse(await listPublicDayOccupancy(manager, location.id, location.courts.map((court) => court.id), date));
+    .safeParse(await listPublicDayOccupancy(manager, location.id, location.courts.map((court) => court.id), date, excludeReservationId));
   return reservations.success ? reservations.data : null;
 }
 

@@ -17,14 +17,14 @@ import { assertLocalDatabase, ensureLocalAuthAccounts, localAuthClient } from ".
 
 export const DEMO_COACH_PASSWORD = "StrongPassword123!";
 
-// Amounts are in RON minor units and are only written for RON locations; the
-// stored currency always comes from the location itself.
+// Amounts are club-wide RON prices in minor units, written only when a current
+// location charges in RON; no amount is converted to another currency.
 const SEED_CURRENCY = "RON";
 
 type ProgramFixture = {
   id: string; name: string; description: string; type: CoachingProgramType; durations: number[];
   min: number | null; max: number | null; courtIncluded: boolean;
-  // Club price per duration at the first location; other locations use 90%, rounded to 10 RON.
+  // Club price per duration.
   clubPrices: Record<number, number>;
 };
 
@@ -48,7 +48,7 @@ type CoachFixture = {
   programIds: string[];
   // Indexes into the current club locations, wrapped to the number that exist.
   locations: number[];
-  overrides: { programId: string; durationMinutes: number; location: number; amountMinor: number }[];
+  overrides: { programId: string; durationMinutes: number; amountMinor: number }[];
 };
 
 const [privateId, semiPrivateId, groupId, juniorId] = demoPrograms.map((program) => program.id);
@@ -60,9 +60,8 @@ export const demoCoaches: CoachFixture[] = [
     specialties: ["Match tactics", "Serve", "Competition preparation"], languages: ["Romanian", "English"],
     programIds: [privateId, semiPrivateId], locations: [0, 1],
     overrides: [
-      { programId: privateId, durationMinutes: 60, location: 0, amountMinor: 25000 },
-      { programId: privateId, durationMinutes: 90, location: 0, amountMinor: 35000 },
-      { programId: privateId, durationMinutes: 60, location: 1, amountMinor: 23000 },
+      { programId: privateId, durationMinutes: 60, amountMinor: 25000 },
+      { programId: privateId, durationMinutes: 90, amountMinor: 35000 },
     ] },
   { email: "demo-coach-maria@example.test", displayName: "Maria Ionescu",
     bio: "Maria has run the club’s junior groups for nine seasons. She believes children learn tennis best through games, so her sessions mix coordination work and footwork with plenty of chances to rally and keep score.\n\nShe also leads adult beginner groups for parents who want to join their children on court.",
@@ -74,23 +73,17 @@ export const demoCoaches: CoachFixture[] = [
     qualifications: "Romanian Tennis Federation Level 2 coach\nCertified fitness instructor",
     specialties: ["Groundstrokes", "Fitness", "Adult groups"], languages: ["Romanian", "English"],
     programIds: [privateId, groupId], locations: [1],
-    overrides: [{ programId: groupId, durationMinutes: 90, location: 1, amountMinor: 10000 }] },
+    overrides: [{ programId: groupId, durationMinutes: 90, amountMinor: 10000 }] },
   { email: "demo-coach-sofia@example.test", displayName: "Sofia Petrescu",
     bio: "Sofia competed on the ITF junior circuit and spent four years playing college tennis in the United States. She coaches juniors moving into competition and adults who enjoy doubles, with a particular eye for net play and positioning.",
     qualifications: "Romanian Tennis Federation Level 3 coach\nPTR Professional",
     specialties: ["Doubles", "Volleys", "Junior competition"], languages: ["Romanian", "English", "Italian"],
     programIds: [privateId, semiPrivateId, juniorId], locations: [0, 1],
-    overrides: [{ programId: semiPrivateId, durationMinutes: 60, location: 0, amountMinor: 24000 }] },
+    overrides: [{ programId: semiPrivateId, durationMinutes: 60, amountMinor: 24000 }] },
 ];
 
-function clubAmount(program: ProgramFixture, durationMinutes: number, locationIndex: number) {
-  const base = program.clubPrices[durationMinutes];
-  if (base === undefined) return null;
-  return locationIndex === 0 ? base : Math.round(base * 0.9 / 1000) * 1000;
-}
-
 const priceKey = (key: coaching.CoachingPriceKey) =>
-  [key.programId, key.durationMinutes, key.locationId, key.coachUserId ?? "club"].join("/").toLowerCase();
+  [key.programId, key.durationMinutes, key.currency, key.coachUserId ?? "club"].join("/").toLowerCase();
 
 export type CoachingSeedSummary = {
   locations: { name: string; currency: string; priced: boolean }[];
@@ -133,7 +126,7 @@ export async function seedCoachingData(manager: EntityManager, options: { locati
   }
 
   const coaches = { created: 0, kept: 0 };
-  const assignments = new Map<string, { userId: string; locationIds: string[]; programIds: string[] }>();
+  const assignments = new Map<string, { userId: string; programIds: string[] }>();
   for (const fixture of demoCoaches) {
     const account = await manager.findOneBy(UserEntity, { email: fixture.email });
     if (!account) throw new Error(`Expected a provisioned account for ${fixture.email}.`);
@@ -163,43 +156,37 @@ export async function seedCoachingData(manager: EntityManager, options: { locati
       if (!profile) throw new Error(`Seed coach ${fixture.displayName} is missing.`);
       coaches.created += 1;
     }
-    assignments.set(fixture.email, { userId: profile.userId, locationIds: profile.locationIds, programIds: profile.programIds });
+    assignments.set(fixture.email, { userId: profile.userId, programIds: profile.programIds });
   }
 
   const prices = { clubCreated: 0, overridesCreated: 0, kept: 0, skipped: 0 };
   const existing = new Set((await coaching.listCoachingPrices(manager)).map((price) => priceKey(price)));
-  const insertPrice = async (key: coaching.CoachingPriceKey, amountMinor: number, currency: CoachingPriceEntity["currency"]) => {
+  const insertPrice = async (key: coaching.CoachingPriceKey, amountMinor: number) => {
     if (existing.has(priceKey(key))) return false;
     const result = await manager.createQueryBuilder().insert().into(CoachingPriceEntity)
-      .values({ ...key, amountMinor, currency, updatedAt: new Date() }).orIgnore().returning("id").execute();
+      .values({ ...key, amountMinor, updatedAt: new Date() }).orIgnore().returning("id").execute();
     existing.add(priceKey(key));
     return (result.raw as unknown[]).length > 0;
   };
-  for (const [index, location] of locations.entries()) {
-    for (const program of demoPrograms) {
-      for (const durationMinutes of program.durations) {
-        const amount = clubAmount(program, durationMinutes, index);
-        if (amount === null) continue;
-        if (location.currency !== SEED_CURRENCY || !durations.get(program.id)?.includes(durationMinutes)) { prices.skipped += 1; continue; }
-        if (await insertPrice({ programId: program.id, durationMinutes, locationId: location.id, coachUserId: null }, amount, location.currency)) prices.clubCreated += 1;
-        else prices.kept += 1;
-      }
+  const priced = locations.some((location) => location.currency === SEED_CURRENCY);
+  for (const program of demoPrograms) {
+    for (const durationMinutes of program.durations) {
+      const amount = program.clubPrices[durationMinutes];
+      if (amount === undefined) continue;
+      if (!priced || !durations.get(program.id)?.includes(durationMinutes)) { prices.skipped += 1; continue; }
+      if (await insertPrice({ programId: program.id, durationMinutes, currency: SEED_CURRENCY, coachUserId: null }, amount)) prices.clubCreated += 1;
+      else prices.kept += 1;
     }
   }
   for (const fixture of demoCoaches) {
     const assigned = assignments.get(fixture.email);
     if (!assigned) continue;
-    const seen = new Set<string>();
     for (const override of fixture.overrides) {
-      const location = locationAt(override.location);
-      const key = { programId: override.programId, durationMinutes: override.durationMinutes, locationId: location.id, coachUserId: assigned.userId };
-      // Wrapped location indexes can repeat when fewer locations exist; keep the first.
-      if (seen.has(priceKey(key))) continue;
-      seen.add(priceKey(key));
-      // Overrides need the coach to still offer the program at the location (composite FKs).
-      if (location.currency !== SEED_CURRENCY || !durations.get(override.programId)?.includes(override.durationMinutes)
-        || !assigned.locationIds.includes(location.id) || !assigned.programIds.includes(override.programId)) { prices.skipped += 1; continue; }
-      if (await insertPrice(key, override.amountMinor, location.currency)) prices.overridesCreated += 1;
+      const key = { programId: override.programId, durationMinutes: override.durationMinutes, currency: SEED_CURRENCY, coachUserId: assigned.userId } as const;
+      // Overrides need the coach to still offer the program (composite FK).
+      if (!priced || !durations.get(override.programId)?.includes(override.durationMinutes)
+        || !assigned.programIds.includes(override.programId)) { prices.skipped += 1; continue; }
+      if (await insertPrice(key, override.amountMinor)) prices.overridesCreated += 1;
       else prices.kept += 1;
     }
   }

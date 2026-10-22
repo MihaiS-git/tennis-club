@@ -36,7 +36,7 @@ function Empty({ children, dark = false }: { children: React.ReactNode; dark?: b
   return <p className={`max-w-xl border-t pt-5 font-sans text-base leading-7 ${dark ? "border-ivory/30 text-ivory" : "border-border text-muted-foreground"}`}>{children}</p>;
 }
 
-// Lowest club price per currency; locations may price in different currencies.
+// Lowest club price per currency; locations may charge in different currencies.
 export function startingPrices(program: Pick<PublicCoachingProgram, "prices">) {
   const lowest = new Map<LocationCurrency, number>();
   for (const price of program.prices) {
@@ -106,8 +106,8 @@ function CoachCard({ coach }: { coach: PublicCoach }) {
         <dt className="font-semibold text-foreground">Individual prices</dt>
         <dd>
           <ul className="text-muted-foreground">
-            {coach.rates.map((rate) => <li key={`${rate.programId}-${rate.locationId}-${rate.durationMinutes}`}>
-              {rate.programName}, {formatCoachingDuration(rate.durationMinutes)}{coach.locations.length > 1 ? ` at ${rate.locationName}` : ""}:{" "}
+            {coach.rates.map((rate) => <li key={`${rate.programId}-${rate.currency}-${rate.durationMinutes}`}>
+              {rate.programName}, {formatCoachingDuration(rate.durationMinutes)}:{" "}
               <span className="font-semibold text-foreground">{formatMoney(rate.amountMinor, rate.currency)}</span>
               {" "}<span className="text-xs">({rentalLabel(rate.courtRentalIncluded).toLowerCase()})</span>
             </li>)}
@@ -131,50 +131,50 @@ export async function CoachingCoaches({ coaching }: { coaching: Promise<PublicCo
   </ul>;
 }
 
-type LocationPrices = { id: string; name: string; rows: { program: PublicCoachingProgram; durationMinutes: number; amount: string | null;
+type CurrencyPrices = { currency: LocationCurrency; rows: { program: PublicCoachingProgram; durationMinutes: number; amount: string | null;
   coaches: { name: string; amount: string }[] }[] };
 
-// Club prices per location, with any individual coach prices for the same lesson.
+// Club-wide prices per currency, with any individual coach prices for the same lesson.
 // A lesson priced only for individual coaches is listed without a club price.
-export function pricesByLocation(data: PublicCoaching): LocationPrices[] {
-  const locations = new Map<string, LocationPrices>();
-  const row = (program: PublicCoachingProgram, locationId: string, locationName: string, durationMinutes: number) => {
-    const location = locations.get(locationId) ?? { id: locationId, name: locationName, rows: [] };
-    locations.set(locationId, location);
-    let entry = location.rows.find((item) => item.program.id === program.id && item.durationMinutes === durationMinutes);
-    if (!entry) location.rows.push(entry = { program, durationMinutes, amount: null, coaches: [] });
+export function pricesByCurrency(data: PublicCoaching): CurrencyPrices[] {
+  const currencies = new Map<LocationCurrency, CurrencyPrices>();
+  const row = (program: PublicCoachingProgram, currency: LocationCurrency, durationMinutes: number) => {
+    const group = currencies.get(currency) ?? { currency, rows: [] };
+    currencies.set(currency, group);
+    let entry = group.rows.find((item) => item.program.id === program.id && item.durationMinutes === durationMinutes);
+    if (!entry) group.rows.push(entry = { program, durationMinutes, amount: null, coaches: [] });
     return entry;
   };
   for (const program of data.programs) {
     for (const price of program.prices) {
-      row(program, price.locationId, price.locationName, price.durationMinutes).amount = formatMoney(price.amountMinor, price.currency);
+      row(program, price.currency, price.durationMinutes).amount = formatMoney(price.amountMinor, price.currency);
     }
   }
   const programs = new Map(data.programs.map((program) => [program.id, program]));
   for (const coach of data.coaches) {
     for (const rate of coach.rates) {
       const program = programs.get(rate.programId);
-      if (program) row(program, rate.locationId, rate.locationName, rate.durationMinutes).coaches
+      if (program) row(program, rate.currency, rate.durationMinutes).coaches
         .push({ name: coach.displayName, amount: formatMoney(rate.amountMinor, rate.currency) });
     }
   }
   const order = new Map(data.programs.map((program, index) => [program.id, index]));
-  for (const location of locations.values()) {
-    location.rows.sort((a, b) => (order.get(a.program.id) ?? 0) - (order.get(b.program.id) ?? 0) || a.durationMinutes - b.durationMinutes);
+  for (const group of currencies.values()) {
+    group.rows.sort((a, b) => (order.get(a.program.id) ?? 0) - (order.get(b.program.id) ?? 0) || a.durationMinutes - b.durationMinutes);
   }
-  return [...locations.values()].sort((a, b) => a.name.localeCompare(b.name));
+  return [...currencies.values()].sort((a, b) => a.currency.localeCompare(b.currency));
 }
 
 export async function CoachingPrices({ coaching }: { coaching: Promise<PublicCoaching> }) {
   const data = await settle(coaching);
   if (!data) return <Unavailable dark />;
-  const locations = pricesByLocation(data);
-  if (!locations.length) return <Empty dark>Coaching prices have not been published yet.</Empty>;
+  const groups = pricesByCurrency(data);
+  if (!groups.length) return <Empty dark>Coaching prices have not been published yet.</Empty>;
   return <div className="space-y-12">
-    {locations.map((location) => <section key={location.id} aria-label={`Coaching prices at ${location.name}`}>
-      <h3 className="font-heading text-2xl font-semibold tracking-[-0.025em] text-chalk">{location.name}</h3>
+    {groups.map((group) => <section key={group.currency} aria-label={`Coaching prices in ${group.currency}`}>
+      <h3 className="font-heading text-2xl font-semibold tracking-[-0.025em] text-chalk">Prices in {group.currency}</h3>
       <ul className="mt-4">
-        {location.rows.map((row) => <li key={`${row.program.id}-${row.durationMinutes}`}
+        {group.rows.map((row) => <li key={`${row.program.id}-${row.durationMinutes}`}
           className="grid gap-x-6 gap-y-1 border-t border-ivory/25 py-4 font-sans sm:grid-cols-[minmax(0,1fr)_auto]">
           <div>
             <p className="text-base font-semibold text-chalk">{row.program.name} · {formatCoachingDuration(row.durationMinutes)}</p>

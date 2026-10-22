@@ -61,6 +61,7 @@ test("navigation follows the current account and protected routes enforce access
     // Every user-area destination, with exactly one active link, in the shared sidebar.
     const userNavigation = page.getByRole("navigation", { name: "My account navigation" });
     const userDestinations = [
+      ["Notifications", /\/messages$/],
       ["Bookings", /\/my-activity\/bookings$/], ["Booking history", /\/my-activity\/history$/],
       ["Player identity", /\/profile$/],
       ["Personal information", /\/profile\/personal$/], ["Tennis profile", /\/profile\/tennis$/],
@@ -176,7 +177,7 @@ test("navigation follows the current account and protected routes enforce access
     await expect(navigation.getByRole("link", { name: "Admin", exact: true })).toHaveAttribute("href", "/admin");
     await navigation.getByRole("link", { name: "Admin", exact: true }).click();
     await expect(page).toHaveURL(/\/coach\/bookings$/);
-    await expect(adminNavigation.getByRole("link")).toHaveText(["Bookings & Reservations", "My availability"]);
+    await expect(adminNavigation.getByRole("link")).toHaveText(["Bookings & Reservations", "My availability", "My prices"]);
     await expect(adminNavigation.getByRole("link", { name: "Bookings & Reservations" })).toHaveAttribute("aria-current", "page");
     await page.goto("/admin");
     await expect(page).toHaveURL(/\/coach\/bookings$/);
@@ -189,7 +190,7 @@ test("navigation follows the current account and protected routes enforce access
     await page.goto("/admin/reservations?date=2099-10-15");
     await expect(page).toHaveURL(/\/coach\/bookings\?view=calendar&date=2099-10-15$/);
     await expect(page.getByRole("heading", { name: "Bookings & Reservations", exact: true })).toBeVisible();
-    await expect(adminNavigation.getByRole("link")).toHaveText(["Bookings & Reservations", "My availability"]);
+    await expect(adminNavigation.getByRole("link")).toHaveText(["Bookings & Reservations", "My availability", "My prices"]);
     await page.getByRole("link", { name: "Profile", exact: true }).click();
     await visitUserDestinations();
     await page.getByRole("button", { name: "Sign out", exact: true }).click();

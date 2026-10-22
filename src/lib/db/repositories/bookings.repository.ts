@@ -142,8 +142,8 @@ export function lockCheckoutBooking(manager: EntityManager, id: string) {
 export async function discoverBookingLocation(manager: EntityManager, id: string) {
   return manager.getRepository(BookingEntity).createQueryBuilder("b")
     .innerJoin(CourtReservationEntity, "r", "r.id=b.reservationId")
-    .innerJoin(CourtEntity, "c", "c.id=r.courtId").select("c.locationId", "location_id")
-    .where("b.id=:id", { id }).getRawOne<{ location_id: string }>();
+    .innerJoin(CourtEntity, "c", "c.id=r.courtId").select("c.locationId", "location_id").addSelect("r.coachUserId", "coach_user_id")
+    .where("b.id=:id", { id }).getRawOne<{ location_id: string; coach_user_id: string | null }>();
 }
 export async function findBookingForUpdate(manager: EntityManager, id: string, revisionId?: string) {
   const b = await lockCheckoutBooking(manager, id);

@@ -6,7 +6,8 @@ import { toast } from "sonner";
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { CourtTimelineGrid, TimelineLegend, timelineCellLabels, timelineCellStyles, timelineSelectedStyle } from "@/components/court-timeline-grid";
+import { TimelineLegend } from "@/components/court-timeline-grid";
+import { BookingTimetable, lessonStartOffers, lessonTimetableDay, lessonTimetableLabels, type LessonOffer } from "@/components/booking-timetable";
 import { BookingCancellationTerms } from "@/components/booking-cancellation-terms";
 import { startAnotherBookingEvent } from "@/components/book-court-link";
 import type { ConfirmedCancellationPolicy } from "@/lib/bookings/confirmation-policy";
@@ -18,7 +19,6 @@ import type { BookingContact } from "@/lib/bookings/domain";
 import type { CourtDay } from "@/lib/courts/calendar";
 import { selectCalendarCell, type CalendarSelection } from "@/lib/courts/interval-selection";
 import { formatMoney, type LocationCurrency } from "@/lib/pricing/money";
-import { formatHourlyRate } from "@/lib/courts/price-bands";
 import { BookingConfirmation, BookingSummary, type BookingSummaryDetails } from "./booking-confirmation";
 
 
@@ -38,23 +38,8 @@ function BookingCalendarContent({ day, date, locationName, currency, initialCont
   onlinePaymentAvailable?: boolean; allowPayAtClub?: boolean; initialContact?: BookingContact; authenticated?: boolean; cancellationNoticeMinutes: number; timezone: string;
 }) {
   const router = useRouter();
-  const lessonOffers = useMemo(() => {
-    const offers = new Map<string, { coachingAmountMinor: number; courtAmountMinor: number; totalAmountMinor: number }>();
-    if (!coaching) return offers;
-    for (const start of coaching.starts) for (const court of start.courts) {
-      const row = day.courts.find(item => item.court.id === court.id);
-      const first = day.times.indexOf(start.startMinute);
-      const length = coaching.durationMinutes / 30;
-      if (row && first >= 0 && length >= 2 && start.endMinute - start.startMinute === coaching.durationMinutes
-        && Array.from({ length }, (_, offset) => row.cells[first + offset]).every(cell => cell === "available"))
-        offers.set(`${court.id}:${start.startMinute}`, court);
-    }
-    return offers;
-  }, [coaching, day]);
-  const visibleDay = useMemo(() => !coaching ? day : { ...day, courts: day.courts.map(row => ({ ...row,
-    cells: row.cells.map((state, index) => state === "available" && !lessonOffers.has(`${row.court.id}:${day.times[index]}`)
-      ? "unavailable" as const : state),
-  })) }, [day, coaching, lessonOffers]);
+  const lessonOffers = useMemo(() => coaching ? lessonStartOffers(day, coaching) : new Map<string, LessonOffer>(), [coaching, day]);
+  const visibleDay = useMemo(() => !coaching ? day : lessonTimetableDay(day, lessonOffers), [day, coaching, lessonOffers]);
   const contentRef = useRef<HTMLDivElement>(null);
   const actionBarRef = useRef<HTMLElement>(null);
   const [selection, setSelection] = useState<(CalendarSelection & { coachingQuote?: BookingSummaryDetails["coaching"] }) | null>(null);
@@ -138,13 +123,13 @@ function BookingCalendarContent({ day, date, locationName, currency, initialCont
     {day.times.length === 0 ? <div className="mt-4 flex items-center gap-3 rounded-card border border-border bg-surface p-5 text-muted-foreground">
       <CalendarX2 aria-hidden className="size-5 shrink-0 text-accent" /><p>{locationName} is closed on {dateLabel}.</p>
     </div> : <>
-      <TimelineLegend cells={visibleDay.courts.flatMap((courtDay) => courtDay.cells)} labels={coaching ? { unavailable: "No lesson start" } : undefined}>
+      <TimelineLegend cells={visibleDay.courts.flatMap((courtDay) => courtDay.cells)} labels={coaching ? lessonTimetableLabels : undefined}>
         {coaching ? coaching.durationMinutes
           ? `Select a lesson start for the full ${coaching.durationMinutes} minutes. Dotted cells cannot start a full lesson; solid cells are occupied courts. Your coach and court are reserved only when checkout starts.`
           : "Choose your lesson details above to see available lesson starts."
           : "Select a half-hour cell to start a one-hour interval, then click adjacent cells to adjust. This does not reserve a court."}
       </TimelineLegend>
-      <BookingTimetable coaching={coaching} lessonOffers={lessonOffers} day={visibleDay} date={date} timezone={timezone} currency={currency} selection={selection} onSelect={(courtDay, rowIndex) => {
+      <BookingTimetable lesson={coaching} lessonOffers={lessonOffers} day={visibleDay} date={date} timezone={timezone} currency={currency} selection={selection} onSelect={(courtDay, rowIndex) => {
         if (coaching) {
           const offer = lessonOffers.get(`${courtDay.court.id}:${day.times[rowIndex]}`);
           if (offer) setSelection(current => current?.courtId === courtDay.court.id && current.startRowIndex === rowIndex ? null : {
@@ -187,34 +172,4 @@ function BookingCalendarContent({ day, date, locationName, currency, initialCont
       }}
       onUnavailable={(message) => { setConfirming(false); setSelection(null); toast.warning(message); router.refresh(); }} />}
   </div>;
-}
-
-function BookingTimetable({ day, date, timezone, currency, selection, onSelect, coaching, lessonOffers }: {
-  coaching?: CoachingSelection;
-  lessonOffers: Map<string, { totalAmountMinor: number }>;
-  day: { times: number[]; courts: CourtDay[] }; date: string; timezone: string; currency: LocationCurrency; selection: CalendarSelection | null;
-  onSelect: (courtDay: CourtDay, rowIndex: number) => void;
-}) {
-  const firstActionableMinute = day.times.find((_, index) => day.courts.some(({ cells }) => cells[index] === "available" && (coaching || cells[index - 1] === "available" || cells[index + 1] === "available")));
-  return <CourtTimelineGrid times={day.times} rows={day.courts} date={date} timezone={timezone}
-    selectedStartMinute={selection?.startMinute} selectedEndMinute={selection?.endMinute} firstActionableMinute={firstActionableMinute}
-    renderCourtContext={(row) => row.stateLabel} priceRates={coaching ? undefined : (row) => row.rates} currency={currency}
-    renderCells={(courtDay) => day.times.map((minute, rowIndex) => {
-      const state = courtDay.cells[rowIndex];
-      const price = courtDay.hourlyPrices[rowIndex];
-      const selected = selection?.courtId === courtDay.court.id && rowIndex >= selection.startRowIndex && rowIndex < selection.endRowIndex;
-      const selectable = state === "available" && (coaching || courtDay.cells[rowIndex - 1] === "available" || courtDay.cells[rowIndex + 1] === "available");
-      const offer = lessonOffers.get(`${courtDay.court.id}:${minute}`);
-      const label = coaching ? offer && selectable ? `${coaching.durationMinutes} min lesson, ${formatMoney(offer.totalAmountMinor, currency)} total`
-        : state === "unavailable" ? "No lesson start" : timelineCellLabels[state]
-        : state === "available" ? formatHourlyRate(price!, currency) : timelineCellLabels[state];
-      const accessibleLabel = `${courtDay.court.name} ${date} ${minuteToTime(minute)}–${minuteToTime(minute + (coaching && selectable ? coaching.durationMinutes : 30))}, ${label}${selected ? ", selected" : ""}`;
-      // Block buttons avoid inline baseline overflow and a scrollbar that narrows rows relative to the header.
-      return <div key={minute} role="cell" className={`min-w-0 border-b ${selected ? "border-primary" : "border-border"}`}>
-        {selectable ? <button type="button" aria-pressed={selected} aria-label={accessibleLabel}
-          onClick={() => onSelect(courtDay, rowIndex)}
-          className={`block h-full w-full border-r px-0.5 text-center text-[length:var(--timeline-cell-font-size)] font-medium tabular-nums focus-visible:relative focus-visible:z-10 focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-accent ${selected ? `border-primary ${timelineSelectedStyle}` : `border-border ${timelineCellStyles[state]}`}`}>
-        </button> : <div aria-label={accessibleLabel} className={`flex h-full items-center justify-center border-r border-border px-0.5 text-[length:var(--timeline-cell-font-size)] tabular-nums ${selected ? timelineSelectedStyle : timelineCellStyles[state]}`} />}
-      </div>;
-    })} />;
 }

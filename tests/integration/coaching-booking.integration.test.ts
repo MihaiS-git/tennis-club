@@ -10,7 +10,9 @@ import { commitCoachingCheckout } from "@/lib/coaching/checkout";
 import { readOnlineCheckout, resolveAuthorizedCheckoutPayment, startOnlineCheckout } from "@/lib/payments/checkout";
 import { processOnlinePaymentEvent, settleOnlinePayment } from "@/lib/payments/service";
 import { POST } from "@/app/api/payments/stripe/webhook/route";
-import { readCustomerBookingEditContext, rescheduleCustomerBookingCommand } from "@/lib/bookings/commands";
+import { readCustomerBookingEditContext } from "@/lib/bookings/commands";
+import { runBookingReschedule } from "@/lib/bookings/reschedule";
+import { adjustmentAttempt } from "@/lib/db/repositories/booking-adjustments.repository";
 import { cancelOwnCustomerBooking } from "@/lib/bookings/self-cancellation-service";
 import { listOwnCourtActivity, listOwnUpcomingActivity } from "@/lib/bookings/activity-service";
 import { randomUUID } from "node:crypto";
@@ -54,6 +56,15 @@ vi.mock("@/lib/db/repositories/payments.repository", async (importOriginal) => {
   } };
 });
 
+// Fixes the reservation clock on demand, so notice and start boundaries are tested
+// against far-future lessons; every other read uses the database clock.
+const clock = vi.hoisted(() => ({ now: null as string | null }));
+vi.mock("@/lib/db/repositories/reservations.repository", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/lib/db/repositories/reservations.repository")>();
+  return { ...original, readReservationClockTime: async (...args: Parameters<typeof original.readReservationClockTime>) =>
+    clock.now ?? original.readReservationClockTime(...args) };
+});
+
 // Two public UTC locations. A: courts A1 (5000/h), A2 (7000/h), A3 (6000/h).
 // B: court B1 (4000/h). The coach teaches at A 08:00–16:00 and at B 16:00–20:00;
 // a second coach teaches at A 08:00–15:00.
@@ -70,7 +81,7 @@ const removalCoachIds: string[] = [];
 const [locationA, locationB] = [randomUUID(), randomUUID()];
 const [courtA1, courtA2, courtA3, courtB1] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
 const [program, includedProgram, inactiveProgram, groupProgram] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
-const [semiProgram, semiIncludedProgram] = [randomUUID(), randomUUID()];
+const [semiProgram, semiIncludedProgram, unpricedProgram] = [randomUUID(), randomUUID(), randomUUID()];
 const courts = [courtA1, courtA2, courtA3, courtB1];
 let coach: string, coach2: string, hiddenCoach: string, formerCoach: string, memberId: string;
 const date = "2099-11-02";
@@ -177,10 +188,10 @@ beforeAll(async () => {
 
   await database.query(`INSERT INTO public.coaching_programs(id,name,description,program_type,court_rental_included,is_active) VALUES
     ($1,'Booking private','','private',false,true),($2,'Booking private included','','private',true,true),
-    ($3,'Booking retired','','private',false,false),($4,'Booking group','','group',false,true)`,
-  [program, includedProgram, inactiveProgram, groupProgram]);
+    ($3,'Booking retired','','private',false,false),($4,'Booking group','','group',false,true),($5,'Booking unpriced','','private',true,true)`,
+  [program, includedProgram, inactiveProgram, groupProgram, unpricedProgram]);
   await database.query(`INSERT INTO public.coaching_program_durations(program_id,duration_minutes)
-    VALUES($1,60),($1,90),($2,60),($3,60),($4,60)`, [program, includedProgram, inactiveProgram, groupProgram]);
+    VALUES($1,60),($1,90),($2,60),($3,60),($4,60),($5,60)`, [program, includedProgram, inactiveProgram, groupProgram, unpricedProgram]);
   await database.query(`INSERT INTO public.coach_profiles(user_id,display_name,bio,qualifications,specialties,languages,is_public) VALUES
     ($1,'Booking Coach','','','{}','{}',true),($2,'Second Coach','','','{}','{}',true),
     ($3,'Hidden Coach','','','{}','{}',false),($4,'Former Coach','','','{}','{}',true)`, [coach, coach2, hiddenCoach, formerCoach]);
@@ -188,20 +199,21 @@ beforeAll(async () => {
     ($1,$5),($1,$6),($2,$5),($3,$5),($4,$5)`, [coach, coach2, hiddenCoach, formerCoach, locationA, locationB]);
   await database.query(`INSERT INTO public.coach_programs(coach_user_id,program_id)
     SELECT $1,p FROM unnest($5::uuid[]) p UNION ALL SELECT c,$6 FROM unnest(ARRAY[$2,$3,$4]::uuid[]) c`,
-  [coach, coach2, hiddenCoach, formerCoach, [program, includedProgram, inactiveProgram, groupProgram], program]);
-  await database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,location_id,coach_user_id,amount_minor,currency) VALUES
-    ($1,60,$5,NULL,10000,'RON'),($1,90,$5,NULL,14000,'RON'),($1,60,$5,$7,12000,'RON'),($2,60,$5,NULL,15000,'RON'),
-    ($3,60,$5,NULL,9000,'RON'),($4,60,$5,NULL,8000,'RON'),($1,60,$6,NULL,9000,'RON')`,
-  [program, includedProgram, inactiveProgram, groupProgram, locationA, locationB, coach]);
+  [coach, coach2, hiddenCoach, formerCoach, [program, includedProgram, inactiveProgram, groupProgram, unpricedProgram], program]);
+  // Club-wide prices apply at every location charging in RON.
+  await database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,coach_user_id,amount_minor,currency) VALUES
+    ($1,60,NULL,10000,'RON'),($1,90,NULL,14000,'RON'),($1,60,$5,12000,'RON'),($2,60,NULL,15000,'RON'),
+    ($3,60,NULL,9000,'RON'),($4,60,NULL,8000,'RON')`,
+  [program, includedProgram, inactiveProgram, groupProgram, coach]);
   await database.query(`INSERT INTO public.coaching_programs(id,name,description,program_type,min_participants,max_participants,court_rental_included)
     VALUES($1,'Semi-private coaching','','semi_private',2,2,false),($2,'Semi-private included','','semi_private',2,2,true)`, [semiProgram, semiIncludedProgram]);
   await database.query(`INSERT INTO public.coaching_program_durations(program_id,duration_minutes)
     VALUES($1,60),($1,90),($2,60)`, [semiProgram, semiIncludedProgram]);
   await database.query(`INSERT INTO public.coach_programs(coach_user_id,program_id)
     SELECT c,p FROM unnest($1::uuid[]) c CROSS JOIN unnest($2::uuid[]) p`, [[coach, coach2], [semiProgram, semiIncludedProgram]]);
-  await database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,location_id,coach_user_id,amount_minor,currency) VALUES
-    ($1,60,$3,NULL,10000,'RON'),($1,60,$3,$4,12000,'RON'),($1,90,$3,NULL,14000,'RON'),($2,60,$3,NULL,15000,'RON')`,
-    [semiProgram, semiIncludedProgram, locationA, coach]);
+  await database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,coach_user_id,amount_minor,currency) VALUES
+    ($1,60,NULL,10000,'RON'),($1,60,$3,12000,'RON'),($1,90,NULL,14000,'RON'),($2,60,NULL,15000,'RON')`,
+    [semiProgram, semiIncludedProgram, coach]);
   await database.query(`INSERT INTO public.coach_weekly_availability(coach_user_id,location_id,weekday,start_minute,end_minute,valid_from) VALUES
     ($1,$5,$6,480,960,'2000-01-01'),($1,$7,$6,960,1200,'2000-01-01'),($2,$5,$6,480,900,'2000-01-01'),($3,$5,$6,480,900,'2000-01-01'),($4,$5,$6,480,900,'2000-01-01')`,
   [coach, coach2, hiddenCoach, formerCoach, locationA, weekday, locationB]);
@@ -220,11 +232,11 @@ async function removeFixtures() {
         await manager.query("DELETE FROM public.court_reservations WHERE court_id=ANY($1::uuid[])", [courts]);
         await manager.query("DELETE FROM public.coach_availability_exceptions WHERE coach_user_id=ANY($1::uuid[])", [coaches]);
         await manager.query("DELETE FROM public.coach_weekly_availability WHERE coach_user_id=ANY($1::uuid[])", [coaches]);
-        await manager.query("DELETE FROM public.coaching_prices WHERE location_id=ANY($1::uuid[])", [locations]);
+        await manager.query("DELETE FROM public.coaching_prices WHERE program_id=ANY($1::uuid[])", [[program, includedProgram, inactiveProgram, groupProgram, semiProgram, semiIncludedProgram, unpricedProgram]]);
         await manager.query("DELETE FROM public.coach_programs WHERE coach_user_id=ANY($1::uuid[])", [coaches]);
         await manager.query("DELETE FROM public.coach_locations WHERE coach_user_id=ANY($1::uuid[])", [coaches]);
         await manager.query("DELETE FROM public.coach_profiles WHERE user_id=ANY($1::uuid[])", [coaches]);
-        await manager.query("DELETE FROM public.coaching_programs WHERE id=ANY($1::uuid[])", [[program, includedProgram, inactiveProgram, groupProgram, semiProgram, semiIncludedProgram]]);
+        await manager.query("DELETE FROM public.coaching_programs WHERE id=ANY($1::uuid[])", [[program, includedProgram, inactiveProgram, groupProgram, semiProgram, semiIncludedProgram, unpricedProgram]]);
         await manager.query("DELETE FROM public.location_pricing_rules WHERE location_id=ANY($1::uuid[])", [locations]);
         await manager.query("DELETE FROM public.pricing_rule_sets WHERE location_id=ANY($1::uuid[])", [locations]);
         await manager.query("DELETE FROM public.location_opening_hours WHERE location_id=ANY($1::uuid[])", [locations]);
@@ -382,8 +394,9 @@ test("an expired coach hold on another court is released by the existing expiry 
 
 test("coach conflicts across locations: live holds block, expired holds are released, the exclusion arbitrates", async () => {
   // Holds at B while the coach still works there.
-  const live = await book({ locationId: locationB, courtId: courtB1, startMinute: 960, expectedTotalAmountMinor: 13000 });
-  const stale = await book({ locationId: locationB, courtId: courtB1, startMinute: 1080, expectedTotalAmountMinor: 13000 });
+  // The coach's own price is not location-specific, so it applies at B as well.
+  const live = await book({ locationId: locationB, courtId: courtB1, startMinute: 960, expectedTotalAmountMinor: 16000 });
+  const stale = await book({ locationId: locationB, courtId: courtB1, startMinute: 1080, expectedTotalAmountMinor: 16000 });
   assert.ok(live.ok); assert.ok(stale.ok);
   await expireHold(stale.reservationId);
   // The coach then moves those hours to A.
@@ -478,7 +491,7 @@ function setupStripe() {
 
 async function checkoutLesson(startMinute: number, client = guest, overrides: Record<string, unknown> = {}) {
   const result = await commitCoachingCheckout({ ...base(), date: "2099-12-07", startMinute, ...overrides }, client);
-  assert.ok(result.ok);
+  assert.ok(result.ok, JSON.stringify(result));
   return { ...result, checkout: access(result.checkout) };
 }
 function access(checkout: { attemptId: string; token: string }) { return { attemptId: checkout.attemptId, token: checkout.token }; }
@@ -522,11 +535,9 @@ test("coaching Stripe checkout captures the agreed contract once despite price a
       operation_key: "confirmation", intent_hash: "confirmation", actor_user_id: null, actor_scope: "provider", recorded_at: expect.any(String) });
     expect((await database.query("SELECT count(*)::int AS count FROM public.booking_revisions WHERE booking_id=$1 AND kind='confirmed'", [lesson.bookingId]))[0].count).toBe(1);
     expect((await listOwnUpcomingActivity({}, member)).bookings.find(b => b.id === lesson.bookingId)).toMatchObject({ includes_coaching: true });
-    await expect(readCustomerBookingEditContext(lesson.bookingId, "2099-12-14", memberId)).rejects.toThrow("Coaching bookings cannot be rescheduled yet");
-    const [token] = await database.query("SELECT updated_at::text AS token FROM public.court_reservations WHERE id=$1", [lesson.reservationId]);
-    expect(await rescheduleCustomerBookingCommand({ id: lesson.bookingId, courtId: courtA2, date: "2099-12-14", startMinute: 480,
-      endMinute: 540, expectedUpdatedAt: token.token, expectedRevisionId: confirmed.revision.id,
-      expectedTotal: 18000, save: true, priceAcknowledged: true }, memberId)).toMatchObject({ ok: false, message: "Coaching bookings cannot be rescheduled yet." });
+    // Rescheduling offers the purchased lesson at its agreed fee, never the edited price.
+    expect((await readCustomerBookingEditContext(lesson.bookingId, "2099-12-14", memberId))?.coaching)
+      .toMatchObject({ coach: { id: coach }, program: { id: program }, durationMinutes: 60, coachingAmountMinor: 12000 });
   } finally {
     await database.query("UPDATE public.coaching_prices SET amount_minor=12000 WHERE program_id=$1 AND coach_user_id=$2", [program, coach]);
     await database.query("UPDATE public.location_pricing_rules SET price_per_hour_minor=6000 WHERE court_id=$1", [courtA3]);
@@ -661,8 +672,8 @@ test.each([
   const selectedProgram = scenario.semi ? (scenario.included ? semiIncludedProgram : semiProgram) : (scenario.included ? includedProgram : program);
   const extraOverrideId = randomUUID();
   if (scenario.included && scenario.override)
-    await database.query(`INSERT INTO public.coaching_prices(id,program_id,duration_minutes,location_id,coach_user_id,amount_minor,currency)
-      VALUES($1,$2,60,$3,$4,16500,'RON')`, [extraOverrideId, selectedProgram, locationA, coach]);
+    await database.query(`INSERT INTO public.coaching_prices(id,program_id,duration_minutes,coach_user_id,amount_minor,currency)
+      VALUES($1,$2,60,$3,16500,'RON')`, [extraOverrideId, selectedProgram, coach]);
   try {
     const lesson = await checkoutLesson(scenario.start, scenario.semi && scenario.override ? member : guest, { date: scenario.semi ? "2100-01-04" : "2099-12-28",
       programId: selectedProgram,
@@ -697,9 +708,9 @@ test.each([
 test("an unpriced coaching scope never creates a booking or Stripe payment", async () => {
   setupStripe();
   const before = await written();
-  // This private program is offered by the coach at B, but has neither a club
-  // default nor coach override there. A priced court cannot price the lesson.
-  expect(await commitCoachingCheckout({ ...base(), programId: includedProgram,
+  // This private program is offered by the coach, but has neither a club default
+  // nor a coach override in RON. A priced court cannot price the lesson.
+  expect(await commitCoachingCheckout({ ...base(), programId: unpricedProgram,
     locationId: locationB, courtId: courtB1, date: "2099-12-28", startMinute: 1080,
     expectedTotalAmountMinor: 15000 }, guest)).toMatchObject({ ok: false, reason: "unpriced" });
   expect(await written()).toEqual(before);
@@ -1051,3 +1062,184 @@ test.each(["booking first", "removal first"])("coach removal and booking creatio
     await observer.end();
   }
 }, 15000);
+
+// Rescheduling a confirmed, member-owned lesson. Each test uses its own Monday;
+// the coach teaches at A 08:00–16:00, A1 5000/h, A2 7000/h, A3 6000/h.
+async function confirmedLesson(startMinute: number, lessonDate: string, overrides: Record<string, unknown> = {}) {
+  setupStripe();
+  const lesson = await checkoutLesson(startMinute, member, { date: lessonDate, ...overrides });
+  const intent = remote(lesson.paymentAttemptId);
+  intent.status = "requires_capture"; intent.amount_capturable = intent.amount;
+  expect(await readOnlineCheckout(lesson.checkout)).toMatchObject({ status: "confirmed" });
+  return lesson;
+}
+async function lessonEdit(bookingId: string, target: { courtId: string; date: string; startMinute: number; expectedTotal: number }) {
+  const context = await readCustomerBookingEditContext(bookingId, target.date, memberId);
+  assert.ok(context);
+  return { id: bookingId, expectedUpdatedAt: context.updated_at, expectedRevisionId: context.current_revision_id,
+    endMinute: target.startMinute + 60, save: true, priceAcknowledged: true, ...target };
+}
+const revisionCount = async (bookingId: string) =>
+  (await database.query("SELECT count(*)::int AS count FROM public.booking_revisions WHERE booking_id=$1", [bookingId]))[0].count;
+const coachRows = async (lessonDate: string) => database.query(`SELECT court_id,starts_at_minute,ends_at_minute,status,adjustment_id IS NOT NULL AS hold
+  FROM public.court_reservations WHERE coach_user_id=$1 AND booking_date=$2 AND status IN ('active','held') ORDER BY starts_at_minute`, [coach, lessonDate]);
+const stripeCalls = () => [stripeFixture.create, stripeFixture.capture, stripeFixture.refundCreate].map(mock => mock.mock.calls.length);
+
+test("an owner moves a lesson at an unchanged total without Stripe, keeping its contract, and notifies customer and coach", async () => {
+  const lessonDate = "2100-09-06";
+  const lesson = await confirmedLesson(480, lessonDate);
+  const original = await aggregate(lesson.bookingId);
+  const calls = stripeCalls();
+  try {
+    // Configuration and marketing changes never reprice the lesson or block it.
+    await database.query("UPDATE public.coaching_prices SET amount_minor=22000 WHERE program_id=$1 AND coach_user_id=$2", [program, coach]);
+    await database.query("UPDATE public.coach_profiles SET is_public=false WHERE user_id=$1", [coach]);
+    const context = await readCustomerBookingEditContext(lesson.bookingId, lessonDate, memberId);
+    expect(context?.coaching).toMatchObject({ coach: { id: coach, name: "Booking Coach" },
+      program: { id: program, name: "Booking private", participantCount: 1, courtRentalIncluded: false },
+      durationMinutes: 60, coachingAmountMinor: 12000 });
+    // The lesson's own reservation never conflicts with itself.
+    expect(context!.coaching!.starts.find(s => s.startMinute === 480)?.courts).toContainEqual(
+      { id: courtA3, name: "A3", coachingAmountMinor: 12000, courtAmountMinor: 6000, totalAmountMinor: 18000 });
+    const input = await lessonEdit(lesson.bookingId, { courtId: courtA3, date: lessonDate, startMinute: 600, expectedTotal: 18000 });
+
+    // Only the date, start and court can change; the lesson's other terms are not inputs.
+    expect(await runBookingReschedule({ ...input, coachId: coach2 }, memberId)).toEqual({ ok: false, message: "Check the booking interval." });
+    expect(await runBookingReschedule({ ...input, programId: includedProgram }, memberId)).toEqual({ ok: false, message: "Check the booking interval." });
+    expect(await runBookingReschedule({ ...input, endMinute: 690 }, memberId)).toEqual({ ok: false,
+      message: "A coaching lesson keeps its original length. Choose a new start time." });
+    expect(await runBookingReschedule({ ...input, courtId: courtB1 }, memberId)).toMatchObject({ ok: false });
+    expect(await runBookingReschedule(input, coach2)).toEqual({ ok: false, message: "This booking is no longer available to edit." });
+    expect(await revisionCount(lesson.bookingId)).toBe(2);
+
+    expect(await runBookingReschedule(input, memberId)).toEqual({ ok: true, totalAmountMinor: 18000 });
+    const moved = await aggregate(lesson.bookingId);
+    expect(moved).toMatchObject({ status: "confirmed", reservation_id: lesson.reservationId, court_id: courtA3, coach_user_id: coach,
+      booking_date: lessonDate, starts_at_minute: 600, ends_at_minute: 660, reservation_status: "active" });
+    expect(moved.revision).toMatchObject({ kind: "rescheduled", revision_number: 3, previous_revision_id: original.revision.id,
+      total_amount_minor: 18000, coach_user_id: coach, coaching_program_id: program, coach_name: "Booking Coach",
+      coaching_program_name: "Booking private", location_id: locationA });
+    expect(moved.revision.pricing_evidence.coaching).toEqual(original.revision.pricing_evidence.coaching);
+    expect(stripeCalls()).toEqual(calls);
+    // One reservation protects both the court and the coach.
+    expect(await coachRows(lessonDate)).toEqual([{ court_id: courtA3, starts_at_minute: 600, ends_at_minute: 660, status: "active", hold: false }]);
+    expect(await database.query("SELECT count(*)::int AS count FROM public.email_deliveries WHERE event_key=$1",
+      [`booking.rescheduled:${moved.revision.id}`])).toEqual([{ count: 1 }]);
+    expect(await database.query("SELECT count(*)::int AS count FROM public.user_messages WHERE user_id=$1 AND event_key=$2",
+      [coach, `coaching.rescheduled:${moved.revision.id}`])).toEqual([{ count: 1 }]);
+    // The original confirmation is never sent again.
+    expect(await database.query(`SELECT count(*)::int AS count FROM public.email_deliveries d JOIN public.booking_revisions v
+      ON d.event_key LIKE 'booking.confirmed:' || v.id WHERE v.booking_id=$1`, [lesson.bookingId])).toEqual([{ count: 1 }]);
+
+    // A replay is idempotent and a stale request changes nothing.
+    expect(await runBookingReschedule(input, memberId)).toEqual({ ok: true, totalAmountMinor: 18000 });
+    expect(await runBookingReschedule({ ...input, startMinute: 720, endMinute: 780 }, memberId)).toMatchObject({ ok: false, reason: "stale" });
+    expect(await revisionCount(lesson.bookingId)).toBe(3);
+    expect((await aggregate(lesson.bookingId)).starts_at_minute).toBe(600);
+  } finally {
+    await database.query("UPDATE public.coaching_prices SET amount_minor=12000 WHERE program_id=$1 AND coach_user_id=$2", [program, coach]);
+    await database.query("UPDATE public.coach_profiles SET is_public=true WHERE user_id=$1", [coach]);
+  }
+});
+
+test("lesson rescheduling rejects coach and court conflicts, a deauthorized coach and closed or started lessons", async () => {
+  const lessonDate = "2100-09-13";
+  const lesson = await confirmedLesson(480, lessonDate);
+  const before = await aggregate(lesson.bookingId);
+  const other = await book({ date: lessonDate, courtId: courtA1, startMinute: 720, expectedTotalAmountMinor: 17000 });
+  assert.ok(other.ok);
+  await database.query(`INSERT INTO public.court_reservations(court_id,booking_date,starts_at_minute,ends_at_minute) VALUES($1,$2,840,900)`, [courtA3, lessonDate]);
+  const context = await readCustomerBookingEditContext(lesson.bookingId, lessonDate, memberId);
+  const starts = new Map(context!.coaching!.starts.map(s => [s.startMinute, s.courts.map(c => c.id)]));
+  expect(starts.has(720)).toBe(false);
+  expect(starts.get(840)).toEqual([courtA1, courtA2]);
+  const attempt = async (startMinute: number, courtId = courtA3) =>
+    runBookingReschedule(await lessonEdit(lesson.bookingId, { courtId, date: lessonDate, startMinute, expectedTotal: 18000 }), memberId);
+  expect(await attempt(720)).toEqual({ ok: false, message: "The coach is no longer available at the selected time. The booking has not changed." });
+  expect(await attempt(840)).toEqual({ ok: false, message: "That court is no longer available. The booking has not changed." });
+  expect(await attempt(960)).toEqual({ ok: false, message: "The coach is not available at the selected time." });
+  // Another coach is never substituted when the lesson's coach can no longer teach it.
+  const deauthorized = await lessonEdit(lesson.bookingId, { courtId: courtA3, date: lessonDate, startMinute: 600, expectedTotal: 18000 });
+  await database.query("DELETE FROM public.user_roles WHERE user_id=$1 AND role_code='coach'", [coach]);
+  try {
+    await expect(readCustomerBookingEditContext(lesson.bookingId, lessonDate, memberId)).rejects.toThrow("no longer available for lessons");
+    expect(await runBookingReschedule(deauthorized, memberId)).toEqual({ ok: false, message: "This lesson's coach is no longer available for lessons. Contact the club to rearrange it." });
+  } finally {
+    await database.query("INSERT INTO public.user_roles(user_id,role_code) VALUES($1,'coach')", [coach]);
+  }
+  const input = await lessonEdit(lesson.bookingId, { courtId: courtA3, date: lessonDate, startMinute: 600, expectedTotal: 18000 });
+  try {
+    // The snapshotted 120-minute notice closes editing; a started lesson never moves.
+    for (const now of [`${lessonDate}T06:30:00.000Z`, `${lessonDate}T08:01:00.000Z`]) {
+      clock.now = now;
+      expect(await runBookingReschedule(input, memberId)).toEqual({ ok: false, message: "The rescheduling window for this booking has closed." });
+    }
+  } finally { clock.now = null; }
+  const after = await aggregate(lesson.bookingId);
+  expect(after).toMatchObject({ reservation_id: before.reservation_id, court_id: courtA3, starts_at_minute: 480, revision: { id: before.revision.id } });
+});
+
+test("a lesson surcharge holds the target for court and coach and settles the accepted quote without repricing", async () => {
+  const lessonDate = "2100-09-20";
+  const lesson = await confirmedLesson(480, lessonDate, { courtId: courtA1, expectedTotalAmountMinor: 17000 });
+  const original = await aggregate(lesson.bookingId);
+  const result = await runBookingReschedule(await lessonEdit(lesson.bookingId,
+    { courtId: courtA2, date: lessonDate, startMinute: 600, expectedTotal: 19000 }), memberId);
+  expect(result).toMatchObject({ ok: true, totalAmountMinor: 19000, adjustmentStatus: "pending" });
+  if (!result.ok || !result.adjustmentId || !result.checkout) throw new Error("No surcharge checkout");
+  const adjustmentId = result.adjustmentId;
+  try {
+    // Pending: the original lesson stays and the target holds both court and coach.
+    expect(await coachRows(lessonDate)).toEqual([
+      { court_id: courtA1, starts_at_minute: 480, ends_at_minute: 540, status: "active", hold: false },
+      { court_id: courtA2, starts_at_minute: 600, ends_at_minute: 660, status: "held", hold: true }]);
+    expect(await book({ date: lessonDate, courtId: courtA3, startMinute: 600 })).toMatchObject({ ok: false, reason: "coach-booked" });
+    await database.query("UPDATE public.coaching_prices SET amount_minor=30000 WHERE program_id=$1 AND coach_user_id=$2", [program, coach]);
+    await database.query("UPDATE public.location_pricing_rules SET price_per_hour_minor=9000 WHERE court_id=$1", [courtA2]);
+    const attempt = await adjustmentAttempt(database.manager, adjustmentId);
+    assert.ok(attempt);
+    expect(attempt.amountMinor).toBe(2000);
+    const intent = remote(attempt.id);
+    intent.status = "succeeded"; intent.amount_received = 2000;
+    expect((await POST(coachingWebhook(attempt.id, "payment_intent.succeeded"))).status).toBe(200);
+    const moved = await aggregate(lesson.bookingId);
+    expect(moved).toMatchObject({ status: "confirmed", reservation_id: lesson.reservationId, court_id: courtA2, starts_at_minute: 600,
+      coach_user_id: coach, reservation_status: "active" });
+    expect(moved.revision).toMatchObject({ kind: "rescheduled", total_amount_minor: 19000, adjustment_id: adjustmentId, coach_user_id: coach });
+    expect(moved.revision.pricing_evidence.coaching).toEqual({ ...original.revision.pricing_evidence.coaching,
+      courtRentalMinor: 7000, courtAmountMinor: 7000 });
+    expect(await database.query("SELECT status FROM public.booking_adjustments WHERE id=$1", [adjustmentId])).toEqual([{ status: "applied" }]);
+    expect(await coachRows(lessonDate)).toEqual([{ court_id: courtA2, starts_at_minute: 600, ends_at_minute: 660, status: "active", hold: false }]);
+    expect(await database.query("SELECT amount_minor,status FROM public.payment_attempts WHERE booking_id=$1 ORDER BY amount_minor", [lesson.bookingId]))
+      .toEqual([{ amount_minor: 2000, status: "succeeded" }, { amount_minor: 17000, status: "succeeded" }]);
+    expect(stripeFixture.refundCreate).not.toHaveBeenCalled();
+    expect(await database.query("SELECT count(*)::int AS count FROM public.user_messages WHERE user_id=$1 AND event_key=$2",
+      [coach, `coaching.rescheduled:${moved.revision.id}`])).toEqual([{ count: 1 }]);
+  } finally {
+    await database.query("UPDATE public.coaching_prices SET amount_minor=12000 WHERE program_id=$1 AND coach_user_id=$2", [program, coach]);
+    await database.query("UPDATE public.location_pricing_rules SET price_per_hour_minor=7000 WHERE court_id=$1", [courtA2]);
+  }
+});
+
+test("a cheaper lesson move refunds only the court difference and keeps the captured payment and coaching evidence", async () => {
+  const lessonDate = "2100-09-27";
+  const lesson = await confirmedLesson(540, lessonDate, { courtId: courtA2, expectedTotalAmountMinor: 19000 });
+  const original = await aggregate(lesson.bookingId);
+  const [capture] = await database.query("SELECT * FROM public.payment_attempts WHERE id=$1", [lesson.paymentAttemptId]);
+  const result = await runBookingReschedule(await lessonEdit(lesson.bookingId,
+    { courtId: courtA1, date: lessonDate, startMinute: 720, expectedTotal: 17000 }), memberId);
+  expect(result).toMatchObject({ ok: true, totalAmountMinor: 17000, adjustmentStatus: "applied", refundStatus: "succeeded" });
+  expect(stripeFixture.refundCreate).toHaveBeenCalledTimes(1);
+  expect(stripeFixture.refundCreate).toHaveBeenCalledWith(expect.objectContaining({ amount: 2000 }), expect.anything());
+  const moved = await aggregate(lesson.bookingId);
+  expect(moved).toMatchObject({ reservation_id: lesson.reservationId, court_id: courtA1, starts_at_minute: 720, coach_user_id: coach });
+  expect(moved.revision).toMatchObject({ kind: "rescheduled", total_amount_minor: 17000, coach_user_id: coach, coaching_program_id: program });
+  expect(moved.revision.pricing_evidence.coaching).toEqual({ ...original.revision.pricing_evidence.coaching,
+    courtRentalMinor: 5000, courtAmountMinor: 5000 });
+  expect(await database.query("SELECT amount_minor,status,reason FROM public.payment_refunds WHERE booking_id=$1", [lesson.bookingId]))
+    .toEqual([{ amount_minor: 2000, status: "succeeded", reason: "booking_price_reduction" }]);
+  expect(await database.query("SELECT * FROM public.payment_attempts WHERE id=$1", [lesson.paymentAttemptId])).toEqual([capture]);
+  expect(await coachRows(lessonDate)).toEqual([{ court_id: courtA1, starts_at_minute: 720, ends_at_minute: 780, status: "active", hold: false }]);
+  expect(await database.query("SELECT count(*)::int AS count FROM public.user_messages WHERE user_id=$1 AND event_key=$2",
+    [coach, `coaching.rescheduled:${moved.revision.id}`])).toEqual([{ count: 1 }]);
+});

@@ -132,7 +132,9 @@ hours, schedule validity and pricing), valid adjacent intervals, partial payment
 payment/capture/refund amounts, capture identity/deduplication, immutable payment-request/provider-event/capture
 facts, refund/adjustment foreign keys, operation/request uniqueness, adjustment hold-fragment
 duration/state and restrictive financial deletes. It also requires the three registered
-migrations (924–926), no notification tables and an empty TypeORM schema-builder diff. Security coverage includes
+migrations (924–926) and an empty TypeORM schema-builder diff. The consolidated migrations
+now create `user_messages` and `email_deliveries` with ownership/deduplication constraints,
+delivery-state checks, and inbox/due-delivery indexes. Security coverage includes
 browser-role table/column and future-table privileges, real denied reads, Auth signup
 and email synchronization, and private active-account avatar Storage access.
 Reservation, configuration, payment and profile integration suites provide additional
@@ -166,6 +168,11 @@ unless the exact isolated test database, project marker, fake secret and URL mat
 Test environment setup clears inherited Stripe fixture/provider variables before
 Playwright opts into these explicit fake credentials. Application server/build remain
 isolated on port 3100 and .next-test; the development server is not reused.
+The Playwright server checks its environment after Next.js loads `.env.local`:
+notification delivery must remain sandbox and PostgreSQL must remain on the isolated
+test port 55322. The local live notification Cron belongs to the separate development
+database on port 54322 and calls the development server on port 3000. The isolated
+test database has no notification Cron job.
 
 ### Real Stripe test-mode modification lifecycle
 
@@ -175,13 +182,13 @@ build). Requirements: test Supabase running, the Stripe CLI logged in to the sam
 account, and `.env.local` holding Stripe test keys whose `STRIPE_WEBHOOK_SECRET` equals
 `stripe listen --print-secret`. The spec starts and stops its own `stripe listen`
 forwarding to port 3100 and uses `stripe events resend` to deliver delayed/duplicate events.
+Playwright starts the guarded Next.js test server itself and requires port 3100 to be free;
+it will not reuse a separately running development server.
 
 ```bash
-node tests/e2e-live/dev-server.mjs            # next dev on :3100, .next-test
 npx playwright test -c playwright.stripe-live.config.ts
-# Late success: restart the server with the test-only hold override
-E2E_ALLOW_HOLD_OVERRIDE=1 BOOKING_HOLD_SECONDS_OVERRIDE=60 node tests/e2e-live/dev-server.mjs
-LIVE_LATE=1 npx playwright test -c playwright.stripe-live.config.ts
+# Late success: Playwright starts the server with the test-only hold override.
+E2E_ALLOW_HOLD_OVERRIDE=1 BOOKING_HOLD_SECONDS_OVERRIDE=60 LIVE_LATE=1 npx playwright test -c playwright.stripe-live.config.ts
 ```
 
 `BOOKING_HOLD_SECONDS_OVERRIDE` (15–600) is honored only when `NODE_ENV=test` or
@@ -278,16 +285,31 @@ project. Surcharge tests cover the capture deadline, acceptance with and without
 court holds, and capture racing expiry, dismissal, supersession and delayed provider
 signals.
 
-## Financial exceptions without notifications
+## Financial exceptions and notifications
 
-The application has no notification system. `tests/integration/booking-financial-exceptions.integration.test.ts`
+`tests/integration/booking-financial-exceptions.integration.test.ts`
 verifies that confirmation, rescheduling and failed/successful cancellation refunds settle
 correctly, that exception facts commit atomically with the deciding refund result, keep
 their first context, reject changed identity and are immutable, and that interrupted
 refund-backed changes are resolved by a later check. Booking-mutation, Stripe payment and
 refund suites assert the exception kinds recorded for rejected changes, unapplied
-surcharges, late captures and failed/unresolved/reversed refunds. Navigation component
-tests assert that no notification links or controls are rendered.
+surcharges, late captures and failed/unresolved/reversed refunds.
+
+`tests/integration/notifications.integration.test.ts` covers transactional booking
+notification persistence and deduplication, financial exception Admin alerts,
+PostgreSQL delivery claiming/retry/terminal state, and inbox ownership/pagination.
+`tests/e2e/notifications.e2e.ts` covers opening an unread message and marking it
+unread through the existing browser setup. Run these focused files with:
+
+```bash
+npm run test:integration -- tests/integration/notifications.integration.test.ts
+npx playwright test tests/e2e/notifications.e2e.ts
+```
+
+These tests require the isolated `tests/local` schema. If its three migration names
+were recorded before notification tables were added to the consolidated migration
+files, running the initializer alone will not replay them. Use the documented
+test-only stop/start without backup above, then initialize the isolated database.
 
 ## Coaching coverage
 

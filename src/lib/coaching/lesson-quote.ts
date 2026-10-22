@@ -1,5 +1,5 @@
 import type { OpeningInterval } from "@/lib/admin/opening-hours-validation";
-import { capturePricingEvidence, type PricingEvidence } from "@/lib/bookings/revision";
+import { capturePricingEvidence, lessonPricingEvidence, type CoachingEvidence, type PricingEvidence } from "@/lib/bookings/revision";
 import { buildCourtDay, type CalendarReservation } from "@/lib/courts/calendar";
 import type { CoveragePeriod } from "@/lib/courts/coverage-validation";
 import { getCalendarSelection } from "@/lib/courts/interval-selection";
@@ -61,7 +61,7 @@ export type CoachingLessonQuote = {
   totalAmountMinor: number;
   currency: LocationCurrency;
   evidence: {
-    coachingPrice: ResolvedCoachingPrice & { programId: string; durationMinutes: number; locationId: string; coachUserId: string };
+    coachingPrice: ResolvedCoachingPrice & { programId: string; durationMinutes: number; coachUserId: string };
     // The court's rental value under the existing court pricing, charged or not.
     courtRentalMinor: number;
     courtPricing: PricingEvidence;
@@ -80,13 +80,11 @@ function isLessonInterval(startMinute: number, durationMinutes: number) {
     && startMinute % 30 === 0 && durationMinutes >= 60 && durationMinutes % 30 === 0 && startMinute + durationMinutes <= 1440;
 }
 
-function lessonDay(day: CoachingLessonDay) {
+// Schedule facts shared by new lessons and rescheduled ones: the coach's windows at
+// this location, the coach's other lessons anywhere, and the court day.
+function lessonSchedule(day: Omit<CoachingLessonDay, "coaching">) {
   const key = (id: string) => id.toLowerCase();
   const locationId = key(day.location.id);
-  const coachUserId = key(day.coach.userId);
-  // Eligibility and coaching price resolution reuse the public coach projection.
-  const profile = projectPublicCoachProfile(day.coaching,
-    [{ id: locationId, name: day.location.name, currency: day.location.currency }], coachUserId);
   // Coach windows at this location only; contiguous windows form one interval.
   const windows = resolveCoachAvailability({ date: day.date, weekly: day.coach.weekly, exceptions: day.coach.exceptions,
     timezones: new Map([[locationId, day.location.timezone]]) })
@@ -101,26 +99,18 @@ function lessonDay(day: CoachingLessonDay) {
   const courtDay = buildCourtDay({ date: day.date, today: day.today, currentMinute: day.currentMinute, courts: day.location.courts,
     hours: day.hours, coverage: day.coverage, pricing: day.pricing, reservations: day.courtOccupancy });
 
-  return (request: CoachingLessonRequest): CoachingLessonResult => {
+  return (request: Omit<CoachingLessonRequest, "programId">) => {
     const { startMinute, durationMinutes } = request;
-    if (!isLessonInterval(startMinute, durationMinutes)) return { ok: false, reason: "invalid-time" };
+    if (!isLessonInterval(startMinute, durationMinutes)) return { ok: false as const, reason: "invalid-time" as const };
     const endMinute = startMinute + durationMinutes;
-    const program = profile?.programs.find((candidate) => candidate.id === key(request.programId));
-    if (!profile || !program || !isOnlineCoachingProgramType(program.type) || !profile.locations.some((location) => location.id === locationId))
-      return { ok: false, reason: "not-offered" };
-    const lesson = profile.lessons.find((candidate) => candidate.locationId === locationId
-      && candidate.programId === program.id && candidate.durationMinutes === durationMinutes);
-    if (!lesson) return { ok: false, reason: "invalid-duration" };
-    if (!lesson.price || lesson.price.currency !== day.location.currency) return { ok: false, reason: "unpriced" };
-
     const startsAt = localStartInstant(day.location.timezone, day.date, startMinute);
     const endsAt = localStartInstant(day.location.timezone, day.date, endMinute);
     // A lesson across a clock change would not last its priced duration.
-    if (Date.parse(endsAt) - Date.parse(startsAt) !== durationMinutes * 60_000) return { ok: false, reason: "invalid-time" };
+    if (Date.parse(endsAt) - Date.parse(startsAt) !== durationMinutes * 60_000) return { ok: false as const, reason: "invalid-time" as const };
     if (!windows.some((window) => window.start <= startMinute && endMinute <= window.end))
-      return { ok: false, reason: "coach-unavailable" };
+      return { ok: false as const, reason: "coach-unavailable" as const };
     if (coachBusy.some((row) => row.starts_at_minute < endMinute && startMinute < row.ends_at_minute))
-      return { ok: false, reason: "coach-booked" };
+      return { ok: false as const, reason: "coach-booked" as const };
 
     // The court must be bookable under the existing court rules (open, priced,
     // unoccupied, not past) even when the program includes its rental.
@@ -128,25 +118,52 @@ function lessonDay(day: CoachingLessonDay) {
     const selection = court && getCalendarSelection({ courtId: court.court.id, times: courtDay.times, cells: court.cells,
       hourlyPrices: court.hourlyPrices }, courtDay.times.indexOf(startMinute), courtDay.times.indexOf(endMinute - 30) + 1);
     if (!court || !selection || selection.startMinute !== startMinute || selection.endMinute !== endMinute)
-      return { ok: false, reason: "court-unavailable" };
+      return { ok: false as const, reason: "court-unavailable" as const };
     const courtPricing = capturePricingEvidence(day.pricing, { courtId: court.court.id, date: day.date, startMinute, endMinute,
       total: selection.priceMinor, courtState: getCourtStateForDate(court.court.environment,
         day.coverage.filter((row) => row.court_id === court.court.id), day.date) });
+    return { ok: true as const, slot: { court: { id: court.court.id, name: court.court.name }, startMinute, endMinute, startsAt, endsAt,
+      courtRentalMinor: selection.priceMinor, courtPricing } };
+  };
+}
 
-    const courtAmountMinor = program.courtRentalIncluded ? 0 : selection.priceMinor;
+function lessonDay(day: CoachingLessonDay) {
+  const key = (id: string) => id.toLowerCase();
+  const locationId = key(day.location.id);
+  // Eligibility and coaching price resolution reuse the public coach projection.
+  const profile = projectPublicCoachProfile(day.coaching,
+    [{ id: locationId, name: day.location.name, currency: day.location.currency }], key(day.coach.userId));
+  const schedule = lessonSchedule(day);
+
+  return (request: CoachingLessonRequest): CoachingLessonResult => {
+    const { startMinute, durationMinutes } = request;
+    if (!isLessonInterval(startMinute, durationMinutes)) return { ok: false, reason: "invalid-time" };
+    const program = profile?.programs.find((candidate) => candidate.id === key(request.programId));
+    if (!profile || !program || !isOnlineCoachingProgramType(program.type) || !profile.locations.some((location) => location.id === locationId))
+      return { ok: false, reason: "not-offered" };
+    // Club-wide price in the location's currency; a lesson without one never reaches payment.
+    const lesson = profile.lessons.find((candidate) => candidate.currency === day.location.currency
+      && candidate.programId === program.id && candidate.durationMinutes === durationMinutes);
+    if (!lesson) return { ok: false, reason: "invalid-duration" };
+    if (!lesson.price) return { ok: false, reason: "unpriced" };
+    const scheduled = schedule(request);
+    if (!scheduled.ok) return scheduled;
+    const { slot } = scheduled;
+
+    const courtAmountMinor = program.courtRentalIncluded ? 0 : slot.courtRentalMinor;
     const totalAmountMinor = lesson.price.amountMinor + courtAmountMinor;
     if (totalAmountMinor > maxAmountMinor) return { ok: false, reason: "unpriced" };
     return { ok: true, quote: {
       location: { id: locationId, name: day.location.name, timezone: day.location.timezone },
-      court: { id: court.court.id, name: court.court.name },
+      court: slot.court,
       coach: { userId: profile.id, displayName: profile.displayName },
       program: { id: program.id, name: program.name, type: program.type, participantCount: program.type === "semi_private" ? 2 : 1,
         courtRentalIncluded: program.courtRentalIncluded },
-      date: day.date, startMinute, endMinute, durationMinutes, startsAt, endsAt,
+      date: day.date, startMinute, endMinute: slot.endMinute, durationMinutes, startsAt: slot.startsAt, endsAt: slot.endsAt,
       coachingAmountMinor: lesson.price.amountMinor, courtAmountMinor, totalAmountMinor, currency: lesson.price.currency,
       evidence: {
-        coachingPrice: { ...lesson.price, programId: program.id, durationMinutes, locationId, coachUserId: profile.id },
-        courtRentalMinor: selection.priceMinor, courtPricing,
+        coachingPrice: { ...lesson.price, programId: program.id, durationMinutes, coachUserId: profile.id },
+        courtRentalMinor: slot.courtRentalMinor, courtPricing: slot.courtPricing,
       },
     } };
   };
@@ -174,4 +191,49 @@ export function listCoachingLessonOffers(day: CoachingLessonDay, request: Omit<C
     }
   }
   return offers;
+}
+
+export type CoachingRescheduleQuote = {
+  court: { id: string; name: string }; startMinute: number; endMinute: number; startsAt: string; endsAt: string;
+  totalAmountMinor: number; pricingEvidence: PricingEvidence;
+};
+export type CoachingRescheduleResult = { ok: true; quote: CoachingRescheduleQuote }
+  | { ok: false; reason: "invalid-time" | "coach-unavailable" | "coach-booked" | "court-unavailable" | "unpriced" };
+
+// A purchased lesson at another time or court: the same coach, location, duration
+// and agreed coaching fee, never repriced; only the court rental follows the
+// current court pricing (and stays uncharged when the program includes it).
+// The caller supplies the operational day, the coach's own facts and occupancy
+// that already excludes the lesson's own reservation.
+export function quoteCoachingReschedule(day: Omit<CoachingLessonDay, "coaching">, coaching: CoachingEvidence,
+  request: { courtId: string; startMinute: number }): CoachingRescheduleResult {
+  return rescheduleDay(day, coaching)(request);
+}
+
+// Every start of the purchased lesson's duration on the day, on every available court.
+export function listCoachingRescheduleOffers(day: Omit<CoachingLessonDay, "coaching">, coaching: CoachingEvidence): CoachingRescheduleQuote[] {
+  const quote = rescheduleDay(day, coaching);
+  const courtIds = [...new Set(day.location.courts.map((court) => court.id.toLowerCase()))];
+  const offers: CoachingRescheduleQuote[] = [];
+  for (let startMinute = 0; startMinute + coaching.durationMinutes <= 1440; startMinute += 30) {
+    for (const courtId of courtIds) {
+      const result = quote({ courtId, startMinute });
+      if (result.ok) offers.push(result.quote);
+    }
+  }
+  return offers;
+}
+
+function rescheduleDay(day: Omit<CoachingLessonDay, "coaching">, coaching: CoachingEvidence) {
+  const schedule = lessonSchedule(day);
+  return (request: { courtId: string; startMinute: number }): CoachingRescheduleResult => {
+    const scheduled = schedule({ ...request, durationMinutes: coaching.durationMinutes });
+    if (!scheduled.ok) return scheduled;
+    const { slot } = scheduled;
+    const pricingEvidence = lessonPricingEvidence(slot.courtPricing, coaching, slot.courtRentalMinor);
+    const totalAmountMinor = coaching.amountMinor + (pricingEvidence.coaching?.courtAmountMinor ?? 0);
+    if (totalAmountMinor > maxAmountMinor) return { ok: false, reason: "unpriced" };
+    return { ok: true, quote: { court: slot.court, startMinute: slot.startMinute, endMinute: slot.endMinute,
+      startsAt: slot.startsAt, endsAt: slot.endsAt, totalAmountMinor, pricingEvidence } };
+  };
 }

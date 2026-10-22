@@ -16,8 +16,8 @@ import ProfileLayout from "../../src/app/profile/layout";
 
 afterEach(() => { cleanup(); navigation.suspended = false; vi.clearAllMocks(); vi.unstubAllGlobals(); });
 
-const labels = ["Bookings", "Booking history", "Player identity", "Personal information", "Tennis profile", "Account & security"];
-const hrefs = ["/my-activity/bookings", "/my-activity/history", "/profile", "/profile/personal", "/profile/tennis", "/profile/security"];
+const labels = ["Notifications", "Bookings", "Booking history", "Player identity", "Personal information", "Tennis profile", "Account & security"];
+const hrefs = ["/messages", "/my-activity/bookings", "/my-activity/history", "/profile", "/profile/personal", "/profile/tennis", "/profile/security"];
 
 it("isolates a suspended dynamic pathname to the sidebar while keeping the page visible", () => {
   navigation.suspended = true;
@@ -34,6 +34,7 @@ it.each([
   ["/profile/personal", "Personal information", "Profile & settings"],
   ["/profile/tennis", "Tennis profile", "Profile & settings"],
   ["/profile/security", "Account & security", "Profile & settings"],
+  ["/messages", "Notifications", null],
 ])("lists every destination and activates only %s", (pathname, label, heading) => {
   navigation.pathname = pathname;
   render(<UserNavigation />);

@@ -62,9 +62,6 @@ export function CoachDialog({ coach, account, accounts = [], locations, programs
         router.refresh();
       } else if (result.reason === "invalid-input") {
         toast.dismiss(notification); setFieldErrors(result.fieldErrors);
-      } else if (result.reason === "has-prices") {
-        toast.dismiss(notification);
-        setFieldErrors({ form: "Individual prices exist for a removed location or program. Remove those prices first." });
       } else if (result.reason === "has-availability") {
         toast.dismiss(notification);
         setFieldErrors({ location_ids: "This coach has availability at a removed location. Remove that availability first." });

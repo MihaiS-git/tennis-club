@@ -12,7 +12,7 @@ import { CoachingCoaches, CoachingPrices, CoachingPrograms } from "./coaching-se
 
 export const metadata: Metadata = {
   title: "Coaching | Tennis Club",
-  description: "Coaching programs, the club’s coaches and coaching prices at each location.",
+  description: "Coaching programs, the club’s coaches and coaching prices.",
 };
 
 const sections = [
@@ -26,7 +26,7 @@ const sections = [
 const steps = [
   { title: "Choose a program", text: "Each program describes who it suits, how long a lesson lasts, how many players take part and whether the court is included in the price." },
   { title: "Meet the coaches", text: "Coach profiles show their background, specialties, the languages they coach in, where they teach and the programs they offer." },
-  { title: "Check the price", text: "Prices are set by the club for each location, in that location’s currency. Where a coach has an individual price, it is shown on their profile." },
+  { title: "Check the price", text: "Club prices apply at every location and are charged in the location’s currency. Where a coach has an individual price, it is shown on their profile." },
   { title: "Choose a lesson", text: "Choose your location, coach and lesson length, then select an available court and time. Pay online to confirm your lesson." },
 ];
 
@@ -34,7 +34,7 @@ const questions = [
   { question: "Is this page different for members?", answer: "No. Members and visitors see the same programs, coaches and prices." },
   { question: "Is the court included in the price?", answer: "Each program states whether court rental is included. Where it is not included, the price shown covers the coaching only." },
   { question: "Why do some coaches have a different price?", answer: "The club sets a standard price for each program and lesson length. Some coaches have an individual price, also set by the club, which is shown on their profile and in the price list." },
-  { question: "Why are prices shown in different currencies?", answer: "Each location sets its prices in its own currency, so the same program can be priced differently between locations." },
+  { question: "Why are prices shown in different currencies?", answer: "Each lesson is charged in its location’s currency. Prices are set separately in each currency and are never converted." },
   { question: "Can I book or pay for a lesson online?", answer: "Private and Semi-private lessons use the booking timetable and one online payment for the complete session. Group and Junior programs are not available for online booking." },
 ];
 
@@ -60,7 +60,7 @@ export default function CoachingPage() {
         eyebrow="Coaching"
         title="Better tennis, one lesson at a time."
         titleClassName="max-w-[14ch]"
-        intro="Find a coaching program that suits your game, meet the coaches who teach it and see what lessons cost at each club location."
+        intro="Find a coaching program that suits your game, meet the coaches who teach it and see what lessons cost."
         image={{
           src: "/images/tennis-coaching-session.webp",
           alt: "A coach guides a player during a practice session on a clay tennis court",
@@ -121,7 +121,7 @@ export default function CoachingPage() {
             <p className={`${eyebrowClassName} text-accent-on-dark`}>Prices</p>
             <h2 id="coaching-prices-title" className={`${headingClassName} mt-4 max-w-[12ch]`}>What a lesson costs.</h2>
             <p className={`${bodyClassName} mt-6 max-w-xl text-ivory`}>
-              Prices are per lesson and set by the club for each location, in that location’s currency. Each line states whether court rental is included.
+              Prices are per lesson, the same at every location that charges in that currency. Each line states whether court rental is included.
             </p>
             <p className="mt-4 max-w-xl font-sans text-sm leading-6 text-ivory">
               The club price applies to every coach unless a coach has an individual price, listed beneath it.

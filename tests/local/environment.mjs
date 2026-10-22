@@ -30,6 +30,8 @@ export function assertTestEnvironment() {
     || process.env.SUPABASE_URL !== "http://127.0.0.1:55321"
     || process.env.MAILPIT_URL !== "http://127.0.0.1:55324"
     || process.env.TEST_SUPABASE_PROJECT !== "tennis-club-tests"
+    || process.env.NOTIFICATION_EMAIL_MODE !== "sandbox"
+    || process.env.NOTIFICATION_TEST_RUNNER !== "1"
     || !process.env.SUPABASE_PUBLISHABLE_KEY || !process.env.LOCAL_SUPABASE_SERVICE_ROLE_KEY) {
     throw new Error("Use the isolated test runner; development and remote Supabase are forbidden.");
   }
@@ -68,6 +70,9 @@ export function configureTestEnvironment() {
     NETOPIA_API_KEY: "",
     NETOPIA_POS_SIGNATURE: "",
     NETOPIA_ENVIRONMENT: "",
+    NOTIFICATION_EMAIL_MODE: "sandbox",
+    NOTIFICATION_DELIVERY_NOT_BEFORE: "",
+    NOTIFICATION_TEST_RUNNER: "1",
     PGOPTIONS: "",
   });
   assertTestEnvironment();

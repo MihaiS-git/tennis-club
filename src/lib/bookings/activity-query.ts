@@ -41,3 +41,8 @@ export function activityHref(scope: ActivityScope, query: ActivityQuery, page = 
   }
   return `/my-activity/${scope === "upcoming" ? "bookings" : "history"}?${params}`;
 }
+
+export function activityBookingHref(scope: ActivityScope, query: ActivityQuery, bookingId: string) {
+  const href = activityHref(scope, query);
+  return `${href}&booking=${encodeURIComponent(bookingId)}`;
+}

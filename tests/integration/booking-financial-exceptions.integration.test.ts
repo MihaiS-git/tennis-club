@@ -205,3 +205,51 @@ test("a rejected price reduction records modification failure without an outstan
     .toEqual([{ event_key: `adjustment:${result.adjustmentId}:abandoned` }]);
   expect(await database.query("SELECT status FROM public.bookings WHERE id=$1", [held.booking_id])).toEqual([{ status: "confirmed" }]);
 });
+
+test("a coach conflict when applying a refunded reduction keeps the booking and records the unapplied change", async () => {
+  const { held, owner } = await ownerBooking(120);
+  const db = localFixtureClient(), database = await getDataSource();
+  const otherCourt = randomUUID();
+  const coachUser = await db.auth.admin.createUser({ email: `financial-coach-${randomUUID()}@example.test`,
+    password: "financial-exception-test-123", email_confirm: true });
+  if (coachUser.error || !coachUser.data.user) throw new Error("Coach fixture failed");
+  const coach = coachUser.data.user.id;
+  userIds.push(coach);
+  try {
+    const context = await readCustomerBookingEditContext(held.booking_id, "2099-10-15", owner);
+    if (!context) throw new Error("Missing edit context");
+    const target = { startMinute: context.ends_at_minute, endMinute: context.ends_at_minute + 60 };
+    const result = await rescheduleCustomerBookingCommand({ id: held.booking_id, expectedUpdatedAt: context.updated_at,
+      expectedRevisionId: context.current_revision_id, courtId, date: context.booking_date, ...target,
+      save: true, expectedTotal: 5000, priceAcknowledged: true }, owner);
+    if (!result.ok || !result.adjustmentId || !result.refundIds?.length) throw new Error("Expected price reduction");
+    // Controlled fixture: the booked row names a coach whom another court already
+    // has at the target time, so only court_reservation_coach_no_overlap can fail the move.
+    await database.query(`INSERT INTO public.coach_profiles(user_id,display_name,bio,qualifications,specialties,languages)
+      VALUES($1,'Exception Coach','','','{}','{}')`, [coach]);
+    await database.query(`INSERT INTO public.courts(id,location_id,name,slug,surface,environment) VALUES($1,$2,'Other','other','clay','outdoor')`,
+      [otherCourt, locationId]);
+    await database.query("UPDATE public.court_reservations SET coach_user_id=$2 WHERE id=$1", [held.reservation_id, coach]);
+    await database.query(`INSERT INTO public.court_reservations(id,court_id,booking_date,starts_at_minute,ends_at_minute,coach_user_id)
+      VALUES($1,$2,'2099-10-15',$3,$4,$5)`, [randomUUID(), otherCourt, target.startMinute, target.endMinute, coach]);
+    const before = await database.query("SELECT court_id,starts_at_minute,ends_at_minute,status FROM public.court_reservations WHERE id=$1", [held.reservation_id]);
+    const prepared = await prepareRefund(result.refundIds[0], {});
+    if (prepared.outcome !== "ready") throw new Error("Expected refund claim");
+    await initiateRefundExecution(prepared.claim);
+    await commitRefundExecution(prepared.claim, { kind: "verified", status: "succeeded", providerRefundId: `re_${randomUUID()}` });
+    expect(await resolveRefundBackedAdjustment(result.adjustmentId)).toBe("unsuccessful");
+    // The verified refund and the original booking survive; the exception is recorded once.
+    expect(await database.query("SELECT status FROM public.payment_refunds WHERE id=$1", [result.refundIds[0]])).toEqual([{ status: "succeeded" }]);
+    expect(await database.query("SELECT court_id,starts_at_minute,ends_at_minute,status FROM public.court_reservations WHERE id=$1", [held.reservation_id])).toEqual(before);
+    expect(await database.query("SELECT status FROM public.booking_adjustments WHERE id=$1", [result.adjustmentId])).toEqual([{ status: "unsuccessful" }]);
+    expect(await database.query("SELECT event_key,kind FROM public.booking_financial_exceptions WHERE booking_id=$1", [held.booking_id]))
+      .toEqual([{ event_key: `adjustment:${result.adjustmentId}:unapplied`, kind: "refunded_modification_unapplied" }]);
+    expect(await database.query("SELECT b.status,v.total_amount_minor FROM public.bookings b JOIN public.booking_revisions v ON v.id=b.current_revision_id WHERE b.id=$1",
+      [held.booking_id])).toEqual([{ status: "confirmed", total_amount_minor: 10000 }]);
+  } finally {
+    await database.query("DELETE FROM public.court_reservations WHERE court_id=$1", [otherCourt]);
+    await database.query("UPDATE public.court_reservations SET coach_user_id=NULL WHERE id=$1", [held.reservation_id]);
+    await database.query("DELETE FROM public.courts WHERE id=$1", [otherCourt]);
+    await database.query("DELETE FROM public.coach_profiles WHERE user_id=$1", [coach]);
+  }
+});

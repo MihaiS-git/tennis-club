@@ -1,6 +1,6 @@
 "use client";
 
-import { CalendarClock, ClipboardList, CreditCard, GraduationCap, MapPin, Users } from "lucide-react";
+import { CalendarClock, ClipboardList, CreditCard, GraduationCap, MapPin, Tag, Users } from "lucide-react";
 import { SidebarNavigation, type SidebarEntry } from "./sidebar-navigation";
 
 const adminEntries: readonly SidebarEntry[] = [
@@ -22,9 +22,12 @@ const adminEntries: readonly SidebarEntry[] = [
 // Coaches get their own Calendar and List of their lessons and staff reservations.
 const coachEntries: readonly SidebarEntry[] = [{ label: "Bookings & Reservations", href: "/coach/bookings", icon: ClipboardList }];
 // The Coach area is shown to every current coach, including Admins who also coach.
-const ownAvailability: SidebarEntry = { label: "My availability", href: "/coach/availability", icon: CalendarClock };
+const ownEntries: readonly SidebarEntry[] = [
+  { label: "My availability", href: "/coach/availability", icon: CalendarClock },
+  { label: "My prices", href: "/coach/pricing", icon: Tag },
+];
 
 export function AdminNavigation({ isAdmin, isCoach = false }: { isAdmin: boolean; isCoach?: boolean }) {
   const entries = isAdmin ? adminEntries : coachEntries;
-  return <SidebarNavigation title="Management" entries={isCoach ? [...entries, ownAvailability] : entries} />;
+  return <SidebarNavigation title="Management" entries={isCoach ? [...entries, ...ownEntries] : entries} />;
 }

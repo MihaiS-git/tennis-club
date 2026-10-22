@@ -46,6 +46,36 @@ test("paid extension hold fragments exclude original occupancy and permit a half
     {...original,startMinute:570,endMinute:600},{...original,startMinute:660,endMinute:690}]);
   expect(adjustmentHoldFragments(original,original)).toEqual([]);
   const target={...original,courtId:randomUUID()};expect(adjustmentHoldFragments(original,target)).toEqual([target]);
+  // Without a coach, court-only behavior is unchanged (no coach on any fragment).
+  for(const fragment of [...adjustmentHoldFragments(original,{...original,startMinute:570,endMinute:690},null),
+    ...adjustmentHoldFragments(original,target,null)]) expect(fragment).not.toHaveProperty("coachUserId");
+});
+test("coaching hold fragments protect the coach and never overlap the original lesson's own coach time",()=>{
+  const coachUserId=randomUUID(), otherCourt=randomUUID();
+  const original={courtId:id,date:"2099-10-15",startMinute:600,endMinute:660};
+  // A. Another date, or a non-overlapping time, holds the whole target for court and coach.
+  const nextDay={...original,date:"2099-10-16"};
+  expect(adjustmentHoldFragments(original,nextDay,coachUserId)).toEqual([{...nextDay,coachUserId}]);
+  expect(adjustmentHoldFragments(original,{...nextDay,courtId:otherCourt},coachUserId)).toEqual([{...nextDay,courtId:otherCourt,coachUserId}]);
+  const later={...original,courtId:otherCourt,startMinute:720,endMinute:780};
+  expect(adjustmentHoldFragments(original,later,coachUserId)).toEqual([{...later,coachUserId}]);
+  // B. Same court, overlapping: only the outside pieces, each protecting both resources.
+  expect(adjustmentHoldFragments(original,{...original,startMinute:570,endMinute:690},coachUserId)).toEqual([
+    {...original,startMinute:570,endMinute:600,coachUserId},{...original,startMinute:660,endMinute:690,coachUserId}]);
+  expect(adjustmentHoldFragments(original,original,coachUserId)).toEqual([]);
+  // C. Different court, overlapping: the overlap holds the new court only; the rest also holds the coach.
+  expect(adjustmentHoldFragments(original,{...original,courtId:otherCourt,startMinute:630,endMinute:690},coachUserId)).toEqual([
+    {courtId:otherCourt,date:original.date,startMinute:630,endMinute:660},
+    {courtId:otherCourt,date:original.date,startMinute:660,endMinute:690,coachUserId}]);
+  expect(adjustmentHoldFragments(original,{...original,courtId:otherCourt,startMinute:540,endMinute:720},coachUserId)).toEqual([
+    {courtId:otherCourt,date:original.date,startMinute:540,endMinute:600,coachUserId},
+    {courtId:otherCourt,date:original.date,startMinute:600,endMinute:660},
+    {courtId:otherCourt,date:original.date,startMinute:660,endMinute:720,coachUserId}]);
+  expect(adjustmentHoldFragments(original,{...original,courtId:otherCourt},coachUserId)).toEqual([{...original,courtId:otherCourt}]);
+  // Every coach-bearing fragment avoids the original's date and time on any court.
+  for(const target of [{...original,startMinute:540,endMinute:720},{...original,courtId:otherCourt,startMinute:570,endMinute:630}])
+    for(const fragment of adjustmentHoldFragments(original,target,coachUserId).filter(f=>f.coachUserId))
+      expect(fragment.endMinute<=original.startMinute||fragment.startMinute>=original.endMinute).toBe(true);
 });
 test("coaching contracts carry coach, program and agreed amounts that must match their evidence",()=>{
   const coach=randomUUID(), program=randomUUID();

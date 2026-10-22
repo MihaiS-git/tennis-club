@@ -19,13 +19,16 @@ export type ReservationEditSaveResult = { ok: true; pending?: boolean; message?:
 const fieldClass = "min-h-10 w-full rounded-control border border-border-strong bg-background px-3 text-sm text-foreground disabled:bg-surface-muted disabled:text-muted-foreground";
 const scheduleSchema = reservationEditSchema.options[1].shape.schedule;
 
-export function ReservationEditForm({ reservation, inProgress, loadAvailability, onCancel, onSave, onSaved, onStale, onPendingChange, scheduleOnly = false, renderScheduleDetails, canSave }: {
+export function ReservationEditForm<Day extends ReservationTimetableDay = ReservationTimetableDay>({ reservation, inProgress, loadAvailability, onCancel, onSave, onSaved, onStale, onPendingChange, scheduleOnly = false, renderScheduleDetails, renderTimetable, canSave }: {
   scheduleOnly?: boolean;
+  // Replaces the default interval timetable, e.g. lesson starts of a fixed length.
+  renderTimetable?: (input: { day: Day; date: string; selection: ReservationSelection | null;
+    select: (selection: ReservationSelection | null) => void; disabled: boolean }) => ReactNode;
   renderScheduleDetails?: (draft: ReservationEditDraft, pending: boolean) => ReactNode;
   canSave?: (draft: ReservationEditDraft) => boolean;
   reservation: EditableReservation;
   inProgress: boolean;
-  loadAvailability: (reservationId: string, date: string) => Promise<{ day: ReservationTimetableDay }>;
+  loadAvailability: (reservationId: string, date: string) => Promise<{ day: Day }>;
   onCancel: () => void;
   onSave?: (draft: ReservationEditDraft) => Promise<ReservationEditSaveResult>;
   onSaved?: () => Promise<void>;
@@ -35,7 +38,7 @@ export function ReservationEditForm({ reservation, inProgress, loadAvailability,
   const prefix = useId();
   const [date, setDate] = useState(reservation.booking_date);
   const [availability, setAvailability] = useState<{
-    day: ReservationTimetableDay | null; date: string; loader: typeof loadAvailability; refreshKey: number; error: string;
+    day: Day | null; date: string; loader: typeof loadAvailability; refreshKey: number; error: string;
   } | null>(null);
   const [selection, setSelection] = useState<ReservationSelection | null>(null);
   const [reason, setReason] = useState(reservation.reason ?? "");
@@ -157,7 +160,8 @@ export function ReservationEditForm({ reservation, inProgress, loadAvailability,
       <p className="text-xs text-muted-foreground">Times shown in {reservation.location_timezone}.</p>
       {loading && <div aria-busy="true" className="min-h-20" />}
       {availabilityError && <button type="button" className="text-sm font-semibold underline" onClick={() => setRefreshKey((key) => key + 1)}>Retry loading availability</button>}
-      {day && <ReservationTimetable day={day} date={date} selection={selection} onChoose={choose} disabled={pending} />}
+      {day && (renderTimetable ? renderTimetable({ day, date, selection, select: setSelection, disabled: pending })
+        : <ReservationTimetable day={day} date={date} selection={selection} onChoose={choose} disabled={pending} />)}
       {(fieldErrors.courtId || fieldErrors.startMinute || fieldErrors.endMinute) && <p role="alert" className="text-sm text-danger">{fieldErrors.courtId || fieldErrors.startMinute || fieldErrors.endMinute}</p>}
       {selection && selectedCourt && <section aria-label="Selected reservation" className="rounded-control border border-border bg-surface-muted p-3 text-sm">
         <p className="font-semibold text-primary">{isCurrent ? "Current reservation" : "Selected"}</p>

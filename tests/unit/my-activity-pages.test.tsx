@@ -1,11 +1,12 @@
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 
-const { context, redirect, upcoming, history } = vi.hoisted(() => ({
-  context: vi.fn(), redirect: vi.fn(() => { throw new Error("redirect"); }), upcoming: vi.fn<typeof import("@/lib/bookings/activity-service").listOwnUpcomingActivity>(), history: vi.fn(),
+const { context, redirect, upcoming, history, target } = vi.hoisted(() => ({
+  context: vi.fn(), redirect: vi.fn((url: string) => { throw new Error(`redirect: ${url}`); }), upcoming: vi.fn<typeof import("@/lib/bookings/activity-service").listOwnUpcomingActivity>(), history: vi.fn(), target: vi.fn(),
 }));
 vi.mock("@/lib/profile/profile", () => ({ profileContext: context }));
 vi.mock("next/navigation", () => ({ redirect }));
-vi.mock("@/lib/bookings/activity-service", () => ({ listOwnUpcomingActivity: upcoming, listOwnCourtActivity: history }));
+vi.mock("@/lib/bookings/activity-service", () => ({ listOwnUpcomingActivity: upcoming, listOwnCourtActivity: history,
+  findOwnBookingActivityTarget: target }));
 
 import { MyBookingsContent } from "@/app/my-activity/bookings/content";
 import { BookingHistoryContent } from "@/app/my-activity/history/content";
@@ -13,6 +14,12 @@ import { parseActivityQuery } from "@/lib/bookings/activity-query";
 
 const account = { state: "active", userId: "owner", roles: [] as string[] };
 const result: import("@/lib/bookings/activity-service").UpcomingActivity = { upcoming: [], bookings: [], ordered: [], hasNext: false, locations: [], courts: [] };
+const bookingId = "ae000000-0000-4000-8000-000000000001";
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  target.mockResolvedValue(null);
+});
 
 it.each(["upcoming"] as const)("requires authentication for %s", async (scope) => {
   context.mockResolvedValue({ account: { state: "unauthenticated" } });
@@ -23,12 +30,37 @@ it.each(["upcoming"] as const)("requires authentication for %s", async (scope) =
 
 it("supplies fresh user-scoped activity on every server render", async () => {
   context.mockResolvedValue({ account, client: {} });
+  target.mockResolvedValue(null);
   const nextResult = { ...result, hasNext: true };
   upcoming.mockResolvedValueOnce(result).mockResolvedValueOnce(nextResult);
   const first = await MyBookingsContent();
   const second = await MyBookingsContent();
   expect(first.props.children.props.initialActivity).toBe(result);
   expect(second.props.children.props.initialActivity).toBe(nextResult);
+  expect(first.props.children.props.deepLinkedBooking).toBeNull();
+  expect(target).toHaveBeenCalledWith(undefined, account.userId);
+});
+
+it("passes only an owner-resolved booking to the existing details dialog, independent of list filters", async () => {
+  context.mockResolvedValue({ account, client: {} });
+  const selected = { id: bookingId, court_name: "Owned court" };
+  target.mockResolvedValueOnce({ scope: "upcoming", booking: selected }).mockResolvedValueOnce(null);
+  upcoming.mockResolvedValue(result);
+  const valid = await MyBookingsContent({ searchParams: Promise.resolve({ booking: bookingId, page: "3", type: "court" }) });
+  expect(target).toHaveBeenCalledWith(bookingId, account.userId);
+  expect(valid.props.children.props.deepLinkedBooking).toBe(selected);
+  expect(valid.props.children.props.listQuery).toMatchObject({ page: "3", type: "booking" });
+  const denied = await MyBookingsContent({ searchParams: Promise.resolve({ booking: bookingId }) });
+  expect(denied.props.children.props.deepLinkedBooking).toBeNull();
+});
+
+it("redirects an owned cancelled booking to History with its selection", async () => {
+  context.mockResolvedValue({ account, client: {} });
+  target.mockResolvedValue({ scope: "history", booking: { id: bookingId } });
+  await expect(MyBookingsContent({ searchParams: Promise.resolve({ booking: bookingId, location: bookingId }) })).rejects.toThrow("redirect");
+  expect(redirect.mock.lastCall![0]).toContain(`/my-activity/history?`);
+  expect(redirect.mock.lastCall![0]).toContain(`booking=${bookingId}`);
+  expect(redirect.mock.lastCall![0]).toContain(`location=${bookingId}`);
 });
 
 it("normalizes invalid filters, sort and dates safely with scope defaults", () => {

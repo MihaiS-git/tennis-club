@@ -21,10 +21,10 @@ const facts: PublicCoachingFacts = {
       location_ids: [ids.east, ids.west], program_ids: [ids.program, ids.group] },
   ],
   prices: [
-    { program_id: ids.program, duration_minutes: 60, location_id: ids.east, coach_user_id: null, amount_minor: 12000, currency: "RON" },
-    { program_id: ids.program, duration_minutes: 60, location_id: ids.east, coach_user_id: ids.bo, amount_minor: 15000, currency: "RON" },
-    { program_id: ids.program, duration_minutes: 60, location_id: ids.west, coach_user_id: null, amount_minor: 4000, currency: "RON" },
-    { program_id: ids.program, duration_minutes: 60, location_id: ids.hidden, coach_user_id: null, amount_minor: 9000, currency: "RON" },
+    { program_id: ids.program, duration_minutes: 60, coach_user_id: null, amount_minor: 12000, currency: "RON" },
+    { program_id: ids.program, duration_minutes: 60, coach_user_id: ids.bo, amount_minor: 15000, currency: "RON" },
+    // No visible location charges in GBP, so it is never shown.
+    { program_id: ids.program, duration_minutes: 60, coach_user_id: null, amount_minor: 9000, currency: "GBP" },
   ],
 };
 const visible = [{ id: ids.east, name: "East", currency: "RON" as const }, { id: ids.west, name: "West", currency: "EUR" as const }];
@@ -32,8 +32,8 @@ const visible = [{ id: ids.east, name: "East", currency: "RON" as const }, { id:
 describe("projectPublicCoaching", () => {
   const result = projectPublicCoaching(facts, visible);
 
-  it("shows club prices only at visible locations in their current currency", () => {
-    expect(result.programs[0].prices).toEqual([{ locationId: ids.east, locationName: "East", durationMinutes: 60, amountMinor: 12000, currency: "RON" }]);
+  it("shows club-wide prices only in the currencies of visible locations", () => {
+    expect(result.programs[0].prices).toEqual([{ durationMinutes: 60, amountMinor: 12000, currency: "RON" }]);
     expect(result.programs[1].prices).toEqual([]);
   });
 
@@ -42,8 +42,8 @@ describe("projectPublicCoaching", () => {
     expect(ana.locations).toEqual([{ id: ids.east, name: "East" }]);
     expect(ana.rates).toEqual([]);
     expect(bo.programs.map((program) => program.name)).toEqual(["Group", "Private"]);
-    expect(bo.rates).toEqual([{ programId: ids.program, programName: "Private", courtRentalIncluded: true, locationId: ids.east,
-      locationName: "East", durationMinutes: 60, amountMinor: 15000, currency: "RON" }]);
+    expect(bo.rates).toEqual([{ programId: ids.program, programName: "Private", courtRentalIncluded: true,
+      durationMinutes: 60, amountMinor: 15000, currency: "RON" }]);
   });
 
   it("exposes no account or contact fields", () => {
@@ -60,22 +60,22 @@ describe("projectPublicCoachProfile", () => {
     const bo = projectPublicCoachProfile(facts, visible, ids.bo.toUpperCase());
     expect(bo?.programs.map((program) => [program.name, program.durations, program.courtRentalIncluded])).toEqual([["Group", [90], false], ["Private", [60], true]]);
     expect(bo?.locations).toEqual([{ id: ids.east, name: "East" }, { id: ids.west, name: "West" }]);
-    expect(bo?.lessons.map((lesson) => [lesson.locationName, lesson.programName, lesson.durationMinutes, lesson.price])).toEqual([
-      ["East", "Group", 90, null],
-      ["East", "Private", 60, { amountMinor: 15000, currency: "RON", source: "coach" }],
-      // West now prices in EUR, so the RON club default is not re-denominated.
-      ["West", "Group", 90, null],
-      ["West", "Private", 60, null],
+    expect(bo?.lessons.map((lesson) => [lesson.currency, lesson.programName, lesson.durationMinutes, lesson.price])).toEqual([
+      // West charges in EUR; the RON club default is never converted.
+      ["EUR", "Group", 90, null],
+      ["EUR", "Private", 60, null],
+      ["RON", "Group", 90, null],
+      ["RON", "Private", 60, { amountMinor: 15000, currency: "RON", source: "coach" }],
     ]);
     const ana = projectPublicCoachProfile(facts, visible, ids.ana);
-    expect(ana?.lessons).toEqual([{ locationId: ids.east, locationName: "East", programId: ids.program, programName: "Private",
+    expect(ana?.lessons).toEqual([{ programId: ids.program, programName: "Private", currency: "RON",
       durationMinutes: 60, price: { amountMinor: 12000, currency: "RON", source: "club" } }]);
   });
 
-  it("uses the configured location currency", () => {
+  it("prices each currency of the coach's locations independently", () => {
     const euro = projectPublicCoachProfile({ ...facts, prices: [...facts.prices,
-      { program_id: ids.program, duration_minutes: 60, location_id: ids.west, coach_user_id: ids.bo, amount_minor: 3500, currency: "EUR" }] }, visible, ids.bo);
-    expect(euro?.lessons.find((lesson) => lesson.locationId === ids.west && lesson.programId === ids.program)?.price)
+      { program_id: ids.program, duration_minutes: 60, coach_user_id: ids.bo, amount_minor: 3500, currency: "EUR" }] }, visible, ids.bo);
+    expect(euro?.lessons.find((lesson) => lesson.currency === "EUR" && lesson.programId === ids.program)?.price)
       .toEqual({ amountMinor: 3500, currency: "EUR", source: "coach" });
   });
 

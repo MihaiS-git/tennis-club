@@ -10,6 +10,7 @@ import { locationCurrencies } from "@/lib/admin/locations-validation";
 import { localStartInstant } from "@/lib/courts/local-time";
 import { getDataSource } from "@/lib/db/data-source";
 import { listOwnerActivityBatch } from "@/lib/db/repositories/court-activity.repository";
+import { findOwnedBookingRevision } from "@/lib/db/repositories/bookings.repository";
 import { listBookingsWithLivePayment, listBookingsWithPendingChange } from "@/lib/db/repositories/booking-adjustments.repository";
 import { courtActivityType, type CourtHistoryItem } from "./history";
 import { minorAmountSchema } from "@/lib/pricing/money";
@@ -176,4 +177,33 @@ export async function listOwnUpcomingActivity(input: ActivitySearchParams = {}, 
   return { hasNext: result.hasNext, locations: result.locations, courts: result.courts,
     ordered, upcoming: ordered.flatMap((item) => item.kind === "reservation" ? [item.row] : []),
     bookings: ordered.flatMap((item) => item.kind === "booking" ? [item.row] : []) };
+}
+
+// A notification target is resolved independently of list filters and pagination.
+// The owner predicate is applied by the database read before any details are returned.
+export async function findOwnBookingActivityTarget(rawId: unknown, ownerId: string, now = new Date()) {
+  const id = z.uuid().safeParse(rawId);
+  if (!id.success) return null;
+  const manager = (await getDataSource()).manager;
+  const owned = await findOwnedBookingRevision(manager, id.data, ownerId);
+  if (!owned || (owned.status !== "confirmed" && owned.status !== "cancelled")) return null;
+  const v = owned.revision;
+  const common = { id: id.data, booking_date: v.bookingDate, starts_at_minute: v.startMinute,
+    ends_at_minute: v.endMinute, starts_at_instant: localStartInstant(v.timezone, v.bookingDate, v.startMinute),
+    location_name: v.locationName, location_timezone: v.timezone, court_name: v.courtName,
+    customer_name: v.customerName, customer_email: v.customerEmail, customer_phone: v.customerPhone,
+    includes_coaching: v.coachUserId != null, coach_name: v.coachName ?? null,
+    coaching_program_name: v.coachingProgramName ?? null, cancellation_notice_minutes: v.cancellationNoticeMinutes,
+    total_amount_minor: v.totalAmountMinor, currency: v.currency };
+  const ended = Date.parse(localStartInstant(v.timezone, v.bookingDate, v.endMinute)) <= now.getTime();
+  if (owned.status === "cancelled" || ended) {
+    return { scope: "history" as const, booking: { ...common, kind: "booking" as const,
+      status: owned.status, history_at: owned.status === "cancelled" ? v.recordedAt.toISOString()
+        : localStartInstant(v.timezone, v.bookingDate, v.endMinute) } };
+  }
+  const [live, changes] = await Promise.all([
+    listBookingsWithLivePayment(manager, [id.data]), listBookingsWithPendingChange(manager, [id.data]),
+  ]);
+  return { scope: "upcoming" as const, booking: { ...common, payment_pending: live.has(id.data),
+    ...(changes.has(id.data) ? { pending_change: changes.get(id.data) } : {}) } };
 }

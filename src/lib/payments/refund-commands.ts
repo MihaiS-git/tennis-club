@@ -13,7 +13,7 @@ import { findBookingCancellationNotice, findBookingForUpdate } from "@/lib/db/re
 import { findReservationForUpdate } from "@/lib/db/repositories/reservations.repository";
 import { findAdjustment, listAdjustmentRefunds } from "@/lib/db/repositories/booking-adjustments.repository";
 import { refundBackedOutcome } from "@/lib/bookings/domain";
-import { recordBookingFinancialException } from "@/lib/db/repositories/booking-financial-exceptions.repository";
+import { recordBookingFinancialException, recordSuccessfulRefund } from "@/lib/notifications/events";
 import { refundObligationTotal, reservingObligations } from "./refund-allocation";
 import { refundFinancialSnapshotMatches, paymentHasCapturedEvidence, sameRefundSnapshot } from "./refund-integrity";
 import { resolvableRefundEvents } from "./providers/stripe/refund-policy";
@@ -225,6 +225,8 @@ export async function commitRefundExecution(claim: RefundExecutionClaim, observa
       if (!latest) throw new Error("Refund execution missing");
       const status = summary(latest);
       await payments.writeRefundStatus(manager, refund.id, status);
+      if (status === "succeeded" && !execution.terminalResult)
+        await recordSuccessfulRefund(manager, refund.id, latest.id, latest.completedAt ?? checkedAt);
       // Full verified compensation of an ended request's capture closes its review flag.
       if (status === "succeeded" && refund.amount_minor === context.payment.amount_minor)
         await payments.writeRefundEventResolution(manager,

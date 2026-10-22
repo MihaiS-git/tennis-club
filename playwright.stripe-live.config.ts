@@ -16,4 +16,10 @@ export default defineConfig({
   reporter: "list",
   timeout: 240_000,
   use: { baseURL: "http://localhost:3100", browserName: "chromium", channel: "chrome", trace: "retain-on-failure" },
+  webServer: {
+    command: "node tests/e2e-live/dev-server.mjs",
+    url: "http://localhost:3100",
+    reuseExistingServer: false,
+    timeout: 180_000,
+  },
 });

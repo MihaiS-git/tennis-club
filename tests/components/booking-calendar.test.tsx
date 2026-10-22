@@ -431,6 +431,8 @@ it("uses the same timetable for every court but only allows complete server-offe
   const blocked = { ...courts[0], court: { ...courts[0].court, id: "blocked", name: "Court 3" } };
   render(<BookingCalendar {...coachingProps} day={{ ...coachingProps.day, courts: [...courts, blocked] }} />);
   expect(screen.getAllByRole("rowheader")).toHaveLength(3);
+  expect(screen.queryByRole("region", { name: "Selected interval" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Continue" })).toBeNull();
   expect(screen.queryByRole("button", { name: /Court 3/ })).toBeNull();
   expect(screen.queryByRole("button", { name: /Court 1 2099-10-15 16:30–/ })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: /Court 1 .*90 min lesson/ }));

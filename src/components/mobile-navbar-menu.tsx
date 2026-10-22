@@ -11,6 +11,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { PrimaryNavigationLink } from "./primary-navigation-link";
 import { BookCourtLink } from "./book-court-link";
 import { ProfileNavigationAvatar } from "./profile-navigation-avatar";
+import { NotificationBell } from "./notification-bell";
 
 export function MobileNavbarShell({ children }: { children: ReactNode }) {
   return <header className="sticky top-0 z-30 w-full border-b border-border bg-surface lg:hidden">
@@ -30,8 +31,8 @@ export function MobileNavbarMenu(props: Parameters<typeof MobileNavbarControls>[
   return <MobileNavbarShell><MobileNavbarControls {...props} /></MobileNavbarShell>;
 }
 
-export function MobileNavbarControls({ isAuthenticated, canReserve, avatarUrl = null }: {
-  isAuthenticated: boolean; canReserve: boolean; avatarUrl?: string | null;
+export function MobileNavbarControls({ isAuthenticated, hasMessageAccess = false, canReserve, avatarUrl = null }: {
+  isAuthenticated: boolean; hasMessageAccess?: boolean; canReserve: boolean; avatarUrl?: string | null;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const menuId = useId();
@@ -91,6 +92,7 @@ export function MobileNavbarControls({ isAuthenticated, canReserve, avatarUrl = 
 
   return (
     <>
+      {hasMessageAccess && <NotificationBell viewport="mobile" />}
           <button
             ref={triggerRef}
             type="button"

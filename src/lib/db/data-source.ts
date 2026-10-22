@@ -8,6 +8,8 @@ import { PlayerProfileEntity } from "./entities/player-profile.entity";
 import { RoleEntity } from "./entities/role.entity";
 import { UserRoleEntity } from "./entities/user-role.entity";
 import { UserEntity } from "./entities/user.entity";
+import { UserMessageEntity } from "./entities/user-message.entity";
+import { EmailDeliveryEntity } from "./entities/email-delivery.entity";
 
 import { LocationEntity } from "./entities/location.entity";
 import { BookingRevisionEntity } from "./entities/booking-revision.entity";
@@ -47,7 +49,7 @@ const entities = {
   OpeningHoursScheduleEntity,
   BookingEntity, PaymentAttemptEntity, PaymentCaptureReceiptEntity, PaymentProviderChangeEntity, PaymentProviderEventEntity,
   PaymentProviderSettingEntity, PaymentRefundEntity, CourtReservationEntity,
-  UserEntity, RoleEntity, UserRoleEntity, PlayerProfileEntity, LocationEntity, CourtEntity,
+  UserEntity, UserMessageEntity, EmailDeliveryEntity, RoleEntity, UserRoleEntity, PlayerProfileEntity, LocationEntity, CourtEntity,
   CourtCoveragePeriodEntity, LocationOpeningHoursEntity, LocationPricingRuleEntity, PricingRuleSetEntity,
   CoachingProgramEntity, CoachingProgramDurationEntity, CoachProfileEntity, CoachLocationEntity, CoachProgramEntity,
   CoachingPriceEntity, CoachWeeklyAvailabilityEntity, CoachAvailabilityExceptionEntity,

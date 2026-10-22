@@ -3,6 +3,8 @@ import { installDialogMock } from "../helpers/dialog";
 import { afterEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 const { loadPayment } = vi.hoisted(() => ({ loadPayment: vi.fn() }));
+const { replace } = vi.hoisted(() => ({ replace: vi.fn() }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ replace }) }));
 vi.mock(import("@/app/my-activity/bookings/actions"), async (importOriginal) => ({ ...await importOriginal(), loadOwnBookingPaymentAction: loadPayment }));
 import { HistoryActivity } from "@/app/my-activity/history/history-activity";
 import type { CustomerBookingHistoryItem } from "@/lib/bookings/history";
@@ -16,6 +18,16 @@ const booking: CustomerBookingHistoryItem = {
   status: "confirmed", customer_name: "Snapshot Name", customer_email: "snapshot@example.test",
   customer_phone: "+40 123", cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON",
 };
+
+it("opens an owner-resolved history deep link outside the filtered list", () => {
+  installDialogMock();
+  replace.mockClear();
+  loadPayment.mockResolvedValue({ ok: false, message: "Unavailable" });
+  render(<HistoryActivity rows={[]} deepLinkedBooking={{ ...booking, status: "cancelled" }} />);
+  expect(within(screen.getByRole("dialog", { name: "Booking details" })).getByText("Court 2")).toBeDefined();
+  fireEvent.click(within(screen.getByRole("dialog", { name: "Booking details" })).getByRole("button", { name: "Close" }));
+  expect(new URL(replace.mock.lastCall![0], "http://localhost").searchParams.has("booking")).toBe(false);
+});
 
 it("opens a completed booking with stored contact and price, without actions", () => {
   installDialogMock();

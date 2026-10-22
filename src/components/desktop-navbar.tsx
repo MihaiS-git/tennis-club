@@ -9,6 +9,7 @@ import { readNavigationProfile } from "@/lib/profile/navigation";
 import { PrimaryNavigationLink } from "./primary-navigation-link";
 import { BookCourtLink } from "./book-court-link";
 import { ProfileNavigationAvatar } from "./profile-navigation-avatar";
+import { NotificationBell } from "./notification-bell";
 
 async function AdminNavigationLink() {
   const { account } = await readNavigationProfile();
@@ -30,6 +31,7 @@ async function AccountControls({ authenticated }: { authenticated: boolean }) {
   if (!authenticated) return <Link className="text-sm font-medium text-primary hover:text-accent" href="/login">Sign in</Link>;
 
   return <>
+    {(account.state === "active" || account.state === "suspended") && <NotificationBell viewport="desktop" />}
     <Link href="/profile" aria-label="Profile"
       className="inline-flex min-h-10 items-center rounded-control border border-border-strong px-1.5 text-primary hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-primary">
       <ProfileNavigationAvatar src={avatarUrl} desktop />

@@ -3,14 +3,15 @@ import { beforeEach, expect, test, vi } from "vitest";
 import type { CurrentAccount } from "@/lib/auth/account";
 import { parseActivityQuery } from "@/lib/bookings/activity-query";
 
-const { account, dataSource, queryRead } = vi.hoisted(() => ({ account: vi.fn(), dataSource: vi.fn(), queryRead: vi.fn() }));
+const { account, dataSource, queryRead, ownedRevision } = vi.hoisted(() => ({ account: vi.fn(), dataSource: vi.fn(), queryRead: vi.fn(), ownedRevision: vi.fn() }));
 vi.mock("@/lib/auth/account", () => ({ readCurrentAccount: account }));
 vi.mock("@/lib/db/data-source", () => ({ getDataSource: dataSource }));
+vi.mock("@/lib/db/repositories/bookings.repository", () => ({ findOwnedBookingRevision: ownedRevision }));
 vi.mock("@/lib/db/repositories/booking-adjustments.repository", () => ({
   listBookingsWithLivePayment: vi.fn(async () => new Set<string>()),
   listBookingsWithPendingChange: vi.fn(async () => new Set<string>()),
 }));
-import { listOwnCourtActivity, listOwnUpcomingActivity } from "@/lib/bookings/activity-service";
+import { findOwnBookingActivityTarget, listOwnCourtActivity, listOwnUpcomingActivity } from "@/lib/bookings/activity-service";
 
 const id = (n: number) => `ca000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const owner = id(1);
@@ -39,10 +40,33 @@ function serve(bookings: unknown[], reservations: unknown[] = []) {
   });
 }
 beforeEach(() => {
-  account.mockReset(); dataSource.mockReset(); queryRead.mockReset();
+  account.mockReset(); dataSource.mockReset(); queryRead.mockReset(); ownedRevision.mockReset();
   account.mockResolvedValue({ state: "active", userId: owner, roles: [] });
   dataSource.mockResolvedValue({ manager: { query: queryRead } });
   serve([booking], [reservation]);
+});
+
+test("booking deep-link lookup rejects invalid and foreign IDs before exposing details", async () => {
+  expect(await findOwnBookingActivityTarget(undefined, owner, now)).toBeNull();
+  expect(await findOwnBookingActivityTarget("not-a-uuid", owner, now)).toBeNull();
+  expect(ownedRevision).not.toHaveBeenCalled();
+  ownedRevision.mockResolvedValue(null);
+  expect(await findOwnBookingActivityTarget(id(4), owner, now)).toBeNull();
+  expect(ownedRevision).toHaveBeenCalledWith(expect.anything(), id(4), owner);
+});
+
+test("owner booking deep link uses the stored snapshot and opens the correct activity scope", async () => {
+  const revision = { bookingDate: "2099-10-15", startMinute: 600, endMinute: 660,
+    timezone: "Europe/Bucharest", locationName: "Club A", courtName: "Court A", customerName: "Snapshot",
+    customerEmail: "snapshot@example.test", customerPhone: "123", coachUserId: null, coachName: null,
+    coachingProgramName: null, cancellationNoticeMinutes: 120, totalAmountMinor: 9000, currency: "RON",
+    recordedAt: now };
+  ownedRevision.mockResolvedValue({ status: "confirmed", revision });
+  const upcoming = await findOwnBookingActivityTarget(id(4), owner, now);
+  expect(upcoming).toMatchObject({ scope: "upcoming", booking: { id: id(4), court_name: "Court A", total_amount_minor: 9000 } });
+  ownedRevision.mockResolvedValue({ status: "cancelled", revision });
+  const history = await findOwnBookingActivityTarget(id(4), owner, now);
+  expect(history).toMatchObject({ scope: "history", booking: { id: id(4), status: "cancelled" } });
 });
 
 test.each<CurrentAccount>([

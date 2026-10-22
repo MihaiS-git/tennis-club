@@ -1,10 +1,10 @@
-import { readCoachingBookingOptions } from "@/lib/coaching/booking-options";
+import { coachingBookingOptions } from "@/lib/coaching/booking-options";
 import { readPublicCoaching } from "@/lib/coaching/public";
 import { listPublicLocationsWithCourts } from "@/lib/courts/public";
 import { randomUUID } from "node:crypto";
 import { afterAll, assert, beforeAll, expect, test } from "vitest";
 import type { DataSource } from "typeorm";
-import { readPublicCoachingLessonAvailability } from "@/lib/coaching/lesson-availability";
+import { projectCoachingLessonAvailability, readCoachingLessonDay, readPublicCoachingLessonAvailability } from "@/lib/coaching/lesson-availability";
 import { getDataSource } from "@/lib/db/data-source";
 import { listCoachDayAvailability } from "@/lib/db/repositories/coach-availability.repository";
 import { listCoachDayOccupancy } from "@/lib/db/repositories/reservations.repository";
@@ -20,7 +20,7 @@ const userIds: string[] = [];
 const [locationA, locationB] = [randomUUID(), randomUUID()];
 const [courtA1, courtA2, courtB1] = [randomUUID(), randomUUID(), randomUUID()];
 const [program, inactiveProgram] = [randomUUID(), randomUUID()];
-let coach: string, member: string, memberEmail: string;
+let coach: string, member: string, memberEmail: string, lesson: string;
 const date = "2099-11-02";
 // 00:30 in Bucharest on the lesson date (22:30 UTC on the previous day).
 const beforeOpening = new Date("2099-11-01T22:30:00Z");
@@ -35,10 +35,12 @@ async function account(roles: "coach"[] = []) {
 }
 
 async function reserve(court: string, start: number, end: number, options: { coach?: string; status?: "active" | "held"; expired?: boolean } = {}) {
+  const id = randomUUID();
   await database.query(`INSERT INTO public.court_reservations(id,court_id,booking_date,starts_at_minute,ends_at_minute,status,hold_expires_at,coach_user_id,created_by_user_id)
     VALUES($1,$2,$3,$4,$5,$6::public.court_reservation_status,
       CASE WHEN $6::text='held' THEN clock_timestamp()+CASE WHEN $7 THEN interval '-1 minute' ELSE interval '1 hour' END END,$8,$9)`,
-  [randomUUID(), court, date, start, end, options.status ?? "active", options.expired ?? false, options.coach ?? null, member]);
+  [id, court, date, start, end, options.status ?? "active", options.expired ?? false, options.coach ?? null, member]);
+  return id;
 }
 
 const read = (overrides: Record<string, unknown> = {}, now = beforeOpening) =>
@@ -74,9 +76,9 @@ beforeAll(async () => {
   await database.query("INSERT INTO public.coach_locations(coach_user_id,location_id) VALUES($1,$2),($1,$3)", [coach, locationA, locationB]);
   await database.query("INSERT INTO public.coach_programs(coach_user_id,program_id) VALUES($1,$2),($1,$3)", [coach, program, inactiveProgram]);
   // Club rates for 60 and 90 minutes, the coach's own 90-minute rate, nothing for 120.
-  await database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,location_id,coach_user_id,amount_minor,currency) VALUES
-    ($1,60,$2,NULL,10000,'RON'),($1,90,$2,NULL,14000,'RON'),($1,90,$2,$3,16000,'RON'),($4,60,$2,NULL,9000,'RON')`,
-  [program, locationA, coach, inactiveProgram]);
+  await database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,coach_user_id,amount_minor,currency) VALUES
+    ($1,60,NULL,10000,'RON'),($1,90,NULL,14000,'RON'),($1,90,$2,16000,'RON'),($3,60,NULL,9000,'RON')`,
+  [program, coach, inactiveProgram]);
   await database.query(`INSERT INTO public.coach_weekly_availability(coach_user_id,location_id,weekday,start_minute,end_minute,valid_from)
     VALUES($1,$2,$3,540,900,'2000-01-01')`, [coach, locationA, mondayWeekday(date)]);
   await database.query(`INSERT INTO public.coach_availability_exceptions(coach_user_id,exception_date,until_date,kind,start_minute,end_minute,note)
@@ -89,7 +91,7 @@ beforeAll(async () => {
   await reserve(courtA2, 660, 720);
   // The coach teaches on A1 12:00–13:00 and at location B 13:00–14:00 (live hold).
   // An expired coach hold at B 09:00–10:00 no longer occupies the coach.
-  await reserve(courtA1, 720, 780, { coach });
+  lesson = await reserve(courtA1, 720, 780, { coach });
   await reserve(courtB1, 780, 840, { coach, status: "held" });
   await reserve(courtB1, 540, 600, { coach, status: "held", expired: true });
 });
@@ -101,7 +103,7 @@ afterAll(async () => {
     await database.query("DELETE FROM public.court_reservations WHERE court_id=ANY($1::uuid[])", [[courtA1, courtA2, courtB1]]);
     await database.query("DELETE FROM public.coach_availability_exceptions WHERE coach_user_id=$1", [coach]);
     await database.query("DELETE FROM public.coach_weekly_availability WHERE coach_user_id=$1", [coach]);
-    await database.query("DELETE FROM public.coaching_prices WHERE location_id=ANY($1::uuid[])", [locations]);
+    await database.query("DELETE FROM public.coaching_prices WHERE program_id=ANY($1::uuid[])", [[program, inactiveProgram]]);
     await database.query("DELETE FROM public.coach_programs WHERE coach_user_id=$1", [coach]);
     await database.query("DELETE FROM public.coach_locations WHERE coach_user_id=$1", [coach]);
     await database.query("DELETE FROM public.coach_profiles WHERE user_id=$1", [coach]);
@@ -280,40 +282,89 @@ test("public lessons include both working intervals and exclude the lunch break"
 });
 
 
-test("public selector uses local effective working hours, keeps booked coaches and preserves public eligibility checks", async () => {
+test("selector lists every coach assigned to the location with their own programs and effective prices, independent of hours and occupancy", async () => {
   const location = (await listPublicLocationsWithCourts()).find(row => row.id === locationA)!;
-  const options = async () => readCoachingBookingOptions(await readPublicCoaching([location]), location, beforeOpening);
-  const includesCoach = async () => (await options()).some(option => option.coach.id === coach);
-  // Current-day occupancy does not control selector eligibility.
-  expect(await includesCoach()).toBe(true);
-  await database.query("UPDATE public.coach_weekly_availability SET location_id=$2 WHERE coach_user_id=$1", [coach, locationB]);
-  const extra = randomUUID();
+  const options = async () => coachingBookingOptions(await readPublicCoaching([location]), location);
+  const other = (await account(["coach"])).id;
+  const otherProgram = randomUUID();
   try {
-    expect(await includesCoach()).toBe(false);
-    await database.query(`INSERT INTO public.coach_availability_exceptions(id,coach_user_id,exception_date,until_date,kind,location_id,start_minute,end_minute)
-      VALUES($1,$2,'2099-11-03','2099-11-03','available',$3,600,660)`, [extra, coach, locationA]);
-    const extraOption = (await options()).find(option => option.coach.id === coach);
-    expect(extraOption?.programs.find(item => item.id === program)?.durations).toEqual([60]);
+    // A second coach at A offering only a program the first coach does not teach.
+    await database.query("INSERT INTO public.coaching_programs(id,name,description,program_type,court_rental_included,is_active) VALUES($1,'Selector semi','','semi_private',true,true)", [otherProgram]);
+    await database.query("INSERT INTO public.coaching_program_durations(program_id,duration_minutes) VALUES($1,60)", [otherProgram]);
+    await database.query("INSERT INTO public.coach_profiles(user_id,display_name,bio,qualifications,specialties,languages,is_public) VALUES($1,'Selector coach','','','{}','{}',true)", [other]);
+    await database.query("INSERT INTO public.coach_locations(coach_user_id,location_id) VALUES($1,$2)", [other, locationA]);
+    await database.query("INSERT INTO public.coach_programs(coach_user_id,program_id) VALUES($1,$2)", [other, otherProgram]);
+    await database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,coach_user_id,amount_minor,currency) VALUES
+      ($1,60,NULL,12000,'RON'),($1,60,$2,11000,'RON'),($1,60,$2,4000,'EUR')`, [otherProgram, other]);
+    await database.query(`INSERT INTO public.coach_weekly_availability(coach_user_id,location_id,weekday,start_minute,end_minute,valid_from)
+      VALUES($1,$2,$3,900,1020,'2000-01-01')`, [other, locationA, mondayWeekday(date)]);
+    // The first coach has no working hours at A and a lesson on the date: still listed.
+    await database.query("UPDATE public.coach_weekly_availability SET location_id=$2 WHERE coach_user_id=$1", [coach, locationB]);
+    const listed = await options();
+    expect(listed.map(option => option.id).sort()).toEqual([coach, other].sort());
+    expect(listed.find(option => option.id === coach)?.programs).toEqual([{ id: program, name: "Availability private", type: "private",
+      courtRentalIncluded: false, bookable: true, durations: [
+        { durationMinutes: 60, price: { amountMinor: 10000, currency: "RON", source: "club" } },
+        { durationMinutes: 90, price: { amountMinor: 16000, currency: "RON", source: "coach" } },
+        { durationMinutes: 120, price: null },
+      ] }]);
+    expect(listed.find(option => option.id === other)?.programs).toEqual([{ id: otherProgram, name: "Selector semi", type: "semi_private",
+      courtRentalIncluded: true, bookable: true, durations: [{ durationMinutes: 60, price: { amountMinor: 11000, currency: "RON", source: "coach" } }] }]);
+    // The second coach's lessons come from their own assignment and hours at A; included rental is not charged.
+    const otherDay = await read({ coachId: other, programId: otherProgram });
+    expect(otherDay?.durations[0].starts.find(start => start.startMinute === 900)?.courts.map(court => court.totalAmountMinor)).toEqual([11000, 11000]);
+    // Neither coach is offered the other's program.
+    expect(await read({ coachId: other })).toBeNull();
+    expect(await read({ programId: otherProgram })).toBeNull();
   } finally {
-    await database.query("DELETE FROM public.coach_availability_exceptions WHERE id=$1", [extra]);
     await database.query("UPDATE public.coach_weekly_availability SET location_id=$2 WHERE coach_user_id=$1", [coach, locationA]);
+    await database.query("DELETE FROM public.coach_weekly_availability WHERE coach_user_id=$1", [other]);
+    await database.query("DELETE FROM public.coaching_prices WHERE program_id=$1", [otherProgram]);
+    await database.query("DELETE FROM public.coach_programs WHERE coach_user_id=$1", [other]);
+    await database.query("DELETE FROM public.coach_locations WHERE coach_user_id=$1", [other]);
+    await database.query("DELETE FROM public.coach_profiles WHERE user_id=$1", [other]);
+    await database.query("DELETE FROM public.coaching_program_durations WHERE program_id=$1", [otherProgram]);
+    await database.query("DELETE FROM public.coaching_programs WHERE id=$1", [otherProgram]);
   }
-  await database.query("UPDATE public.coach_weekly_availability SET valid_until='2099-11-01' WHERE coach_user_id=$1", [coach]);
-  try { expect(await includesCoach()).toBe(false); }
-  finally { await database.query("UPDATE public.coach_weekly_availability SET valid_until=NULL WHERE coach_user_id=$1", [coach]); }
-  await database.query("UPDATE public.coach_weekly_availability SET valid_from='2099-12-01' WHERE coach_user_id=$1", [coach]);
-  try { expect(await includesCoach()).toBe(true); }
-  finally { await database.query("UPDATE public.coach_weekly_availability SET valid_from='2000-01-01' WHERE coach_user_id=$1", [coach]); }
+  const includesCoach = async () => (await options()).some(option => option.id === coach);
   const toggles = [
-    ["UPDATE public.coach_profiles SET is_public=false WHERE user_id=$1", "UPDATE public.coach_profiles SET is_public=true WHERE user_id=$1", coach],
-    ["UPDATE public.coach_profiles SET archived_at=clock_timestamp(),is_public=false WHERE user_id=$1", "UPDATE public.coach_profiles SET archived_at=NULL,is_public=true WHERE user_id=$1", coach],
-    ["UPDATE public.users SET status='suspended' WHERE id=$1", "UPDATE public.users SET status='active' WHERE id=$1", coach],
-    ["UPDATE public.coaching_programs SET is_active=false WHERE id=$1", "UPDATE public.coaching_programs SET is_active=true WHERE id=$1", program],
+    ["UPDATE public.coach_profiles SET is_public=false WHERE user_id=$1", "UPDATE public.coach_profiles SET is_public=true WHERE user_id=$1"],
+    ["UPDATE public.coach_profiles SET archived_at=clock_timestamp(),is_public=false WHERE user_id=$1", "UPDATE public.coach_profiles SET archived_at=NULL,is_public=true WHERE user_id=$1"],
+    ["UPDATE public.users SET status='suspended' WHERE id=$1", "UPDATE public.users SET status='active' WHERE id=$1"],
+    ["DELETE FROM public.user_roles WHERE user_id=$1 AND role_code='coach'", "INSERT INTO public.user_roles(user_id,role_code) VALUES($1,'coach')"],
   ] as const;
-  for (const [disable, restore, id] of toggles) {
-    await database.query(disable, [id]);
+  for (const [disable, restore] of toggles) {
+    await database.query(disable, [coach]);
     try { expect(await includesCoach()).toBe(false); }
-    finally { await database.query(restore, [id]); }
+    finally { await database.query(restore, [coach]); }
   }
+  // An inactive program leaves the coach listed without it.
+  await database.query("UPDATE public.coaching_programs SET is_active=false WHERE id=$1", [program]);
+  try { expect((await options()).find(option => option.id === coach)?.programs).toEqual([]); }
+  finally { await database.query("UPDATE public.coaching_programs SET is_active=true WHERE id=$1", [program]); }
   expect(await includesCoach()).toBe(true);
+});
+
+test("rescheduling excludes only the lesson's own reservation from court and coach occupancy", async () => {
+  const location = (await listPublicLocationsWithCourts()).find(row => row.id === locationA)!;
+  const day = (excludeReservationId?: string) => readCoachingLessonDay(database.manager, location, coach, date, beforeOpening, excludeReservationId);
+  const project = async (excludeReservationId?: string) => projectCoachingLessonAvailability((await day(excludeReservationId))!, program);
+  // The coach's own A1 12:00–13:00 lesson no longer conflicts with itself: A1 at
+  // 11:30 and 12:00 and A2 at 12:00 open. The A1 customer hold, the A2 booking, the
+  // coach's live B1 13:00 hold, working hours and the 14:00 absence still apply.
+  expect(starts(await project(lesson), 60)).toEqual([
+    [540, [["A1", 15000], ["A2", 17000]]], [570, [["A2", 17000]]], [600, [["A2", 17000]]], [660, [["A1", 15000]]],
+    [690, [["A1", 15000]]], [720, [["A1", 15000], ["A2", 17000]]],
+  ]);
+  expect((await day(lesson))?.coach.occupancy).toEqual([{ booking_date: date, starts_at_minute: 780, ends_at_minute: 840 }]);
+  expect((await day(lesson))?.courtOccupancy).not.toContainEqual(expect.objectContaining({ court_id: courtA1, starts_at_minute: 720 }));
+  // Excluding another (unrelated or unknown) reservation leaves the lesson's conflicts in place.
+  expect(starts(await project(randomUUID()), 60)).toEqual(starts(await project(), 60));
+  // A lesson of the same coach elsewhere stays a coach conflict across courts and locations.
+  const elsewhere = await reserve(courtB1, 630, 690, { coach });
+  try { expect(starts(await project(lesson), 60)?.map(([start]) => start)).toEqual([540, 570, 690, 720]); }
+  finally { await database.query("DELETE FROM public.court_reservations WHERE id=$1", [elsewhere]); }
+  // The public read accepts no exclusion: an extra input key is ignored.
+  expect(await read({ excludeReservationId: lesson })).toEqual(await read());
+  expect(starts(await read({ excludeReservationId: lesson }), 60)?.some(([start]) => start === 720)).toBe(false);
 });

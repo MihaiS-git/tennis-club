@@ -11,7 +11,7 @@ import { courtSlotRates } from "@/lib/courts/calendar";
 import { mondayWeekday } from "@/lib/pricing/resolution";
 import { readCurrentAccount } from "@/lib/auth/account";
 import { bookingRescheduleInputSchema, readCustomerBookingEditContext, rescheduleCustomerBookingCommand } from "./commands";
-import { normalizeDatabaseError } from "@/lib/db/errors";
+import { normalizeDatabaseError, reservationOverlap } from "@/lib/db/errors";
 import { finishBookingAdjustment } from "@/lib/payments/booking-adjustments";
 import type { AdjustmentTarget } from "@/lib/db/entities/booking-adjustment.entity";
 import type { OnlineCheckout } from "@/lib/payments/domain";
@@ -29,6 +29,15 @@ const bookingEditContextSchema = z.object({
   total_amount_minor: z.number().int().positive(), currency: z.string(),
   location: reservationEditLocationSchema, hours: z.array(openingIntervalSchema),
   occupancy: z.array(z.object({ court_id: z.uuid(), starts_at_minute: z.number().int(), ends_at_minute: z.number().int() })),
+  // A coaching lesson's immutable coach, program and duration, and the starts it can move to on the date.
+  coaching: z.object({
+    coach: z.object({ id: z.uuid(), name: z.string() }),
+    program: z.object({ id: z.uuid(), name: z.string(), participantCount: z.union([z.literal(1), z.literal(2)]), courtRentalIncluded: z.boolean() }),
+    durationMinutes: z.number().int(), coachingAmountMinor: z.number().int(),
+    starts: z.array(z.object({ startMinute: z.number().int(), endMinute: z.number().int(), startsAt: z.string(), endsAt: z.string(),
+      courts: z.array(z.object({ id: z.uuid(), name: z.string(), coachingAmountMinor: z.number().int(),
+        courtAmountMinor: z.number().int(), totalAmountMinor: z.number().int() })) })),
+  }).nullable(),
 });
 export type BookingEditContext = z.infer<typeof bookingEditContextSchema>;
 export type BookingRescheduleResult = { ok: true; totalAmountMinor: number;
@@ -80,8 +89,9 @@ export async function runBookingReschedule(input: unknown, actorId: string): Pro
     return await finishBookingAdjustment(await rescheduleCustomerBookingCommand(parsed.data, actorId));
   } catch (error: unknown) {
     const failure = normalizeDatabaseError(error);
-    if (failure.sqlState === "23P01" && failure.constraint === "court_reservation_no_overlap")
-      return { ok: false, message: "That court is no longer available. The booking has not changed." };
+    const overlap = reservationOverlap(failure);
+    if (overlap === "court") return { ok: false, message: "That court is no longer available. The booking has not changed." };
+    if (overlap === "coach") return { ok: false, message: "The coach is no longer available at that time. The booking has not changed." };
     logger.error({ event: "bookings.reschedule_failed", actorId, bookingId: parsed.data.id, code: failure.sqlState }, "Booking reschedule failed");
     return { ok: false, message: "Unable to reschedule this booking. Try again." };
   }

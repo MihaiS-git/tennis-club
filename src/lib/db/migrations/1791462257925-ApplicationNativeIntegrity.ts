@@ -171,6 +171,7 @@ export class ApplicationNativeIntegrity1791462257925 implements MigrationInterfa
     await queryRunner.query(`REVOKE ALL ON FUNCTION public.protect_booking_financial_exception() FROM PUBLIC, anon, authenticated, service_role`);
 
     await queryRunner.query(`CREATE UNIQUE INDEX users_email_lower_unique ON public.users (lower(email))`);
+    await queryRunner.query(`CREATE UNIQUE INDEX email_deliveries_event_recipient_key ON public.email_deliveries (event_key, lower(recipient_email))`);
     await queryRunner.query(`INSERT INTO public.roles(code) VALUES ('admin'), ('coach')`);
     await queryRunner.query(`INSERT INTO public.payment_provider_settings(id) VALUES (true)`);
   }
@@ -210,6 +211,7 @@ export class ApplicationNativeIntegrity1791462257925 implements MigrationInterfa
     }
     await queryRunner.query(`DELETE FROM public.payment_provider_settings WHERE id = true`);
     await queryRunner.query(`DELETE FROM public.roles WHERE code IN ('admin', 'coach')`);
+    await queryRunner.query(`DROP INDEX public.email_deliveries_event_recipient_key`);
     await queryRunner.query(`DROP INDEX public.users_email_lower_unique`);
   }
 }

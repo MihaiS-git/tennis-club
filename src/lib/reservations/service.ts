@@ -3,6 +3,7 @@ import type { BookingCancellationCommandResult } from "@/lib/bookings/domain";
 import { cancelBookingCommand } from "@/lib/bookings/cancellation-service";
 import { paymentFactSchema } from "@/lib/payments/facts";
 import { successfulRefundPayment } from "@/lib/payments/providers/stripe/refund-policy";
+import { latestFinancialStatus, type LatestFinancialStatus } from "@/lib/payments/latest-financial-status";
 import { finishBookingCancellation, type BookingCancellationResult } from "@/lib/payments/refunds";
 
 import { z } from "zod";
@@ -13,6 +14,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getDataSource } from "@/lib/db/data-source";
 import { normalizeDatabaseError } from "@/lib/db/errors";
 import * as reservations from "@/lib/db/repositories/reservations.repository";
+import { loadAdminTransactionContext } from "@/lib/db/repositories/payments.repository";
 import { createDirectReservationCommand, editDirectReservationCommand, cancelDirectReservationCommand } from "./commands";
 import { logger } from "@/lib/logger";
 import { localMinute, localToday } from "@/lib/courts/calendar";
@@ -45,7 +47,7 @@ export type AdminBooking = Pick<z.infer<typeof adminOccupancyRowSchema>,
     coaching?: PricingEvidence["coaching"] | null;
     location_name?: string | null; court_name?: string | null; location_timezone?: string | null;
     kind: "booking"; account_user_id: string | null; coach_user_id?: string | null; payment_method: "online" | "pay_at_club";
-    payments: Pick<z.infer<typeof paymentFactSchema>, "id" | "method" | "provider" | "status">[]; stripe_refund_available: boolean; customer_name: string; customer_email: string; customer_phone: string;
+    payment_status: LatestFinancialStatus | null; stripe_refund_available: boolean; customer_name: string; customer_email: string; customer_phone: string;
     cancellation_notice_minutes: number; total_amount_minor: number; currency: LocationCurrency;
   };
 // Coach Calendar projections: own lessons keep schedule and customer contact only; other bookings are bare intervals.
@@ -127,6 +129,14 @@ export async function getReservationDay(location: InternalLocation, date: string
     logger.error({ event: "reservations.admin_read_failed" }, "Failed to load admin reservation details");
     throw new Error("Unable to load reservation details.");
   }
+  let financialFacts: Awaited<ReturnType<typeof loadAdminTransactionContext>>;
+  try {
+    financialFacts = await loadAdminTransactionContext((await getDataSource()).manager, { revisionIds: [], adjustmentIds: [],
+      bookingIds: parsed.data.filter((row) => row.kind === "booking").map((row) => row.id) });
+  } catch (error: unknown) {
+    logger.error({ event: "reservations.admin_read_failed", code: normalizeDatabaseError(error).sqlState }, "Failed to load admin reservation details");
+    throw new Error("Unable to load reservation details.");
+  }
   for (const row of parsed.data) {
     if (row.kind === "reservation") {
       adminOccupancy.push({ kind: "reservation", payment_method: row.payment_method, id: row.id, court_id: row.court_id, booking_date: row.booking_date,
@@ -138,7 +148,8 @@ export async function getReservationDay(location: InternalLocation, date: string
         account_user_id: row.account_user_id, payment_method: row.payment_method,
         location_name: row.location_name, court_name: row.court_name, location_timezone: row.location_timezone,
         includes_coaching: row.includes_coaching, coach_user_id: row.coach_user_id, coach_name: row.coach_name, coaching_program_name: row.coaching_program_name, coaching: row.coaching,
-        payments: row.payment_facts.map(({ id, method, provider, status }) => ({ id, method, provider, status })),
+        payment_status: latestFinancialStatus(financialFacts.payments.filter((payment) => payment.bookingId === row.id),
+          financialFacts.refunds.filter((refund) => refund.bookingId === row.id)),
         customer_name: row.customer_name, customer_email: row.customer_email, customer_phone: row.customer_phone,
         cancellation_notice_minutes: row.cancellation_notice_minutes,
         stripe_refund_available: successfulRefundPayment(row.payment_facts) !== null, total_amount_minor: row.total_amount_minor, currency: row.currency });

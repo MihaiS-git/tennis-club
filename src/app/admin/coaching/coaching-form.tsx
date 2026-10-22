@@ -20,7 +20,7 @@ export const coachingFailureMessages: Record<Failure, string> = {
   "already-exists": "This already exists. Refresh the page.",
   "invalid-location": "Select a current location.",
   "invalid-program": "Select an existing program and duration.",
-  "not-offered": "The coach must offer this program at this location before an individual price can be set.",
+  "not-offered": "The coach must offer this program before an individual price can be set.",
 };
 
 // Field errors keyed by field name, rendered beside the failed control.

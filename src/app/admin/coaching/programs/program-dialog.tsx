@@ -8,11 +8,11 @@ import { DialogHeader } from "@/components/dialog-layout";
 import { Input } from "@/components/input";
 import { ModalDialog } from "@/components/modal-dialog";
 import { useEditableFormBaseline } from "@/components/use-editable-form-baseline";
-import type { AdminCoachingLocation, AdminCoachingPrice, AdminCoachingProgram } from "@/lib/coaching/admin";
+import type { AdminCoachingCurrency, AdminCoachingPrice, AdminCoachingProgram } from "@/lib/coaching/admin";
 import {
   coachingProgramFieldsSchema, coachingProgramTypeLabels, coachingProgramTypes, formatCoachingDuration, isCoachingDuration,
 } from "@/lib/coaching/validation";
-import { formatMoney, majorAmountSchema, minorToMajor } from "@/lib/pricing/money";
+import { majorAmountSchema, minorToMajor, type LocationCurrency } from "@/lib/pricing/money";
 import { saveCoachingProgramAction } from "../actions";
 import { coachingFailureMessages, formText, hintClass, labelClass, optionalNumber, selectClass, textareaClass, useFieldErrors } from "../coaching-form";
 
@@ -31,15 +31,15 @@ function programFields(form: HTMLFormElement) {
   };
 }
 
-const priceKey = (locationId: string, minutes: number) => `${locationId}:${minutes}`;
-type PriceEntry = { location_id: string; duration_minutes: number };
+const priceKey = (currency: LocationCurrency, minutes: number) => `${currency}:${minutes}`;
+type PriceEntry = { currency: LocationCurrency; duration_minutes: number };
 
-// Club prices keyed by location and duration. Empty means not configured, never zero;
+// Club prices keyed by currency and duration. Empty means not configured, never zero;
 // a saved price is removed only through its explicit Remove action.
 function useClubPrices(program: AdminCoachingProgram | undefined, prices: readonly AdminCoachingPrice[]) {
   const club = new Map(prices.filter((price) => price.coach_user_id === null && price.program_id === program?.id)
-    .map((price) => [priceKey(price.location_id, price.duration_minutes), price]));
-  const baseline = (key: string) => { const price = club.get(key); return price?.current ? minorToMajor(price.amount_minor) : ""; };
+    .map((price) => [priceKey(price.currency, price.duration_minutes), price]));
+  const baseline = (key: string) => { const price = club.get(key); return price ? minorToMajor(price.amount_minor) : ""; };
   const initial = () => Object.fromEntries([...club.keys()].map((key) => [key, baseline(key)]));
   const [values, setValues] = useState<Record<string, string>>(initial);
   const [removed, setRemoved] = useState<ReadonlySet<string>>(new Set());
@@ -48,12 +48,12 @@ function useClubPrices(program: AdminCoachingProgram | undefined, prices: readon
   function error(key: string) {
     if (removed.has(key)) return undefined;
     const value = (values[key] ?? "").trim();
-    if (value === "") return club.get(key)?.current ? "Enter a price, or use Remove to clear it." : undefined;
+    if (value === "") return club.has(key) ? "Enter a price, or use Remove to clear it." : undefined;
     return majorAmountSchema.safeParse(value).success ? errors[key] : "Enter a positive amount with at most two decimal places.";
   }
   // Only changed entries for the selected durations are submitted, in a stable order.
-  function changes(locations: readonly AdminCoachingLocation[], durations: readonly number[]) {
-    const keys = locations.flatMap((location) => durations.map((minutes) => ({ key: priceKey(location.id, minutes), location_id: location.id, duration_minutes: minutes })));
+  function changes(currencies: readonly AdminCoachingCurrency[], durations: readonly number[]) {
+    const keys = currencies.flatMap(({ currency }) => durations.map((minutes) => ({ key: priceKey(currency, minutes), currency, duration_minutes: minutes })));
     return {
       saved: keys.filter(({ key }) => !removed.has(key) && (values[key] ?? "").trim() !== "" && (values[key] ?? "").trim() !== baseline(key))
         .map(({ key, ...entry }) => ({ ...entry, key, amount: (values[key] ?? "").trim() })),
@@ -71,8 +71,8 @@ function selectedDurations(form: HTMLFormElement) {
   return programFields(form).durations.filter(isCoachingDuration);
 }
 
-export function ProgramDialog({ program, locations = [], prices = [], open: controlledOpen, onOpenChange }: {
-  program?: AdminCoachingProgram; locations?: AdminCoachingLocation[]; prices?: AdminCoachingPrice[];
+export function ProgramDialog({ program, currencies = [], prices = [], open: controlledOpen, onOpenChange }: {
+  program?: AdminCoachingProgram; currencies?: AdminCoachingCurrency[]; prices?: AdminCoachingPrice[];
   open?: boolean; onOpenChange?: (open: boolean) => void;
 }) {
   const router = useRouter();
@@ -90,7 +90,7 @@ export function ProgramDialog({ program, locations = [], prices = [], open: cont
   const choices = [...new Set([...presetDurations, ...durations])].sort((a, b) => a - b);
   const [selected, setSelected] = useState<number[]>(durations);
   const clubPrices = useClubPrices(program, prices);
-  const priceChanges = clubPrices.changes(locations, selected);
+  const priceChanges = clubPrices.changes(currencies, selected);
   const priceChanged = priceChanges.saved.length > 0 || priceChanges.removed.length > 0;
   // Removing a duration deletes its prices on save (existing rule); state that before saving.
   const droppedPrices = (program?.durations ?? []).filter((minutes) => !selected.includes(minutes)).flatMap((minutes) => {
@@ -110,11 +110,11 @@ export function ProgramDialog({ program, locations = [], prices = [], open: cont
     setPending(true); setFieldErrors({});
     const saved = submitted(form);
     const notification = toast.loading("Saving program…");
-    const { saved: savedPrices, removed: removedPrices } = clubPrices.changes(locations, selectedDurations(form));
+    const { saved: savedPrices, removed: removedPrices } = clubPrices.changes(currencies, selectedDurations(form));
     try {
       const result = await saveCoachingProgramAction({ ...(program ? { id: program.id } : {}), fields: programFields(form),
-        ...savedPrices.length > 0 && { club_prices: savedPrices.map(({ location_id, duration_minutes, amount }) => ({ location_id, duration_minutes, amount })) },
-        ...removedPrices.length > 0 && { removed_club_prices: removedPrices.map(({ location_id, duration_minutes }): PriceEntry => ({ location_id, duration_minutes })) } });
+        ...savedPrices.length > 0 && { club_prices: savedPrices.map(({ currency, duration_minutes, amount }) => ({ currency, duration_minutes, amount })) },
+        ...removedPrices.length > 0 && { removed_club_prices: removedPrices.map(({ currency, duration_minutes }): PriceEntry => ({ currency, duration_minutes })) } });
       if (result.ok) {
         commit(saved);
         toast.success(program ? "Program updated." : "Program created.", { id: notification });
@@ -208,7 +208,7 @@ export function ProgramDialog({ program, locations = [], prices = [], open: cont
               <p className={hintClass}>Inactive programs are hidden from the public Coaching page.</p>
               {fieldError("is_active")}
             </div>
-            <ClubPrices prefix={prefix} locations={locations} durations={selected} prices={clubPrices} dropped={droppedPrices} />
+            <ClubPrices prefix={prefix} currencies={currencies} durations={selected} prices={clubPrices} dropped={droppedPrices} />
             {/* Kept in view while long price lists scroll. */}
             <div className="sticky bottom-0 -mx-5 -mb-5 flex justify-end border-t border-border bg-surface px-5 py-4 sm:-mx-6 sm:-mb-6 sm:px-6">
               <Button type="submit" fullWidth={false} disabled={pending || !valid || !priceChanges.valid || (program ? !dirty && !priceChanged : false)} aria-busy={pending}>
@@ -222,53 +222,50 @@ export function ProgramDialog({ program, locations = [], prices = [], open: cont
   </>;
 }
 
-function ClubPrices({ prefix, locations, durations, prices, dropped }: {
-  prefix: string; locations: readonly AdminCoachingLocation[]; durations: readonly number[];
+function ClubPrices({ prefix, currencies, durations, prices, dropped }: {
+  prefix: string; currencies: readonly AdminCoachingCurrency[]; durations: readonly number[];
   prices: ReturnType<typeof useClubPrices>; dropped: { minutes: number; club: number; coach: number }[];
 }) {
   const count = (value: number, noun: string) => `${value} ${noun}${value === 1 ? "" : "s"}`;
   return <fieldset aria-describedby={`${prefix}-club-prices-hint`}>
     <legend className={labelClass}>Club prices</legend>
     <p id={`${prefix}-club-prices-hint`} className="mb-3 text-xs text-muted-foreground">
-      Default price per location and duration, in the location’s currency. Leave a price empty to keep it not set.
-      Individual coach prices are managed under Prices.
+      Club-wide default price per duration in each currency; a lesson is charged in its location’s currency.
+      Leave a price empty to keep it not set. Coaches set their own individual prices.
     </p>
     {dropped.length > 0 && <p role="status" className="mb-3 rounded-control border border-warning bg-warning-background px-3 py-2 text-sm text-foreground">
       Saving removes {dropped.map(({ minutes, club, coach }) => `${formatCoachingDuration(minutes)} with ${[club && count(club, "club price"), coach && count(coach, "coach price")].filter(Boolean).join(" and ")}`).join("; ")}.
       Select the duration again to keep its prices.
     </p>}
-    {!locations.length ? <p className="text-sm text-muted-foreground">No locations yet. Add a location before setting club prices.</p>
+    {!currencies.length ? <p className="text-sm text-muted-foreground">No locations yet. Add a location before setting club prices.</p>
       : !durations.length ? <p className="text-sm text-muted-foreground">Select a duration to set its prices.</p>
       : <div className="grid gap-3 sm:grid-cols-2">
-        {locations.map((location) => <section key={location.id} aria-label={`Club prices at ${location.name}`} className="rounded-control border border-border px-3 py-2.5">
+        {currencies.map(({ currency, location_names }) => <section key={currency} aria-label={`Club prices in ${currency}`} className="rounded-control border border-border px-3 py-2.5">
           <h3 className="mb-2 text-sm font-semibold text-foreground">
-            {location.name}{location.is_active ? "" : " (inactive)"} <span className="font-normal text-muted-foreground">— {location.currency}</span>
+            {currency} <span className="font-normal text-muted-foreground">— {location_names.length ? location_names.join(", ") : "no current location"}</span>
           </h3>
           <ul className="space-y-2">
             {durations.map((minutes) => {
-              const key = priceKey(location.id, minutes);
+              const key = priceKey(currency, minutes);
               const id = `${prefix}-price-${key}`;
               const stored = prices.club.get(key);
               const removed = prices.removed.has(key);
               const error = prices.error(key);
-              const label = `${location.name} ${formatCoachingDuration(minutes)} club price`;
+              const label = `${currency} ${formatCoachingDuration(minutes)} club price`;
               return <li key={minutes}>
                 <div className="flex items-center gap-2">
-                  <label htmlFor={id} className="w-16 shrink-0 text-sm">{formatCoachingDuration(minutes)}<span className="sr-only"> club price at {location.name}</span></label>
+                  <label htmlFor={id} className="w-16 shrink-0 text-sm">{formatCoachingDuration(minutes)}<span className="sr-only"> club price in {currency}</span></label>
                   <div className={`flex min-h-9 w-32 items-center rounded-control border bg-surface pr-2 focus-within:border-primary focus-within:ring-2 focus-within:ring-focus/20 ${error ? "border-danger" : "border-border"}`}>
                     <input id={id} value={removed ? "" : prices.values[key] ?? ""} inputMode="decimal" placeholder={removed ? "Removed" : "Not set"}
                       disabled={removed} onChange={(event) => prices.setValue(key, event.target.value)}
                       aria-invalid={Boolean(error)} aria-describedby={error ? `${id}-error` : undefined}
                       className="min-w-0 flex-1 bg-transparent px-2.5 py-1.5 text-sm text-foreground outline-none disabled:opacity-60" />
-                    <span className="text-xs font-semibold text-muted-foreground">{location.currency}</span>
+                    <span className="text-xs font-semibold text-muted-foreground">{currency}</span>
                   </div>
                   {stored && <Button type="button" variant="subtle" size="small" fullWidth={false} onClick={() => prices.toggleRemoved(key)}
                     aria-label={`${removed ? "Keep" : "Remove"} ${label}`}>{removed ? "Undo" : "Remove"}</Button>}
                 </div>
                 {removed && <p className="mt-1 text-xs text-muted-foreground">Removed when you save.</p>}
-                {stored && !stored.current && !removed && <p className="mt-1 text-xs text-danger">
-                  Entered as {formatMoney(stored.amount_minor, stored.currency)}; the location now uses {location.currency}. Enter a new price.
-                </p>}
                 {error && <p id={`${id}-error`} className="mt-1 text-xs text-danger">{error}</p>}
               </li>;
             })}

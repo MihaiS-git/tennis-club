@@ -8,7 +8,7 @@ import type { AdminCoach, AdminCoachingLocation, AdminCoachingPrice, AdminCoachi
 const actions = vi.hoisted(() => ({
   deleteCoachingProgramAction: vi.fn(), deleteCoachProfileAction: vi.fn(),
   saveCoachingProgramAction: vi.fn(), setCoachingProgramStatusAction: vi.fn(), saveCoachProfileAction: vi.fn(),
-  setCoachVisibilityAction: vi.fn(), saveCoachingPriceAction: vi.fn(), removeCoachingPriceAction: vi.fn(),
+  setCoachVisibilityAction: vi.fn(), saveClubCoachingPriceAction: vi.fn(), removeClubCoachingPriceAction: vi.fn(),
 }));
 const router = vi.hoisted(() => ({ refresh: vi.fn(), push: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => router, usePathname: () => "/admin/coaching/prices" }));
@@ -20,13 +20,14 @@ import { CoachesTable } from "@/app/admin/coaching/coaches/coaches-table";
 import { CoachDialog } from "@/app/admin/coaching/coaches/coach-dialog";
 import { PriceEditor } from "@/app/admin/coaching/prices/price-editor";
 import { PricesTable } from "@/app/admin/coaching/prices/prices-table";
+import { priceFiltersSchema } from "@/lib/coaching/admin-filters";
 
 const location: AdminCoachingLocation = { id: "b1000000-0000-4000-8000-000000000001", name: "East Club", currency: "RON", is_active: true };
 const program: AdminCoachingProgram = { id: "a1000000-0000-4000-8000-000000000001", name: "Private lesson", description: "",
   program_type: "private", durations: [60], min_participants: 1, max_participants: 1, court_rental_included: true, is_active: true };
 const coach: AdminCoach = { user_id: "c1000000-0000-4000-8000-00000000000a", display_name: "Ana Pop", bio: "", qualifications: "",
   specialties: [], languages: [], is_public: false, email: "ana@example.test", location_ids: [location.id], program_ids: [program.id], ineligibility: null };
-const target = { program_id: program.id, duration_minutes: 60, location_id: location.id, coach_user_id: null };
+const target = { program_id: program.id, duration_minutes: 60, currency: "RON" as const };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -105,10 +106,10 @@ it("adds a coach for a selected coach account with public profile fields only", 
   expect(await within(dialog).findByText(/Only active accounts with the Coach role/)).toBeTruthy();
 });
 
-it("saves a club price inline in the location currency and keeps rejected input", async () => {
-  actions.saveCoachingPriceAction.mockResolvedValueOnce({ ok: false, reason: "invalid-input", fieldErrors: { amount: "Too large." } })
+it("saves a club price inline in its currency and keeps rejected input", async () => {
+  actions.saveClubCoachingPriceAction.mockResolvedValueOnce({ ok: false, reason: "invalid-input", fieldErrors: { amount: "Too large." } })
     .mockResolvedValueOnce({ ok: true, id: "p1" });
-  render(<PriceEditor label="Club price" target={target} currency="RON" emptyHint="Not set" />);
+  render(<PriceEditor label="Club price" target={target} emptyHint="Not set" />);
   expect(screen.getByText("RON")).toBeTruthy();
   const input = screen.getByLabelText("Club price") as HTMLInputElement;
   fireEvent.change(input, { target: { value: "120" } });
@@ -116,31 +117,33 @@ it("saves a club price inline in the location currency and keeps rejected input"
   expect(await screen.findByText("Too large.")).toBeTruthy();
   expect(input.value).toBe("120");
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
-  await waitFor(() => expect(actions.saveCoachingPriceAction).toHaveBeenLastCalledWith({ ...target, amount: "120" }));
+  await waitFor(() => expect(actions.saveClubCoachingPriceAction).toHaveBeenLastCalledWith({ ...target, amount: "120" }));
   await expectToast("Price saved.", "success");
 });
 
-it("flags an amount entered before the location currency changed", () => {
-  const stale: AdminCoachingPrice = { id: "p1", ...target, amount_minor: 3000, currency: "EUR", current: false };
-  render(<PriceEditor label="Club price" target={target} price={stale} currency="RON" emptyHint="Not set" />);
-  expect((screen.getByLabelText("Club price") as HTMLInputElement).value).toBe("");
-  expect(screen.getByText(/the location now uses RON/)).toBeTruthy();
-});
-
-it("lists coach prices only for coaches offering the program at the location", () => {
-  const override: AdminCoachingPrice = { id: "p2", ...target, coach_user_id: coach.user_id, amount_minor: 15000, currency: "RON", current: true };
-  const other = { ...coach, user_id: "c1000000-0000-4000-8000-00000000000b", display_name: "Bo", location_ids: [] };
-  render(<PricesTable location={location} programs={[program]} coaches={[coach, other]} prices={[override]} />);
-  expect(screen.getByRole("table", { name: "Coaching prices at East Club" }).textContent).toContain("Ana Pop:");
-  fireEvent.click(screen.getByRole("button", { name: "Coach prices for Private lesson, 60 min" }));
-  const dialog = screen.getByRole("dialog", { name: "Coach prices" });
-  expect(within(dialog).getByText("Ana Pop")).toBeTruthy();
-  expect(within(dialog).queryByText("Bo")).toBeNull();
-  expect((within(dialog).getByLabelText("Ana Pop price for Private lesson, 60 min") as HTMLInputElement).value).toBe("150.00");
+it("edits club prices per currency and shows coach overrides read-only for coaches offering the program", () => {
+  const club: AdminCoachingPrice = { id: "p1", ...target, coach_user_id: null, amount_minor: 12000 };
+  const override: AdminCoachingPrice = { id: "p2", ...target, coach_user_id: coach.user_id, amount_minor: 15000 };
+  // Location assignments do not matter: Bo offers the program but teaches nowhere; Cy does not offer it.
+  const bo = { ...coach, user_id: "c1000000-0000-4000-8000-00000000000b", display_name: "Bo", location_ids: [] };
+  const cy = { ...coach, user_id: "c1000000-0000-4000-8000-00000000000c", display_name: "Cy", program_ids: [] };
+  const boOverride: AdminCoachingPrice = { ...override, id: "p3", coach_user_id: bo.user_id, amount_minor: 9000 };
+  const cyOverride: AdminCoachingPrice = { ...override, id: "p4", coach_user_id: cy.user_id, amount_minor: 1000 };
+  render(<PricesTable rows={[{ program, durationMinutes: 60, currency: { currency: "RON", location_names: [location.name] } }]}
+    coaches={[coach, bo, cy]} prices={[club, override, boOverride, cyOverride]} filters={priceFiltersSchema.parse({})} filtered={false} sortLinks={{}} />);
+  const table = screen.getByRole("table", { name: "Coaching prices" });
+  expect((within(table).getByLabelText("Club price for Private lesson, 60 min, RON") as HTMLInputElement).value).toBe("120.00");
+  expect(table.textContent).toContain("East Club");
+  expect(table.textContent).toContain("Ana Pop:");
+  expect(table.textContent).toContain("Bo:");
+  expect(table.textContent).not.toContain("Cy:");
+  // Admins cannot edit a coach's own price.
+  expect(within(table).queryByRole("button", { name: /Coach prices/ })).toBeNull();
+  expect(within(table).getAllByRole("textbox")).toHaveLength(1);
 });
 
 it("edits an existing coach's public profile, specialties, qualifications, languages and assignments from the table", async () => {
-  actions.saveCoachProfileAction.mockResolvedValueOnce({ ok: false, reason: "has-prices" }).mockResolvedValueOnce({ ok: true, id: coach.user_id });
+  actions.saveCoachProfileAction.mockResolvedValueOnce({ ok: false, reason: "has-availability" }).mockResolvedValueOnce({ ok: true, id: coach.user_id });
   const west: AdminCoachingLocation = { id: "b1000000-0000-4000-8000-000000000002", name: "West Club", currency: "EUR", is_active: true };
   const group: AdminCoachingProgram = { ...program, id: "a1000000-0000-4000-8000-000000000002", name: "Group drills", is_active: false };
   render(<CoachesTable coaches={[listItem({ ...coach, specialties: ["Serve"], languages: ["English"], qualifications: "Level 1" })]}
@@ -165,7 +168,7 @@ it("edits an existing coach's public profile, specialties, qualifications, langu
   fireEvent.click(within(dialog).getByRole("button", { name: "Save coach" }));
   await waitFor(() => expect(actions.saveCoachProfileAction).toHaveBeenCalledWith(expected));
   // A dependency failure keeps the draft open beside the form.
-  expect(await within(dialog).findByText(/Individual prices exist for a removed location or program/)).toBeTruthy();
+  expect(await within(dialog).findByText(/availability at a removed location/)).toBeTruthy();
   expect((within(dialog).getByLabelText("Public name") as HTMLInputElement).value).toBe("Ana Popescu");
   fireEvent.click(within(dialog).getByLabelText("East Club"));
   fireEvent.click(within(dialog).getByRole("button", { name: "Save coach" }));

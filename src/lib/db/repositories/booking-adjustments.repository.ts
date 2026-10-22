@@ -85,15 +85,17 @@ export async function updateAdjustment(manager: EntityManager, id: string, statu
 export async function adjustmentAttempt(manager: EntityManager, id: string) {
   return manager.getRepository(PaymentAttemptEntity).findOneBy({ adjustmentId: id });
 }
-// Protect the target with the existing GiST exclusion, without overlapping the
-// original confirmed occupancy. Fragments may be one half-hour long.
+// Protect the target with the existing GiST exclusions, without overlapping the
+// original confirmed occupancy. Fragments may be one half-hour long; a coaching
+// fragment also names the coach, so court_reservation_coach_no_overlap holds it.
 export async function insertAdjustmentHolds(manager: EntityManager, input: {
-  adjustmentId: string; expiresAt: Date; fragments: readonly { courtId: string; date: string; startMinute: number; endMinute: number }[];
+  adjustmentId: string; expiresAt: Date;
+  fragments: readonly { courtId: string; date: string; startMinute: number; endMinute: number; coachUserId?: string | null }[];
 }) {
   for (const fragment of input.fragments) {
     await manager.getRepository(CourtReservationEntity).insert({ id: randomUUID(), courtId: fragment.courtId,
       adjustmentId: input.adjustmentId, bookingDate: fragment.date, startsAtMinute: fragment.startMinute, endsAtMinute: fragment.endMinute,
-      status: "held", holdExpiresAt: input.expiresAt });
+      status: "held", holdExpiresAt: input.expiresAt, coachUserId: fragment.coachUserId ?? null });
   }
 }
 export async function releaseAdjustmentHolds(manager: EntityManager, adjustmentId: string) {

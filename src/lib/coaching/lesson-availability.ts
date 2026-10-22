@@ -14,7 +14,8 @@ import { readPublicCoachingFacts } from "@/lib/db/repositories/coaching.reposito
 import { listCoachDayOccupancy } from "@/lib/db/repositories/reservations.repository";
 import { logger } from "@/lib/logger";
 import type { LocationCurrency } from "@/lib/pricing/money";
-import { listCoachingLessonOffers, type CoachingLessonDay, type CoachingLessonQuote } from "./lesson-quote";
+import type { CoachingEvidence } from "@/lib/bookings/revision";
+import { listCoachingLessonOffers, listCoachingRescheduleOffers, type CoachingLessonDay, type CoachingLessonQuote } from "./lesson-quote";
 import { projectPublicCoachProfile } from "./public";
 import { isOnlineCoachingProgramType } from "./validation";
 
@@ -41,14 +42,18 @@ export type PublicCoachingLessonAvailability = {
 // booking creation reloads the same facts with this function inside its booking
 // transaction, after its locks, and requotes before creating any hold. Reads run
 // concurrently only on the pooled manager, never on a transaction's connection.
+// excludeReservationId leaves that lesson out of both court and coach occupancy so
+// it does not conflict with itself. Only rescheduling passes it, for its own
+// reservation, after authorizing the booking's owner and eligibility under its
+// locks; public reads never accept it.
 export async function readCoachingLessonDay(manager: EntityManager, location: PublicLocation, coachUserId: string,
-  date: string, now: Date): Promise<CoachingLessonDay | null> {
+  date: string, now: Date, excludeReservationId?: string): Promise<CoachingLessonDay | null> {
   const [coaching, configuration, courtOccupancy, schedule, coachOccupancy] = await readIndependently(manager, [
     () => readPublicCoachingFacts(manager),
     () => readPublicDayConfiguration(manager, location, date),
-    () => readPublicDayReservations(manager, location, date),
+    () => readPublicDayReservations(manager, location, date, excludeReservationId),
     () => listCoachDayAvailability(manager, coachUserId, date),
-    () => listCoachDayOccupancy(manager, coachUserId, date),
+    () => listCoachDayOccupancy(manager, coachUserId, date, excludeReservationId),
   ]);
   if (!configuration || !courtOccupancy) return null;
   return {
@@ -58,16 +63,26 @@ export async function readCoachingLessonDay(manager: EntityManager, location: Pu
   };
 }
 
-function groupByStart(offers: readonly CoachingLessonQuote[]): PublicLessonStart[] {
+function groupByStart<Offer extends Omit<PublicLessonStart, "courts">>(offers: readonly Offer[],
+  court: (offer: Offer) => PublicLessonCourt): PublicLessonStart[] {
   const starts = new Map<number, PublicLessonStart>();
   for (const offer of offers) {
     const start = starts.get(offer.startMinute) ?? { startMinute: offer.startMinute, endMinute: offer.endMinute,
       startsAt: offer.startsAt, endsAt: offer.endsAt, courts: [] };
-    start.courts.push({ id: offer.court.id, name: offer.court.name, coachingAmountMinor: offer.coachingAmountMinor,
-      courtAmountMinor: offer.courtAmountMinor, totalAmountMinor: offer.totalAmountMinor });
+    start.courts.push(court(offer));
     starts.set(offer.startMinute, start);
   }
   return [...starts.values()];
+}
+const quotedCourt = (offer: CoachingLessonQuote): PublicLessonCourt => ({ id: offer.court.id, name: offer.court.name,
+  coachingAmountMinor: offer.coachingAmountMinor, courtAmountMinor: offer.courtAmountMinor, totalAmountMinor: offer.totalAmountMinor });
+
+// The starts at which a purchased lesson can be moved on the day, in the public
+// lesson shape: the agreed coaching fee plus each court's current rental component.
+export function projectCoachingRescheduleStarts(day: CoachingLessonDay, coaching: CoachingEvidence): PublicLessonStart[] {
+  return groupByStart(listCoachingRescheduleOffers(day, coaching), (offer) => ({ id: offer.court.id, name: offer.court.name,
+    coachingAmountMinor: coaching.amountMinor, courtAmountMinor: offer.pricingEvidence.coaching?.courtAmountMinor ?? 0,
+    totalAmountMinor: offer.totalAmountMinor }));
 }
 
 // Public projection of one coach's online lessons on the day. Null unless the
@@ -80,8 +95,8 @@ export function projectCoachingLessonAvailability(day: CoachingLessonDay, progra
   const program = profile?.programs.find((candidate) => candidate.id === programId.toLowerCase());
   if (!profile || !program || !isOnlineCoachingProgramType(program.type) || !profile.locations.some((location) => location.id === locationId)) return null;
   const durations = program.durations.filter((durationMinutes) => durationMinutes >= 60 && durationMinutes % 30 === 0
-    && profile.lessons.some((lesson) => lesson.locationId === locationId && lesson.programId === program.id
-      && lesson.durationMinutes === durationMinutes && lesson.price?.currency === day.location.currency));
+    && profile.lessons.some((lesson) => lesson.currency === day.location.currency && lesson.programId === program.id
+      && lesson.durationMinutes === durationMinutes && lesson.price !== null));
   return {
     location: { id: locationId, name: day.location.name, timezone: day.location.timezone },
     coach: { id: profile.id, displayName: profile.displayName },
@@ -89,7 +104,7 @@ export function projectCoachingLessonAvailability(day: CoachingLessonDay, progra
       courtRentalIncluded: program.courtRentalIncluded },
     date: day.date, currency: day.location.currency,
     durations: durations.map((durationMinutes) => ({ durationMinutes,
-      starts: groupByStart(listCoachingLessonOffers(day, { programId: program.id, durationMinutes })) })),
+      starts: groupByStart(listCoachingLessonOffers(day, { programId: program.id, durationMinutes }), quotedCourt) })),
   };
 }
 

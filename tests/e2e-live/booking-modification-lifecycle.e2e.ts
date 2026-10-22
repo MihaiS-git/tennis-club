@@ -12,9 +12,8 @@ import { localServiceRoleKey } from "../e2e/helpers/supabase";
 
 // Real Chromium + real Stripe test mode + `stripe listen`. Only the original
 // booking is seeded; every modification, PaymentIntent and webhook is real.
-// Start the server first: node tests/e2e-live/dev-server.mjs
-// The late scenario needs the server started with
-//   E2E_ALLOW_HOLD_OVERRIDE=1 BOOKING_HOLD_SECONDS_OVERRIDE=60 and LIVE_LATE=1 here.
+// Playwright starts the isolated server. The late scenario needs
+// E2E_ALLOW_HOLD_OVERRIDE=1 BOOKING_HOLD_SECONDS_OVERRIDE=60 and LIVE_LATE=1.
 const webhook = "localhost:3100/api/payments/stripe/webhook";
 const date = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
 const courts = ["C1", "C2", "C3", "C4", "C5", "C6"];

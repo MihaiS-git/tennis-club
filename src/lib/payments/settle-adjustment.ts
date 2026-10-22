@@ -5,9 +5,9 @@ import * as payments from "@/lib/db/repositories/payments.repository";
 import * as reservations from "@/lib/db/repositories/reservations.repository";
 import { applyCapturedBookingAdjustment } from "@/lib/bookings/commands";
 import { BookingRevisionFenceError } from "@/lib/db/repositories/booking-revisions.repository";
-import { normalizeDatabaseError } from "@/lib/db/errors";
+import { normalizeDatabaseError, reservationOverlap } from "@/lib/db/errors";
 import { allocateBookingRefund } from "./financials";
-import { recordBookingFinancialException } from "@/lib/db/repositories/booking-financial-exceptions.repository";
+import { recordBookingFinancialException } from "@/lib/notifications/events";
 import { findBookingCancellationNotice } from "@/lib/db/repositories/bookings.repository";
 import type { OnlinePaymentEvent } from "./providers/types";
 
@@ -65,8 +65,9 @@ export async function settleAdjustment(manager: EntityManager, input: {
     let applied: Awaited<ReturnType<typeof applyCapturedBookingAdjustment>> | null = null;
     try { applied = await applyCapturedBookingAdjustment(manager, adjustment, attempt.id, deadline); }
     catch (error) {
-      const failure = normalizeDatabaseError(error);
-      if (!(error instanceof BookingRevisionFenceError) && !(failure.sqlState === "23P01" && failure.constraint === "court_reservation_no_overlap")) throw error;
+      // A court or coach conflict rolls back only the change; the capture and its
+      // receipt still commit, and the compensation refund below repays it.
+      if (!(error instanceof BookingRevisionFenceError) && !reservationOverlap(normalizeDatabaseError(error))) throw error;
       await manager.query("ROLLBACK TO SAVEPOINT booking_adjustment_apply");
     }
     await manager.query("RELEASE SAVEPOINT booking_adjustment_apply");

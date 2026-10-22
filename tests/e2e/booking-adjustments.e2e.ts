@@ -194,7 +194,7 @@ test("My Activity paid edit collects only the difference, X discards an unpaid m
     // Client navigation away while the booking load is in flight must dispose progress.
     await page.goto('/my-activity/bookings');
     await page.getByRole('row',{name:/Details for/}).filter({hasText:'C2'}).click();
-    await page.route('**/my-activity/bookings', async route => {
+    await page.route(/\/my-activity\/bookings(?:\?.*)?$/, async route => {
       if (route.request().method() === 'POST') await new Promise(resolve => setTimeout(resolve, 1000));
       await route.continue();
     });
@@ -208,11 +208,11 @@ test("My Activity paid edit collects only the difference, X discards an unpaid m
     await expect(page.locator('[data-sonner-toast][data-type="loading"]')).toHaveCount(0);
     await lateLoad;
     await expect(page.locator('[data-sonner-toast][data-type="loading"]')).toHaveCount(0);
-    await page.unroute('**/my-activity/bookings');
+    await page.unroute(/\/my-activity\/bookings(?:\?.*)?$/);
     // A real failed Server Action request replaces progress with a visible error.
     await page.goto('/my-activity/bookings');
     await page.getByRole('row',{name:/Details for/}).filter({hasText:'C2'}).click();
-    await page.route('**/my-activity/bookings', route => route.request().method() === 'POST' ? route.abort('failed') : route.continue());
+    await page.route(/\/my-activity\/bookings(?:\?.*)?$/, route => route.request().method() === 'POST' ? route.abort('failed') : route.continue());
     await page.getByRole('button',{name:'Edit booking',exact:true}).click();
     await expect(page.getByRole('dialog').getByRole('alert')).toContainText('This booking is no longer available to edit.');
     await expect(page.locator('[data-sonner-toast][data-type="loading"]')).toHaveCount(0);

@@ -27,6 +27,8 @@ test.each([
   ["SUPABASE_URL", "https://project.supabase.co"],
   ["MAILPIT_URL", "http://127.0.0.1:54324"],
   ["TEST_SUPABASE_PROJECT", "tennis-club"],
+  ["NOTIFICATION_EMAIL_MODE", "live"],
+  ["NOTIFICATION_TEST_RUNNER", ""],
   ["LOCAL_SUPABASE_SERVICE_ROLE_KEY", ""],
 ])("rejects unsafe %s = %s before any connection", (name, value) => {
   vi.stubEnv(name, value);

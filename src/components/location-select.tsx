@@ -10,7 +10,8 @@ export function LocationSelect({ id, locations, selectedId, onChange, disabled =
     <select id={id} value={selectedId} disabled={disabled || locations.length === 0}
       onChange={(event) => onChange(event.target.value)}
       className="min-h-11 rounded-control border border-border-strong bg-surface px-3 text-base font-normal text-foreground transition-colors hover:border-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:cursor-not-allowed disabled:opacity-60 sm:min-h-10 sm:text-sm">
-      {locations.length === 0 && <option value="">No locations available</option>}
+      {locations.length === 0 ? <option value="">No locations available</option>
+        : !locations.some((item) => item.id === selectedId) && <option value="" disabled>Choose a location</option>}
       {locations.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
     </select>
   </div>;

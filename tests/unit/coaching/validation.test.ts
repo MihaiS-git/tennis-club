@@ -40,13 +40,15 @@ describe("coach profile and price validation", () => {
     expect(coachProfileMutationSchema.safeParse({ user_id, create: true, fields: { ...coach, specialties: Array(13).fill("x") } }).success).toBe(false);
   });
 
-  it("parses decimal amounts without floating point and never accepts a client currency", () => {
-    const key = { program_id: "a1000000-0000-4000-8000-000000000001", duration_minutes: 60,
-      location_id: "b1000000-0000-4000-8000-000000000001", coach_user_id: null };
+  it("parses decimal amounts without floating point for a program, duration and supported currency", () => {
+    const key = { program_id: "a1000000-0000-4000-8000-000000000001", duration_minutes: 60, currency: "RON" };
     expect(coachingPriceMutationSchema.parse({ ...key, amount: "120.5" }).amount).toBe(12050);
     expect(coachingPriceMutationSchema.safeParse({ ...key, amount: "0" }).success).toBe(false);
     expect(coachingPriceMutationSchema.safeParse({ ...key, amount: "1.234" }).success).toBe(false);
-    expect(coachingPriceMutationSchema.safeParse({ ...key, amount: "10", currency: "EUR" }).success).toBe(false);
+    expect(coachingPriceMutationSchema.safeParse({ ...key, amount: "10", currency: "XYZ" }).success).toBe(false);
+    // Prices are club-wide and the input never names a location or a coach.
+    expect(coachingPriceMutationSchema.safeParse({ ...key, amount: "10", location_id: "b1000000-0000-4000-8000-000000000001" }).success).toBe(false);
+    expect(coachingPriceMutationSchema.safeParse({ ...key, amount: "10", coach_user_id: null }).success).toBe(false);
   });
 
   it("formats lists and participant ranges", () => {

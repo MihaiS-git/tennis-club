@@ -1,11 +1,10 @@
 import type { LocationCurrency } from "@/lib/pricing/money";
 
-// One configured amount: a club default (coach null) or one coach's override,
-// for a program duration at one location, in the currency it was entered in.
+// One configured amount for a program duration in one currency: a club default
+// (coach null) or one coach's override. Prices are club-wide, never per location.
 export type CoachingPriceRecord = {
   programId: string;
   durationMinutes: number;
-  locationId: string;
   coachUserId: string | null;
   amountMinor: number;
   currency: LocationCurrency;
@@ -20,36 +19,25 @@ export type ResolvedCoachingPrice = {
 export type CoachingPriceTarget = {
   programId: string;
   durationMinutes: number;
-  locationId: string;
-  // The location's current currency. Amounts entered in another currency are
-  // never re-denominated; they stay unavailable until an Admin re-enters them.
-  locationCurrency: LocationCurrency;
+  // The booking location's currency. Amounts are never converted between currencies.
+  currency: LocationCurrency;
   coachUserId?: string | null;
 };
 
-export function isCurrentCoachingPrice(price: Pick<CoachingPriceRecord, "currency">, locationCurrency: LocationCurrency) {
-  return price.currency === locationCurrency;
-}
-
-// A coach's override wins over the club default. An override that exists but
-// no longer matches the location currency resolves to null rather than silently
-// falling back to the club default, so a coach is never shown a price the Admin
-// did not set for them. Uniqueness is a database constraint; ambiguity throws.
+// Effective price: the coach's override ?? the club default, for the same program,
+// duration and currency. An override wins whether higher or lower. Null means the
+// lesson is unpriced and cannot proceed to payment. Uniqueness is a database
+// constraint; ambiguity throws.
 export function resolveCoachingPrice(prices: readonly CoachingPriceRecord[], target: CoachingPriceTarget): ResolvedCoachingPrice | null {
-  const key = (id: string) => id.toLowerCase();
+  const key = (id: string | null) => id === null ? null : id.toLowerCase();
   const candidates = prices.filter((price) => key(price.programId) === key(target.programId)
-    && price.durationMinutes === target.durationMinutes && key(price.locationId) === key(target.locationId));
+    && price.durationMinutes === target.durationMinutes && price.currency === target.currency);
   const pick = (coachUserId: string | null) => {
-    const matches = candidates.filter((price) => (price.coachUserId === null ? null : key(price.coachUserId)) === (coachUserId === null ? null : key(coachUserId)));
+    const matches = candidates.filter((price) => key(price.coachUserId) === key(coachUserId));
     if (matches.length > 1) throw new Error("Ambiguous coaching price configuration.");
     return matches[0];
   };
-  const resolved = (price: CoachingPriceRecord, source: ResolvedCoachingPrice["source"]) =>
-    isCurrentCoachingPrice(price, target.locationCurrency) ? { amountMinor: price.amountMinor, currency: price.currency, source } : null;
-  if (target.coachUserId) {
-    const override = pick(target.coachUserId);
-    if (override) return resolved(override, "coach");
-  }
-  const fallback = pick(null);
-  return fallback ? resolved(fallback, "club") : null;
+  const override = target.coachUserId ? pick(target.coachUserId) : undefined;
+  const price = override ?? pick(null);
+  return price ? { amountMinor: price.amountMinor, currency: price.currency, source: override ? "coach" : "club" } : null;
 }

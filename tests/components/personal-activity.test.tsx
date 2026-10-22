@@ -12,10 +12,10 @@ import type { UpcomingActivity, UpcomingCourtActivity } from "@/lib/bookings/act
 import type { PersonalCustomerBooking } from "@/lib/bookings/personal";
 import type { PersonalReservation } from "@/lib/reservations/personal";
 
-const { load, cancel, cancelBooking, edit, availability } = vi.hoisted(() => ({ load: vi.fn<typeof import("@/app/my-activity/bookings/actions").loadPersonalActivityAction>(), cancel: vi.fn(), cancelBooking: vi.fn(), edit: vi.fn(), availability: vi.fn() }));
+const { load, cancel, cancelBooking, edit, availability, bookingEditDay } = vi.hoisted(() => ({ load: vi.fn<typeof import("@/app/my-activity/bookings/actions").loadPersonalActivityAction>(), cancel: vi.fn(), cancelBooking: vi.fn(), edit: vi.fn(), availability: vi.fn(), bookingEditDay: vi.fn() }));
 vi.mock("@/app/my-activity/bookings/actions", () => ({ loadPersonalActivityAction: load, cancelOwnReservationAction: cancel, cancelOwnCustomerBookingAction: cancelBooking,
   editOwnReservationAction: edit, loadReservationEditDayAction: availability,
-  loadOwnBookingEditDayAction: vi.fn(), quoteOwnBookingAction: vi.fn(), rescheduleOwnBookingAction: vi.fn(),
+  loadOwnBookingEditDayAction: bookingEditDay, quoteOwnBookingAction: vi.fn(), rescheduleOwnBookingAction: vi.fn(),
   loadOwnBookingPaymentAction: vi.fn(async () => ({ ok: true, payment: { method: "online", currency: "RON", timezone: "UTC",
     total: 5000, paid: 5000, refunded: 0, refundPending: 0, outstanding: 0, dueAtClub: 0, operations: [] } })) }));
 
@@ -44,6 +44,7 @@ beforeEach(() => {
   cancelBooking.mockReset();
   edit.mockReset();
   availability.mockReset();
+  bookingEditDay.mockReset();
   installDialogMock();
 });
 afterEach(cleanup);
@@ -238,6 +239,21 @@ const cancellableBooking: PersonalCustomerBooking = {
   cancellation_notice_minutes: 1440, total_amount_minor: 5000, currency: "RON",
 };
 
+it("opens an owner-resolved booking deep link and preserves filters when details close", () => {
+  render(<PersonalActivity staff={false} userId="owner" initialActivity={activityFixture([])} initialError=""
+    listQuery={{ booking: cancellableBooking.id, page: "3", location: "22222222-2222-4222-8222-222222222222" }}
+    deepLinkedBooking={cancellableBooking} />);
+  const dialog = screen.getByRole("dialog", { name: "Booking" });
+  expect(within(dialog).getByText("Customer court")).toBeDefined();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+  expect(screen.queryByRole("dialog", { name: "Booking" })).toBeNull();
+  expect(window.location.pathname).toBe("/my-activity/bookings");
+  const params = new URLSearchParams(window.location.search);
+  expect(params.get("page")).toBe("3");
+  expect(params.get("location")).toBe("22222222-2222-4222-8222-222222222222");
+  expect(params.has("booking")).toBe(false);
+});
+
 it("adopts revalidated server snapshots while mounted and preserves an open dialog", () => {
   const { rerender } = render(<PersonalActivity staff={false} userId="owner"
     initialActivity={activityFixture([])} initialError="" />);
@@ -403,11 +419,42 @@ it("shows each upcoming booking's actual status in the table and its details dia
   expect(within(dialog).queryByText("Confirmed")).toBeNull();
 });
 
-it.each([false, true])("withholds coaching Edit while retaining cancellation (coaching=%s)", includes_coaching => {
+it.each([false, true])("offers Reschedule for coaching and Edit for court bookings, retaining cancellation (coaching=%s)", includes_coaching => {
   render(<CustomerBookingCancellation booking={{ ...cancellableBooking, includes_coaching }} staff={false}
     onCancelled={vi.fn()} onPendingChange={vi.fn()} onEdit={vi.fn()} />);
   expect(screen.queryByRole("button", { name: "Edit booking" }) !== null).toBe(!includes_coaching);
+  expect(screen.queryByRole("button", { name: "Reschedule" }) !== null).toBe(includes_coaching);
   expect(screen.getByRole("button", { name: "Cancel booking" })).toBeDefined();
+});
+
+it.each([
+  ["past its notice window", { starts_at_instant: new Date(Date.now() + 60 * 60_000).toISOString() }],
+  ["with a processing payment", { payment_pending: true }],
+] as const)("withholds Reschedule for a coaching lesson %s", (_, change) => {
+  render(<CustomerBookingCancellation booking={{ ...cancellableBooking, includes_coaching: true, ...change }} staff={false}
+    onCancelled={vi.fn()} onPendingChange={vi.fn()} onEdit={vi.fn()} />);
+  expect(screen.queryByRole("button", { name: "Reschedule" })).toBeNull();
+});
+
+it("shows a pending lesson change instead of Reschedule until its refund is confirmed", () => {
+  render(<CustomerBookingCancellation booking={{ ...cancellableBooking, includes_coaching: true, pending_change: "reschedule" }} staff={false}
+    onCancelled={vi.fn()} onPendingChange={vi.fn()} onEdit={vi.fn()} />);
+  expect(screen.queryByRole("button", { name: "Reschedule" })).toBeNull();
+  expect(screen.getByRole("status").textContent).toContain("The current booking stays unchanged until then.");
+});
+
+it("opens the lesson rescheduler in the booking dialog and returns to its details", async () => {
+  bookingEditDay.mockReturnValue(new Promise(() => {}));
+  load.mockResolvedValue(activityFixture([bookingItem({ ...cancellableBooking, includes_coaching: true,
+    coach_name: "Daniel Stoica", coaching_program_name: "Private coaching" })]));
+  await renderWithServerActivity({ staff: false, userId: "owner" });
+  fireEvent.click(within(await screen.findByRole("region", { name: "Upcoming" })).getByRole("row", { name: /Details for/ }));
+  fireEvent.click(within(screen.getByRole("dialog", { name: "Booking" })).getByRole("button", { name: "Reschedule" }));
+  const dialog = screen.getByRole("dialog", { name: "Reschedule lesson" });
+  expect(bookingEditDay).toHaveBeenCalledWith(cancellableBooking.id, cancellableBooking.booking_date);
+  expect(within(dialog).getByRole("status").textContent).toBe("Loading booking…");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Back to details" }));
+  expect(screen.getByRole("dialog", { name: "Booking" })).toBeDefined();
 });
 
 it.each([true, false])("shows historical coaching names alongside court bookings (staff=%s)", (staff) => {

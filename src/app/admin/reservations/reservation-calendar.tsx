@@ -24,11 +24,19 @@ import { ReservationTimetable, type ReservationTimetableDay } from "@/components
 import { reservationEditInput, reservationEditSchema, selectReservationCell, type ReservationCell, type ReservationSelection } from "@/lib/reservations/domain";
 import { isReservationBeforeStart, isReservationInProgress, isReservationUpcoming } from "@/lib/reservations/personal";
 import type { AdminOperationalOccupancy, AdminReservation, InternalLocation } from "@/lib/reservations/service";
+import { paymentProviderLabels } from "@/lib/payments/admin-query";
+import type { LatestFinancialStatus } from "@/lib/payments/latest-financial-status";
 import { adminBookingLinkFrom, adminReservationLinkFrom, coachLessonLinkFrom, coachReservationLinkFrom } from "@/lib/bookings/admin-query";
 import { AdminBookingCancellation } from "./admin-booking-cancellation";
 import { cancelAdminReservationAction, editAdminReservationAction, loadAdminReservationEditDayAction, reserveCourtAction } from "./actions";
 
 const ownBookingActions: BookingEditActions = { load: loadOwnBookingEditDayAction, quote: quoteOwnBookingAction, save: rescheduleOwnBookingAction };
+
+function financialStatusLabel(summary: LatestFinancialStatus) {
+  const provider = summary.provider ? ` (${paymentProviderLabels[summary.provider]})` : "";
+  if (summary.operation === "payment" && summary.status === "due") return "Payment due at club";
+  return `${summary.operation === "payment" ? "Payment" : "Refund"} ${summary.status}${provider}`;
+}
 
 export function ReservationCalendar({ day, date, location, occupancy = [], adminOccupancy = [], canManage = false, actorUserId }: {
   day: ReservationTimetableDay;
@@ -180,9 +188,9 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
             <dt className="text-muted-foreground">Customer type</dt><dd>{selectedBooking.account_user_id === null ? "Guest" : "Authenticated customer"}</dd>
             <dt className="text-muted-foreground">Currency</dt><dd>{selectedBooking.currency}</dd>
             <dt className="text-muted-foreground">Payment method</dt><dd>{selectedBooking.payment_method === "online" ? "Online" : "Pay at club"}</dd>
-            {selectedBooking.payments.map((payment) => <div key={payment.id} className="contents">
-              <dt className="text-muted-foreground">Payment{payment.provider ? ` (${payment.provider})` : ""}</dt><dd>{payment.status}</dd>
-            </div>)}
+            {selectedBooking.payment_status && <>
+              <dt className="text-muted-foreground">Payment status</dt><dd>{financialStatusLabel(selectedBooking.payment_status)}</dd>
+            </>}
           </dl>
           {canManage && <Link href={adminBookingLinkFrom(selectedBooking.id,
             `/admin/bookings?${new URLSearchParams({ view: "calendar", location: location.id, date })}`)}

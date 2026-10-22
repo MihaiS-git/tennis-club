@@ -1,9 +1,10 @@
 "use client";
 
-import { CalendarDays, UserRound } from "lucide-react";
+import { Bell, CalendarDays, UserRound } from "lucide-react";
 import { SidebarNavigation, type SidebarEntry } from "./sidebar-navigation";
 
 const entries: readonly SidebarEntry[] = [
+  { label: "Notifications", href: "/messages", icon: Bell },
   { label: "My activity", icon: CalendarDays, links: [
     { label: "Bookings", href: "/my-activity/bookings" },
     { label: "Booking history", href: "/my-activity/history" },

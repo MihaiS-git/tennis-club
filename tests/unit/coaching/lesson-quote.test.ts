@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { projectCoachingLessonAvailability } from "@/lib/coaching/lesson-availability";
-import { listCoachingLessonOffers, quoteCoachingLesson, type CoachingLessonDay } from "@/lib/coaching/lesson-quote";
+import { listCoachingLessonOffers, listCoachingRescheduleOffers, quoteCoachingLesson, quoteCoachingReschedule, type CoachingLessonDay } from "@/lib/coaching/lesson-quote";
 import type { PublicCoachingFacts } from "@/lib/db/repositories/coaching.repository";
 import type { PricingRule } from "@/lib/pricing/validation";
 import { mondayWeekday } from "@/lib/pricing/resolution";
@@ -21,8 +21,8 @@ const date = "2026-10-21";
 const program = (id: string, name: string, program_type: string, court_rental_included: boolean, durations: number[]) => ({
   id, name, description: "", program_type, min_participants: 1, max_participants: 1, court_rental_included, durations,
 });
-const price = (program_id: string, duration_minutes: number, location_id: string, amount_minor: number, currency: string, coach_user_id: string | null = null) =>
-  ({ program_id, duration_minutes, location_id, coach_user_id, amount_minor, currency });
+const price = (program_id: string, duration_minutes: number, amount_minor: number, currency: string, coach_user_id: string | null = null) =>
+  ({ program_id, duration_minutes, coach_user_id, amount_minor, currency });
 const facts: PublicCoachingFacts = {
   programs: [
     program(ids.private, "Private", "private", false, [45, 60, 90, 120, 150]),
@@ -32,16 +32,15 @@ const facts: PublicCoachingFacts = {
   coaches: [{ user_id: ids.ana, display_name: "Ana", bio: "", qualifications: "", specialties: [], languages: [],
     location_ids: [ids.east, ids.west], program_ids: [ids.private, ids.included, ids.group] }],
   prices: [
-    price(ids.private, 60, ids.east, 10000, "RON"),
-    price(ids.private, 90, ids.east, 14000, "RON"),
-    price(ids.private, 90, ids.east, 16000, "RON", ids.ana),
-    price(ids.private, 45, ids.east, 8000, "RON"),
-    price(ids.private, 150, ids.east, 20000, "RON"),
-    price(ids.included, 60, ids.east, 15000, "RON"),
-    price(ids.group, 60, ids.east, 5000, "RON"),
-    price(ids.private, 60, ids.west, 7000, "EUR"),
-    // Entered before the location currency changed: never re-denominated.
-    price(ids.private, 90, ids.west, 9000, "RON"),
+    price(ids.private, 60, 10000, "RON"),
+    price(ids.private, 90, 14000, "RON"),
+    price(ids.private, 90, 16000, "RON", ids.ana),
+    price(ids.private, 45, 8000, "RON"),
+    price(ids.private, 150, 20000, "RON"),
+    price(ids.included, 60, 15000, "RON"),
+    price(ids.group, 60, 5000, "RON"),
+    // EUR has no 90-minute price: RON amounts are never converted.
+    price(ids.private, 60, 7000, "EUR"),
   ],
 };
 
@@ -96,7 +95,7 @@ describe("coaching lesson quote", () => {
       coachingAmountMinor: 10000, courtAmountMinor: 6000, totalAmountMinor: 16000, currency: "RON",
       evidence: {
         coachingPrice: { amountMinor: 10000, currency: "RON", source: "club", programId: ids.private, durationMinutes: 60,
-          locationId: ids.east, coachUserId: ids.ana },
+          coachUserId: ids.ana },
         courtRentalMinor: 6000,
         courtPricing: { version: 1, rounding: "half-hour-sum-round", courtState: "outdoor" },
       },
@@ -166,6 +165,17 @@ describe("coaching lesson quote", () => {
     expect(quoteCoachingLesson(eastDay(), lesson({ durationMinutes: 90 }))).toMatchObject({ ok: true, quote: {
       coachingAmountMinor: 16000, courtAmountMinor: 9000, totalAmountMinor: 25000,
       evidence: { coachingPrice: { source: "coach", amountMinor: 16000 } } } });
+  });
+
+  it("applies club-wide prices at every assigned location charging in that currency", () => {
+    const ronWest = westDay({ location: { id: ids.west, name: "West", timezone: "America/New_York", currency: "RON", courts: [court(ids.court3, "Court 3")] } });
+    expect(quoteCoachingLesson(ronWest, lesson({ courtId: ids.court3, startMinute: 900 }))).toMatchObject({ ok: true, quote: {
+      coachingAmountMinor: 10000, currency: "RON", evidence: { coachingPrice: { source: "club" } } } });
+    expect(quoteCoachingLesson(ronWest, lesson({ courtId: ids.court3, startMinute: 900, durationMinutes: 90 }))).toMatchObject({ ok: true, quote: {
+      coachingAmountMinor: 16000, currency: "RON", evidence: { coachingPrice: { source: "coach" } } } });
+    // Program eligibility needs only the coach's program and location assignments.
+    const onlyWest = { ...facts, coaches: [{ ...facts.coaches[0], location_ids: [ids.west], program_ids: [ids.private] }] };
+    expect(reason(westDay({ coaching: onlyWest }), lesson({ courtId: ids.court3, startMinute: 900 }))).toBe("ok");
   });
 
   it("never offers a lesson without an applicable coaching price or eligibility", () => {
@@ -314,3 +324,39 @@ it.each(["2026-12-20", "2026-12-21", "2026-12-31", "2027-01-01", "2027-01-10", "
     expect(listCoachingLessonOffers(day, { programId: ids.private, durationMinutes: 60 }).length === 0).toBe(inside);
   },
 );
+
+describe("purchased lesson reschedule quotes", () => {
+  // The agreed fee differs from every configured price: it is never repriced.
+  const agreed = { programId: ids.private, coachUserId: ids.ana, locationId: ids.east, durationMinutes: 90, source: "coach" as const,
+    amountMinor: 12345, currency: "RON" as const, courtRentalIncluded: false, courtRentalMinor: 9000, courtAmountMinor: 9000 };
+
+  it("keeps the agreed fee and duration and charges only the current court rental", () => {
+    const result = quoteCoachingReschedule(eastDay(), agreed, { courtId: ids.court2, startMinute: 660 });
+    expect(result).toMatchObject({ ok: true, quote: { court: { id: ids.court2, name: "Court 2" }, startMinute: 660, endMinute: 750,
+      totalAmountMinor: 12345 + 12000 } });
+    if (result.ok) expect(result.quote.pricingEvidence.coaching).toEqual({ ...agreed, courtRentalMinor: 12000, courtAmountMinor: 12000 });
+    const included = quoteCoachingReschedule(eastDay(), { ...agreed, courtRentalIncluded: true, courtAmountMinor: 0 }, { courtId: ids.court2, startMinute: 660 });
+    expect(included).toMatchObject({ ok: true, quote: { totalAmountMinor: 12345,
+      pricingEvidence: { coaching: { courtRentalIncluded: true, courtRentalMinor: 12000, courtAmountMinor: 0 } } } });
+  });
+
+  it("does not need the coach's public profile, program or price to stay published", () => {
+    const unpublished = { ...eastDay(), coaching: { programs: [], coaches: [], prices: [] } };
+    expect(quoteCoachingReschedule(unpublished, agreed, { courtId: ids.court1, startMinute: 600 })).toMatchObject({ ok: true });
+  });
+
+  it("still requires the coach's availability, a free coach and a free court for the whole lesson", () => {
+    const reason = (day: CoachingLessonDay, startMinute: number, courtId = ids.court1) => {
+      const result = quoteCoachingReschedule(day, agreed, { courtId, startMinute });
+      return result.ok ? "ok" : result.reason;
+    };
+    expect(reason(eastDay(), 720)).toBe("coach-unavailable");
+    expect(reason(eastDay(), 615)).toBe("invalid-time");
+    expect(reason(eastDay({}, { occupancy: [{ booking_date: date, starts_at_minute: 660, ends_at_minute: 720 }] }), 600)).toBe("coach-booked");
+    const busyCourt = eastDay({ courtOccupancy: [{ court_id: ids.court1, booking_date: date, starts_at_minute: 630, ends_at_minute: 690 }] });
+    expect(reason(busyCourt, 600)).toBe("court-unavailable");
+    expect(reason(busyCourt, 600, ids.court2)).toBe("ok");
+    expect(listCoachingRescheduleOffers(busyCourt, agreed).map((offer) => [offer.startMinute, offer.court.id]))
+      .toEqual([[600, ids.court2], [630, ids.court2], [660, ids.court2], [690, ids.court1], [690, ids.court2]]);
+  });
+});

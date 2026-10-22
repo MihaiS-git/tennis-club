@@ -9,7 +9,7 @@ import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
-import type { AdminCoachingLocation, AdminCoachingPrice, AdminCoachingProgram } from "@/lib/coaching/admin";
+import type { AdminCoachingCurrency, AdminCoachingPrice, AdminCoachingProgram } from "@/lib/coaching/admin";
 import { coachingProgramTypeLabels, formatCoachingDuration, formatParticipants } from "@/lib/coaching/validation";
 import { setCoachingProgramStatusAction } from "../actions";
 import { coachingFailureMessages } from "../coaching-form";
@@ -56,9 +56,9 @@ function ProgramStatusControl({ program }: { program: AdminCoachingProgram }) {
   </span>;
 }
 
-type PricingContext = { locations?: AdminCoachingLocation[]; prices?: AdminCoachingPrice[] };
+type PricingContext = { currencies?: AdminCoachingCurrency[]; prices?: AdminCoachingPrice[] };
 
-function ProgramRow({ program, mobile, locations, prices }: { program: AdminCoachingProgram; mobile?: boolean } & PricingContext) {
+function ProgramRow({ program, mobile, currencies, prices }: { program: AdminCoachingProgram; mobile?: boolean } & PricingContext) {
   const [open, setOpen] = useState(false);
   const rowRef = useRef<HTMLElement | null>(null);
   const rowProps = {
@@ -78,7 +78,7 @@ function ProgramRow({ program, mobile, locations, prices }: { program: AdminCoac
   const durations = program.durations.map(formatCoachingDuration).join(", ");
   const participants = formatParticipants(program.min_participants, program.max_participants) ?? "Not set";
   const rental = program.court_rental_included ? "Included" : "Not included";
-  const dialog = open && createPortal(<ProgramDialog program={program} locations={locations}
+  const dialog = open && createPortal(<ProgramDialog program={program} currencies={currencies}
     prices={prices?.filter((price) => price.program_id === program.id)} open onOpenChange={(nextOpen) => {
     setOpen(nextOpen);
     if (!nextOpen) rowRef.current?.focus();
@@ -112,14 +112,14 @@ function ProgramRow({ program, mobile, locations, prices }: { program: AdminCoac
   </>;
 }
 
-export function ProgramsTable({ programs, sortLinks, filtered = false, locations, prices }: {
+export function ProgramsTable({ programs, sortLinks, filtered = false, currencies, prices }: {
   programs: AdminCoachingProgram[]; sortLinks?: Record<string, TableSortLink>; filtered?: boolean;
 } & PricingContext) {
   if (!programs.length) return <p className="rounded-card border border-border bg-surface px-4 py-5 text-sm text-muted-foreground">
     {filtered ? "No coaching programs match these filters." : "No coaching programs yet. Create a program to describe a coaching offering, its durations and whether court rental is included."}
   </p>;
   return <section aria-label="Coaching programs">
-    <div className="space-y-3 lg:hidden">{programs.map((program) => <ProgramRow key={program.id} program={program} locations={locations} prices={prices} mobile />)}</div>
+    <div className="space-y-3 lg:hidden">{programs.map((program) => <ProgramRow key={program.id} program={program} currencies={currencies} prices={prices} mobile />)}</div>
     <div className="hidden overflow-hidden rounded-card border border-border bg-surface lg:block">
       <table className="w-full table-fixed text-left font-sans text-sm" aria-label="Coaching programs">
         <thead className="border-b border-border bg-surface-muted text-xs font-semibold text-muted-foreground">
@@ -133,7 +133,7 @@ export function ProgramsTable({ programs, sortLinks, filtered = false, locations
             <th scope="col" className="w-28 px-4 py-2.5">Actions</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-border">{programs.map((program) => <ProgramRow key={program.id} program={program} locations={locations} prices={prices} />)}</tbody>
+        <tbody className="divide-y divide-border">{programs.map((program) => <ProgramRow key={program.id} program={program} currencies={currencies} prices={prices} />)}</tbody>
       </table>
     </div>
   </section>;

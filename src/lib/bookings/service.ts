@@ -27,6 +27,7 @@ import { customerBookingInputSchema } from "./domain";
 import { buildBookingRevision, capturePricingEvidence } from "./revision";
 import { getCourtStateForDate } from "@/lib/courts/state";
 import { customerMutationDeadline } from "./self-cancellation";
+import { recordBookingTransition } from "@/lib/notifications/events";
 
 class CheckoutParentChanged extends Error {}
 
@@ -138,6 +139,7 @@ export async function createCustomerBooking(input: unknown, reader?: Reader,
           status: lifecycle.booking_status, revision });
         await insertCheckoutAttempt(manager, { id: attemptId, bookingId, method: paymentMethod, provider,
           amountMinor: selection.priceMinor, currency: location.currency, status: lifecycle.attempt_status, expiresAt: clock.expiry });
+        if (lifecycle.booking_status === "confirmed") await recordBookingTransition(manager, revision);
         if (paymentMethod === "online" && clock.expiry === null) throw new Error("Missing payment hold deadline.");
         return { ok: true, bookingId, reservationId, paymentAttemptId: attemptId,
           ...(clock.expiry === null ? { status: "confirmed", holdExpiresAt: null } as const

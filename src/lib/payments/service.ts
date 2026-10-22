@@ -17,7 +17,7 @@ import * as payments from "@/lib/db/repositories/payments.repository";
 import * as captures from "@/lib/db/repositories/payment-capture-receipts.repository";
 import * as bookings from "@/lib/db/repositories/bookings.repository";
 import * as reservations from "@/lib/db/repositories/reservations.repository";
-import { recordBookingFinancialException } from "@/lib/db/repositories/booking-financial-exceptions.repository";
+import { recordBookingFinancialException, recordBookingTransition } from "@/lib/notifications/events";
 import { logger } from "@/lib/logger";
 import { paymentProviderSchema, paymentTransition } from "./domain";
 import type { OnlinePaymentEvent } from "./providers/types";
@@ -179,6 +179,7 @@ async function commitSettlement(value: Settlement, event: OnlinePaymentEvent | n
               actorScope: "provider", recordedAt: new Date(await reservations.readReservationClockTime(manager)),
               adjustmentId: null, cancellationCause: null }, b.revision);
             await advanceRevision(manager, { revision, previousId: b.current_revision_id, status: "confirmed" });
+            await recordBookingTransition(manager, revision);
           } else {
             await bookings.updateSettlementBookingStatus(manager, b.id,
               z.enum(["confirmed", "cancelled", "pending_payment", "failed", "expired"]).parse(decision.targets.booking));

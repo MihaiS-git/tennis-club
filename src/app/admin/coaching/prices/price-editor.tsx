@@ -6,21 +6,30 @@ import { toast } from "sonner";
 import { Button } from "@/components/button";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import type { AdminCoachingPrice } from "@/lib/coaching/admin";
-import { formatMoney, majorAmountSchema, minorToMajor, type LocationCurrency } from "@/lib/pricing/money";
-import { removeCoachingPriceAction, saveCoachingPriceAction } from "../actions";
+import type { CoachingMutationResult } from "@/lib/coaching/validation";
+import { majorAmountSchema, minorToMajor, type LocationCurrency } from "@/lib/pricing/money";
+import { removeClubCoachingPriceAction, saveClubCoachingPriceAction } from "../actions";
 import { coachingFailureMessages } from "../coaching-form";
 
-export type PriceTarget = { program_id: string; duration_minutes: number; location_id: string; coach_user_id: string | null };
+type PriceTarget = { program_id: string; duration_minutes: number; currency: LocationCurrency };
+type PriceActions = {
+  save: (input: PriceTarget & { amount: string }) => Promise<CoachingMutationResult>;
+  remove: (input: PriceTarget) => Promise<CoachingMutationResult>;
+};
+const clubActions: PriceActions = { save: saveClubCoachingPriceAction, remove: removeClubCoachingPriceAction };
 
-// Inline scalar edit of one configured amount. An empty amount means "not set".
-export function PriceEditor({ label, target, price, currency, emptyHint }: {
-  label: string; target: PriceTarget; price?: AdminCoachingPrice; currency: LocationCurrency; emptyHint: string;
+// Inline scalar edit of one price amount: a club default unless other actions are
+// given (a coach's own override). An empty amount means "not set".
+export function PriceEditor({ label, target, price, emptyHint, actions = clubActions, confirmRemoval = true }: {
+  label: string; target: PriceTarget; price?: Pick<AdminCoachingPrice, "amount_minor">; emptyHint: string;
+  actions?: PriceActions; confirmRemoval?: boolean;
 }) {
+  const { currency } = target;
   const router = useRouter();
   const id = useId();
   const removeRef = useRef<HTMLButtonElement>(null);
   const pendingRef = useRef(false);
-  const initial = price?.current ? minorToMajor(price.amount_minor) : "";
+  const initial = price ? minorToMajor(price.amount_minor) : "";
   const [value, setValue] = useState(initial);
   const [baseline, setBaseline] = useState(initial);
   const [error, setError] = useState<string | null>(null);
@@ -40,7 +49,7 @@ export function PriceEditor({ label, target, price, currency, emptyHint }: {
     pendingRef.current = true; setPending(true); setError(null);
     const notification = toast.loading(remove ? "Removing price…" : "Saving price…");
     try {
-      const result = remove ? await removeCoachingPriceAction(target) : await saveCoachingPriceAction({ ...target, amount: value });
+      const result = remove ? await actions.remove(target) : await actions.save({ ...target, amount: value });
       if (result.ok) {
         toast.success(remove ? "Price removed." : "Price saved.", { id: notification });
         const next = remove ? "" : value.trim();
@@ -69,11 +78,8 @@ export function PriceEditor({ label, target, price, currency, emptyHint }: {
       </div>
       {dirty && <Button type="submit" size="small" fullWidth={false} disabled={pending || !valid} aria-busy={pending}>Save</Button>}
       {dirty && <Button type="button" variant="subtle" size="small" disabled={pending} onClick={() => { setValue(baseline); setError(null); }}>Cancel</Button>}
-      {!dirty && price && <Button ref={removeRef} type="button" variant="subtle" size="small" disabled={pending} onClick={() => setRemoving(true)}>Remove</Button>}
+      {!dirty && price && <Button ref={removeRef} type="button" variant="subtle" size="small" disabled={pending} onClick={() => confirmRemoval ? setRemoving(true) : void run(true)}>Remove</Button>}
     </div>
-    {price && !price.current && <p className="mt-1 text-xs text-danger">
-      Entered as {formatMoney(price.amount_minor, price.currency)}; the location now uses {currency}. Enter a new price.
-    </p>}
     {error && <p id={`${id}-error`} className="mt-1 text-sm text-danger">{error}</p>}
     <ConfirmationDialog open={removing} title="Remove price?" message={`${label} will no longer have a configured price.`}
       confirmLabel="Remove price" pending={pending} returnFocusRef={removeRef}

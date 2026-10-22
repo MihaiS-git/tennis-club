@@ -5,6 +5,7 @@ import type { CurrentAccount } from "@/lib/auth/account";
 const { account, query } = vi.hoisted(() => ({ account: vi.fn(), query: vi.fn() }));
 vi.mock("@/lib/auth/account", () => ({ readCurrentAccount: account }));
 vi.mock("@/lib/db/data-source", () => ({ getDataSource: async () => ({ manager: { query } }) }));
+vi.mock("@/lib/db/repositories/payments.repository", () => ({ loadAdminTransactionContext: async () => ({ payments: [], refunds: [] }) }));
 import { getReservationDay, readInternalOccupancy } from "@/lib/reservations/service";
 
 const id = (n: number) => `ca000000-0000-4000-8000-${String(n).padStart(12, "0")}`;

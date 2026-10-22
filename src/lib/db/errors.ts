@@ -59,3 +59,11 @@ export function normalizeDatabaseError(error: unknown): DatabaseError {
   }
   return new DatabaseError(kind, sqlState, error, driverMessage, constraint, detail);
 }
+
+// The two occupancy exclusions on court_reservations: one court, and one coach
+// across every court and location. Any other failure is not an occupancy conflict.
+export function reservationOverlap(failure: DatabaseError): "court" | "coach" | null {
+  if (failure.sqlState !== "23P01") return null;
+  if (failure.constraint === "court_reservation_no_overlap") return "court";
+  return failure.constraint === "court_reservation_coach_no_overlap" ? "coach" : null;
+}

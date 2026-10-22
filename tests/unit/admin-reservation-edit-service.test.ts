@@ -5,7 +5,8 @@ import type { AdminBooking, AdminReservation } from "@/lib/reservations/service"
 import type { BookingEditContext } from "@/lib/bookings/reschedule";
 import type { CurrentAccount } from "@/lib/auth/account";
 
-const { account, query, command } = vi.hoisted(() => ({ account: vi.fn(), query: vi.fn(), command: vi.fn() }));
+const { account, query, command, financialFacts } = vi.hoisted(() => ({ account: vi.fn(), query: vi.fn(), command: vi.fn(), financialFacts: vi.fn() }));
+vi.mock("@/lib/db/repositories/payments.repository", () => ({ loadAdminTransactionContext: financialFacts }));
 vi.mock("@/lib/auth/account", () => ({ readCurrentAccount: account }));
 vi.mock("@/lib/db/data-source", () => ({ getDataSource: async () => ({ manager: { query } }) }));
 vi.mock("@/lib/reservations/commands", () => ({ editDirectReservationCommand: command }));
@@ -30,6 +31,7 @@ const load = (requestedDate = date) => getAdminReservationEditDay({ reservationI
 
 beforeEach(() => {
   vi.clearAllMocks(); query.mockReset(); command.mockReset();
+  financialFacts.mockResolvedValue({ payments: [], refunds: [] });
   account.mockResolvedValue({ state: "active", userId: id(6), roles: ["admin"] });
   query.mockImplementation(async (sql: string) => {
     if (sql.includes("r.id = $1")) return [target];
@@ -138,7 +140,7 @@ test("staff DTOs require identity, contacts, payments and refund state", () => {
   expectTypeOf<Omit<AdminReservation, "creator_phone">>().not.toExtend<AdminReservation>();
   expectTypeOf<Omit<AdminReservation, "payment_method">>().not.toExtend<AdminReservation>();
   expectTypeOf<Omit<AdminBooking, "account_user_id">>().not.toExtend<AdminBooking>();
-  expectTypeOf<Omit<AdminBooking, "payments">>().not.toExtend<AdminBooking>();
+  expectTypeOf<Omit<AdminBooking, "payment_status">>().not.toExtend<AdminBooking>();
   expectTypeOf<Omit<AdminBooking, "stripe_refund_available">>().not.toExtend<AdminBooking>();
   expectTypeOf<Omit<BookingEditContext, "refunds">>().not.toExtend<BookingEditContext>();
 });
@@ -159,15 +161,53 @@ test.each([false, true])("projects complete nullable staff details (captured Str
     if (sql.includes("court_reservations")) return [row];
     return [hours];
   });
+  financialFacts.mockResolvedValue({ refunds: [], payments: captured ? [
+    { id: payment.id, bookingId: booking.id, provider: "stripe", status: "succeeded", createdAt: new Date(token) },
+    { id: id(9), bookingId: id(10), provider: "stripe", status: "failed", createdAt: new Date(now) }] : [] });
   const result = await getReservationDay(location, date, now, client);
+  expect(financialFacts).toHaveBeenCalledWith(expect.anything(), { bookingIds: [booking.id], revisionIds: [], adjustmentIds: [] });
   expect(result.adminOccupancy).toEqual([
     { kind: "reservation", id: target.id, court_id: target.court_id, booking_date: date,
       starts_at_minute: 600, ends_at_minute: 660, reason: target.reason, created_by_user_id: target.created_by_user_id,
       creator_name: direct.creator_name, creator_email: direct.creator_email, creator_phone: direct.creator_phone, payment_method: null },
     { kind: "booking", includes_coaching: false, coach_user_id: null, coach_name: null, coaching_program_name: null, coaching: null, location_name: null, court_name: null, location_timezone: null, id: booking.id, court_id: booking.court_id, booking_date: date,
       starts_at_minute: 600, ends_at_minute: 660, account_user_id: booking.account_user_id, payment_method: booking.payment_method,
-      payments: captured ? [{ id: payment.id, method: payment.method, provider: payment.provider, status: payment.status }] : [],
+      payment_status: captured ? { operation: "payment", status: "succeeded", provider: "stripe" } : null,
       stripe_refund_available: captured, customer_name: booking.customer_name, customer_email: booking.customer_email,
       customer_phone: booking.customer_phone, cancellation_notice_minutes: 120, total_amount_minor: 5000, currency: "RON" },
   ]);
+});
+
+const at = (minute: number) => new Date(Date.UTC(2026, 9, 1, 12, minute));
+const succeededPayment = (n: number, minute: number) => ({ id: id(n), bookingId: id(7), provider: "stripe", status: "succeeded", createdAt: at(minute) });
+const refund = (n: number, minute: number, status: string) => ({ id: id(n), bookingId: id(7), provider: "stripe", status, createdAt: at(minute) });
+test.each([
+  ["one successful payment", [succeededPayment(20, 0)], [], { operation: "payment", status: "succeeded", provider: "stripe" }],
+  ["multiple successful payments", [succeededPayment(21, 0), succeededPayment(20, 5)], [], { operation: "payment", status: "succeeded", provider: "stripe" }],
+  ["payment followed by refund", [succeededPayment(20, 0)], [refund(30, 10, "succeeded")], { operation: "refund", status: "succeeded", provider: "stripe" }],
+  ["refund retry pending", [succeededPayment(20, 0)], [refund(30, 10, "pending_retry")], { operation: "refund", status: "pending", provider: "stripe" }],
+  ["refund failed", [succeededPayment(20, 0)], [refund(30, 10, "failed")], { operation: "refund", status: "failed", provider: "stripe" }],
+  ["later payment pending", [succeededPayment(20, 0), { ...succeededPayment(21, 10), status: "pending" }], [refund(30, 5, "succeeded")],
+    { operation: "payment", status: "pending", provider: "stripe" }],
+  ["later payment failed", [succeededPayment(20, 0), { ...succeededPayment(21, 10), status: "failed" }], [],
+    { operation: "payment", status: "failed", provider: "stripe" }],
+  ["abandoned checkout and voided refund ignored", [succeededPayment(20, 0), { ...succeededPayment(21, 10), status: "expired" }],
+    [refund(30, 15, "voided")], { operation: "payment", status: "succeeded", provider: "stripe" }],
+  ["same-time tie broken by ID", [succeededPayment(20, 0)], [refund(30, 0, "pending")], { operation: "refund", status: "pending", provider: "stripe" }],
+  ["pay at club due", [{ id: id(20), bookingId: id(7), provider: null, status: "due", createdAt: at(0) }], [],
+    { operation: "payment", status: "due", provider: null }],
+] as const)("dialog payment status is the latest financial operation: %s", async (_name, payments, refunds, expected) => {
+  const booking = { ...target, includes_coaching: false, coach_name: null, coaching_program_name: null, coaching: null,
+    location_name: null, court_name: null, location_timezone: null, creator_name: null, creator_email: null, creator_phone: null,
+    id: id(7), kind: "booking", account_user_id: null, payment_method: "online", payment_facts: [],
+    customer_name: "Customer", customer_email: "snapshot@example.test", customer_phone: "123",
+    cancellation_notice_minutes: 120, total_amount_minor: 5000, currency: "RON" };
+  query.mockImplementation(async (sql: string) => {
+    if (sql.includes("payment_facts")) return [booking];
+    if (sql.includes("court_reservations")) return [row];
+    return [hours];
+  });
+  financialFacts.mockResolvedValue({ payments, refunds });
+  const [result] = (await getReservationDay(location, date, now, client)).adminOccupancy;
+  expect(result).toMatchObject({ kind: "booking", payment_status: expected });
 });

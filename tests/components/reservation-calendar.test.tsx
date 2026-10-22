@@ -45,7 +45,7 @@ it("confirms booking cancellation and refreshes the timetable in place", async (
   const courtId = "22222222-2222-4222-8222-222222222222";
   const location = { id: "11111111-1111-4111-8111-111111111111", name: "RIVUS", timezone: "UTC",
     courts: [{ id: courtId, name: "Court 2" }] };
-  const booking = { account_user_id: null, payments: [], stripe_refund_available: false, kind: "booking" as const, id: "33333333-3333-4333-8333-333333333333", court_id: courtId,
+  const booking = { account_user_id: null, payment_status: null, stripe_refund_available: false, kind: "booking" as const, id: "33333333-3333-4333-8333-333333333333", court_id: courtId,
     payment_method: "pay_at_club" as const,
     booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660,
     customer_name: "Ana Pop", customer_email: "ana@example.test", customer_phone: "+40 123",
@@ -224,14 +224,14 @@ it.each(["reservation", "booking"] as const)("opens shared %s details for a Coac
     account_user_id: null, customer_name: "Ana Pop", customer_email: "ana@example.test", customer_phone: "+40 123",
     cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON",
     payment_method: "online", stripe_refund_available: true,
-    payments: [{ id: "payment", method: "online", provider: "stripe", status: "succeeded" }] };
+    payment_status: { operation: "payment", status: "succeeded", provider: "stripe" } };
   const view = <ReservationCalendar canManage={false} date={item.booking_date} location={location}
     day={{ times: [600, 630], courts: [{ court, cells: ["booked", "booked"] }] }} adminOccupancy={[item]} />;
   const { unmount } = render(view);
   function openAndCheck() {
     fireEvent.click(screen.getByRole("button", { name: /Court 1.*10:00–11:00/ }));
     const dialog = screen.getByRole("dialog", { name: kind === "booking" ? "Booking details" : "Reservation details" });
-    for (const value of kind === "booking" ? ["Ana Pop", "ana@example.test", "+40 123", "Guest", "Online", "succeeded", "RON"] : ["Coach", "Training", "coach@example.test", "123"])
+    for (const value of kind === "booking" ? ["Ana Pop", "ana@example.test", "+40 123", "Guest", "Online", "Payment succeeded (Stripe)", "RON"] : ["Coach", "Training", "coach@example.test", "123"])
       expect(dialog.textContent).toContain(value);
     expect(within(dialog).queryByText("Payment method") !== null).toBe(kind === "booking");
     expect(within(dialog).queryByRole("button", { name: /^(Edit|Cancel) / })).toBeNull();
@@ -252,7 +252,7 @@ it.each([false, true])("Admin cancellation reflects captured-funds refund availa
   const location = { id: "11111111-1111-4111-8111-111111111111", name: "RIVUS", timezone: "UTC",
     courts: [{ id: courtId, name: "Court 2" }] };
   const booking = { account_user_id: null,
-    payments: refundable ? [{ id: "payment", method: "online", provider: "stripe", status: "succeeded" }] : [],
+    payment_status: refundable ? { operation: "payment" as const, status: "succeeded" as const, provider: "stripe" as const } : null,
     kind: "booking" as const, stripe_refund_available: refundable, id: "33333333-3333-4333-8333-333333333333", court_id: courtId,
     payment_method: "online" as const,
     booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660,
@@ -295,7 +295,7 @@ it.each([null, coachId])("uses explicit account identity for booking customer ty
   const booking: AdminOperationalOccupancy = { kind: "booking", id: "booking", court_id: coachCourt.id,
     booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660,
     account_user_id: accountUserId, payment_method: "pay_at_club", stripe_refund_available: false,
-    payments: [{ id: "payment", method: "pay_at_club", provider: null, status: "due" }],
+    payment_status: { operation: "payment", status: "due", provider: null },
     customer_name: "Customer", customer_email: "customer@example.test", customer_phone: "123",
     cancellation_notice_minutes: 120, total_amount_minor: 5000, currency: "RON" };
   render(<ReservationCalendar actorUserId={coachId} date={booking.booking_date} location={coachLocation}
@@ -304,7 +304,7 @@ it.each([null, coachId])("uses explicit account identity for booking customer ty
   const dialog = screen.getByRole("dialog", { name: "Booking details" });
   expect(within(dialog).getByText(accountUserId === null ? "Guest" : "Authenticated customer")).toBeTruthy();
   expect(within(dialog).getByText("Pay at club")).toBeTruthy();
-  expect(within(dialog).getByText("due")).toBeTruthy();
+  expect(within(dialog).getByText("Payment due at club")).toBeTruthy();
   expect(within(dialog).queryByRole("button", { name: "Edit booking" }) !== null).toBe(accountUserId !== null);
   expect(within(dialog).queryByRole("button", { name: "Cancel booking" }) !== null).toBe(accountUserId !== null);
 });
@@ -353,7 +353,7 @@ it.each(["stale", "network"])("Coach cancellation reports %s failure through Son
 });
 
 it.each(["other Coach", "historical creator", "customer", "guest", "ended", "ended booking"])("Coach cannot cancel %s occupancy", (kind) => {
-  const item = kind === "customer" || kind === "guest" || kind === "ended booking" ? { payments: [], stripe_refund_available: false, ...coachReservation, kind: "booking" as const,
+  const item = kind === "customer" || kind === "guest" || kind === "ended booking" ? { payment_status: null, stripe_refund_available: false, ...coachReservation, kind: "booking" as const,
     account_user_id: kind === "ended booking" ? coachId : kind === "customer" ? "other-user" : null,
     payment_method: "pay_at_club" as const,
     booking_date: kind === "ended booking" ? "2000-10-15" : coachReservation.booking_date, customer_name: "Customer", customer_email: "coach@example.test",
@@ -420,7 +420,7 @@ it.each(["future", "in-progress", "stale"])("Coach edits own reservation through
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
-const ownBooking = { payments: [], kind: "booking" as const, id: coachReservation.id, court_id: coachCourt.id,
+const ownBooking = { payment_status: null, kind: "booking" as const, id: coachReservation.id, court_id: coachCourt.id,
   payment_method: "online" as const,
   booking_date: coachReservation.booking_date, starts_at_minute: 600, ends_at_minute: 660, account_user_id: coachId,
   customer_name: "Customer", customer_email: "coach@example.test", customer_phone: "123",
@@ -543,7 +543,7 @@ it.each([
 it("closes the Admin booking preview when following its details link, so no modal outlives the Calendar", () => {
   const courtId = "22222222-2222-4222-8222-222222222222";
   const location = { id: "11111111-1111-4111-8111-111111111111", name: "RIVUS", timezone: "UTC", courts: [{ id: courtId, name: "Court 2" }] };
-  const booking = { account_user_id: null, payments: [], kind: "booking" as const, stripe_refund_available: false,
+  const booking = { account_user_id: null, payment_status: null, kind: "booking" as const, stripe_refund_available: false,
     id: "33333333-3333-4333-8333-333333333333", court_id: courtId, payment_method: "pay_at_club" as const,
     booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660, customer_name: "Ana Pop", customer_email: "ana@example.test",
     customer_phone: "+40 123", cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON" as const };
@@ -555,6 +555,30 @@ it("closes the Admin booking preview when following its details link, so no moda
   fireEvent.click(link);
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(cancelBookingAction).not.toHaveBeenCalled();
+});
+
+it.each([
+  [{ operation: "payment", status: "succeeded", provider: "stripe" }, "Payment succeeded (Stripe)"],
+  [{ operation: "refund", status: "succeeded", provider: "stripe" }, "Refund succeeded (Stripe)"],
+  [{ operation: "refund", status: "pending", provider: "stripe" }, "Refund pending (Stripe)"],
+  [{ operation: "refund", status: "failed", provider: "stripe" }, "Refund failed (Stripe)"],
+  [{ operation: "payment", status: "pending", provider: "stripe" }, "Payment pending (Stripe)"],
+  [{ operation: "payment", status: "failed", provider: "stripe" }, "Payment failed (Stripe)"],
+  [null, null],
+] as const)("Admin booking preview shows one current payment status: %j", (paymentStatus, label) => {
+  const courtId = "22222222-2222-4222-8222-222222222222";
+  const location = { id: "11111111-1111-4111-8111-111111111111", name: "RIVUS", timezone: "UTC", courts: [{ id: courtId, name: "Court 2" }] };
+  const booking = { account_user_id: null, payment_status: paymentStatus, kind: "booking" as const, stripe_refund_available: false,
+    id: "33333333-3333-4333-8333-333333333333", court_id: courtId, payment_method: "online" as const,
+    booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660, customer_name: "Ana Pop", customer_email: "ana@example.test",
+    customer_phone: "+40 123", cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON" as const };
+  render(<ReservationCalendar canManage date={booking.booking_date} location={location}
+    day={{ times: [600, 630], courts: [{ court: location.courts[0], cells: ["booked", "booked"] }] }} adminOccupancy={[booking]} />);
+  fireEvent.click(screen.getByRole("button", { name: /Booking · Ana Pop/ }));
+  const dialog = screen.getByRole("dialog", { name: "Booking details" });
+  expect(within(dialog).queryAllByText("Payment status")).toHaveLength(label ? 1 : 0);
+  expect(within(dialog).queryAllByText(/^(Payment|Refund) (succeeded|pending|failed)/)).toHaveLength(label ? 1 : 0);
+  if (label) expect(within(dialog).getByText("Payment status").nextElementSibling?.textContent).toBe(label);
 });
 
 it("links an Admin's staff reservation preview to its details page with Calendar return, closing the preview", () => {

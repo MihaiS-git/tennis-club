@@ -62,14 +62,14 @@ function Empty({ children, dark = false }: { children: React.ReactNode; dark?: b
   return <p className={`max-w-xl border-t pt-5 font-sans text-base leading-7 ${dark ? "border-ivory/30 text-ivory" : "border-border text-muted-foreground"}`}>{children}</p>;
 }
 
-function lessonsByLocation(lessons: readonly PublicCoachLesson[]) {
-  const locations = new Map<string, { id: string; name: string; lessons: PublicCoachLesson[] }>();
+function lessonsByCurrency(lessons: readonly PublicCoachLesson[]) {
+  const currencies = new Map<string, { currency: string; lessons: PublicCoachLesson[] }>();
   for (const lesson of lessons) {
-    const location = locations.get(lesson.locationId) ?? { id: lesson.locationId, name: lesson.locationName, lessons: [] };
-    location.lessons.push(lesson);
-    locations.set(lesson.locationId, location);
+    const group = currencies.get(lesson.currency) ?? { currency: lesson.currency, lessons: [] };
+    group.lessons.push(lesson);
+    currencies.set(lesson.currency, group);
   }
-  return [...locations.values()];
+  return [...currencies.values()];
 }
 
 export default async function CoachPage({ params }: CoachPageProps) {
@@ -91,7 +91,7 @@ export default async function CoachPage({ params }: CoachPageProps) {
   const firstName = coach.displayName.split(/\s+/)[0] || coach.displayName;
   const introduction = coachIntroduction(coach.bio);
   const programTypes = new Map(coach.programs.map((program) => [program.id, program]));
-  const priceLocations = lessonsByLocation(coach.lessons);
+  const priceGroups = lessonsByCurrency(coach.lessons);
 
   return (
     <main className="flex-1">
@@ -223,19 +223,19 @@ export default async function CoachPage({ params }: CoachPageProps) {
             <p className={`${eyebrowClassName} text-accent-on-dark`}>Lesson prices</p>
             <h2 id="coach-prices-title" className={`${headingClassName} mt-4 max-w-[12ch]`}>Lessons with {firstName}.</h2>
             <p className={`${bodyClassName} mt-6 max-w-xl text-ivory`}>
-              Prices are per lesson and set by the club for each location, in that location’s currency. Where {firstName} has an individual price, it replaces the club price.
+              Prices are per lesson and charged in the location’s currency. Where {firstName} has an individual price, it replaces the club price.
             </p>
             <p className="mt-4 max-w-xl font-sans text-sm leading-6 text-ivory">
               <Link href={`/book?mode=coaching&coach=${coach.id}`} className="inline-flex min-h-11 items-center font-semibold underline underline-offset-4">Book a lesson with {firstName}</Link>
             </p>
           </div>
-          {priceLocations.length ? (
+          {priceGroups.length ? (
             <div className="space-y-12">
-              {priceLocations.map((location) => (
-                <section key={location.id} aria-label={`Lesson prices at ${location.name}`}>
-                  <h3 className="font-heading text-2xl font-semibold tracking-[-0.025em] text-chalk">{location.name}</h3>
+              {priceGroups.map((group) => (
+                <section key={group.currency} aria-label={`Lesson prices in ${group.currency}`}>
+                  {priceGroups.length > 1 && <h3 className="font-heading text-2xl font-semibold tracking-[-0.025em] text-chalk">Prices in {group.currency}</h3>}
                   <ul className="mt-4">
-                    {location.lessons.map((lesson) => (
+                    {group.lessons.map((lesson) => (
                       <li key={`${lesson.programId}-${lesson.durationMinutes}`} className="grid gap-x-6 gap-y-1 border-t border-ivory/25 py-4 font-sans sm:grid-cols-[minmax(0,1fr)_auto]">
                         <div>
                           <p className="text-base font-semibold text-chalk">{lesson.programName} · {formatCoachingDuration(lesson.durationMinutes)}</p>

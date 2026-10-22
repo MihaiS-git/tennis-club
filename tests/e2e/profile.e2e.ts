@@ -5,7 +5,7 @@ import { localServiceRoleKey } from "./helpers/supabase";
 
 const labels = ["Player identity", "Personal information", "Tennis profile", "Account & security"] as const;
 const routes = { "Player identity": "/profile", "Personal information": "/profile/personal", "Tennis profile": "/profile/tennis", "Account & security": "/profile/security" } as const;
-const sidebarLabels = ["Bookings", "Booking history", ...labels];
+const sidebarLabels = ["Notifications", "Bookings", "Booking history", ...labels];
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAD0lEQVQImWP4z8Dwn4EBAAj+Af/KOtJRAAAAAElFTkSuQmCC", "base64");
 
 // Below lg the shared user sidebar is a drawer behind the "My account menu" trigger.

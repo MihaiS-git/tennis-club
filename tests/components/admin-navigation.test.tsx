@@ -99,8 +99,8 @@ it("shows Coaches only their own Bookings & Reservations area", () => {
 });
 
 it.each([
-  [false, ["Bookings & Reservations", "My availability"]],
-  [true, ["Locations", "Bookings & Reservations", "Programs", "Coaches", "Prices", "Availability", "Transactions", "Settings", "Users", "My availability"]],
+  [false, ["Bookings & Reservations", "My availability", "My prices"]],
+  [true, ["Locations", "Bookings & Reservations", "Programs", "Coaches", "Prices", "Availability", "Transactions", "Settings", "Users", "My availability", "My prices"]],
 ] as const)("adds the Coach area for coaches (Admin: %s)", (isAdmin, labels) => {
   navigation.pathname = "/coach/availability";
   render(<AdminNavigation isAdmin={isAdmin} isCoach />);
@@ -108,6 +108,7 @@ it.each([
   expect(within(nav).getAllByRole("link").map((link) => link.textContent)).toEqual(labels);
   expect(within(nav).getByRole("link", { name: "My availability" })).toMatchObject({ pathname: "/coach/availability" });
   expect(within(nav).getByRole("link", { name: "My availability" }).getAttribute("aria-current")).toBe("page");
+  expect(within(nav).getByRole("link", { name: "My prices" })).toMatchObject({ pathname: "/coach/pricing" });
 });
 
 it("closes the drawer with Escape and restores focus", () => {

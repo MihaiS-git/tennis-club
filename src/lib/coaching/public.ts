@@ -12,13 +12,12 @@ import type { LocationCurrency } from "@/lib/pricing/money";
 import { resolveCoachingPrice, type CoachingPriceRecord, type ResolvedCoachingPrice } from "./pricing";
 import { coachingProgramTypes, type CoachingProgramType } from "./validation";
 
-type PublicCoachingPrice = {
-  locationId: string; locationName: string; durationMinutes: number; amountMinor: number; currency: LocationCurrency;
-};
+// Club-wide prices: one per program duration and currency, never per location.
+type PublicCoachingPrice = { durationMinutes: number; amountMinor: number; currency: LocationCurrency };
 export type PublicCoachingProgram = {
   id: string; name: string; description: string; type: CoachingProgramType; durations: number[];
   minParticipants: number | null; maxParticipants: number | null; courtRentalIncluded: boolean;
-  // Club rates at publicly visible locations, in each location's current currency.
+  // Club rates in the currencies of publicly visible locations.
   prices: PublicCoachingPrice[];
 };
 type PublicCoachRate = PublicCoachingPrice & { programId: string; programName: string; courtRentalIncluded: boolean };
@@ -26,7 +25,7 @@ export type PublicCoach = {
   id: string; displayName: string; bio: string; qualifications: string; specialties: string[]; languages: string[];
   locations: { id: string; name: string }[];
   programs: { id: string; name: string }[];
-  // Only rates the Admin set for this coach; other lessons use the club rate.
+  // Only the coach's own rates, in the currencies of their public locations; other lessons use the club rate.
   rates: PublicCoachRate[];
 };
 export type PublicCoaching = { programs: PublicCoachingProgram[]; coaches: PublicCoach[] };
@@ -37,15 +36,21 @@ function priceRecords(facts: PublicCoachingFacts): CoachingPriceRecord[] {
   return facts.prices.flatMap((price) => {
     const currency = z.enum(locationCurrencies).safeParse(price.currency);
     return currency.success ? [{
-      programId: price.program_id, durationMinutes: price.duration_minutes, locationId: price.location_id,
+      programId: price.program_id, durationMinutes: price.duration_minutes,
       coachUserId: price.coach_user_id, amountMinor: price.amount_minor, currency: currency.data,
     }] : [];
   });
 }
 
+// A lesson is charged in its location's currency, so prices are shown in those currencies only.
+function currenciesOf(locations: readonly Pick<VisibleLocation, "currency">[]) {
+  return [...new Set(locations.map((location) => location.currency))].sort();
+}
+
 // Pure projection of the public facts onto the publicly visible locations.
 export function projectPublicCoaching(facts: PublicCoachingFacts, visibleLocations: readonly VisibleLocation[]): PublicCoaching {
   const locations = new Map(visibleLocations.map((location) => [location.id.toLowerCase(), location]));
+  const currencies = currenciesOf(visibleLocations);
   const prices = priceRecords(facts);
   const programs = facts.programs.flatMap((program) => {
     const type = z.enum(coachingProgramTypes).safeParse(program.program_type);
@@ -53,9 +58,9 @@ export function projectPublicCoaching(facts: PublicCoachingFacts, visibleLocatio
     return [{
       id: program.id, name: program.name, description: program.description, type: type.data, durations: program.durations,
       minParticipants: program.min_participants, maxParticipants: program.max_participants, courtRentalIncluded: program.court_rental_included,
-      prices: [...locations.values()].flatMap((location) => program.durations.flatMap((durationMinutes) => {
-        const resolved = resolveCoachingPrice(prices, { programId: program.id, durationMinutes, locationId: location.id, locationCurrency: location.currency });
-        return resolved ? [{ locationId: location.id, locationName: location.name, durationMinutes, amountMinor: resolved.amountMinor, currency: resolved.currency }] : [];
+      prices: currencies.flatMap((currency) => program.durations.flatMap((durationMinutes) => {
+        const resolved = resolveCoachingPrice(prices, { programId: program.id, durationMinutes, currency });
+        return resolved ? [{ durationMinutes, amountMinor: resolved.amountMinor, currency: resolved.currency }] : [];
       })),
     }];
   });
@@ -68,11 +73,10 @@ export function projectPublicCoaching(facts: PublicCoachingFacts, visibleLocatio
       specialties: coach.specialties, languages: coach.languages,
       locations: coachLocations.map(({ id, name }) => ({ id, name })),
       programs: coachPrograms.map(({ id, name }) => ({ id, name })),
-      rates: coachPrograms.flatMap((program) => coachLocations.flatMap((location) => program.durations.flatMap((durationMinutes) => {
-        const resolved = resolveCoachingPrice(prices, { programId: program.id, durationMinutes, locationId: location.id,
-          locationCurrency: location.currency, coachUserId: coach.user_id });
+      rates: coachPrograms.flatMap((program) => currenciesOf(coachLocations).flatMap((currency) => program.durations.flatMap((durationMinutes) => {
+        const resolved = resolveCoachingPrice(prices, { programId: program.id, durationMinutes, currency, coachUserId: coach.user_id });
         return resolved?.source === "coach" ? [{ programId: program.id, programName: program.name, courtRentalIncluded: program.courtRentalIncluded,
-          locationId: location.id, locationName: location.name, durationMinutes, amountMinor: resolved.amountMinor, currency: resolved.currency }] : [];
+          durationMinutes, amountMinor: resolved.amountMinor, currency: resolved.currency }] : [];
       }))),
     };
   });
@@ -80,13 +84,13 @@ export function projectPublicCoaching(facts: PublicCoachingFacts, visibleLocatio
 }
 
 export type PublicCoachLesson = {
-  locationId: string; locationName: string; programId: string; programName: string; durationMinutes: number;
+  programId: string; programName: string; durationMinutes: number; currency: LocationCurrency;
   // The coach's override, otherwise the club price, otherwise null (not published).
   price: ResolvedCoachingPrice | null;
 };
 export type PublicCoachProfile = Omit<PublicCoach, "programs" | "rates"> & {
   programs: Omit<PublicCoachingProgram, "prices">[];
-  // Every program duration the coach offers at each of their public locations.
+  // Every program duration the coach offers, in each currency of their public locations.
   lessons: PublicCoachLesson[];
 };
 
@@ -101,16 +105,13 @@ export function projectPublicCoachProfile(facts: PublicCoachingFacts, visibleLoc
       id: program.id, name: program.name, description: program.description, type: program.type, durations: program.durations,
       minParticipants: program.minParticipants, maxParticipants: program.maxParticipants, courtRentalIncluded: program.courtRentalIncluded,
     }));
-  const currencies = new Map(visibleLocations.map((location) => [location.id.toLowerCase(), location.currency]));
+  const coachLocationIds = new Set(coach.locations.map((location) => location.id.toLowerCase()));
+  const currencies = currenciesOf(visibleLocations.filter((location) => coachLocationIds.has(location.id.toLowerCase())));
   const prices = priceRecords(facts);
-  const lessons = coach.locations.flatMap((location) => {
-    const locationCurrency = currencies.get(location.id.toLowerCase());
-    if (!locationCurrency) return [];
-    return programs.flatMap((program) => program.durations.map((durationMinutes) => ({
-      locationId: location.id, locationName: location.name, programId: program.id, programName: program.name, durationMinutes,
-      price: resolveCoachingPrice(prices, { programId: program.id, durationMinutes, locationId: location.id, locationCurrency, coachUserId: coach.id }),
-    })));
-  });
+  const lessons = currencies.flatMap((currency) => programs.flatMap((program) => program.durations.map((durationMinutes) => ({
+    programId: program.id, programName: program.name, durationMinutes, currency,
+    price: resolveCoachingPrice(prices, { programId: program.id, durationMinutes, currency, coachUserId: coach.id }),
+  }))));
   return {
     id: coach.id, displayName: coach.displayName, bio: coach.bio, qualifications: coach.qualifications,
     specialties: coach.specialties, languages: coach.languages, locations: coach.locations, programs, lessons,

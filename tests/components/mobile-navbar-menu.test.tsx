@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { renderToReadableStream } from "react-dom/server";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 
 import type { CurrentAccount } from "../../src/lib/auth/account";
@@ -20,7 +20,12 @@ import { MobileNavbarMenu } from "../../src/components/mobile-navbar-menu";
 import { DesktopNavbar } from "../../src/components/desktop-navbar";
 import { MobileNavbar } from "../../src/components/mobile-navbar";
 
-afterEach(() => { cleanup(); avatar.url = null; signOut.mockReset(); });
+beforeEach(() => {
+  vi.stubGlobal("matchMedia", vi.fn((query: string) => Object.assign(new EventTarget(), {
+    matches: false, media: query, onchange: null,
+  })));
+});
+afterEach(() => { cleanup(); avatar.url = null; signOut.mockReset(); vi.unstubAllGlobals(); });
 
 it("shows signed-out links and closes on link selection or Escape", () => {
   render(<MobileNavbarMenu isAuthenticated={false} canReserve={false} />);
@@ -185,21 +190,28 @@ it.each([
 it.each([
   { state: "active", userId: "member-1", email: "member@example.com", roles: [] },
   { state: "active", userId: "admin-1", email: "admin@example.com", roles: ["admin"] },
-] satisfies CurrentAccount[])("renders no notification control in mobile navigation (%o)", async account => {
+] satisfies CurrentAccount[])("renders a notification bell in mobile navigation (%o)", async account => {
   readCurrentAccount.mockResolvedValue(account);
-  const { container } = render(await MobileNavbar());
+  render(await MobileNavbar());
   fireEvent.click(screen.getByRole("button", { name: "Open menu" }));
-  expect(screen.queryByRole("link", { name: /Notifications/ })).toBeNull();
+  expect(screen.getByRole("link", { name: "Notifications" }).getAttribute("href")).toBe("/messages");
   expect(screen.queryByRole("button", { name: /Notifications/ })).toBeNull();
-  expect(container.ownerDocument.querySelector('a[href*="notifications"]')).toBeNull();
 });
 
-it("renders no notification control in desktop navigation", async () => {
+it("renders a notification bell in desktop navigation", async () => {
   readCurrentAccount.mockResolvedValue({ state: "active", roles: ["admin"], userId: "admin-1", email: "admin@example.com" });
   const markup = await new Response(await renderToReadableStream(<DesktopNavbar />)).text();
   const container = document.createElement("div");
   container.innerHTML = markup;
   expect(container.querySelector('a[href="/profile"]')).not.toBeNull();
-  expect(container.querySelector('a[href*="notifications"]')).toBeNull();
-  expect(container.querySelector('[aria-label^="Notifications"]')).toBeNull();
+  expect(container.querySelector('a[aria-label="Notifications"]')?.getAttribute("href")).toBe("/messages");
+});
+
+it("does not render a notification bell for guests", async () => {
+  readCurrentAccount.mockResolvedValue({ state: "unauthenticated" });
+  render(await MobileNavbar());
+  expect(screen.queryByRole("link", { name: /Notifications/ })).toBeNull();
+  const markup = await new Response(await renderToReadableStream(<DesktopNavbar />)).text();
+  const desktop = new DOMParser().parseFromString(markup, "text/html");
+  expect(desktop.querySelector('[aria-label^="Notifications"]')).toBeNull();
 });

@@ -81,7 +81,7 @@ test("Coach opens own lessons and reservations from Calendar and List, managing 
     const rendered = await (await page.request.get(calendarUrl)).text();
     expect(rendered).toContain(studentA);
     for (const leaked of [studentB, courtCustomer, `${lessonB.slice(0, 8)}@example.test`, `${courtBooking.slice(0, 8)}@example.test`, lessonB, courtBooking,
-      "Coach Beta", "total_amount_minor", "stripe_refund_available", "payments", "account_user_id"]) expect(rendered).not.toContain(leaked);
+      "Coach Beta", "total_amount_minor", "stripe_refund_available", "payments", "payment_status", "account_user_id"]) expect(rendered).not.toContain(leaked);
     await page.goto(calendarUrl);
     for (const hidden of [studentB, courtCustomer]) await expect(page.getByText(hidden)).toHaveCount(0);
     await expect(page.getByRole("button", { name: new RegExp(`S1 ${date} 09:00–10:00, Booked`) })).toBeVisible();

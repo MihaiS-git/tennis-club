@@ -3,9 +3,9 @@ import "server-only";
 import { timestampToEpochMicroseconds } from "@/lib/precise-time";
 
 import { adjustmentHoldFragments, refundBackedAdjustment, refundBackedOutcome, type BookingCancellationCommandResult } from "./domain";
-import { buildBookingRevision, capturePricingEvidence, pricingEvidenceSchema, sameRevisionContract } from "./revision";
+import { buildBookingRevision, capturePricingEvidence, pricingEvidenceSchema, sameRevisionContract, type CoachingEvidence, type PricingEvidence } from "./revision";
 import { getDataSource } from "@/lib/db/data-source";
-import { normalizeDatabaseError } from "@/lib/db/errors";
+import { normalizeDatabaseError, reservationOverlap } from "@/lib/db/errors";
 import { logger } from "@/lib/logger";
 import * as revisions from "@/lib/db/repositories/booking-revisions.repository";
 import { createHash, randomUUID } from "node:crypto";
@@ -18,6 +18,10 @@ import type { EntityManager } from "typeorm";
 import { z } from "zod";
 import { inTransaction } from "@/lib/db/transaction";
 import { lockReservationActorFacts } from "@/lib/db/repositories/accounts.repository";
+import { findCoachLessonAssignment, lockCoachProfileForBooking } from "@/lib/db/repositories/coaching.repository";
+import { findPublicLocationWithCourts } from "@/lib/courts/public";
+import { projectCoachingRescheduleStarts, readCoachingLessonDay } from "@/lib/coaching/lesson-availability";
+import { quoteCoachingReschedule, type CoachingRescheduleResult } from "@/lib/coaching/lesson-quote";
 import * as bookings from "@/lib/db/repositories/bookings.repository";
 import * as reservations from "@/lib/db/repositories/reservations.repository";
 import * as payments from "@/lib/db/repositories/payments.repository";
@@ -30,7 +34,7 @@ import { getCourtStateForDate } from "@/lib/courts/state";
 import { mondayWeekday, resolvePricingRule } from "@/lib/pricing/resolution";
 import { getCalendarSelection } from "@/lib/courts/interval-selection";
 import { fitsOpeningHours } from "@/lib/reservations/domain";
-import { recordBookingFinancialException } from "@/lib/db/repositories/booking-financial-exceptions.repository";
+import { recordBookingFinancialException, recordBookingTransition } from "@/lib/notifications/events";
 import { customerBookingNoticeBypass, customerMutationDeadline } from "./self-cancellation";
 import type { BookingRescheduleResult } from "./reschedule";
 
@@ -44,24 +48,42 @@ class BookingParentChanged extends Error {}
 
 // The only retry is parent rediscovery, always in a fresh transaction. In
 // particular serialization/deadlock failures never become browser stale results.
+// coachDate marks a write that may hold a coaching lesson's coach on that date:
+// it follows the lesson lock order (configuration → coach profile FOR SHARE →
+// ordered locations, including those of the coach's expired holds on the date).
 async function withBooking<T>(id: string, configuration: boolean, unavailable: T,
   work: (manager: EntityManager, aggregate: Aggregate) => Promise<T>,
-  tokens?: { booking: string; reservation: string }, occupancyWrite = true): Promise<T> {
+  tokens?: { booking: string; reservation: string }, occupancyWrite = true, coachDate?: string): Promise<T> {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       return await inTransaction(async (manager) => {
         if (configuration) await clubs.lockConfigurationForRead(manager);
         const parent = await bookings.discoverBookingLocation(manager, id);
         if (!parent) return unavailable;
-        const [location] = await (occupancyWrite ? clubs.lockLocations : clubs.lockLocationsForRead)(manager, [parent.location_id]);
+        const lesson = coachDate && occupancyWrite && configuration && parent.coach_user_id
+          ? { coach: parent.coach_user_id, date: coachDate } : null;
+        // An archived profile has no row to share; eligibility then rejects the lesson.
+        if (lesson) await lockCoachProfileForBooking(manager, lesson.coach);
+        // Expired coach holds no longer occupy the coach, yet the coach exclusion
+        // still covers them on any court or location until their expiry releases them.
+        const discovered = lesson ? await reservations.listExpiredCoachHoldCourts(manager, lesson.coach, lesson.date) : [];
+        const locked = await (occupancyWrite ? clubs.lockLocations : clubs.lockLocationsForRead)(manager,
+          [parent.location_id, ...discovered.map((row) => row.location_id)]);
+        const location = locked.find((candidate) => candidate.id === parent.location_id);
         if (!location) return unavailable;
         if (occupancyWrite && configuration) await expirePaymentHoldsAtLocation(manager, location.id);
+        if (lesson) {
+          const expired = await reservations.listExpiredCoachHoldCourts(manager, lesson.coach, lesson.date);
+          if (expired.some((row) => !locked.some((candidate) => candidate.id === row.location_id))) throw new BookingParentChanged();
+          for (const row of expired) await expirePaymentHoldsAtLocation(manager, row.location_id, { courtId: row.court_id });
+        }
         const booking = await bookings.findBookingForUpdate(manager, id, tokens?.booking);
         if (!booking) return unavailable;
         const reservation = await reservations.findReservationForUpdate(manager, booking.reservation_id, tokens?.reservation);
         if (!reservation) return unavailable;
         const resource = await reservations.findReservationResourceFacts(manager, reservation.court_id);
         if (!resource || resource.location_id !== parent.location_id) throw new BookingParentChanged();
+        if (coachDate && reservation.coach_user_id !== parent.coach_user_id) throw new BookingParentChanged();
         return work(manager, { booking, reservation, location, resource });
       });
     } catch (error: unknown) {
@@ -152,6 +174,7 @@ export async function cancelCustomerBookingCommand(id: string, actorId: string, 
       cancellationCause: scope === "admin" ? "admin_cancelled" : "owner_cancelled" }, b.revision);
     await revisions.advanceRevision(manager, { revision, previousId: b.current_revision_id, status: "cancelled" });
     await reservations.updateCustomerReservationCancellation(manager, r.id, actorId, checkedAt);
+    await recordBookingTransition(manager, revision);
     return { outcome: "cancelled", refundIds: [] };
   });
   return result;
@@ -209,6 +232,7 @@ export async function resolveRefundBackedAdjustment(adjustmentId: string): Promi
       await revisions.advanceRevision(manager, { revision, previousId: b.current_revision_id, status: "cancelled" });
       await reservations.updateCustomerReservationCancellation(manager, r.id, adjustment.actorId, now);
       await adjustments.updateAdjustment(manager, adjustment.id, "applied");
+      await recordBookingTransition(manager, revision, "The cancellation refund completed.");
       return "applied";
     }
     // Reduction: the accepted quote is applied as refunded, never repriced. Its
@@ -219,8 +243,8 @@ export async function resolveRefundBackedAdjustment(adjustmentId: string): Promi
     let moved = false;
     try { moved = await reservations.updateCustomerReservationSchedule(manager, r.id, target); }
     catch (error) {
-      const failure = normalizeDatabaseError(error);
-      if (!(failure.sqlState === "23P01" && failure.constraint === "court_reservation_no_overlap")) throw error;
+      // Either exclusion (court, or the lesson's coach) leaves the original booking in place.
+      if (!reservationOverlap(normalizeDatabaseError(error))) throw error;
       await manager.query("ROLLBACK TO SAVEPOINT refund_adjustment_apply");
     }
     await manager.query("RELEASE SAVEPOINT refund_adjustment_apply");
@@ -242,6 +266,7 @@ export async function resolveRefundBackedAdjustment(adjustmentId: string): Promi
       cancellationCause: null }, b.revision);
     await revisions.advanceRevision(manager, { revision, previousId: b.current_revision_id, status: "confirmed" });
     await adjustments.updateAdjustment(manager, adjustment.id, "applied");
+    await recordBookingTransition(manager, revision, "The price reduction refund completed.");
     return "applied";
   });
   return status;
@@ -257,21 +282,67 @@ type Edit = z.infer<typeof bookingRescheduleInputSchema>;
 const unavailableEdit = { ok: false as const, message: "This booking or interval is no longer available to reschedule." };
 const conflict = { ok: false as const, message: "That court is no longer available. The booking has not changed." };
 
-async function editEligibility(manager: EntityManager, a: Aggregate, actorId: string) {
+// A coaching booking's immutable lesson: its revision names the coach and program,
+// its evidence the agreed fee and duration, and its reservation holds the same coach
+// at the same location. null for a court booking; false when the facts disagree.
+function lessonContract(a: Aggregate) {
+  const v = a.booking.revision, coaching = v.pricingEvidence.coaching;
+  if (!coaching && !v.coachUserId && !a.reservation.coach_user_id) return null;
+  if (!coaching || !v.coachUserId || !v.coachingProgramId || a.reservation.coach_user_id !== v.coachUserId
+    || coaching.coachUserId !== v.coachUserId || coaching.programId !== v.coachingProgramId || coaching.locationId !== a.location.id
+    || a.reservation.ends_at_minute - a.reservation.starts_at_minute !== coaching.durationMinutes
+    || v.paymentMethod !== "online") return false;
+  return { coachUserId: v.coachUserId, programId: v.coachingProgramId, coaching };
+}
+
+// funded: an accepted, paid proposal; its coach authorization was checked when proposed.
+async function editEligibility(manager: EntityManager, a: Aggregate, actorId: string, funded = false) {
   const actor = await lockReservationActorFacts(manager, actorId);
   if (actor?.status !== "active") return { ok: false as const, message: "An active account is required to edit a booking." };
   if (a.booking.account_user_id !== actorId)
     return { ok: false as const, message: "This booking is no longer available to edit." };
-  if (a.booking.revision.coachUserId || a.reservation.coach_user_id)
-    return { ok: false as const, message: "Coaching bookings cannot be rescheduled yet." };
-  if (a.booking.status !== "confirmed" || a.reservation.status !== "active" || !activeOriginal(a)
+  const lesson = lessonContract(a);
+  if (lesson === false || a.booking.status !== "confirmed" || a.reservation.status !== "active" || !activeOriginal(a)
     || a.location.currency !== a.booking.currency) return { ok: false as const,
       message: "This booking is no longer available to edit." };
+  if (lesson && !funded) {
+    // The same coach must still be able to teach this lesson here; another coach is never substituted.
+    const coach = await lockReservationActorFacts(manager, lesson.coachUserId);
+    const assignment = await findCoachLessonAssignment(manager, lesson.coachUserId, a.location.id, lesson.programId);
+    if (coach?.status !== "active" || !coach.roles.includes("coach") || !assignment.profile) return { ok: false as const,
+      message: "This lesson's coach is no longer available for lessons. Contact the club to rearrange it." };
+    if (!assignment.location) return { ok: false as const,
+      message: "This lesson's coach no longer teaches at this location. Contact the club to rearrange it." };
+    if (!assignment.program) return { ok: false as const,
+      message: "This lesson's coach no longer offers this program. Contact the club to rearrange it." };
+  }
   const bypass = customerBookingNoticeBypass(actor.roles);
   if (timing(a, bypass, await reservations.readReservationClockTime(manager)) !== "eligible")
     return { ok: false as const, message: "The rescheduling window for this booking has closed." };
-  return { ok: true as const, bypass, actorScope: actor.roles.includes("admin") ? "admin_owner" as const
+  return { ok: true as const, bypass, lesson, actorScope: actor.roles.includes("admin") ? "admin_owner" as const
     : actor.roles.includes("coach") ? "coach_owner" as const : "customer" as const };
+}
+
+const lessonMessages: Record<Exclude<CoachingRescheduleResult, { ok: true }>["reason"], string> = {
+  "invalid-time": "Choose a lesson start on a 30-minute boundary that keeps the lesson's length.",
+  "coach-unavailable": "The coach is not available at the selected time.",
+  "coach-booked": "The coach is no longer available at the selected time. The booking has not changed.",
+  "court-unavailable": "That court is no longer available. The booking has not changed.",
+  unpriced: "No complete pricing is available for this interval. Choose another interval.",
+};
+
+// The purchased lesson at the requested slot under the current operational
+// availability, read after the booking's locks. The lesson's own reservation is
+// excluded so it never conflicts with itself; the coaching fee is never repriced.
+async function quoteLesson(manager: EntityManager, a: Aggregate, edit: Edit, coaching: CoachingEvidence, coachUserId: string) {
+  const now = new Date(await reservations.readReservationClockTime(manager));
+  const location = await findPublicLocationWithCourts(manager, a.location.id, now);
+  if (!location) return { ok: false as const, message: "This location is not accepting lesson bookings right now." };
+  const day = await readCoachingLessonDay(manager, location, coachUserId, edit.date, now, a.reservation.id);
+  if (!day) throw new Error("Malformed lesson day.");
+  if (edit.date < day.today) return unavailableEdit;
+  const result = quoteCoachingReschedule(day, coaching, { courtId: edit.courtId, startMinute: edit.startMinute });
+  return result.ok ? result : { ok: false as const, message: lessonMessages[result.reason] };
 }
 
 async function executeReschedule(manager: EntityManager, a: Aggregate, edit: Edit, actorId: string,
@@ -282,9 +353,11 @@ async function executeReschedule(manager: EntityManager, a: Aggregate, edit: Edi
     const intentHash = createHash("sha256").update(JSON.stringify({ actorId, base: edit.expectedRevisionId,
       courtId: edit.courtId, date: edit.date, start: edit.startMinute, end: edit.endMinute, total: edit.expectedTotal })).digest("hex");
     const requestKey = edit.requestId ?? intentHash;
-    const eligible = await editEligibility(manager, a, actorId);
+    const eligible = await editEligibility(manager, a, actorId, Boolean(funded));
     if (!eligible.ok) return eligible;
     const b = a.booking, r = a.reservation;
+    if (eligible.lesson && edit.endMinute - edit.startMinute !== eligible.lesson.coaching.durationMinutes)
+      return { ok: false, message: "A coaching lesson keeps its original length. Choose a new start time." };
     if (edit.save && !funded) {
       const applied = await revisions.findRevisionOperation(manager, b.id, requestKey);
       if (applied) return applied.intentHash === intentHash ? { ok: true, totalAmountMinor: applied.totalAmountMinor }
@@ -325,38 +398,56 @@ async function executeReschedule(manager: EntityManager, a: Aggregate, edit: Edi
 
     if (!b.token_matches || !r.token_matches) return { ok: false, reason: "stale",
       message: "This booking has changed since you opened it. Close and reopen its details." };
-    const courts = await clubs.listCheckoutLocationCourts(manager, a.location.id);
-    const court = courts.find(c => c.id === edit.courtId);
-    const hours = await reservations.listReservationOpeningHours(manager, a.location.id, edit.date);
-    if (!court || !fitsOpeningHours(hours, edit.date, edit.startMinute, edit.endMinute)) return unavailableEdit;
     const targetStart = localStartInstant(a.location.timezone, edit.date, edit.startMinute);
-    if (timestampToEpochMicroseconds(await reservations.readReservationClockTime(manager)) >= timestampToEpochMicroseconds(targetStart)) return unavailableEdit;
-    if (await hasOccupancyConflict(manager, edit, a.location.id, r.id)) return conflict;
-    const coverage = await clubs.listCheckoutCourtCoverage(manager, court.id, edit.date);
-    const state = getCourtStateForDate(court.environment, coverage.map(c => ({ starts_on: c.startsOn, ends_on: c.endsOn })), edit.date);
-    const rules = await listCheckoutPricing(manager, court.id, mondayWeekday(edit.date), edit.date);
-    const pricing = rules.map(p => ({ id: p.id, rule_set_id: p.ruleSetId, location_id: p.locationId,
-      court_id: p.courtId, court_state: p.courtState, weekday: p.weekday, starts_at_minute: p.startsAtMinute,
-      ends_at_minute: p.endsAtMinute, starts_on: p.startsOn, ends_on: p.endsOn, price_per_hour_minor: p.pricePerHourMinor,
-      created_at: p.createdAt.toISOString(), updated_at: p.updatedAt.toISOString() }));
-    const times = Array.from({ length: (edit.endMinute - edit.startMinute) / 30 }, (_, i) => edit.startMinute + i * 30);
-    const hourlyPrices = times.map(minute => {
-      const rule = resolvePricingRule(pricing, { court_id: court.id, court_state: state, date: edit.date, minute });
-      return rule && minute + 30 <= rule.ends_at_minute ? rule.price_per_hour_minor : null;
-    });
-    const selection = getCalendarSelection({ courtId: court.id, times, cells: times.map(() => "available"), hourlyPrices }, 0, times.length);
-    if (!selection || selection.priceMinor > 2147483647) return { ok: false,
-      message: "No complete pricing is available for this interval. Choose another interval." };
-    const total = selection.priceMinor;
+    let court: { id: string; name: string }, total: number, pricingEvidence: () => PricingEvidence;
+    if (eligible.lesson && funded) {
+      // The accepted, paid proposal is the contract: its held target and snapshotted
+      // quote are applied as accepted, never repriced or rechecked against the coach's schedule.
+      const accepted = pricingEvidenceSchema.safeParse(funded.adjustment.target.pricingEvidence);
+      const target = (await clubs.listCheckoutLocationCourts(manager, a.location.id)).find(c => c.id === edit.courtId);
+      if (!accepted.success || !accepted.data.coaching || !target) return unavailableEdit;
+      if (timestampToEpochMicroseconds(await reservations.readReservationClockTime(manager)) >= timestampToEpochMicroseconds(targetStart)) return unavailableEdit;
+      const evidence = accepted.data;
+      court = target; total = funded.adjustment.newTotal; pricingEvidence = () => evidence;
+    } else if (eligible.lesson) {
+      const quoted = await quoteLesson(manager, a, edit, eligible.lesson.coaching, eligible.lesson.coachUserId);
+      if (!quoted.ok) return quoted;
+      const { quote } = quoted;
+      court = quote.court; total = quote.totalAmountMinor; pricingEvidence = () => quote.pricingEvidence;
+    } else {
+      const courts = await clubs.listCheckoutLocationCourts(manager, a.location.id);
+      const target = courts.find(c => c.id === edit.courtId);
+      const hours = await reservations.listReservationOpeningHours(manager, a.location.id, edit.date);
+      if (!target || !fitsOpeningHours(hours, edit.date, edit.startMinute, edit.endMinute)) return unavailableEdit;
+      if (timestampToEpochMicroseconds(await reservations.readReservationClockTime(manager)) >= timestampToEpochMicroseconds(targetStart)) return unavailableEdit;
+      if (await hasOccupancyConflict(manager, edit, a.location.id, r.id)) return conflict;
+      const coverage = await clubs.listCheckoutCourtCoverage(manager, target.id, edit.date);
+      const state = getCourtStateForDate(target.environment, coverage.map(c => ({ starts_on: c.startsOn, ends_on: c.endsOn })), edit.date);
+      const rules = await listCheckoutPricing(manager, target.id, mondayWeekday(edit.date), edit.date);
+      const pricing = rules.map(p => ({ id: p.id, rule_set_id: p.ruleSetId, location_id: p.locationId,
+        court_id: p.courtId, court_state: p.courtState, weekday: p.weekday, starts_at_minute: p.startsAtMinute,
+        ends_at_minute: p.endsAtMinute, starts_on: p.startsOn, ends_on: p.endsOn, price_per_hour_minor: p.pricePerHourMinor,
+        created_at: p.createdAt.toISOString(), updated_at: p.updatedAt.toISOString() }));
+      const times = Array.from({ length: (edit.endMinute - edit.startMinute) / 30 }, (_, i) => edit.startMinute + i * 30);
+      const hourlyPrices = times.map(minute => {
+        const rule = resolvePricingRule(pricing, { court_id: target.id, court_state: state, date: edit.date, minute });
+        return rule && minute + 30 <= rule.ends_at_minute ? rule.price_per_hour_minor : null;
+      });
+      const selection = getCalendarSelection({ courtId: target.id, times, cells: times.map(() => "available"), hourlyPrices }, 0, times.length);
+      if (!selection || selection.priceMinor > 2147483647) return { ok: false,
+        message: "No complete pricing is available for this interval. Choose another interval." };
+      const rental = selection.priceMinor;
+      court = target; total = rental;
+      pricingEvidence = () => capturePricingEvidence(pricing, { courtId: target.id, courtState: state, date: edit.date,
+        startMinute: edit.startMinute, endMinute: edit.endMinute, total: rental });
+    }
     if (!edit.save) return { ok: true, totalAmountMinor: total };
     if (edit.expectedTotal !== total || total !== b.total_amount_minor && !edit.priceAcknowledged)
       return { ok: false, reason: "price_changed", totalAmountMinor: total,
         message: "The price has changed. Confirm the new total before saving." };
     const terms = { ...b.revision, courtId: court.id, courtName: court.name,
       locationName: a.location.name, timezone: a.location.timezone, bookingDate: edit.date,
-      startMinute: edit.startMinute, endMinute: edit.endMinute, totalAmountMinor: total,
-      pricingEvidence: capturePricingEvidence(pricing, { courtId: court.id, courtState: state, date: edit.date,
-        startMinute: edit.startMinute, endMinute: edit.endMinute, total }) };
+      startMinute: edit.startMinute, endMinute: edit.endMinute, totalAmountMinor: total, pricingEvidence: pricingEvidence() };
     if (sameRevisionContract(b.revision, terms)) return { ok: true, totalAmountMinor: total };
     const revisionId = randomUUID();
     if (total !== b.total_amount_minor && b.payment_method !== "pay_at_club") {
@@ -371,7 +462,7 @@ async function executeReschedule(manager: EntityManager, a: Aggregate, edit: Edi
         const financial = lockedFinancials ?? await bookingFinancials(manager, b.id, true);
         if (financial.refundable !== b.total_amount_minor || financial.captures.some(p => p.currency !== b.currency)) return { ok: false,
           message: "This booking has an unresolved financial balance. Contact the club before changing its price." };
-        const fragments = adjustmentHoldFragments({ courtId:r.court_id,date:r.booking_date,startMinute:r.starts_at_minute,endMinute:r.ends_at_minute }, edit);
+        const fragments = adjustmentHoldFragments({ courtId:r.court_id,date:r.booking_date,startMinute:r.starts_at_minute,endMinute:r.ends_at_minute }, edit, r.coach_user_id);
         const target = { courtId: edit.courtId, date: edit.date, startMinute: edit.startMinute, endMinute: edit.endMinute,
           expectedUpdatedAt: edit.expectedUpdatedAt, courtName: court.name, locationName: a.location.name, timezone: a.location.timezone,
           actorScope: eligible.actorScope };
@@ -395,8 +486,9 @@ async function executeReschedule(manager: EntityManager, a: Aggregate, edit: Edi
             refundIds: pendingRefundIds, target: pending.target };
         }
         const expiresAt = new Date(Date.parse(await reservations.readReservationClockTime(manager)) + paymentHoldSeconds() * 1000);
+        // A lesson's accepted quote is snapshotted so settlement applies it without repricing.
         const adjustment = await adjustments.insertAdjustment(manager, { bookingId: b.id, baseRevisionId: b.current_revision_id, actorId, scope: "owner", requestKey,
-          target, originalTotal: b.total_amount_minor, newTotal: total, currency: b.currency, expiresAt });
+          target: eligible.lesson ? { ...target, pricingEvidence: terms.pricingEvidence } : target, originalTotal: b.total_amount_minor, newTotal: total, currency: b.currency, expiresAt });
         await adjustments.insertAdjustmentHolds(manager, { adjustmentId: adjustment.id, expiresAt, fragments });
         await payments.insertAdjustmentAttempt(manager, { id: randomUUID(), bookingId: b.id, adjustmentId: adjustment.id,
           method: "online", provider: "stripe", amountMinor: delta, currency: z.enum(locationCurrencies).parse(b.currency),
@@ -424,6 +516,7 @@ async function executeReschedule(manager: EntityManager, a: Aggregate, edit: Edi
       intentHash, actorUserId: actorId, actorScope: eligible.actorScope, recordedAt: new Date(now),
       adjustmentId: funded?.adjustment.id ?? null, cancellationCause: null }, b.revision);
     await revisions.advanceRevision(manager, { revision, previousId: b.current_revision_id, status: "confirmed", deadline: writeDeadline });
+    await recordBookingTransition(manager, revision);
     return { ok: true, totalAmountMinor: total };
 }
 
@@ -432,7 +525,7 @@ export async function rescheduleCustomerBookingCommand(edit: Edit, actorId: stri
   let superseded: SupersededAttempt[] = [];
   const result = await withBooking<BookingRescheduleResult>(edit.id, true, { ok: false, message: "This booking is no longer available to edit." },
     (manager, a) => { superseded = []; return executeReschedule(manager, a, edit, actorId, undefined, superseded); },
-    { booking: edit.expectedRevisionId, reservation: edit.expectedUpdatedAt });
+    { booking: edit.expectedRevisionId, reservation: edit.expectedUpdatedAt }, true, edit.date);
   return superseded.length ? { ...result, supersededAttempts: superseded } : result;
 }
 
@@ -450,10 +543,28 @@ export async function applyCapturedBookingAdjustment(manager: EntityManager, adj
   }, adjustment.actorId, { id: attemptId, adjustment, deadline });
   return { result };
 }
+// The purchased lesson's fixed terms and every start it can move to on the date,
+// after its owner and eligibility were authorized under the booking's locks.
+async function readLessonEditContext(manager: EntityManager, a: Aggregate, date: string,
+  lesson: { coachUserId: string; programId: string; coaching: CoachingEvidence }) {
+  const now = new Date(await reservations.readReservationClockTime(manager));
+  const location = await findPublicLocationWithCourts(manager, a.location.id, now);
+  if (!location) throw new Error("This location is not accepting lesson bookings right now.");
+  const day = await readCoachingLessonDay(manager, location, lesson.coachUserId, date, now, a.reservation.id);
+  if (!day) throw new Error("Malformed lesson day.");
+  const v = a.booking.revision;
+  return { coach: { id: lesson.coachUserId, name: v.coachName ?? "" },
+    program: { id: lesson.programId, name: v.coachingProgramName ?? "", participantCount: lesson.coaching.participantCount ?? 1,
+      courtRentalIncluded: lesson.coaching.courtRentalIncluded },
+    durationMinutes: lesson.coaching.durationMinutes, coachingAmountMinor: lesson.coaching.amountMinor,
+    starts: projectCoachingRescheduleStarts(day, lesson.coaching) };
+}
+
 export async function readCustomerBookingEditContext(id: string, date: string, actorId: string) {
   return withBooking(id, true, null, async (manager, a) => {
     const eligible = await editEligibility(manager, a, actorId);
     if (!eligible.ok) throw new Error(eligible.message);
+    const coaching = eligible.lesson ? await readLessonEditContext(manager, a, date, eligible.lesson) : null;
     const courts = await clubs.listCheckoutLocationCourts(manager, a.location.id);
     const hours = await reservations.listReservationOpeningHours(manager, a.location.id, date);
     const occupancy = await reservations.listCustomerEditOccupancy(manager, a.location.id, date, a.reservation.id);
@@ -468,6 +579,6 @@ export async function readCustomerBookingEditContext(id: string, date: string, a
       current_revision_id: a.booking.current_revision_id, total_amount_minor: a.booking.total_amount_minor, currency: a.booking.currency,
       location: { id: a.location.id, name: a.location.name, timezone: a.location.timezone, is_active: a.location.isActive,
         archived_at: a.location.archivedAt?.toISOString() ?? null, courts: courts.map(c => ({ id: c.id, name: c.name, is_active: true })) },
-      hours, occupancy };
+      hours, occupancy, coaching };
   }, undefined, false);
 }
