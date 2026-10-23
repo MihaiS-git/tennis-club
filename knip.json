@@ -5,6 +5,7 @@
     "scripts/initialize-test-database.ts",
     "playwright.config.ts",
     "playwright.stripe-live.config.ts",
+    "tests/local/assert-next-server-environment.mjs",
     "tests/e2e/fixtures/stripe-server.mjs",
     "tests/e2e/recovery-verification.config.ts",
     "tests/e2e-live/**/*.e2e.ts",
@@ -26,6 +27,9 @@
       "tests/e2e/**/*.e2e.ts"
     ]
   },
+  "ignoreDependencies": [
+    "@next/env"
+  ],
   "ignoreBinaries": [
     "psql",
     "stripe"
