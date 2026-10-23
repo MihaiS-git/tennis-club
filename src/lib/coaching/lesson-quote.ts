@@ -12,7 +12,7 @@ import type { PricingRule } from "@/lib/pricing/validation";
 import { resolveCoachAvailability, type AvailabilityException, type WeeklyAvailabilityInterval } from "./availability-schedule";
 import type { ResolvedCoachingPrice } from "./pricing";
 import { projectPublicCoachProfile } from "./public";
-import { isOnlineCoachingProgramType } from "./validation";
+import { isCoachingDuration, isOnlineCoachingProgramType } from "./validation";
 
 const maxAmountMinor = 2147483647;
 
@@ -74,10 +74,10 @@ export type CoachingLessonUnavailableReason =
 
 export type CoachingLessonResult = { ok: true; quote: CoachingLessonQuote } | { ok: false; reason: CoachingLessonUnavailableReason };
 
-// Lessons use the court grid: 30-minute starts, at least 60 minutes in 30-minute steps.
+// Lessons use 30-minute starts and one of the canonical durations.
 function isLessonInterval(startMinute: number, durationMinutes: number) {
   return Number.isInteger(startMinute) && Number.isInteger(durationMinutes) && startMinute >= 0
-    && startMinute % 30 === 0 && durationMinutes >= 60 && durationMinutes % 30 === 0 && startMinute + durationMinutes <= 1440;
+    && startMinute % 30 === 0 && isCoachingDuration(durationMinutes) && startMinute + durationMinutes <= 1440;
 }
 
 // Schedule facts shared by new lessons and rescheduled ones: the coach's windows at
@@ -200,7 +200,7 @@ export type CoachingRescheduleQuote = {
 export type CoachingRescheduleResult = { ok: true; quote: CoachingRescheduleQuote }
   | { ok: false; reason: "invalid-time" | "coach-unavailable" | "coach-booked" | "court-unavailable" | "unpriced" };
 
-// A purchased lesson at another time or court: the same coach, location, duration
+// A purchased lesson at another time on its stored court: the same coach, location, duration
 // and agreed coaching fee, never repriced; only the court rental follows the
 // current court pricing (and stays uncharged when the program includes it).
 // The caller supplies the operational day, the coach's own facts and occupancy

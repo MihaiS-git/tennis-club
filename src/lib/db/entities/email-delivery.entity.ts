@@ -45,6 +45,9 @@ export class EmailDeliveryEntity {
   @Column({ name: "last_error", type: "text", nullable: true })
   lastError!: string | null;
 
+  @Column({ name: "suppressed_at", type: "timestamptz", nullable: true })
+  suppressedAt?: Date | null;
+
   @Column({ name: "created_at", type: "timestamptz" })
   createdAt!: Date;
 

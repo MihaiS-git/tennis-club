@@ -4,8 +4,8 @@ Admin-configured programs, public coach profiles and coaching prices form the fo
 Coaches and Admins manage private coach availability (see [Coach availability](#coach-availability)).
 Reservation Steps 1–6 support Private and Semi-private lessons on `/book?mode=coaching`, using protected
 coach/court holds and the existing combined-payment, settlement, expiry and refund lifecycle.
-Coaching packages remain deferred. Customer lesson rescheduling is implemented server-side (see
-"Lesson rescheduling"); its My Activity UI is not yet enabled.
+Coaching packages remain deferred. Customer lesson rescheduling uses the shared My Activity editor
+(see "Lesson rescheduling").
 
 ## Data model
 
@@ -16,7 +16,7 @@ Browser roles have no grants on any of them.
 | Table | Purpose |
 | --- | --- |
 | `coaching_programs` | Name, description, `program_type` (`private`, `semi_private`, `group`, `junior`), optional min/max participants, `court_rental_included`, `is_active`. Unused programs may be deleted; booking history requires deactivation. |
-| `coaching_program_durations` | Lesson lengths a program offers (15–480 minutes, 5-minute steps). |
+| `coaching_program_durations` | Any nonempty subset of 60, 90 and 120 minutes, for every program type. |
 | `coach_profiles` | Public coaching profile keyed by `user_id`: display name, bio, qualifications, specialties, languages, `is_public`. A sibling of `player_profiles`. |
 | `coach_locations`, `coach_programs` | Where a coach teaches and which programs they offer. |
 | `coaching_prices` | A club-wide default (`coach_user_id IS NULL`) or one coach's override for a program duration in one `currency`, with `amount_minor`. Prices name no location. |
@@ -288,7 +288,7 @@ revision, reservation and payment lifecycle. Server-side checkout, settlement an
   and historical `coach_name`/`coaching_program_name`: all set for a coaching contract, all
   NULL for a court booking (`booking_revisions_coaching`). Revisions remain immutable.
 
-Lessons use the existing court grid (30-minute steps, at least 60 minutes). Matching a
+Lessons start on the existing 30-minute court grid and last 60, 90 or 120 minutes. Matching a
 reservation's coach to its current revision, availability, eligibility and pricing remain
 TypeScript decisions. Tests: `tests/integration/db/coaching-reservations.integration.test.ts`.
 
@@ -306,7 +306,7 @@ with no second account, enrollment, booking or payment. Group and Junior remain 
 
 Rules, in order (the first failure is the result's `reason`):
 
-1. `invalid-time`: 30-minute start, at least 60 minutes in 30-minute steps, ending by midnight.
+1. `invalid-time`: 30-minute start, a 60/90/120-minute duration, ending by midnight.
 2. `not-offered`: eligibility comes from `projectPublicCoachProfile` over the public coaching facts
    (active program, public coach with an active account holding the `coach` role, assigned to the
    program and, independently, to the location). The program must be `private` or `semi_private`. The location must be publicly eligible
@@ -429,10 +429,10 @@ remains unimplemented.
 
 ### Lesson rescheduling
 
-The owner of a confirmed online lesson may move it to another date, start or court at the
-same location before the snapshotted modification notice; started lessons never move. The
-coach, program, location, duration and agreed coaching fee are fixed: the request carries
-only the court, date and start, and the end must keep the purchased length. The lesson's
+The owner of a confirmed online lesson may change only its date and starting time before the snapshotted modification notice; started lessons never move. The
+court, coach, program, location, participants, duration and agreed coaching fee/policy are fixed.
+The server rejects a different court or end inconsistent with the stored duration; quotations
+calculate the end from that duration. The lesson's
 coach must still be active, hold the coach role, have an unarchived profile and be assigned
 to the location and program; another coach is never substituted. Public coach/program
 publication is not required, but the location must still accept public lesson bookings
@@ -442,18 +442,19 @@ because the operational day reads are the public ones.
 rules (coach windows and exceptions, the coach's other lessons and holds, court occupancy,
 opening hours, the court grid) to a day read with the lesson's own reservation excluded.
 The total is the agreed fee plus the current court rental, or the fee alone when the
-program includes rental; `lessonPricingEvidence` keeps the full coaching evidence. The
+original stored agreement includes rental, regardless of current program configuration;
+`lessonPricingEvidence` keeps the coaching contract and revised court amount. The
 existing adjustment lifecycle handles the difference: an unchanged total moves the row and
 appends a `rescheduled` revision directly; a reduction is refund-backed; an increase holds
 the target for court and coach and its proposal snapshots the accepted evidence, which
 settlement applies without repricing or rechecking the coach. The edit context returns the
-fixed lesson terms and every available start with per-court amounts.
+fixed lesson terms and every available start on the original court.
 
 In My Activity, Reschedule opens the existing booking dialog's `BookingEditForm`. For a
-lesson it shows the fixed location, coach, program, duration and original interval, and
+lesson it shows the fixed location, court, coach, program, duration and original interval, and
 renders the `/book` lesson timetable (`src/components/booking-timetable.tsx`, shared with
-`BookingCalendar`) from each date's edit read: a start selects the full lesson length on any
-court at the location. Totals, surcharge checkout and refund status come from the existing
+`BookingCalendar`) from each date's edit read: a start selects the full lesson length on the
+original court. Totals, surcharge checkout and refund status come from the existing
 owner quote/save actions and modification UI; the browser never prices or excludes the
 original reservation itself. `tests/components/lesson-reschedule.test.tsx` covers it.
 
@@ -531,7 +532,7 @@ page, with mode links and shared location/date navigation. Selection order is
   never filtered by date, working hours, reservations, courts, programs or prices.
 - Program: the selected coach's own `coach_programs` assignments (active programs). Group and
   Junior assignments are listed but disabled (not bookable online). Nothing is derived from the location.
-- Duration: the program's configured durations on the lesson grid (≥ 60 minutes, 30-minute steps),
+- Duration: the program's configured subset of 60, 90 and 120 minutes,
   each labelled with its effective price (`coachingBookingOptions` in
   `src/lib/coaching/booking-options.ts`): the coach's override, else the club default, in the
   location's currency; otherwise "price unavailable", which blocks lesson starts and checkout.
@@ -711,14 +712,13 @@ Auth/account records, player profiles, roles and personal court bookings are nev
 Focused regressions: `admin/coaching.integration.test.ts` covers cross-location/override/stale-currency
 cleanup, retained prices, rollback, real foreign keys, removal authorization, historical protections,
 coach eligibility and preserved identities. `admin-coaching.test.tsx` covers visible icon actions,
-confirmation, explicit deactivation, archive feedback and the Junior 45-minute single-save interaction.
+confirmation, explicit deactivation, archive feedback and canonical Junior duration selection.
 
 ### Correction validation and changed files
 
 The existing uncommitted Private/Semi-private selector, quote, booking, snapshot and
-single-payment corrections were preserved and verified. The duration failure was confirmed
-by a read-only development PostgreSQL query: Junior coaching / 45 min had a RON 50 club
-price at RiMUS, while the selected Mivus pricing view showed it as not set.
+single-payment corrections were preserved and verified. Earlier development fixtures contained unsupported 45-minute Junior lessons. Current
+fixtures use canonical durations; legacy financial contracts remain untouched.
 
 Changes for management cleanup and removal:
 
@@ -781,3 +781,17 @@ Do not run a reset/rebuild without approval. Existing single-day fixtures explic
 identical start and end dates. Focused range integration coverage is in
 `tests/integration/admin/coach-availability.integration.test.ts`; list coverage is in
 `tests/integration/admin/coaching-lists.integration.test.ts`.
+
+### Canonical duration correction
+
+`CanonicalCoachingDurations1791462257928` tightens the configuration CHECK to 60/90/120.
+It never changes booked lessons, revisions or financial records. Existing unsupported
+configuration is retained for explicit Admin cleanup, hidden from customer offerings;
+the CHECK applies to all new/updated rows and is validated immediately when no legacy rows exist.
+The earlier applied migration stays immutable. Apply the additive migration before deployment.
+
+Rescheduling notifications always retain the eligible customer/Coach in-app messages.
+Email is optional and queues only when Admin has enabled configured delivery in Club settings;
+Admin/Coach accounts never receive transactional application email. The coaching integration
+fixture explicitly selects disabled/unconfigured or enabled/configured settings, restores the
+previous singleton values, and never dispatches Brevo. Supabase Auth mail is independent.

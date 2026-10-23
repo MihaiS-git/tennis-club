@@ -30,13 +30,14 @@ it.each([
   ["/admin/coaching/prices", "Prices"],
   ["/admin/coaching/availability", "Availability"],
   ["/admin/users", "Users"],
+  ["/admin/club", "Club"],
 ])("activates only %s's primary section", (pathname, label) => {
   navigation.pathname = pathname;
   render(<AdminNavigation isAdmin={true} />);
   const nav = screen.getByRole("navigation", { name: "Management navigation" });
   const links = within(nav).getAllByRole("link");
-  expect(links.map((link) => link.textContent)).toEqual(["Locations", "Bookings & Reservations", "Programs", "Coaches", "Prices", "Availability", "Transactions", "Settings", "Users"]);
-  expect(links.map((link) => link.getAttribute("href"))).toEqual(["/admin/locations", "/admin/bookings", "/admin/coaching/programs", "/admin/coaching/coaches", "/admin/coaching/prices", "/admin/coaching/availability", "/admin/payments/transactions", "/admin/payments/settings", "/admin/users"]);
+  expect(links.map((link) => link.textContent)).toEqual(["Locations", "Bookings & Reservations", "Programs", "Coaches", "Prices", "Availability", "Transactions", "Settings", "Users", "Club"]);
+  expect(links.map((link) => link.getAttribute("href"))).toEqual(["/admin/locations", "/admin/bookings", "/admin/coaching/programs", "/admin/coaching/coaches", "/admin/coaching/prices", "/admin/coaching/availability", "/admin/payments/transactions", "/admin/payments/settings", "/admin/users", "/admin/club"]);
   for (const link of links) {
     expect(link.getAttribute("aria-current")).toBe(link.textContent === label ? "page" : null);
     expect(link.className.includes("bg-primary text-primary-foreground")).toBe(link.textContent === label);
@@ -100,7 +101,7 @@ it("shows Coaches only their own Bookings & Reservations area", () => {
 
 it.each([
   [false, ["Bookings & Reservations", "My availability", "My prices"]],
-  [true, ["Locations", "Bookings & Reservations", "Programs", "Coaches", "Prices", "Availability", "Transactions", "Settings", "Users", "My availability", "My prices"]],
+  [true, ["Locations", "Bookings & Reservations", "Programs", "Coaches", "Prices", "Availability", "Transactions", "Settings", "Users", "Club", "My availability", "My prices"]],
 ] as const)("adds the Coach area for coaches (Admin: %s)", (isAdmin, labels) => {
   navigation.pathname = "/coach/availability";
   render(<AdminNavigation isAdmin={isAdmin} isCoach />);
@@ -118,7 +119,7 @@ it("closes the drawer with Escape and restores focus", () => {
   const drawer = screen.getByRole("dialog", { name: "Management menu" });
   const close = within(drawer).getByRole("button", { name: "Close management menu" });
   expect(document.activeElement).toBe(close);
-  const last = within(drawer).getByRole("link", { name: "Users" });
+  const last = within(drawer).getByRole("link", { name: "Club" });
   fireEvent.keyDown(close, { key: "Tab", shiftKey: true });
   expect(document.activeElement).toBe(last);
   fireEvent.keyDown(last, { key: "Tab" });

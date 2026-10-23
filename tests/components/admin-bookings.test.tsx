@@ -61,12 +61,12 @@ test("court filter is disabled until a location is selected and offers only that
 });
 
 test("filters, dates and debounced search update the URL, keep header sorting and reset to page 1", () => {
-  mocks.query = "status=confirmed&sort=scheduled&dir=asc&page=3";
+  mocks.query = "view=list&status=confirmed&sort=scheduled&dir=asc&page=3";
   render(<BookingsToolbar locations={locations} />);
   fireEvent.change(screen.getByLabelText("From"), { target: { value: "2026-01-01" } });
-  expect(lastParams()).toEqual({ status: "confirmed", sort: "scheduled", dir: "asc", from: "2026-01-01" });
+  expect(lastParams()).toEqual({ view: "list", status: "confirmed", sort: "scheduled", dir: "asc", from: "2026-01-01" });
   fireEvent.change(screen.getByLabelText("To"), { target: { value: "2026-01-31" } });
-  expect(lastParams()).toEqual({ status: "confirmed", sort: "scheduled", dir: "asc", from: "2026-01-01", to: "2026-01-31" });
+  expect(lastParams()).toEqual({ view: "list", status: "confirmed", sort: "scheduled", dir: "asc", from: "2026-01-01", to: "2026-01-31" });
   expect(screen.queryByRole("combobox", { name: "Sort" })).toBeNull();
   fireEvent.change(screen.getByRole("searchbox", { name: "Search" }), { target: { value: " ac000000 " } });
   expect(mocks.replace).toHaveBeenCalledTimes(2);
@@ -359,7 +359,7 @@ test("one area shows URL-backed Calendar and List tabs without stacking the two 
   expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Bookings & Reservations");
   const tabs = within(screen.getByRole("navigation", { name: "Bookings and reservations views" })).getAllByRole("link");
   expect(tabs.map((tab) => [tab.textContent, tab.getAttribute("href"), tab.getAttribute("aria-current")]))
-    .toEqual([["Calendar", "/admin/bookings?view=calendar", null], ["List", "/admin/bookings", "page"]]);
+    .toEqual([["Calendar", "/admin/bookings?view=calendar", null], ["List", "/admin/bookings?view=list", "page"]]);
   expect(screen.getByRole("table", { name: "Bookings and reservations" })).toBeDefined();
   expect(screen.queryByText("Scheduler")).toBeNull();
   cleanup(); vi.clearAllMocks(); mocks.authorize.mockResolvedValue({ roles: ["admin"] });

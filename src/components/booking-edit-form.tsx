@@ -71,6 +71,7 @@ function LessonChange({ context, lesson, draft }: { context: BookingEditContext;
   return <section aria-label="Lesson" className="rounded-control border border-border bg-surface-muted/50 p-3 text-sm">
     <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 [&_dd]:text-right [&_dd]:font-semibold">
       <dt className="text-muted-foreground">Location</dt><dd>{context.location.name}</dd>
+      <dt className="text-muted-foreground">Court</dt><dd>{courtName(context.court_id)}</dd>
       <dt className="text-muted-foreground">Coach</dt><dd>{lesson.coach.name}</dd>
       <dt className="text-muted-foreground">Program</dt><dd>{lesson.program.name}</dd>
       <dt className="text-muted-foreground">Duration</dt><dd>{lesson.durationMinutes} min</dd>
@@ -147,7 +148,9 @@ export function BookingEditForm({ booking, location, onCancel, onSaved, onPendin
   // A lesson's starts depend on the date, so each day read carries them to its timetable.
   const loadLessonDay = useMemo(() => async (id: string, date: string) => {
     const result = await actions.load(id, date);
-    return { day: { ...result.day, lesson: result.booking.coaching } };
+    return { day: { ...result.day, courts: result.booking.coaching
+      ? result.day.courts.filter(row => row.court.id === result.booking.court_id) : result.day.courts,
+      lesson: result.booking.coaching } };
   }, [actions]);
   useEffect(() => {
     let disposed = false;

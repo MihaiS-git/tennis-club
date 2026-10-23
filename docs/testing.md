@@ -321,3 +321,21 @@ section menu (`public-page-layout.test.tsx`). `coaching-seed.integration.test.ts
 idempotency, preserved Admin edits, duplicate-free prices, coach eligibility and public coach reads. `tests/integration/admin/coaching.integration.test.ts`
 exercises real Admin saves, coach eligibility, dependency rejection, unique/composite FK
 constraints, public visibility, currency handling and denied browser grants.
+
+
+## Club settings
+
+After applying pending additive TypeORM migrations with the existing isolated initializer
+(no reset needed), run:
+
+```bash
+node --conditions=react-server --import=./scripts/ts-loader.mjs scripts/initialize-test-database.ts
+npx vitest run tests/unit/club tests/unit/notifications tests/components/club-settings.test.tsx tests/components/admin-navigation.test.tsx
+npm run test:integration -- tests/integration/club-settings.integration.test.ts tests/integration/notifications.integration.test.ts tests/integration/db/migration-cutover.integration.test.ts
+```
+
+Club tests use mocked HTTP only. The settings integration test rolls back its settings
+and delivery fixtures, tests persistent suppression and denied browser grants, and makes
+no provider requests. Notification integration fixtures explicitly enable email while
+testing channel policies and restore the original settings afterward. Migration history
+now includes additive `ClubSettings1791462257927` after the three base migrations.

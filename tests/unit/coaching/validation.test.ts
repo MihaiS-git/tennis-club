@@ -10,9 +10,22 @@ const fields = { name: "Private lesson", description: "", program_type: "private
 describe("coaching program validation", () => {
   it("accepts configurable program types and optional participant limits", () => {
     for (const program_type of ["private", "semi_private", "group", "junior"]) {
-      expect(coachingProgramMutationSchema.safeParse({ fields: { ...fields, program_type } }).success).toBe(true);
+      for (const durations of [[60], [90], [120], [60, 90], [60, 120], [90, 120], [60, 90, 120]]) {
+        expect(coachingProgramMutationSchema.safeParse({ fields: { ...fields, program_type, durations } }).success).toBe(true);
+      }
     }
     expect(coachingProgramMutationSchema.safeParse({ fields: { ...fields, max_participants: null } }).success).toBe(true);
+  });
+
+  it.each([undefined, "a1000000-0000-4000-8000-000000000001"])("restricts create/update durations (id=%s)", (id) => {
+    for (const durations of [[60], [90], [120], [60, 90, 120]]) {
+      expect(coachingProgramMutationSchema.safeParse({ id, fields: { ...fields, durations } }).success).toBe(true);
+    }
+    for (const minutes of [15, 30, 45, 75, 105, 150, 480]) {
+      expect(coachingProgramMutationSchema.safeParse({ id, fields: { ...fields, durations: [60, minutes] } }).success).toBe(false);
+    }
+    expect(coachingProgramMutationSchema.safeParse({ id, fields: { ...fields, other_durations: "105" } }).success).toBe(false);
+    expect(coachingProgramMutationSchema.safeParse({ id, fields, other_durations: "105" }).success).toBe(false);
   });
 
   it("rejects invalid durations, limits, types and unknown fields with field errors", () => {
@@ -43,6 +56,9 @@ describe("coach profile and price validation", () => {
   it("parses decimal amounts without floating point for a program, duration and supported currency", () => {
     const key = { program_id: "a1000000-0000-4000-8000-000000000001", duration_minutes: 60, currency: "RON" };
     expect(coachingPriceMutationSchema.parse({ ...key, amount: "120.5" }).amount).toBe(12050);
+    for (const duration_minutes of [45, 150, 180]) {
+      expect(coachingPriceMutationSchema.safeParse({ ...key, duration_minutes, amount: "100" }).success).toBe(false);
+    }
     expect(coachingPriceMutationSchema.safeParse({ ...key, amount: "0" }).success).toBe(false);
     expect(coachingPriceMutationSchema.safeParse({ ...key, amount: "1.234" }).success).toBe(false);
     expect(coachingPriceMutationSchema.safeParse({ ...key, amount: "10", currency: "XYZ" }).success).toBe(false);

@@ -15,6 +15,24 @@ import { OpeningHoursScheduleEntity } from "../entities/opening-hours-schedule.e
 
 const returnedIds = z.array(z.object({ id: z.uuid() }));
 
+// Selector facts for one location, independent of the timetable's selected date.
+// No private notes, absences or occupancy are needed to establish that a coach teaches here.
+export async function listLocationCoachBookingAvailability(manager: EntityManager, locationId: string, coachIds: readonly string[], today: string) {
+  if (!coachIds.length) return { weekly: [], extra: [] };
+  const where = { locationId: locationId.toLowerCase(), coachUserId: In([...coachIds]) };
+  const [weekly, extra] = await readIndependently(manager, [
+    () => manager.getRepository(CoachWeeklyAvailabilityEntity).find({
+      select: { coachUserId: true, weekday: true, startMinute: true, endMinute: true, validFrom: true, validUntil: true },
+      where: [IsNull(), MoreThanOrEqual(today)].map(validUntil => ({ ...where, validUntil })),
+    }),
+    () => manager.getRepository(CoachAvailabilityExceptionEntity).find({
+      select: { coachUserId: true, exceptionDate: true, startMinute: true, endMinute: true },
+      where: { ...where, kind: "available", exceptionDate: MoreThanOrEqual(today) },
+    }),
+  ]);
+  return { weekly, extra };
+}
+
 export async function listCoachWeeklyAvailability(manager: EntityManager, coachUserId: string) {
   return manager.getRepository(CoachWeeklyAvailabilityEntity).find({
     where: { coachUserId: coachUserId.toLowerCase() },

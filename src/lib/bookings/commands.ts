@@ -356,6 +356,8 @@ async function executeReschedule(manager: EntityManager, a: Aggregate, edit: Edi
     const eligible = await editEligibility(manager, a, actorId, Boolean(funded));
     if (!eligible.ok) return eligible;
     const b = a.booking, r = a.reservation;
+    if (eligible.lesson && edit.courtId !== r.court_id)
+      return { ok: false, message: "A coaching lesson keeps its original court. Choose a new date or start time." };
     if (eligible.lesson && edit.endMinute - edit.startMinute !== eligible.lesson.coaching.durationMinutes)
       return { ok: false, message: "A coaching lesson keeps its original length. Choose a new start time." };
     if (edit.save && !funded) {
@@ -557,7 +559,8 @@ async function readLessonEditContext(manager: EntityManager, a: Aggregate, date:
     program: { id: lesson.programId, name: v.coachingProgramName ?? "", participantCount: lesson.coaching.participantCount ?? 1,
       courtRentalIncluded: lesson.coaching.courtRentalIncluded },
     durationMinutes: lesson.coaching.durationMinutes, coachingAmountMinor: lesson.coaching.amountMinor,
-    starts: projectCoachingRescheduleStarts(day, lesson.coaching) };
+    starts: projectCoachingRescheduleStarts({ ...day, location: { ...day.location,
+      courts: day.location.courts.filter(court => court.id === a.reservation.court_id) } }, lesson.coaching) };
 }
 
 export async function readCustomerBookingEditContext(id: string, date: string, actorId: string) {

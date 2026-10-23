@@ -41,7 +41,10 @@ import { CoachingPriceEntity } from "./entities/coaching-price.entity";
 import { CoachingProgramDurationEntity } from "./entities/coaching-program-duration.entity";
 import { CoachingProgramEntity } from "./entities/coaching-program.entity";
 
+import { ClubSettingEntity } from "./entities/club-setting.entity";
+
 const entities = {
+  ClubSettingEntity,
   AuthUserEntity,
   RefundExecutionEntity,
   BookingRevisionEntity,

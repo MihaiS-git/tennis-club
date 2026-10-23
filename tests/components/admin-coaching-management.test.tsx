@@ -70,7 +70,7 @@ it("lays out coaches in seven compact columns with the email below the name", ()
   expect(cells.map((cell) => cell.textContent).slice(1, 3)).toEqual(["Active", "Configured"]);
   expect(cells[4].textContent).toBe("Central Club");
   expect(cells[5].textContent).toBe("Private lesson");
-  expect(within(cells[6]).getByRole("button", { name: "Edit coach" })).toBeTruthy();
+  expect(within(cells[6]).queryByRole("button", { name: "Edit coach" })).toBeNull();
   expect(within(cells[6]).getByRole("button", { name: "Delete coach" })).toBeTruthy();
 });
 
@@ -139,6 +139,19 @@ it("removes the Programs sort dropdowns and marks the descending heading", async
   expect(new URL(within(table).getByRole("link", { name: "Name" }).getAttribute("href")!, "http://localhost").searchParams.get("dir")).toBe("asc");
 });
 
+it("keeps one Status column and filters programs by status", async () => {
+  navigation.pathname = "/admin/coaching/programs";
+  navigation.query = "type=private&page=2";
+  lists.loadProgramsPage.mockResolvedValue({ programs: [program], currencies: [ron], prices: [], total: 1, page: 1, totalPages: 1,
+    filters: programFiltersSchema.parse({ type: "private" }) });
+  render(await AdminCoachingProgramsPage({ searchParams: Promise.resolve({ type: "private", page: "2" }) }));
+  const table = screen.getByRole("table", { name: "Coaching programs" });
+  expect(within(table).getAllByRole("columnheader", { name: "Status" })).toHaveLength(1);
+  expect((within(table).getByRole("combobox", { name: "Status of Private lesson" }) as HTMLSelectElement).value).toBe("true");
+  fireEvent.change(screen.getByRole("combobox", { name: "Status" }), { target: { value: "inactive" } });
+  expect(navigation.replace).toHaveBeenCalledWith("/admin/coaching/programs?type=private&status=inactive", { scroll: false });
+});
+
 function pricesPageData(filters: Record<string, string>, programs: AdminCoachingProgram[]) {
   return { programs, coaches: [coach], locations: [central], currencies: [ron], prices: [], total: 18, page: 1, totalPages: 1,
     filters: priceFiltersSchema.parse(filters), groups: [{ program_id: programs[0].id, currency: "RON" as const, duration_minutes: 60 }] };
@@ -147,14 +160,14 @@ function pricesPageData(filters: Record<string, string>, programs: AdminCoaching
 it("offers a searchable program filter and numerically ordered durations without sort dropdowns", async () => {
   navigation.query = "scope=club&sort=amount&dir=desc&page=2";
   const many = Array.from({ length: 60 }, (_, index) => ({ ...program, id: `a1000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
-    name: `Program ${String(index).padStart(2, "0")}`, durations: [120, 45, 90 + (index % 3) * 5] }));
+    name: `Program ${String(index).padStart(2, "0")}`, durations: [60, 90, 120] }));
   lists.loadPricesPage.mockResolvedValue(pricesPageData({ scope: "club", sort: "amount", dir: "desc" }, many));
   render(await AdminCoachingPricesPage({ searchParams: Promise.resolve({ scope: "club", sort: "amount", dir: "desc" }) }));
   expect(screen.getByText(/^18 pricing groups/)).toBeTruthy();
   expect(screen.queryByRole("combobox", { name: "Sort by" })).toBeNull();
   expect(screen.queryByRole("combobox", { name: "Direction" })).toBeNull();
   expect([...(screen.getByRole("combobox", { name: "Duration" }) as HTMLSelectElement).options].map((option) => option.text))
-    .toEqual(["All durations", "45 min", "90 min", "95 min", "100 min", "120 min"]);
+    .toEqual(["All durations", "60 min", "90 min", "120 min"]);
 
   const programFilter = screen.getByRole("combobox", { name: "Program" }) as HTMLInputElement;
   expect(programFilter.value).toBe("All programs");
@@ -192,8 +205,8 @@ it("shows club-wide price inputs grouped by currency for the selected durations"
   const dialog = screen.getByRole("dialog", { name: "Edit program" });
   const ronPrices = within(dialog).getByRole("region", { name: "Club prices in RON" });
   const eurPrices = within(dialog).getByRole("region", { name: "Club prices in EUR" });
-  expect(within(ronPrices).getByRole("heading").textContent).toBe("RON — Central Club");
-  expect(within(eurPrices).getByRole("heading").textContent).toBe("EUR — Riverside Club");
+  expect(within(ronPrices).getByRole("heading").textContent).toBe("RON");
+  expect(within(eurPrices).getByRole("heading").textContent).toBe("EUR");
   // Existing club defaults are loaded; coach overrides are not editable here.
   expect((within(dialog).getByLabelText("60 min club price in RON") as HTMLInputElement).value).toBe("180.00");
   expect((within(dialog).getByLabelText("90 min club price in RON") as HTMLInputElement).value).toBe("");
@@ -205,8 +218,9 @@ it("shows club-wide price inputs grouped by currency for the selected durations"
   expect(within(dialog).getByLabelText("120 min club price in EUR")).toBeTruthy();
   fireEvent.click(within(dialog).getByLabelText("90 min"));
   expect(within(dialog).queryByLabelText("90 min club price in RON")).toBeNull();
-  fireEvent.input(within(dialog).getByLabelText("Other durations (minutes, comma-separated)"), { target: { value: "105" } });
-  expect(within(dialog).getByLabelText("105 min club price in RON")).toBeTruthy();
+  expect(within(dialog).queryByLabelText(/Other durations/)).toBeNull();
+  expect(dialog.textContent).not.toContain(central.name);
+  expect(dialog.textContent).not.toContain(riverside.name);
 });
 
 it("creates a program with its submitted club prices, omitting empty prices", async () => {

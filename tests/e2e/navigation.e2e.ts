@@ -99,7 +99,7 @@ test("navigation follows the current account and protected routes enforce access
     await navigation.getByRole("link", { name: "Admin" }).click();
     const adminNavigation = page.getByRole("navigation", { name: "Management navigation" });
     await expect(page).toHaveURL(/\/admin\/locations$/);
-    await expect(adminNavigation.getByRole("link")).toHaveText(["Locations", "Bookings & Reservations", "Programs", "Coaches", "Prices", "Availability", "Transactions", "Settings", "Users"]);
+    await expect(adminNavigation.getByRole("link")).toHaveText(["Locations", "Bookings & Reservations", "Programs", "Coaches", "Prices", "Availability", "Transactions", "Settings", "Users", "Club"]);
     await expect(adminNavigation.getByRole("link", { name: "Locations" })).toHaveAttribute("aria-current", "page");
     await adminNavigation.getByRole("link", { name: "Users" }).click();
     await expect(page.getByRole("heading", { name: "Users", exact: true })).toBeVisible();
@@ -143,7 +143,7 @@ test("navigation follows the current account and protected routes enforce access
     await expect(page.getByLabel("Date")).toHaveValue("2099-10-15");
     await expect(page.getByRole("table", { name: "Bookings and reservations" })).toHaveCount(0);
     await views.getByRole("link", { name: "List" }).click();
-    await expect(page).toHaveURL(/\/admin\/bookings$/);
+    await expect(page).toHaveURL(/\/admin\/bookings\?view=list$/);
     await expect(views.getByRole("link", { name: "List" })).toHaveAttribute("aria-current", "page");
     await expect(page.getByRole("searchbox", { name: "Search" })).toBeVisible();
     await expect(page.getByLabel("Date")).toHaveCount(0);

@@ -151,6 +151,7 @@ test("inbox toolbar keeps active controls and detail/pagination links retain the
   const html = renderToStaticMarkup(await MessagesPage({ searchParams: Promise.resolve({
     q: "Court", status: "unread", category: "bookings", sort: "oldest", page: "2",
   }) }));
+  expect(html).not.toContain(">Apply</button>");
   expect(html).toContain('name="q"');
   expect(html).toContain('value="Court"');
   expect(html).toContain('name="status"');

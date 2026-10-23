@@ -39,11 +39,11 @@ const days: Record<string, { day: unknown; coaching: ReturnType<typeof lesson> }
   "2099-10-15": { day: { times, courts: [
     { court: courtA, cells: ["available", "available", "available", "available", "available", "available"] },
     { court: courtB, cells: ["available", "available", "booked", "available", "available", "available"] },
-  ] }, coaching: lesson([start(600, [offer(courtA, 7500), offer(courtB, 7500)]), start(690, [offer(courtA, 7500), offer(courtB, 9000)])]) },
+  ] }, coaching: lesson([start(600, [offer(courtA, 7500), offer(courtB, 7500)]), start(690, [offer(courtA, 9000), offer(courtB, 9000)])]) },
   "2099-10-16": { day: { times, courts: [
     { court: courtA, cells: ["booked", "booked", "available", "available", "available", "available"] },
     { court: courtB, cells: ["available", "available", "available", "available", "available", "available"] },
-  ] }, coaching: lesson([start(720, [offer(courtB, 6500)])]) },
+  ] }, coaching: lesson([start(720, [offer(courtA, 6500)])]) },
 };
 
 function renderLesson() {
@@ -83,6 +83,7 @@ it("reuses the /book timetable with fixed lesson terms and the original lesson p
     expect(lessonTerms().getByText(term).nextElementSibling?.textContent).toBe(value);
   expect(lessonTerms().getByText("Choose a new lesson start")).toBeTruthy();
   expect(screen.queryByRole("combobox")).toBeNull();
+  expect(screen.queryByRole("button", { name: /Court B/ })).toBeNull();
   // The lesson's own reservation does not block its start.
   expect(cell(/Court A 2099-10-15 10:00–11:00, 60 min lesson/).getAttribute("aria-pressed")).toBe("true");
   expect(screen.queryByRole("button", { name: /Court B 2099-10-15 11:00/ })).toBeNull();
@@ -92,15 +93,15 @@ it("reuses the /book timetable with fixed lesson terms and the original lesson p
   expect(save).not.toHaveBeenCalled();
 });
 
-it("selects another court and start of the fixed length and shows the server-quoted surcharge", async () => {
+it("selects a start on the original court with the fixed length and shows the server-quoted surcharge", async () => {
   quote.mockResolvedValue({ ok: true, totalAmountMinor: 7500 });
   renderLesson();
   await opened();
-  await choose(/Court B 2099-10-15 11:30–12:30, 60 min lesson, RON\s90.00 total/, 9000);
-  expect(quote).toHaveBeenLastCalledWith(expect.objectContaining({ id: booking.id, courtId: courtB.id, date: "2099-10-15",
+  await choose(/Court A 2099-10-15 11:30–12:30, 60 min lesson, RON\s90.00 total/, 9000);
+  expect(quote).toHaveBeenLastCalledWith(expect.objectContaining({ id: booking.id, courtId: courtA.id, date: "2099-10-15",
     startMinute: 690, endMinute: 750, save: false }));
   expect(Object.keys(quote.mock.lastCall![0])).not.toContain("excludeReservationId");
-  expect(lessonTerms().getByText("Proposed").nextElementSibling?.textContent).toBe("2099-10-15 · 11:30–12:30 · Court B");
+  expect(lessonTerms().getByText("Proposed").nextElementSibling?.textContent).toBe("2099-10-15 · 11:30–12:30 · Court A");
   expect(screen.getByText(/Additional amount payable:.*RON\s15\.00/)).toBeTruthy();
   expect(screen.getByRole("region", { name: "Booking price" }).textContent).toContain(formatMoney(7500, "RON"));
   expect(saveButton()).toHaveProperty("disabled", true);
@@ -117,12 +118,12 @@ it("reloads lesson availability for a new date", async () => {
   renderLesson();
   await opened();
   fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2099-10-16" } });
-  await screen.findByRole("button", { name: /Court B 2099-10-16 12:00–13:00, 60 min lesson, RON\s65.00 total/ });
+  await screen.findByRole("button", { name: /Court A 2099-10-16 12:00–13:00, 60 min lesson, RON\s65.00 total/ });
   expect(load).toHaveBeenLastCalledWith(booking.id, "2099-10-16");
-  expect(screen.queryByRole("button", { name: /Court A 2099-10-16/ })).toBeNull();
-  expect(screen.queryByRole("button", { name: /Court B 2099-10-16 10:00/ })).toBeNull();
-  await choose(/Court B 2099-10-16 12:00–13:00/, 6500);
-  expect(lessonTerms().getByText("Proposed").nextElementSibling?.textContent).toBe("2099-10-16 · 12:00–13:00 · Court B");
+  expect(screen.queryByRole("button", { name: /Court B 2099-10-16/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Court A 2099-10-16 10:00/ })).toBeNull();
+  await choose(/Court A 2099-10-16 12:00–13:00/, 6500);
+  expect(lessonTerms().getByText("Proposed").nextElementSibling?.textContent).toBe("2099-10-16 · 12:00–13:00 · Court A");
 });
 
 it("applies an unchanged-price lesson move directly", async () => {
@@ -141,12 +142,12 @@ it("applies an unchanged-price lesson move directly", async () => {
 it("uses the existing surcharge checkout and keeps the original lesson until payment is verified", async () => {
   quote.mockResolvedValue({ ok: true, totalAmountMinor: 7500 });
   save.mockResolvedValue({ ok: true, totalAmountMinor: 9000, adjustmentId: booking.id, adjustmentStatus: "pending",
-    target: { courtId: courtB.id, date: "2099-10-15", startMinute: 690, endMinute: 750 },
+    target: { courtId: courtA.id, date: "2099-10-15", startMinute: 690, endMinute: 750 },
     checkout: { attemptId: booking.id, token: "a".repeat(64), presentation: { kind: "stripe", clientSecret: "pi_secret", publishableKey: "pk_test_Fixture" } },
     holdExpiresAt: "2099-10-15T10:00:00Z" });
   const { onSaved, onAdjustment } = renderLesson();
   await opened();
-  await choose(/Court B 2099-10-15 11:30–12:30/, 9000);
+  await choose(/Court A 2099-10-15 11:30–12:30/, 9000);
   fireEvent.click(screen.getByRole("checkbox")); fireEvent.click(saveButton());
   await screen.findByRole("region", { name: "Booking modification" });
   expect(screen.getByText("Complete your modification")).toBeTruthy();
@@ -163,8 +164,8 @@ it("uses the existing refund-backed adjustment without claiming the lesson moved
   const { onSaved, onAdjustment } = renderLesson();
   await opened();
   fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2099-10-16" } });
-  await screen.findByRole("button", { name: /Court B 2099-10-16 12:00–13:00/ });
-  await choose(/Court B 2099-10-16 12:00–13:00/, 6500);
+  await screen.findByRole("button", { name: /Court A 2099-10-16 12:00–13:00/ });
+  await choose(/Court A 2099-10-16 12:00–13:00/, 6500);
   expect(screen.getByText(/Eligible refund:.*RON\s10\.00/)).toBeTruthy();
   fireEvent.click(screen.getByRole("checkbox")); fireEvent.click(saveButton());
   await screen.findByText("Refund requested, awaiting confirmation");

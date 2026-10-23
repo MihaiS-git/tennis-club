@@ -1,6 +1,6 @@
 "use client";
 
-import { CalendarClock, ClipboardList, CreditCard, GraduationCap, MapPin, Tag, Users } from "lucide-react";
+import { Building2, CalendarClock, ClipboardList, CreditCard, GraduationCap, MapPin, Tag, Users } from "lucide-react";
 import { SidebarNavigation, type SidebarEntry } from "./sidebar-navigation";
 
 const adminEntries: readonly SidebarEntry[] = [
@@ -18,6 +18,7 @@ const adminEntries: readonly SidebarEntry[] = [
     { label: "Settings", href: "/admin/payments/settings" },
   ] },
   { label: "Users", href: "/admin/users", icon: Users },
+  { label: "Club", href: "/admin/club", icon: Building2 },
 ];
 // Coaches get their own Calendar and List of their lessons and staff reservations.
 const coachEntries: readonly SidebarEntry[] = [{ label: "Bookings & Reservations", href: "/coach/bookings", icon: ClipboardList }];

@@ -17,7 +17,7 @@ import type { LocationCurrency } from "@/lib/pricing/money";
 import type { CoachingEvidence } from "@/lib/bookings/revision";
 import { listCoachingLessonOffers, listCoachingRescheduleOffers, type CoachingLessonDay, type CoachingLessonQuote } from "./lesson-quote";
 import { projectPublicCoachProfile } from "./public";
-import { isOnlineCoachingProgramType } from "./validation";
+import { isCoachingDuration, isOnlineCoachingProgramType } from "./validation";
 
 const coachingLessonAvailabilitySchema = z.object({
   locationId: z.uuid(), programId: z.uuid(), coachId: z.uuid(), date: z.iso.date(),
@@ -94,7 +94,7 @@ export function projectCoachingLessonAvailability(day: CoachingLessonDay, progra
     [{ id: locationId, name: day.location.name, currency: day.location.currency }], day.coach.userId);
   const program = profile?.programs.find((candidate) => candidate.id === programId.toLowerCase());
   if (!profile || !program || !isOnlineCoachingProgramType(program.type) || !profile.locations.some((location) => location.id === locationId)) return null;
-  const durations = program.durations.filter((durationMinutes) => durationMinutes >= 60 && durationMinutes % 30 === 0
+  const durations = program.durations.filter((durationMinutes) => isCoachingDuration(durationMinutes)
     && profile.lessons.some((lesson) => lesson.currency === day.location.currency && lesson.programId === program.id
       && lesson.durationMinutes === durationMinutes && lesson.price !== null));
   return {

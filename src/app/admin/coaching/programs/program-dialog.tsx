@@ -10,19 +10,17 @@ import { ModalDialog } from "@/components/modal-dialog";
 import { useEditableFormBaseline } from "@/components/use-editable-form-baseline";
 import type { AdminCoachingCurrency, AdminCoachingPrice, AdminCoachingProgram } from "@/lib/coaching/admin";
 import {
-  coachingProgramFieldsSchema, coachingProgramTypeLabels, coachingProgramTypes, formatCoachingDuration, isCoachingDuration,
+  coachingProgramDurations, coachingProgramFieldsSchema, coachingProgramTypeLabels, coachingProgramTypes, formatCoachingDuration,
 } from "@/lib/coaching/validation";
 import { majorAmountSchema, minorToMajor, type LocationCurrency } from "@/lib/pricing/money";
 import { saveCoachingProgramAction } from "../actions";
 import { coachingFailureMessages, formText, hintClass, labelClass, optionalNumber, selectClass, textareaClass, useFieldErrors } from "../coaching-form";
 
-const presetDurations = [30, 45, 60, 75, 90, 120];
-const editableFields = ["name", "description", "program_type", "duration", "other_durations", "min_participants", "max_participants", "court_rental_included", "is_active"];
+const editableFields = ["name", "description", "program_type", "duration", "min_participants", "max_participants", "court_rental_included", "is_active"];
 
 function programFields(form: HTMLFormElement) {
   const data = new FormData(form);
-  const other = formText(data, "other_durations").split(",").map((value) => value.trim()).filter(Boolean).map(Number);
-  const durations = [...new Set([...data.getAll("duration").map(Number), ...other])].sort((a, b) => a - b);
+  const durations = [...new Set(data.getAll("duration").map(Number))].sort((a, b) => a - b);
   return {
     name: formText(data, "name"), description: formText(data, "description"), program_type: formText(data, "program_type"),
     durations, min_participants: optionalNumber(formText(data, "min_participants")),
@@ -68,7 +66,7 @@ function useClubPrices(program: AdminCoachingProgram | undefined, prices: readon
 }
 
 function selectedDurations(form: HTMLFormElement) {
-  return programFields(form).durations.filter(isCoachingDuration);
+  return programFields(form).durations;
 }
 
 export function ProgramDialog({ program, currencies = [], prices = [], open: controlledOpen, onOpenChange }: {
@@ -86,8 +84,7 @@ export function ProgramDialog({ program, currencies = [], prices = [], open: con
   const { setFieldErrors, errorProps, fieldError } = useFieldErrors(prefix);
   const { attach, dirty, valid, sync, submitted, commit } = useEditableFormBaseline(editableFields, undefined,
     (form) => coachingProgramFieldsSchema.safeParse(programFields(form)).success);
-  const durations = program?.durations ?? [60];
-  const choices = [...new Set([...presetDurations, ...durations])].sort((a, b) => a - b);
+  const durations = program ? coachingProgramDurations.filter((minutes) => program.durations.includes(minutes)) : [60];
   const [selected, setSelected] = useState<number[]>(durations);
   const clubPrices = useClubPrices(program, prices);
   const priceChanges = clubPrices.changes(currencies, selected);
@@ -168,14 +165,12 @@ export function ProgramDialog({ program, currencies = [], prices = [], open: con
             <fieldset aria-describedby={`${prefix}-durations-hint`}>
               <legend className={labelClass}>Durations</legend>
               <div className="flex flex-wrap gap-2">
-                {choices.map((minutes) => <label key={minutes} className="inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-control border border-border px-3 text-sm has-checked:border-primary has-checked:bg-surface-muted">
+                {coachingProgramDurations.map((minutes) => <label key={minutes} className="inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-control border border-border px-3 text-sm has-checked:border-primary has-checked:bg-surface-muted">
                   <input type="checkbox" name="duration" value={minutes} defaultChecked={durations.includes(minutes)} className="accent-primary" />
                   {formatCoachingDuration(minutes)}
                 </label>)}
               </div>
-              <label htmlFor={`${prefix}-other_durations`} className="mt-3 mb-1.5 block text-sm">Other durations (minutes, comma-separated)</label>
-              <Input id={`${prefix}-other_durations`} name="other_durations" inputMode="numeric" placeholder="e.g. 105" {...errorProps("durations")} />
-              <p id={`${prefix}-durations-hint`} className={hintClass}>15–480 minutes in 5-minute steps. Prices are set per duration.</p>
+              <p id={`${prefix}-durations-hint`} className={hintClass}>60, 90 or 120 minutes. Prices are set per duration.</p>
               {fieldError("durations")}
             </fieldset>
             <div className="grid gap-4 sm:grid-cols-2">
@@ -240,9 +235,9 @@ function ClubPrices({ prefix, currencies, durations, prices, dropped }: {
     {!currencies.length ? <p className="text-sm text-muted-foreground">No locations yet. Add a location before setting club prices.</p>
       : !durations.length ? <p className="text-sm text-muted-foreground">Select a duration to set its prices.</p>
       : <div className="grid gap-3 sm:grid-cols-2">
-        {currencies.map(({ currency, location_names }) => <section key={currency} aria-label={`Club prices in ${currency}`} className="rounded-control border border-border px-3 py-2.5">
+        {currencies.map(({ currency }) => <section key={currency} aria-label={`Club prices in ${currency}`} className="rounded-control border border-border px-3 py-2.5">
           <h3 className="mb-2 text-sm font-semibold text-foreground">
-            {currency} <span className="font-normal text-muted-foreground">— {location_names.length ? location_names.join(", ") : "no current location"}</span>
+            {currency}
           </h3>
           <ul className="space-y-2">
             {durations.map((minutes) => {

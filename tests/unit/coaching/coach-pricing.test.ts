@@ -67,7 +67,7 @@ it("requires an active coach account offering the program and duration", async (
 
   mocks.lockCoachProfile.mockResolvedValueOnce({ userId: coach, locationIds: [], programIds: [] });
   expect(await saveOwnCoachingPrice(input)).toEqual({ ok: false, reason: "not-offered" });
-  expect(await saveOwnCoachingPrice({ ...input, duration_minutes: 45 })).toEqual({ ok: false, reason: "invalid-program" });
+  expect(await saveOwnCoachingPrice({ ...input, duration_minutes: 45 })).toMatchObject({ ok: false, reason: "invalid-input" });
   mocks.lockReservationActorFacts.mockResolvedValueOnce({ status: "suspended", roles: ["coach"] });
   expect(await saveOwnCoachingPrice(input)).toEqual({ ok: false, reason: "not-eligible" });
   mocks.lockCoachProfile.mockResolvedValueOnce(null);

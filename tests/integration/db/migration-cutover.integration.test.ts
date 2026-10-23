@@ -55,7 +55,7 @@ afterAll(async () => {
 
 test("registered migrations match application metadata without schema changes", async () => {
   expect((await database.query("SELECT name FROM public.migrations ORDER BY timestamp")).map((row: { name: string }) => row.name))
-    .toEqual(["InitialApplicationSchema1791462257924", "ApplicationNativeIntegrity1791462257925", "SupabaseAuthStorage1791462257926"]);
+    .toEqual(["InitialApplicationSchema1791462257924", "ApplicationNativeIntegrity1791462257925", "SupabaseAuthStorage1791462257926", "ClubSettings1791462257927", "CanonicalCoachingDurations1791462257928"]);
   expect(await database.query("SELECT to_regclass('public.job_leases') AS job_leases")).toEqual([{ job_leases: null }]);
   // No application notification persistence exists.
   expect(await database.query(`SELECT table_name FROM information_schema.tables WHERE table_schema='public'

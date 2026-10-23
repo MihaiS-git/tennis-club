@@ -1,8 +1,6 @@
 "use client";
 
 import { SortableTableHeading, type TableSortLink } from "@/components/sortable-table-heading";
-import { Pencil } from "lucide-react";
-import { Button } from "@/components/button";
 import { CoachingDeleteButton } from "../delete-button";
 import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -72,7 +70,6 @@ function ProgramRow({ program, mobile, currencies, prices }: { program: AdminCoa
     },
   };
   const actions = <span className="inline-flex gap-2" onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>
-    <Button type="button" variant="secondary" size="small" aria-label="Edit program" onClick={() => setOpen(true)}><Pencil size={14} aria-hidden="true" /></Button>
     <CoachingDeleteButton kind="program" id={program.id} name={program.name} />
   </span>;
   const durations = program.durations.map(formatCoachingDuration).join(", ");

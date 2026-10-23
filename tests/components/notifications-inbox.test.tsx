@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { installDialogMock } from "../helpers/dialog";
+import { InboxFilters } from "@/app/messages/inbox-filters";
 import { InboxList, type InboxRow } from "@/app/messages/inbox-list";
 import { MessageDetailActions } from "@/app/messages/[messageId]/unread-button";
 import { parseInboxQuery } from "@/lib/notifications/inbox-query";
@@ -25,7 +26,7 @@ beforeEach(() => {
   mocks.unread.mockResolvedValue({ ok: true });
   installDialogMock();
 });
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 it("selects only the current page and clears selection when the page changes", async () => {
   const first = parseInboxQuery({ q: "Court", page: "1" });
@@ -82,4 +83,70 @@ it("detail controls mark read, mark unread and delete while keeping the inbox re
   fireEvent.click(screen.getByRole("button", { name: "Delete" }));
   await waitFor(() => expect(mocks.deleteOne).toHaveBeenCalledWith(ids[0]));
   expect(mocks.push).toHaveBeenLastCalledWith(returnHref);
+});
+
+
+it("applies selects immediately, composes pending changes and retains search and sort", () => {
+  render(<InboxFilters query={parseInboxQuery({ q: "Court", page: "3", sort: "oldest" })} />);
+  expect(screen.queryByRole("button", { name: "Apply" })).toBeNull();
+  fireEvent.change(screen.getByRole("combobox", { name: "Status" }), { target: { value: "unread" } });
+  expect(mocks.replace).toHaveBeenLastCalledWith("/messages?q=Court&status=unread&sort=oldest&page=1", { scroll: false });
+  fireEvent.change(screen.getByRole("combobox", { name: "Category" }), { target: { value: "bookings" } });
+  expect(mocks.replace).toHaveBeenLastCalledWith("/messages?q=Court&status=unread&category=bookings&sort=oldest&page=1", { scroll: false });
+});
+
+it("sort preserves the current page, search and filters", () => {
+  render(<InboxFilters query={parseInboxQuery({ q: "Court", status: "read", category: "club", page: "3" })} />);
+  fireEvent.change(screen.getByRole("combobox", { name: "Sort" }), { target: { value: "subject_asc" } });
+  expect(mocks.replace).toHaveBeenLastCalledWith("/messages?q=Court&status=read&category=club&sort=subject_asc&page=3", { scroll: false });
+});
+
+it("debounces search for 300 ms, cancels older timers and keeps filters", () => {
+  vi.useFakeTimers();
+  render(<InboxFilters query={parseInboxQuery({ status: "unread", category: "payments", sort: "oldest", page: "4" })} />);
+  const input = screen.getByRole("searchbox");
+  fireEvent.change(input, { target: { value: "Co" } });
+  act(() => vi.advanceTimersByTime(200));
+  fireEvent.change(input, { target: { value: "Court" } });
+  act(() => vi.advanceTimersByTime(299));
+  expect(mocks.replace).not.toHaveBeenCalled();
+  act(() => vi.advanceTimersByTime(1));
+  expect(mocks.replace).toHaveBeenCalledExactlyOnceWith("/messages?q=Court&status=unread&category=payments&sort=oldest&page=1", { scroll: false });
+});
+
+it("keeps newer typing and focus across a search response and composes a pending search with selects", () => {
+  vi.useFakeTimers();
+  const { rerender } = render(<InboxFilters query={parseInboxQuery({})} />);
+  const input = screen.getByRole("searchbox");
+  input.focus();
+  fireEvent.change(input, { target: { value: "Court" } });
+  act(() => vi.advanceTimersByTime(300));
+  fireEvent.change(input, { target: { value: "Court A" } });
+  rerender(<InboxFilters query={parseInboxQuery({ q: "Court" })} />);
+  expect(screen.getByRole("searchbox")).toBe(input);
+  expect(document.activeElement).toBe(input);
+  expect(input.getAttribute("value")).toBe("Court A");
+  fireEvent.change(screen.getByRole("combobox", { name: "Category" }), { target: { value: "bookings" } });
+  act(() => vi.advanceTimersByTime(300));
+  expect(mocks.replace).toHaveBeenLastCalledWith("/messages?q=Court+A&category=bookings&page=1", { scroll: false });
+});
+
+it("syncs controls on URL and page navigation and cancels search on unmount or Clear", () => {
+  vi.useFakeTimers();
+  const { rerender, unmount } = render(<InboxFilters query={parseInboxQuery({ q: "Court", status: "unread" })} />);
+  rerender(<InboxFilters query={parseInboxQuery({ q: "Lesson", status: "read", category: "coaching", sort: "oldest", page: "2" })} />);
+  expect(screen.getByRole("searchbox").getAttribute("value")).toBe("Lesson");
+  expect((screen.getByRole("combobox", { name: "Status" }) as HTMLSelectElement).value).toBe("read");
+  expect((screen.getByRole("combobox", { name: "Category" }) as HTMLSelectElement).value).toBe("coaching");
+  expect((screen.getByRole("combobox", { name: "Sort" }) as HTMLSelectElement).value).toBe("oldest");
+  fireEvent.change(screen.getByRole("searchbox"), { target: { value: "New" } });
+  fireEvent.click(screen.getByRole("link", { name: "Clear" }));
+  rerender(<InboxFilters query={parseInboxQuery({})} />);
+  expect(screen.getByRole("searchbox").getAttribute("value")).toBe("");
+  act(() => vi.advanceTimersByTime(300));
+  expect(mocks.replace).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByRole("searchbox"), { target: { value: "Another" } });
+  unmount();
+  act(() => vi.advanceTimersByTime(300));
+  expect(mocks.replace).not.toHaveBeenCalled();
 });

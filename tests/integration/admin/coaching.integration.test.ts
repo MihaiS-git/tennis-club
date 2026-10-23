@@ -142,7 +142,7 @@ test("coaching administration enforces Admin authorization, coach eligibility, c
   expect(await saveClubCoachingPrice({ ...key, amount: "120" }, admin.client)).toMatchObject({ ok: true });
   expect(await saveClubCoachingPrice({ ...key, amount: "125.50" }, admin.client)).toMatchObject({ ok: true });
   expect(await saveOwnCoachingPrice({ ...key, amount: "150" }, coach.client)).toMatchObject({ ok: true });
-  expect(await saveClubCoachingPrice({ ...key, duration_minutes: 45, amount: "10" }, admin.client)).toEqual({ ok: false, reason: "invalid-program" });
+  expect(await saveClubCoachingPrice({ ...key, duration_minutes: 45, amount: "10" }, admin.client)).toMatchObject({ ok: false, reason: "invalid-input" });
   expect(await saveClubCoachingPrice({ ...key, currency: "XYZ", amount: "10" }, admin.client)).toMatchObject({ ok: false, reason: "invalid-input" });
   expect(await saveClubCoachingPrice({ ...key, location_id: locationIds[0], amount: "10" }, admin.client)).toMatchObject({ ok: false, reason: "invalid-input" });
   // adminCoach does not offer the program, so an override is rejected in TypeScript and by the composite FK.
@@ -296,18 +296,22 @@ test("coach pricing view resolves per active-location currency; assignment remov
 test("duration edits clean all currencies, overrides and stale currencies atomically; program and coach deletion clean owned configuration", async () => {
   const admin = await account(["admin"]);
   const coach = await account(["coach"]);
-  const created = await saveCoachingProgram({ fields: { ...programFields, name: "Junior cleanup", program_type: "junior", durations: [45, 60, 90] } }, admin.client);
+  const created = await saveCoachingProgram({ fields: { ...programFields, name: "Junior cleanup", program_type: "junior", durations: [60, 90, 120] } }, admin.client);
   assert.ok(created.ok); programIds.push(created.id);
-  const fields = { ...programFields, name: "Junior cleanup", program_type: "junior", durations: [45, 60, 90] };
+  expect(await saveCoachingProgram({ fields: { ...programFields, program_type: "junior", durations: [45] } }, admin.client))
+    .toMatchObject({ ok: false, reason: "invalid-input" });
+  const fields = { ...programFields, name: "Junior cleanup", program_type: "junior", durations: [60, 90, 120] };
   expect(await saveCoachProfile({ user_id: coach.id, create: true, fields: coachFields({ location_ids: locationIds, program_ids: [created.id] }) }, admin.client)).toMatchObject({ ok: true });
   const db = await getDataSource();
-  for (const currency of ["RON", "EUR"]) for (const duration of [45, 60, 90]) {
+  for (const currency of ["RON", "EUR"]) for (const duration of [60, 90, 120]) {
     const price = { program_id: created.id, duration_minutes: duration, currency, amount: "125" };
     expect(await saveClubCoachingPrice(price, admin.client)).toMatchObject({ ok: true });
     expect(await saveOwnCoachingPrice(price, coach.client)).toMatchObject({ ok: true });
   }
   // A hidden old-currency price must also be removed.
-  await db.query("UPDATE public.coaching_prices SET currency='USD' WHERE program_id=$1 AND duration_minutes=45 AND currency='RON'", [created.id]);
+  await db.query("UPDATE public.coaching_prices SET currency='USD' WHERE program_id=$1 AND duration_minutes=120 AND currency='RON'", [created.id]);
+  await expect(db.query("INSERT INTO public.coaching_program_durations(program_id,duration_minutes) VALUES($1,45)", [created.id]))
+    .rejects.toMatchObject({ driverError: { code: "23514" } });
   const prices = () => coachingRepository.listCoachingPrices(db.manager, { programId: created.id });
   const before = await prices();
   // Fail after price deletion: every deletion and the program update must roll back.
@@ -315,7 +319,7 @@ test("duration edits clean all currencies, overrides and stale currencies atomic
   await expect(saveCoachingProgram({ id: created.id, fields: { ...fields, durations: [60] } }, admin.client)).rejects.toThrow("Unable to save coaching");
   fault.mockRestore();
   expect(await prices()).toEqual(before);
-  expect((await coachingRepository.listCoachingPrograms(db.manager)).find(p => p.id === created.id)?.durations).toEqual([45, 60, 90]);
+  expect((await coachingRepository.listCoachingPrograms(db.manager)).find(p => p.id === created.id)?.durations).toEqual([60, 90, 120]);
   expect(await saveCoachingProgram({ id: created.id, fields: { ...fields, durations: [60] } }, admin.client)).toMatchObject({ ok: true });
   expect(await prices()).toEqual(before.filter(p => p.durationMinutes === 60));
   // Retained prices remain in both currencies; removed duration rows are gone.

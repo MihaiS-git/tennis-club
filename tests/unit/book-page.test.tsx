@@ -6,6 +6,9 @@ vi.mock("@/lib/coaching/lesson-availability", () => ({ readPublicCoachingLessonA
 vi.mock("next/server", () => ({ connection: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("@/lib/courts/public-calendar", () => ({ getPublicCourtDay: loadDay }));
 vi.mock("@/lib/courts/public", () => ({ listPublicLocationsWithCourts: loadLocations }));
+vi.mock("@/lib/db/data-source", () => ({ getDataSource: async () => ({ manager: {} }) }));
+const { loadSchedules } = vi.hoisted(() => ({ loadSchedules: vi.fn() }));
+vi.mock("@/lib/db/repositories/coach-availability.repository", () => ({ listLocationCoachBookingAvailability: loadSchedules }));
 const eligible = {
   id: "11111111-1111-4111-8111-111111111111", name: "Club", timezone: "Europe/Bucharest", currency: "RON",
   courts: [{ id: "22222222-2222-4222-8222-222222222222", name: "Court 1" }],
@@ -86,6 +89,7 @@ const coaching = async (params: Record<string, string>, includeDate = true) => {
 };
 
 beforeEach(() => {
+  loadSchedules.mockReset().mockImplementation(async (_manager, locationId) => ({ weekly: (locationId === central.id ? [andrei, sofia] : [dan]).map(coach => ({ coachUserId: coach.id, weekday: 0, startMinute: 480, endMinute: 1200, validFrom: "2000-01-01", validUntil: null })), extra: [] }));
   loadLocations.mockResolvedValue([central, riverside]);
   loadCoaching.mockResolvedValue({ programs, coaches: [andrei, elena, maria, sofia, dan] });
   loadLessons.mockReset().mockResolvedValue({ program: { participantCount: 1, courtRentalIncluded: false }, durations: [{ durationMinutes: 60, starts: [start] }, { durationMinutes: 90, starts: [] }] });
@@ -110,23 +114,23 @@ it("keeps explicit invalid location feedback without selecting another location"
   expect(loadLessons).not.toHaveBeenCalled();
 });
 
-it("lists every eligible coach while defaulting to the first coach with a priced online program", async () => {
+it("lists only location-working coaches with priced online programs", async () => {
   const page = await coaching({ location: central.id });
-  expect(page.controls?.coaches).toEqual([andrei, elena, maria, sofia].map(({ id, displayName }) => ({ id, displayName })));
+  expect(page.controls?.coaches).toEqual([andrei, sofia].map(({ id, displayName }) => ({ id, displayName })));
   expect(page.controls).toMatchObject({ coachId: "andrei", programId: "private", durationMinutes: 60 });
-  expect((await coaching({ location: riverside.id })).controls?.coaches).toEqual([andrei, dan].map(({ id, displayName }) => ({ id, displayName })));
-  expect((await coaching({ location: riverside.id })).controls).toMatchObject({ coachId: "andrei", programId: "private", durationMinutes: 60 });
+  expect((await coaching({ location: riverside.id })).controls?.coaches).toEqual([dan].map(({ id, displayName }) => ({ id, displayName })));
+  expect((await coaching({ location: riverside.id })).controls).toMatchObject({ coachId: "dan", programId: "private", durationMinutes: 60 });
   loadCoaching.mockResolvedValueOnce({ programs, coaches: [dan] });
-  expect((await coaching({ location: central.id })).status).toEqual(["No coaches currently teach at Central Club."]);
+  expect((await coaching({ location: central.id })).status).toEqual(["No coaches currently offer online-bookable lessons at Central Club."]);
 });
 
 it("offers the selected coach's own program assignments, with clear empty states", async () => {
   const programsOf = async (coach: string) => (await coaching({ location: central.id, coach })).controls?.programs;
   expect(await programsOf("andrei")).toEqual([{ id: "private", name: "Private", bookable: true }, { id: "semi", name: "Semi-private", bookable: true }]);
   expect(await programsOf("sofia")).toEqual([{ id: "semi", name: "Semi-private", bookable: true }]);
-  expect(await programsOf("maria")).toEqual([{ id: "group", name: "Group", bookable: false }]);
-  expect((await coaching({ location: central.id, coach: "maria" })).status).toEqual(["None of Maria’s programs can be booked online."]);
-  expect((await coaching({ location: central.id, coach: "elena" })).status).toEqual(["Elena has no programs assigned yet."]);
+  expect(await programsOf("maria")).toEqual([]);
+  expect((await coaching({ location: central.id, coach: "maria" })).status).toEqual(["Choose a coach to see their programs."]);
+  expect((await coaching({ location: central.id, coach: "elena" })).status).toEqual(["Choose a coach to see their programs."]);
   expect((await coaching({ location: central.id, coach: "andrei" })).controls).toMatchObject({ programId: "private", durationMinutes: 60 });
 });
 
@@ -144,8 +148,7 @@ it("lists the program's lesson-grid durations with the coach override ?? club de
     .toEqual([{ durationMinutes: 60, price: { amountMinor: 26000, currency: "RON", source: "club" } }]);
   // No conversion and no price from another currency.
   loadLocations.mockResolvedValueOnce([{ ...central, currency: "EUR" }]);
-  expect((await coaching({ location: central.id, coach: "andrei", program: "private" })).controls?.durations)
-    .toEqual([60, 90, 120].map(durationMinutes => ({ durationMinutes, price: null })));
+  expect((await coaching({ location: central.id, coach: "andrei", program: "private" })).controls?.durations).toEqual([]);
   expect((await coaching({ location: central.id, coach: "andrei", program: "private" })).controls?.durationMinutes).toBe(60);
 });
 
@@ -157,7 +160,7 @@ it("loads lesson starts for the complete selection through the existing availabi
   expect(page.status).toEqual([]);
   const empty = await coaching({ location: central.id, coach: "andrei", program: "private", duration: "90" });
   expect(empty.status).toEqual(["No lessons are available for this coach and lesson length on this date."]);
-  expect(empty.controls?.coaches).toHaveLength(4);
+  expect(empty.controls?.coaches).toHaveLength(2);
   loadLessons.mockResolvedValueOnce(null);
   expect((await coaching({ location: central.id, coach: "andrei", program: "private", duration: "60" })).status)
     .toEqual(["Andrei does not currently offer Private at Central Club."]);
@@ -178,7 +181,7 @@ it("reports invalid URL selections and never substitutes another coach, program 
   const otherProgram = await coaching({ location: central.id, coach: "sofia", program: "private", duration: "60" });
   expect(otherProgram.alerts).toEqual(["Sofia does not offer the selected program online. Choose a program."]);
   expect(otherProgram.controls).toMatchObject({ coachId: "sofia", programId: "", durationMinutes: 0, durations: [] });
-  expect((await coaching({ location: central.id, coach: "maria", program: "group" })).controls).toMatchObject({ coachId: "maria", programId: "" });
+  expect((await coaching({ location: central.id, coach: "maria", program: "group" })).controls).toMatchObject({ coachId: "", programId: "" });
   for (const duration of ["45", "75"]) {
     const page = await coaching({ location: central.id, coach: "andrei", program: "private", duration });
     expect(page.alerts).toEqual(["The selected lesson length is not offered for Private. Choose a lesson length."]);
@@ -233,17 +236,17 @@ it("leaves missing defaults empty and shows existing contextual states", async (
   loadCoaching.mockResolvedValueOnce({ programs, coaches: [elena, maria] });
   const noPricedCoach = await coaching({ location: central.id });
   expect(noPricedCoach.controls).toMatchObject({ coachId: "", programId: "", durationMinutes: 0 });
-  expect(noPricedCoach.controls?.coaches).toHaveLength(2);
-  expect(noPricedCoach.status).toEqual(["Choose a coach to see their programs."]);
+  expect(noPricedCoach.controls?.coaches).toHaveLength(0);
+  expect(noPricedCoach.status).toEqual(["No coaches currently offer online-bookable lessons at Central Club."]);
   expect(loadLessons).not.toHaveBeenCalled();
   loadCoaching.mockResolvedValueOnce({ programs, coaches: [elena] });
-  expect((await coaching({ coach: "elena" })).status).toEqual(["Elena has no programs assigned yet."]);
+  expect((await coaching({ coach: "elena" })).status).toEqual(["No coaches currently offer online-bookable lessons at Central Club."]);
   loadCoaching.mockResolvedValueOnce({ programs, coaches: [maria] });
-  expect((await coaching({ coach: "maria" })).status).toEqual(["None of Maria’s programs can be booked online."]);
+  expect((await coaching({ coach: "maria" })).status).toEqual(["No coaches currently offer online-bookable lessons at Central Club."]);
   loadCoaching.mockResolvedValueOnce({ programs: [{ ...programs[0], prices: [] }], coaches: [{ ...andrei, rates: [] }] });
   const unpriced = await coaching({ coach: "andrei", program: "private" });
-  expect(unpriced.controls).toMatchObject({ coachId: "andrei", programId: "private", durationMinutes: 0 });
-  expect(unpriced.status).toEqual(["Choose a lesson length."]);
+  expect(unpriced.controls).toMatchObject({ coachId: "", programId: "", durationMinutes: 0 });
+  expect(unpriced.status).toEqual(["No coaches currently offer online-bookable lessons at Central Club."]);
 });
 
 it("rejects an explicit invalid date without loading coaching availability", async () => {
@@ -260,4 +263,35 @@ it("fails closed in coaching mode when public options or lesson availability can
   const page = await coaching({ location: central.id, coach: "andrei", program: "private", duration: "60" });
   expect(page.alerts).toEqual(["Unable to load lesson availability. Please try again."]);
   expect(page.booking).toMatchObject({ durationMinutes: 0, starts: [] });
+});
+
+it("invalidates an ineligible URL coach and all dependent selections after working hours change", async () => {
+  loadSchedules.mockResolvedValueOnce({ weekly: [], extra: [] });
+  const page = await coaching({ location: central.id, coach: "andrei", program: "private", duration: "60" });
+  expect(page.controls).toMatchObject({ coaches: [], coachId: "", programId: "", durationMinutes: 0, programs: [], durations: [] });
+  expect(page.booking).toMatchObject({ coachId: "", programId: "", durationMinutes: 0, starts: [] });
+  expect(page.alerts).toEqual(["The selected coach is not available at Central Club. Choose a coach."]);
+  expect(loadLessons).not.toHaveBeenCalled();
+});
+
+it("resolves new eligible defaults when the location changes", async () => {
+  expect((await coaching({ location: central.id })).controls).toMatchObject({ coachId: "andrei", programId: "private", durationMinutes: 60 });
+  const page = await coaching({ location: riverside.id });
+  expect(page.controls).toMatchObject({ coachId: "dan", programId: "private", durationMinutes: 60 });
+  expect(loadLessons).toHaveBeenLastCalledWith({ locationId: riverside.id, coachId: "dan", programId: "private", date: "2099-10-15" }, expect.any(Date));
+});
+
+it("fails closed when selector working hours cannot be read", async () => {
+  loadSchedules.mockRejectedValueOnce(new Error("Unavailable"));
+  expect((await coaching({})).alerts).toEqual(["Coaching information is temporarily unavailable. Please try again."]);
+  expect(loadLessons).not.toHaveBeenCalled();
+});
+
+it.each(["fully booked coach", "coach time off", "occupied courts"])("keeps eligible coaches when the timetable has no starts due to %s", async () => {
+  loadLessons.mockResolvedValueOnce({ program: { participantCount: 1, courtRentalIncluded: false }, durations: [{ durationMinutes: 60, starts: [] }] });
+  const page = await coaching({ location: central.id, coach: "andrei" });
+  expect(page.controls).toMatchObject({ coachId: "andrei", programId: "private", durationMinutes: 60 });
+  expect(page.controls?.coaches).toContainEqual({ id: "andrei", displayName: "Andrei" });
+  expect(page.booking?.starts).toEqual([]);
+  expect(page.status).toEqual(["No lessons are available for this coach and lesson length on this date."]);
 });

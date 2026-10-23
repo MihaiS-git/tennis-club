@@ -1,19 +1,33 @@
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
-import { expect, test } from "vitest";
+import { beforeEach, afterEach, expect, test, vi } from "vitest";
 import { getDataSource } from "@/lib/db/data-source";
 import { inTransaction } from "@/lib/db/transaction";
 import { createCustomerBooking } from "@/lib/bookings/service";
 import { recordBookingTransition, recordBookingFinancialException } from "@/lib/notifications/events";
 import { recordNotification } from "@/lib/notifications/record";
-import { claimEmailDeliveries, completeEmailAttempt, insertEmailDelivery, insertEmailFailureAlerts, insertUserMessage } from "@/lib/db/repositories/notifications.repository";
+import { claimEmailDeliveries, completeEmailAttempt, insertEmailDelivery, insertEmailFailureAlerts, insertUserMessage, findMessageDelivery, findDeliveryBooking, failExpiredFinalClaims } from "@/lib/db/repositories/notifications.repository";
 import { deleteOwnMessage, listOwnMessages, openOwnMessage, readOwnMessage, unreadOwnMessage, unreadOwnMessageCount,
   updateOwnMessages } from "@/lib/notifications/inbox";
+import { processClaim } from "@/lib/notifications/delivery";
 import { parseInboxQuery } from "@/lib/notifications/inbox-query";
 import { findRevision } from "@/lib/db/repositories/booking-revisions.repository";
 import { configureCheckoutPolicyFixture } from "./opening-hours-fixtures";
 import { cleanupBookingFixtures, insertCheckoutFixture } from "./checkout-fixtures";
 import { cleanupAuthFixtures, localFixtureClient } from "./auth-fixtures";
+
+// Explicit opt-in fixture; production and fresh migrations start disabled.
+let previousSettings: unknown;
+beforeEach(async () => {
+  const source = await getDataSource();
+  [previousSettings] = await source.query("SELECT official_email, sender_name, emails_enabled FROM public.club_settings WHERE id=true");
+  await source.query("UPDATE public.club_settings SET official_email='club@example.test', sender_name='Test Club', emails_enabled=true WHERE id=true");
+});
+afterEach(async () => {
+  if (previousSettings) await (await getDataSource()).query(`UPDATE public.club_settings SET
+    official_email=$1::jsonb->>'official_email', sender_name=$1::jsonb->>'sender_name',
+    emails_enabled=($1::jsonb->>'emails_enabled')::boolean WHERE id=true`, [JSON.stringify(previousSettings)]);
+});
 
 async function account(role?: "admin" | "coach") {
   const service = localFixtureClient();
@@ -177,7 +191,7 @@ test("PostgreSQL claims, retry state, terminal alert and stale completion", asyn
     expect(await source.query("SELECT status,provider_message_id FROM public.email_deliveries WHERE id=$1", [id]))
       .toEqual([{ status: "accepted", provider_message_id: "brevo-first" }]);
 
-    await source.query("UPDATE public.email_deliveries SET status='pending', attempts=0, next_attempt_at=$2 WHERE id=$1", [id, firstDue]);
+    await source.query("UPDATE public.email_deliveries SET status='pending', attempts=0, provider_message_id=NULL, next_attempt_at=$2 WHERE id=$1", [id, firstDue]);
     for (const [index, minutes] of [5, 15, 60, 360].entries()) {
       const [retryClaim] = await inTransaction(manager => claimEmailDeliveries(manager, 1));
       expect(retryClaim.id).toBe(id);
@@ -185,13 +199,13 @@ test("PostgreSQL claims, retry state, terminal alert and stale completion", asyn
       const nextAttemptAt = new Date(Date.now() + minutes * 60_000);
       expect(await completeEmailAttempt(source.manager, { id, attempts: retryClaim.attempts,
         lockedUntil: retryClaim.lockedUntil, status: "pending", nextAttemptAt,
-        providerMessageId: null, lastError: "HTTP 503" })).toBe(true);
+        providerMessageId: null, lastError: "Brevo HTTP 503" })).toBe(true);
       const rows: { status: string; attempts: number; next_attempt_at: Date; last_error: string }[] = await source.query(
         "SELECT status, attempts, next_attempt_at, last_error FROM public.email_deliveries WHERE id=$1", [id]);
       expect(rows[0].status).toBe("pending");
       expect(rows[0].attempts).toBe(index + 1);
       expect(rows[0].next_attempt_at).toEqual(nextAttemptAt);
-      expect(rows[0].last_error).toBe("HTTP 503");
+      expect(rows[0].last_error).toBe("Brevo HTTP 503");
       await source.query("UPDATE public.email_deliveries SET next_attempt_at=$2 WHERE id=$1", [id, firstDue]);
     }
     const [terminalClaim] = await inTransaction(manager => claimEmailDeliveries(manager, 1));
@@ -200,7 +214,7 @@ test("PostgreSQL claims, retry state, terminal alert and stale completion", asyn
     expect(await inTransaction(async manager => {
       const completed = await completeEmailAttempt(manager, { id, attempts: terminalClaim.attempts,
         lockedUntil: terminalClaim.lockedUntil, status: "failed", nextAttemptAt: now,
-        providerMessageId: null, lastError: "HTTP 503" });
+        providerMessageId: null, lastError: "Brevo HTTP 503" });
       if (completed) await insertEmailFailureAlerts(manager, id, now);
       return completed;
     })).toBe(true);
@@ -299,5 +313,78 @@ test("soft deletion is owner-scoped, hides messages and survives event replay an
     await source.query("DELETE FROM public.email_deliveries WHERE id=$1", [deliveryId]);
     await source.query("DELETE FROM public.user_messages WHERE user_id IN ($1,$2)", [owner.id, other.id]);
     await cleanupAuthFixtures(localFixtureClient(), [owner.id, other.id]);
+  }
+});
+
+
+test("manual and Cron share one claim, preserve booking/payment state and deduplicate failure alerts", async () => {
+  const admin = await account("admin");
+  const fixture = await bookingFixture(`retry-${randomUUID()}@example.test`, "pay_at_club");
+  const source = await getDataSource();
+  const eventKey = `booking.confirmed:${fixture.revisionId}`;
+  const [delivery]: { id: string }[] = await source.query("SELECT id FROM public.email_deliveries WHERE event_key=$1", [eventKey]);
+  const cutoff = new Date("2199-01-01T00:00:00Z");
+  const firstDue = new Date("1800-01-01T00:00:00Z");
+  const snapshot = async () => source.query(`SELECT to_jsonb(b) AS booking, to_jsonb(r) AS reservation,
+      (SELECT jsonb_agg(v ORDER BY v.id) FROM public.booking_revisions v WHERE v.booking_id=b.id) AS revisions,
+      (SELECT jsonb_agg(p ORDER BY p.id) FROM public.payment_attempts p WHERE p.booking_id=b.id) AS payments,
+      (SELECT jsonb_agg(f ORDER BY f.id) FROM public.payment_refunds f WHERE f.booking_id=b.id) AS refunds
+    FROM public.bookings b JOIN public.court_reservations r ON r.id=b.reservation_id WHERE b.id=$1`, [fixture.bookingId]);
+  try {
+    await source.query("UPDATE public.email_deliveries SET status='failed',attempts=1,last_error='Brevo HTTP 401',next_attempt_at=$2,created_at=$3 WHERE id=$1", [delivery.id, firstDue, cutoff]);
+    await inTransaction(manager => insertEmailFailureAlerts(manager, delivery.id, new Date()));
+    const [{ id: messageId }]: { id: string }[] = await source.query("SELECT id FROM public.user_messages WHERE event_key=$1 AND user_id=$2", [`email.delivery-failed:${delivery.id}`, admin.id]);
+    expect((await findMessageDelivery(source.manager, admin.id, messageId))?.recipientEmail).toContain("retry-");
+    expect(await findMessageDelivery(source.manager, randomUUID(), messageId)).toBeNull();
+    expect(await findDeliveryBooking(source.manager, eventKey)).toBe(fixture.bookingId);
+    const before = await snapshot();
+    // A failed row is selectable only by manual retry; pending rejected rows can race Cron.
+    await source.query("UPDATE public.email_deliveries SET status='pending' WHERE id=$1", [delivery.id]);
+    const [manual, cron] = await Promise.all([
+      inTransaction(manager => claimEmailDeliveries(manager, 1, cutoff, delivery.id)),
+      inTransaction(manager => claimEmailDeliveries(manager, 1, cutoff)),
+    ]);
+    const claims = [...manual, ...cron].filter(row => row.id === delivery.id);
+    expect(claims).toHaveLength(1);
+    expect([...manual, ...cron]).toHaveLength(1);
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ code: "unauthorized", message: "Invalid API key" }), { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await processClaim({ apiKey: "mock", sender: "club@example.test", mode: "sandbox" }, claims[0])).toBe("failed");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect((await findMessageDelivery(source.manager, admin.id, messageId))?.lastError).toBe("Brevo HTTP 401: unauthorized: Invalid API key");
+    expect(await snapshot()).toEqual(before);
+    expect(await source.query("SELECT id FROM public.user_messages WHERE event_key=$1 AND user_id=$2", [`email.delivery-failed:${delivery.id}`, admin.id])).toHaveLength(1);
+    // Definitive rejection remains manually claimable, even beyond Cron's attempt budget.
+    await source.query("UPDATE public.email_deliveries SET attempts=5 WHERE id=$1", [delivery.id]);
+    const [retry] = await inTransaction(manager => claimEmailDeliveries(manager, 1, cutoff, delivery.id));
+    expect(retry.attempts).toBe(6);
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ messageId: "<sandbox>" }), { status: 201 }));
+    expect(await processClaim({ apiKey: "mock", sender: "club@example.test", mode: "sandbox" }, retry)).toBe("sandboxAccepted");
+    expect(await inTransaction(manager => claimEmailDeliveries(manager, 1, cutoff, delivery.id))).toEqual([]);
+    for (const state of [
+      { status: "accepted", provider: "<accepted>", error: null },
+      { status: "failed", provider: "<bounced>", error: "hard_bounce" },
+      { status: "failed", provider: null, error: "Brevo request outcome unknown" },
+      { status: "processing", provider: null, error: "Brevo HTTP 401" },
+    ]) {
+      await source.query("UPDATE public.email_deliveries SET status=$2,provider_message_id=$3,last_error=$4,attempts=1,locked_until=$5 WHERE id=$1", [delivery.id,state.status,state.provider,state.error,firstDue]);
+      expect(await inTransaction(manager => claimEmailDeliveries(manager, 1, cutoff, delivery.id))).toEqual([]);
+      expect(await inTransaction(manager => claimEmailDeliveries(manager, 1, cutoff))).toEqual([]);
+    }
+    // An expired claim has uncertain dispatch evidence, so expiration never authorizes resend.
+    expect(await inTransaction(manager => failExpiredFinalClaims(manager, 20))).toContain(delivery.id);
+    expect(await inTransaction(manager => claimEmailDeliveries(manager, 1, cutoff, delivery.id))).toEqual([]);
+    await source.query("UPDATE public.email_deliveries SET status='failed',last_error='Brevo HTTP 401' WHERE id=$1", [delivery.id]);
+    expect(await inTransaction(manager => claimEmailDeliveries(manager, 1, new Date("2200-01-01T00:00:00Z"), delivery.id))).toEqual([]);
+    await deleteOwnMessage(admin.id, messageId);
+    expect(await findMessageDelivery(source.manager, admin.id, messageId)).toBeNull();
+    expect(await source.query("SELECT id FROM public.email_deliveries WHERE id=$1", [delivery.id])).toHaveLength(1);
+    expect(await snapshot()).toEqual(before);
+  } finally {
+    vi.unstubAllGlobals();
+    await source.query("DELETE FROM public.user_messages WHERE event_key=$1", [`email.delivery-failed:${delivery.id}`]);
+    await source.query("DELETE FROM public.email_deliveries WHERE id=$1", [delivery.id]);
+    await fixture.cleanup([fixture.bookingId]);
+    await cleanupAuthFixtures(localFixtureClient(), [admin.id]);
   }
 });

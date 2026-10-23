@@ -4,9 +4,9 @@ The application sends persisted `email_deliveries` through the Brevo transaction
 
 ## Application configuration
 
-Set server-only `BREVO_API_KEY`, a Brevo-verified email address in `BOOKING_MAIL_FROM`, `NOTIFICATION_EMAIL_MODE=live`, `NOTIFICATION_CRON_SECRET`, and `BREVO_WEBHOOK_SECRET` for manual local development and production. Use independent random values of at least 32 characters for the two Bearer secrets. The isolated automated test runners force sandbox mode even when `.env.local` selects live; live delivery is rejected in test processes and Vercel deployments without `VERCEL_ENV=production`. Sandbox requests include `X-Sib-Sandbox: drop` in the Brevo JSON `headers` object and send no real email. Configuration errors stop processing before any claim is taken. A separate `sandbox_accepted` status is never treated as live acceptance or replayed automatically.
+Set server-only `BREVO_API_KEY`, `NOTIFICATION_EMAIL_MODE=live`, `NOTIFICATION_CRON_SECRET`, and `BREVO_WEBHOOK_SECRET` for manual local development and production. Use independent random values of at least 32 characters for the two Bearer secrets. The isolated automated test runners force sandbox mode even when `.env.local` selects live; live delivery is rejected in test processes and Vercel deployments without `VERCEL_ENV=production`. Sandbox requests include `X-Sib-Sandbox: drop` in the Brevo JSON `headers` object and send no real email. Configure the official email address and sender display name in Admin → Club (`/admin/club`) and enable transactional emails. No environment-defined sender is used. The sender must be authorized in Brevo; saving it validates syntax only. Configuration errors stop processing before any claim is taken. A separate `sandbox_accepted` status is never treated as live acceptance or replayed automatically.
 
-The delivery endpoint is `POST /api/notifications/deliver` with `Authorization: Bearer <NOTIFICATION_CRON_SECRET>`. It takes at most 20 due/expired deliveries per call. Run it every five minutes. A lost response or timeout can mean Brevo accepted an email; retries can therefore duplicate provider delivery. Delivery status is acceptance, not inbox receipt.
+The delivery endpoint is `POST /api/notifications/deliver` with `Authorization: Bearer <NOTIFICATION_CRON_SECRET>`. It takes at most 20 due/expired deliveries per call. Run it every five minutes. A lost response, timeout, malformed acceptance response or expired processing lease can mean Brevo accepted an email. These unresolved outcomes are never reclaimed for sending. Explicit HTTP rejections retain the existing bounded automatic retry schedule for transient errors (429/5xx); HTTP 408 is treated as unresolved. Delivery status is acceptance, not inbox receipt.
 
 ## Supabase Cron and pg_net
 
@@ -44,3 +44,52 @@ Use a separate local Supabase database and local secret for development. Confirm
 Create a Brevo **transactional email** webhook with URL `https://<production-domain>/api/notifications/brevo-webhook`, events `hardBounce`, `invalid`, and `blocked`, and Bearer authentication using `BREVO_WEBHOOK_SECRET` as its token (`auth: {"type":"bearer","token":"..."}`). Brevo emits payload event names `hard_bounce`, `invalid_email`, and `blocked`; the endpoint also accepts `invalid`. For local webhook testing, expose the local app through a reachable HTTPS tunnel and configure a separate test webhook/token. Other event types are ignored.
 
 Each outbound message carries `X-Mailin-custom: email_delivery_id:<UUID>`. The webhook matches the provider message ID and recipient email, using the UUID for correlation when the provider ID is not yet stored. A terminal event marks the delivery failed and adds one in-app message per active Admin with event key `email.delivery-failed:<UUID>`. Sandbox-accepted records are excluded from webhook failure updates. The webhook does not send Admin email.
+
+## Admin delivery review and manual retry
+
+An active Admin opening an `email.delivery_failed` notification at `/messages/[messageId]`
+sees the associated recipient, email type, current persisted status, error, attempt count,
+latest delivery update and any scheduled automatic retry, with a link to Admin booking details.
+The existing persisted `email.delivery-failed:<delivery-id>` event key is the association,
+including for older UUID-only notifications. No message-body parsing is used. The schema
+has no separate last-attempt timestamp; the UI explicitly labels the displayed time as the
+latest recorded delivery update, which can also reflect a later webhook.
+
+**Retry now** immediately claims only that delivery using the same claim/lease and HTTP
+pipeline as Cron. An authoritative active-Admin check is fenced inside the claim transaction;
+the Brevo request starts after commit. A definitive HTTP rejection without a provider ID
+permits manual retry, including after the automatic attempt budget is exhausted. Attempts
+continue increasing. Accepted, sandbox-accepted, processing, ambiguous and pre-cutoff
+records cannot be resent; staff email suppression is rechecked. Existing alert event keys
+continue deduplicating incident notifications, including after message deletion. Read/unread
+and deletion do not resolve delivery failures or change booking/payment state.
+
+
+## Club-wide email settings
+
+Only active Admins may read or update `/admin/club`. One TypeORM-managed
+`club_settings` record applies across all locations; it starts disabled with empty
+sender fields. Saving requires a valid email and a trimmed sender name of 1–100
+characters. Credentials remain exclusively in server environment variables.
+The Admin-only test action sends directly to the authenticated Auth user's verified
+email, with no booking/payment event or retry queue. It reports Brevo's actual rejection
+or acceptance (including sandbox mode); acceptance never establishes inbox delivery.
+
+Disabling email leaves in-app channels and Supabase Auth mail unchanged. Notification
+recording takes a shared settings lock before enqueueing eligible customer/guest mail;
+Admin changes take the exclusive singleton lock. Disable atomically marks pending,
+processing and failed rows with `suppressed_at`, retaining their content/status and
+provider evidence. Cron and manual claims exclude that marker permanently. Re-enabling
+never clears it. Every dispatch rechecks current settings and suppression after claim,
+using the saved official address and sender name. Already in-flight HTTP requests can
+complete; their acceptance/failure evidence is retained and suppressed retries stay
+ineligible. Accepted, sandbox-accepted and ambiguous deliveries retain the existing
+no-resend rules. No network calls run inside database transactions.
+
+Pause the notification Cron job and drain old application workers, then roll out
+additive TypeORM migration `ClubSettings1791462257927` before the new application
+code. Resume Cron after deploying the new code. It creates the singleton, denies browser-role access, adds suppression evidence,
+and suppresses existing unsent deliveries because delivery starts disabled. It does not
+reset or replace existing tables. Configure the sender and deliberately enable email
+after rollout. Rollback requires a reviewed migration preserving suppression evidence;
+removing the marker could resurrect old mail.

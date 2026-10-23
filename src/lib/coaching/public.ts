@@ -10,7 +10,7 @@ import { readPublicCoachingFacts, type PublicCoachingFacts } from "@/lib/db/repo
 import { logger } from "@/lib/logger";
 import type { LocationCurrency } from "@/lib/pricing/money";
 import { resolveCoachingPrice, type CoachingPriceRecord, type ResolvedCoachingPrice } from "./pricing";
-import { coachingProgramTypes, type CoachingProgramType } from "./validation";
+import { isCoachingDuration, coachingProgramTypes, type CoachingProgramType } from "./validation";
 
 // Club-wide prices: one per program duration and currency, never per location.
 type PublicCoachingPrice = { durationMinutes: number; amountMinor: number; currency: LocationCurrency };
@@ -55,10 +55,11 @@ export function projectPublicCoaching(facts: PublicCoachingFacts, visibleLocatio
   const programs = facts.programs.flatMap((program) => {
     const type = z.enum(coachingProgramTypes).safeParse(program.program_type);
     if (!type.success) return [];
+    const durations = program.durations.filter(isCoachingDuration);
     return [{
-      id: program.id, name: program.name, description: program.description, type: type.data, durations: program.durations,
+      id: program.id, name: program.name, description: program.description, type: type.data, durations,
       minParticipants: program.min_participants, maxParticipants: program.max_participants, courtRentalIncluded: program.court_rental_included,
-      prices: currencies.flatMap((currency) => program.durations.flatMap((durationMinutes) => {
+      prices: currencies.flatMap((currency) => durations.flatMap((durationMinutes) => {
         const resolved = resolveCoachingPrice(prices, { programId: program.id, durationMinutes, currency });
         return resolved ? [{ durationMinutes, amountMinor: resolved.amountMinor, currency: resolved.currency }] : [];
       })),

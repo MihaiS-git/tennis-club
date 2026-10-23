@@ -1226,10 +1226,18 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 ## Application notifications
 
-There is no application-specific notification system: no booking emails, in-app inbox,
-notification bell, Admin notification list, delivery queue, scheduled delivery or Brevo
-integration. Supabase Auth confirmation/recovery emails remain provider-managed and
-independent. Do not add notification side effects to booking, payment or refund workflows.
+Application notifications use the existing in-app inbox and Brevo queue. Club-wide
+sender email/name and transactional delivery enablement live in the TypeORM singleton
+`club_settings`, managed only by active Admins at `/admin/club`. Never fall back to an
+environment sender. Credentials remain server-only. Disable leaves in-app and Supabase
+Auth mail unchanged, skips email creation and permanently marks queued deliveries with
+`suppressed_at`; Cron and manual retry must exclude them even after re-enabling.
+Dispatch rechecks settings/suppression, outside network transactions. Preserve accepted,
+sandbox-accepted and ambiguous no-resend rules, historical provider evidence and existing
+recipient policies. Test emails go only to the verified authenticated Admin email and
+report provider acceptance/rejection without asserting inbox delivery. Sender authorization
+belongs to Brevo and must never be inferred from syntax or a saved value. See
+`docs/notifications-delivery.md` for the additive migration and rollout.
 
 The `/book` confirmation UI reads only the selected eligible public location’s cancellation-notice value through a narrow TypeORM read. After atomic creation, a read bound to the returned booking ID retrieves its stored policy snapshot; authenticated success uses the existing TypeScript timezone utility for start instant and cutoff display. Guest success shows the stored notice without inferring a timezone-resolved cutoff. Failed post-commit display reads are logged and never report the committed booking as a failed submission. No browser database access or public database grants are added.
 

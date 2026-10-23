@@ -25,7 +25,7 @@ const price = (program_id: string, duration_minutes: number, amount_minor: numbe
   ({ program_id, duration_minutes, coach_user_id, amount_minor, currency });
 const facts: PublicCoachingFacts = {
   programs: [
-    program(ids.private, "Private", "private", false, [45, 60, 90, 120, 150]),
+    program(ids.private, "Private", "private", false, [60, 90, 120]),
     program(ids.included, "Private court included", "private", true, [60]),
     program(ids.group, "Group", "group", false, [60]),
   ],
@@ -35,8 +35,6 @@ const facts: PublicCoachingFacts = {
     price(ids.private, 60, 10000, "RON"),
     price(ids.private, 90, 14000, "RON"),
     price(ids.private, 90, 16000, "RON", ids.ana),
-    price(ids.private, 45, 8000, "RON"),
-    price(ids.private, 150, 20000, "RON"),
     price(ids.included, 60, 15000, "RON"),
     price(ids.group, 60, 5000, "RON"),
     // EUR has no 90-minute price: RON amounts are never converted.
@@ -144,10 +142,10 @@ describe("coaching lesson quote", () => {
     expect(reason(eastDay(), lesson({ durationMinutes: 45 }))).toBe("invalid-time");
     expect(reason(eastDay(), lesson({ durationMinutes: 75 }))).toBe("invalid-time");
     expect(reason(eastDay(), lesson({ startMinute: 1410, durationMinutes: 60 }))).toBe("invalid-time");
-    expect(reason(eastDay(), lesson({ durationMinutes: 180 }))).toBe("invalid-duration");
+    expect(reason(eastDay(), lesson({ durationMinutes: 180 }))).toBe("invalid-time");
     expect(reason(eastDay(), lesson({ programId: ids.included, durationMinutes: 90 }))).toBe("invalid-duration");
-    expect(reason(eastDay(), lesson({ durationMinutes: 150 }))).toBe("ok");
-    expect(reason(eastDay(), lesson({ durationMinutes: 150, startMinute: 660 }))).toBe("coach-unavailable");
+    expect(reason(eastDay(), lesson({ durationMinutes: 150 }))).toBe("invalid-time");
+    expect(reason(eastDay(), lesson({ durationMinutes: 90, startMinute: 720 }))).toBe("coach-unavailable");
   });
 
   it("adds the court rental only when the program does not include it", () => {
@@ -206,7 +204,7 @@ describe("coaching lesson quote", () => {
     const day = eastDay({ date: springForward, today: "2026-03-01", hours: [hours(ids.east, springForward, 0, 1440)],
       pricing: [rule(ids.east, ids.court1, springForward, 6000, 0, 1440), rule(ids.east, ids.court2, springForward, 8000, 0, 1440)] },
     { weekly: [weekly(ids.east, springForward, 0, 1440)] });
-    expect(reason(day, lesson({ startMinute: 120, durationMinutes: 150 }))).toBe("invalid-time");
+    expect(reason(day, lesson({ startMinute: 150, durationMinutes: 90 }))).toBe("invalid-time");
     expect(quoteCoachingLesson(day, lesson({ startMinute: 600 }))).toMatchObject({ ok: true, quote: {
       startsAt: "2026-03-29T07:00:00.000Z", endsAt: "2026-03-29T08:00:00.000Z" } });
     expect(quoteCoachingLesson(eastDay(), lesson())).toMatchObject({ ok: true, quote: { startsAt: "2026-10-21T07:00:00.000Z" } });
@@ -250,8 +248,8 @@ describe("public coaching lesson availability", () => {
       location: { id: ids.east, name: "East", timezone: "Europe/Bucharest" }, coach: { id: ids.ana, displayName: "Ana" },
       program: { id: ids.private, name: "Private", courtRentalIncluded: false }, date, currency: "RON",
     });
-    // 45 minutes is off the court grid and 120 minutes is unpriced; both are omitted.
-    expect(availability?.durations.map((duration) => duration.durationMinutes)).toEqual([60, 90, 150]);
+    // The unpriced 120-minute duration is omitted.
+    expect(availability?.durations.map((duration) => duration.durationMinutes)).toEqual([60, 90]);
     const sixty = availability!.durations[0].starts;
     expect(sixty.map((start) => [start.startMinute, start.courts.map((court) => court.id)])).toEqual([
       [600, [ids.court2]], [630, [ids.court2]], [660, [ids.court2]], [690, [ids.court1, ids.court2]], [720, [ids.court1, ids.court2]],
@@ -301,7 +299,7 @@ describe("semi-private complete-session quotes", () => {
       ? { ...p, name: "Semi-private coaching", program_type: "semi_private", min_participants: 2, max_participants: 2, court_rental_included: included } : p) };
     const day = eastDay({ coaching });
     expect(projectCoachingLessonAvailability(day, ids.private)?.program).toMatchObject({ name: "Semi-private coaching", participantCount: 2 });
-    expect(projectCoachingLessonAvailability(day, ids.private)?.durations.map(d => d.durationMinutes)).toEqual([60, 90, 150]);
+    expect(projectCoachingLessonAvailability(day, ids.private)?.durations.map(d => d.durationMinutes)).toEqual([60, 90]);
     for (const [durationMinutes, amountMinor, source, rental] of [[60, 10000, "club", 6000], [90, 16000, "coach", 9000]] as const) {
       expect(quoteCoachingLesson(day, lesson({ durationMinutes }))).toMatchObject({ ok: true, quote: {
         program: { type: "semi_private", participantCount: 2 }, coachingAmountMinor: amountMinor,

@@ -85,25 +85,29 @@ test("Admin Users shows live profiles and private avatars while preserving manag
         fit: getComputedStyle(element).objectFit,
         radius: getComputedStyle(element).borderRadius,
         clip: getComputedStyle(element).clipPath,
-        naturalRatio: element.naturalWidth / element.naturalHeight,
         ratio: element.getBoundingClientRect().width / element.getBoundingClientRect().height,
+        frameWidth: element.parentElement!.getBoundingClientRect().width,
+        frameHeight: element.parentElement!.getBoundingClientRect().height,
       }));
-      expect(imageStyle.fit).toBe("contain");
+      expect(imageStyle.fit).toBe("cover");
       expect(imageStyle.radius).toBe("0px");
       expect(imageStyle.clip).toBe("none");
-      expect(imageStyle.ratio).toBeCloseTo(imageStyle.naturalRatio, 2);
+      expect(imageStyle.ratio).toBeCloseTo(1, 2);
+      expect(imageStyle.frameWidth).toBe(width >= 640 ? 208 : 112);
+      expect(imageStyle.frameHeight).toBe(imageStyle.frameWidth);
       expect(await tennis.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
     }
     const avatarResponse = await page.request.get(`/admin/users/${populated.id}/avatar`);
     expect(avatarResponse.status()).toBe(200);
     expect(avatarResponse.headers()["cache-control"]).toBe("private, no-store");
-    // A landscape photograph uses the same full-image presentation.
+    // A landscape photograph is cropped to the same square presentation.
     const landscape = await sharp({ create: { width: 64, height: 32, channels: 3, background: "green" } }).webp().toBuffer();
     expect((await service.storage.from("profile-avatars").upload(`${populated.id}/avatar.webp`, landscape, { contentType: "image/webp", upsert: true })).error).toBeNull();
     await page.reload();
     await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth / element.naturalHeight)).toBe(2);
     const landscapeSize = await image.boundingBox();
-    expect(landscapeSize!.width / landscapeSize!.height).toBeCloseTo(2, 2);
+    expect(landscapeSize!.width / landscapeSize!.height).toBeCloseTo(1, 2);
+    await expect(image).toHaveCSS("object-fit", "cover");
     await tabs.getByRole("link", { name: "Account & access", exact: true }).click();
     for (const role of ["Admin", "Coach"]) {
       const row = account.getByRole("listitem").filter({ has: page.getByText(role, { exact: true }) });

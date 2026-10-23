@@ -1,5 +1,6 @@
 import "server-only";
 
+import { readClubSettings } from "@/lib/db/repositories/club-settings.repository";
 import { randomUUID } from "node:crypto";
 import type { EntityManager } from "typeorm";
 import { insertEmailDelivery, insertUserMessage } from "@/lib/db/repositories/notifications.repository";
@@ -29,7 +30,7 @@ export async function recordNotification(manager: EntityManager, notification: N
       kind: notification.kind, subject: notification.subject, bodyText: notification.bodyText,
       href: notification.href ?? null, createdAt: notification.occurredAt });
   }
-  if (channels.email) {
+  if (channels.email && (await readClubSettings(manager, "pessimistic_read")).emailsEnabled) {
     await insertEmailDelivery(manager, { id: randomUUID(), eventKey: notification.eventKey,
       recipientEmail: notification.recipientEmail.trim(), subject: notification.subject,
       bodyText: notification.bodyText, bodyHtml: notification.bodyHtml, status: "pending", attempts: 0,

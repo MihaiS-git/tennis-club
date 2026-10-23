@@ -1624,13 +1624,15 @@ Before expanding the platform, prove the following cases locally:
 
 ## Notifications
 
-The application has no notification system of its own: it sends no booking,
-cancellation, rescheduling or refund emails and has no in-app inbox, notification bell,
-Admin notification list, delivery queue or scheduled delivery. Booking confirmation and
-payment outcomes are shown immediately in the UI. Failed, unresolved and reversed refunds
-are recorded as immutable `booking_financial_exceptions` atomically with financial state
-and remain visible to Admin through Payments → Transactions and financial history.
-Supabase Auth confirmation and password-recovery emails are unaffected.
+Application notifications use the existing in-app inbox and Brevo delivery queue.
+Admin → Club (`/admin/club`) controls the saved official sender address, display name
+and club-wide transactional email switch. Only active Admins may read or change these
+settings or send a test to their verified Auth email. Sender authorization is managed
+in Brevo; saving an address does not verify it. There is no environment sender fallback.
+Disabling email preserves in-app notifications and permanently suppresses queued mail,
+including manual retries; enabling it again never replays suppressed mail. Requests
+already in flight may complete. Supabase Auth confirmation/recovery mail is independent.
+See [notification delivery and rollout](docs/notifications-delivery.md).
 
 The `/book` confirmation UI reads only the selected eligible public location’s cancellation-notice value through a narrow TypeORM projection. After atomic creation, a read bound to the returned booking ID retrieves its stored policy snapshot; authenticated success uses the existing TypeScript timezone utility for start instant and cutoff display. Guest success shows the stored notice without inferring a timezone-resolved cutoff. Failed post-commit display reads are logged and never report the committed booking as a failed submission. No browser database access or public database grants are added.
 
@@ -1686,8 +1688,9 @@ explicit email-change timestamps, private WebP avatar bucket and Storage policie
 A secured active-account boolean helper keeps Storage working without browser
 SELECT on `public.users`. Ordinary accounts receive no RBAC roles.
 
-The three final-state migrations and their DataSource registry remain the schema
-source. The guarded development rebuild applies them; there are no npm migration
+The three base migrations plus additive `ClubSettings1791462257927` and their DataSource registry remain the schema
+source. Apply pending TypeORM migrations before deploying Club settings; this migration
+starts transactional email disabled and preserves existing delivery history. The guarded development rebuild applies them; there are no npm migration
 management commands. Production migration execution will be addressed with deployment.
 Schema synchronization and automatic runtime migrations are off.
 

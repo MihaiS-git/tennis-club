@@ -11,12 +11,12 @@ export const coachingProgramTypeLabels: Record<CoachingProgramType, string> = {
   private: "Private", semi_private: "Semi-private", group: "Group", junior: "Junior",
 };
 
-const coachingDurationLimits = { min: 15, max: 480, step: 5, count: 8 } as const;
+export const coachingProgramDurations = [60, 90, 120] as const;
 
 export function isCoachingDuration(minutes: number) {
-  return Number.isInteger(minutes) && minutes >= coachingDurationLimits.min && minutes <= coachingDurationLimits.max
-    && minutes % coachingDurationLimits.step === 0;
+  return coachingProgramDurations.some(duration => duration === minutes);
 }
+export const coachingDurationSchema = z.number().int().refine(isCoachingDuration, "Select 60, 90 or 120 minutes.");
 
 export function formatCoachingDuration(minutes: number) {
   return `${minutes} min`;
@@ -49,11 +49,8 @@ export const coachingProgramFieldsSchema = z.strictObject({
   name: z.string().trim().min(1, "Enter a program name.").max(100, "Use at most 100 characters."),
   description: z.string().trim().max(2000, "Use at most 2,000 characters."),
   program_type: z.enum(coachingProgramTypes, "Select a program type."),
-  durations: z.array(z.number().int()
-    .min(coachingDurationLimits.min, `Durations must be at least ${coachingDurationLimits.min} minutes.`)
-    .max(coachingDurationLimits.max, `Durations must be at most ${coachingDurationLimits.max} minutes.`)
-    .refine((minutes) => minutes % coachingDurationLimits.step === 0, `Use durations in ${coachingDurationLimits.step}-minute steps.`))
-    .min(1, "Add at least one duration.").max(coachingDurationLimits.count, `Use at most ${coachingDurationLimits.count} durations.`)
+  durations: z.array(coachingDurationSchema)
+    .min(1, "Add at least one duration.").max(coachingProgramDurations.length)
     .refine((durations) => new Set(durations).size === durations.length, "Each duration can be listed only once."),
   min_participants: optionalCount,
   max_participants: optionalCount,
@@ -116,10 +113,13 @@ export const coachVisibilitySchema = z.strictObject({ user_id: z.uuid(), is_publ
 // One price for a program duration in a currency. The input never names a coach:
 // Admin operations set the club default, Coach operations the signed-in coach's override.
 export const coachingPriceMutationSchema = z.strictObject({
-  program_id: z.uuid(), duration_minutes: z.number().int().min(coachingDurationLimits.min).max(coachingDurationLimits.max),
+  program_id: z.uuid(), duration_minutes: coachingDurationSchema,
   currency: coachingCurrencySchema, amount: majorAmountSchema,
 });
-export const coachingPriceRemovalSchema = coachingPriceMutationSchema.omit({ amount: true });
+// Legacy configuration can still be removed without allowing new unsupported prices.
+export const coachingPriceRemovalSchema = coachingPriceMutationSchema.omit({ amount: true }).extend({
+  duration_minutes: z.number().int().min(15).max(480),
+});
 
 export type CoachingMutationResult =
   | { ok: true; id: string; archived?: boolean }

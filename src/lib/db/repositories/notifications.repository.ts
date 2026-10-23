@@ -4,6 +4,7 @@ import { IsNull, type EntityManager } from "typeorm";
 import { z } from "zod";
 import { EmailDeliveryEntity } from "../entities/email-delivery.entity";
 import { UserMessageEntity } from "../entities/user-message.entity";
+import { definitiveRejectionPattern } from "@/lib/notifications/delivery-retry";
 import type { InboxQuery } from "@/lib/notifications/inbox-query";
 
 export async function insertUserMessage(manager: EntityManager, message: Omit<UserMessageEntity, "readAt" | "deletedAt">) {
@@ -85,17 +86,19 @@ export type ClaimedEmail = {
   attempts: number; lockedUntil: Date;
 };
 
-export async function claimEmailDeliveries(manager: EntityManager, limit: number, notBefore: Date | null = null): Promise<ClaimedEmail[]> {
+export async function claimEmailDeliveries(manager: EntityManager, limit: number, notBefore: Date | null = null, selectedId: string | null = null): Promise<ClaimedEmail[]> {
   const result: unknown = await manager.query(`WITH due AS (
       SELECT id FROM public.email_deliveries
-      WHERE attempts < 5 AND ($2::timestamptz IS NULL OR created_at >= $2::timestamptz)
-        AND ((status='pending' AND next_attempt_at <= clock_timestamp())
-        OR (status='processing' AND locked_until <= clock_timestamp()))
+      WHERE ($2::timestamptz IS NULL OR created_at >= $2::timestamptz)
+        AND provider_message_id IS NULL AND suppressed_at IS NULL
+        AND (last_error IS NULL AND attempts=0 OR (last_error ~ $4 AND last_error !~ '^Brevo HTTP 408(:|$)'))
+        AND (($3::uuid IS NULL AND attempts < 5 AND status='pending' AND next_attempt_at <= clock_timestamp())
+          OR (id=$3::uuid AND status IN ('failed','pending') AND last_error ~ $4))
       ORDER BY next_attempt_at, id LIMIT $1 FOR UPDATE SKIP LOCKED
     ) UPDATE public.email_deliveries e SET status='processing', attempts=e.attempts+1,
       locked_until=date_trunc('milliseconds', clock_timestamp()+interval '2 minutes'), updated_at=clock_timestamp()
     FROM due WHERE e.id=due.id
-    RETURNING e.id, e.recipient_email, e.subject, e.body_text, e.body_html, e.attempts, e.locked_until`, [limit, notBefore]);
+    RETURNING e.id, e.recipient_email, e.subject, e.body_text, e.body_html, e.attempts, e.locked_until`, [limit, notBefore, selectedId, definitiveRejectionPattern]);
   return z.tuple([z.array(claimRow), z.number().int()]).parse(result)[0].map((row) => ({ id: row.id, recipientEmail: row.recipient_email,
     subject: row.subject, bodyText: row.body_text, bodyHtml: row.body_html,
     attempts: row.attempts, lockedUntil: row.locked_until }));
@@ -103,11 +106,11 @@ export async function claimEmailDeliveries(manager: EntityManager, limit: number
 
 export async function failExpiredFinalClaims(manager: EntityManager, limit: number): Promise<string[]> {
   const result: unknown = await manager.query(`WITH expired AS (
-      SELECT id FROM public.email_deliveries WHERE status='processing' AND attempts >= 5
+      SELECT id FROM public.email_deliveries WHERE status='processing'
         AND locked_until <= clock_timestamp()
       ORDER BY locked_until, id LIMIT $1 FOR UPDATE SKIP LOCKED
     ) UPDATE public.email_deliveries e SET status='failed', locked_until=NULL,
-      last_error='Final delivery claim expired; provider outcome unknown', updated_at=clock_timestamp()
+      last_error='Delivery claim expired; provider outcome unknown', updated_at=clock_timestamp()
     FROM expired WHERE e.id=expired.id RETURNING e.id`, [limit]);
   return z.tuple([z.array(z.object({ id: z.uuid() })), z.number().int()]).parse(result)[0].map((row) => row.id);
 }
@@ -143,9 +146,28 @@ export async function insertEmailFailureAlerts(manager: EntityManager, deliveryI
   await manager.query(`INSERT INTO public.user_messages
       (id, user_id, event_key, kind, subject, body_text, href, read_at, created_at)
     SELECT gen_random_uuid(), u.id, $1, 'email.delivery_failed',
-      'Booking email delivery failed', 'An outbound booking email could not be delivered. Delivery ID: ' || $2,
+      'Booking email delivery failed', 'An outbound booking email could not be delivered. Open Delivery details to review the failure and retry eligibility.',
       NULL, NULL, $3
-    FROM public.users u JOIN public.user_roles r ON r.user_id=u.id
-    WHERE u.status='active' AND r.role_code='admin'
+    FROM public.email_deliveries delivery CROSS JOIN public.users u JOIN public.user_roles r ON r.user_id=u.id
+    WHERE delivery.id=$2::uuid AND u.status='active' AND r.role_code='admin'
     ON CONFLICT (user_id, event_key) DO NOTHING`, [`email.delivery-failed:${deliveryId}`, deliveryId, occurredAt]);
+}
+
+// The persisted event key is the association for both existing and new failure alerts.
+// Message text and browser-supplied delivery identifiers are never used.
+export async function findMessageDelivery(manager: EntityManager, userId: string, messageId: string, lock = false) {
+  const query = manager.getRepository(EmailDeliveryEntity).createQueryBuilder("delivery")
+    .innerJoin(UserMessageEntity, "message", "message.event_key = 'email.delivery-failed:' || delivery.id::text")
+    .where("message.id=:messageId AND message.user_id=:userId AND message.deleted_at IS NULL AND message.kind='email.delivery_failed'", { messageId, userId });
+  if (lock) query.setLock("pessimistic_write", undefined, ["delivery"]);
+  return query.getOne();
+}
+
+export async function findDeliveryBooking(manager: EntityManager, eventKey: string): Promise<string | null> {
+  const rows: unknown = await manager.query(`SELECT booking_id FROM public.booking_revisions
+      WHERE $1 IN ('booking.confirmed:' || id::text, 'booking.cancelled:' || id::text, 'booking.rescheduled:' || id::text)
+    UNION SELECT booking_id FROM public.booking_financial_exceptions WHERE 'financial.customer:' || event_key=$1
+    UNION SELECT f.booking_id FROM public.payment_refunds f JOIN public.refund_executions x ON x.refund_id=f.id
+      WHERE 'financial.refund:' || x.id::text=$1 LIMIT 1`, [eventKey]);
+  return z.array(z.object({ booking_id: z.uuid() })).parse(rows)[0]?.booking_id ?? null;
 }

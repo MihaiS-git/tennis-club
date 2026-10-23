@@ -38,9 +38,9 @@ export const demoPrograms: ProgramFixture[] = [
   { id: "c0ac0000-0000-4000-8000-000000000003", name: "Group coaching", type: "group", durations: [90], min: 3, max: 6, courtIncluded: true,
     description: "Small adult groups grouped by level, with structured drills and supervised points. The price is per player per session.",
     clubPrices: { 90: 9000 } },
-  { id: "c0ac0000-0000-4000-8000-000000000004", name: "Junior coaching", type: "junior", durations: [45, 60], min: 4, max: 8, courtIncluded: true,
+  { id: "c0ac0000-0000-4000-8000-000000000004", name: "Junior coaching", type: "junior", durations: [60, 90], min: 4, max: 8, courtIncluded: true,
     description: "Sessions for players aged 6 to 16, focused on coordination, footwork and enjoying the game. The price is per child per session.",
-    clubPrices: { 45: 6000, 60: 7500 } },
+    clubPrices: { 60: 7500, 90: 11250 } },
 ];
 
 type CoachFixture = {

@@ -26,6 +26,8 @@ import { createClient } from "@/lib/supabase/server";
 import { readCoachingLessonDay } from "./lesson-availability";
 import { quoteCoachingLesson, type CoachingLessonUnavailableReason } from "./lesson-quote";
 
+import { coachingDurationSchema } from "./validation";
+
 // One complete private or semi-private lesson: one coach, one payer, one court. The
 // customer identity comes from the verified session, never from this input.
 export const coachingBookingInputSchema = z.strictObject({
@@ -35,13 +37,13 @@ export const coachingBookingInputSchema = z.strictObject({
   courtId: z.uuid(),
   date: z.iso.date(),
   startMinute: z.number().int().min(0).max(1439),
-  durationMinutes: z.number().int().min(60).max(1440),
+  durationMinutes: coachingDurationSchema,
   ...bookingContactShape,
   expectedTotalAmountMinor: minorAmountSchema,
   expectedCurrency: z.enum(locationCurrencies),
 }).refine((value) => value.startMinute % 30 === 0 && value.durationMinutes % 30 === 0
   && value.startMinute + value.durationMinutes <= 1440,
-{ path: ["startMinute"], message: "Choose at least 60 minutes in 30-minute steps." });
+{ path: ["startMinute"], message: "Choose a 60, 90 or 120 minute lesson on a 30-minute boundary." });
 
 type CoachingBookingFailure = CoachingLessonUnavailableReason
   | "invalid-input" | "account-inactive" | "location-unavailable" | "past" | "payment-unavailable" | "changed" | "failed";

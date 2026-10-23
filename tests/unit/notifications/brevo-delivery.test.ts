@@ -1,3 +1,7 @@
+vi.mock("@/lib/db/repositories/club-settings.repository", () => ({
+  readClubSettings: vi.fn(async () => ({ officialEmail: "club@example.com", senderName: "My Club", emailsEnabled: true })),
+  emailDispatchAllowed: vi.fn(async () => ({ officialEmail: "club@example.com", senderName: "My Club", emailsEnabled: true })),
+}));
 import type { EntityManager } from "typeorm";
 import { beforeEach, expect, test, vi } from "vitest";
 
@@ -10,8 +14,10 @@ vi.mock("@/lib/db/repositories/notifications.repository", () => ({
   completeEmailAttempt: mocks.complete, insertEmailFailureAlerts: mocks.alerts,
 }));
 
-import { sendBrevoEmail, brevoConfig } from "@/lib/notifications/brevo";
+import { sendBrevoEmail, brevoConfig as makeBrevoConfig } from "@/lib/notifications/brevo";
 import { processPendingEmailDeliveries } from "@/lib/notifications/delivery";
+
+const brevoConfig = () => makeBrevoConfig({ officialEmail: "club@example.com", senderName: "My Club" });
 
 const id = "00000000-0000-4000-8000-000000000001";
 const claim = { id, recipientEmail: "player@example.com", subject: "Booked", bodyText: "Text",
@@ -78,8 +84,8 @@ test("missing or invalid configuration fails closed, and Vercel preview rejects 
   vi.stubEnv("BREVO_API_KEY", "");
   expect(brevoConfig).toThrow();
   vi.stubEnv("BREVO_API_KEY", "test-api-key");
-  vi.stubEnv("BOOKING_MAIL_FROM", "invalid");
-  expect(brevoConfig).toThrow();
+  expect(() => makeBrevoConfig({ officialEmail: "invalid", senderName: "Club" })).toThrow();
+  expect(() => makeBrevoConfig()).toThrow();
   vi.stubEnv("BOOKING_MAIL_FROM", "club@example.com");
   vi.stubEnv("NOTIFICATION_EMAIL_MODE", "live");
   vi.stubEnv("NODE_ENV", "production"); vi.stubEnv("VERCEL", "1"); vi.stubEnv("VERCEL_ENV", "preview");
@@ -121,7 +127,7 @@ test.each([
   [1, 5], [2, 15], [3, 60], [4, 360],
 ] as const)("retryable attempt %i schedules %i minutes", async (attempts, minutes) => {
   mocks.claim.mockResolvedValue([{ ...claim, attempts }]);
-  vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("connection lost")));
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("busy", { status: 503 })));
   const before = Date.now();
   expect(await processPendingEmailDeliveries()).toMatchObject({ retried: 1 });
   const input = mocks.complete.mock.calls[0][1];
@@ -156,4 +162,46 @@ test("expired fifth claim fails without a sixth provider request", async () => {
   expect(mocks.claim).toHaveBeenCalledWith(expect.anything(), 19, null);
   expect(mocks.alerts).toHaveBeenCalledTimes(1);
   expect(fetchMock).not.toHaveBeenCalled();
+});
+
+test.each([
+  () => Promise.reject(new Error("connection lost")),
+  () => Promise.resolve(new Response("{}", { status: 201 })),
+  () => Promise.resolve(new Response("timeout", { status: 408 })),
+])("ambiguous provider outcomes stop automatic retry", async (response) => {
+  vi.stubGlobal("fetch", vi.fn(response));
+  expect(await processPendingEmailDeliveries()).toMatchObject({ failed: 1, retried: 0 });
+  expect(mocks.complete.mock.calls[0][1]).toMatchObject({ status: "failed" });
+});
+
+test("Brevo JSON rejection retains its actual code and message", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+    code: "unauthorized", message: "Key not found",
+  }), { status: 401 })));
+  await processPendingEmailDeliveries();
+  expect(mocks.complete.mock.calls[0][1].lastError).toBe("Brevo HTTP 401: unauthorized: Key not found");
+});
+
+test("disabled delivery does not claim, consume attempts or contact Brevo", async () => {
+  const { readClubSettings } = await import("@/lib/db/repositories/club-settings.repository");
+  vi.mocked(readClubSettings).mockResolvedValueOnce({ officialEmail: "", senderName: "", emailsEnabled: false });
+  const request = vi.fn(); vi.stubGlobal("fetch", request);
+  expect(await processPendingEmailDeliveries()).toEqual({ claimed: 0, accepted: 0, sandboxAccepted: 0, retried: 0, failed: 0, stale: 0 });
+  expect(mocks.claim).not.toHaveBeenCalled(); expect(request).not.toHaveBeenCalled();
+});
+
+test("suppression after claim blocks dispatch even after email is enabled again", async () => {
+  const { emailDispatchAllowed } = await import("@/lib/db/repositories/club-settings.repository");
+  vi.mocked(emailDispatchAllowed).mockResolvedValueOnce(null);
+  const request = vi.fn(); vi.stubGlobal("fetch", request);
+  expect(await processPendingEmailDeliveries()).toMatchObject({ claimed: 1, stale: 1 });
+  expect(request).not.toHaveBeenCalled(); expect(mocks.complete).not.toHaveBeenCalled();
+});
+
+test("saved official address and display name override environment sender", async () => {
+  vi.stubEnv("BOOKING_MAIL_FROM", "wrong@example.com");
+  const request = vi.fn().mockResolvedValue(new Response(JSON.stringify({ messageId: "<saved>" }), { status: 201 }));
+  vi.stubGlobal("fetch", request);
+  await processPendingEmailDeliveries();
+  expect(JSON.parse(request.mock.calls[0][1].body).sender).toEqual({ email: "club@example.com", name: "My Club" });
 });

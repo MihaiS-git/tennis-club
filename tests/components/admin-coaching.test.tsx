@@ -43,12 +43,13 @@ it("creates a program with the explicit fields and selected durations", async ()
   fireEvent.input(within(dialog).getByLabelText("Name"), { target: { value: "Junior squad" } });
   fireEvent.change(within(dialog).getByLabelText("Program type"), { target: { value: "junior" } });
   fireEvent.click(within(dialog).getByLabelText("90 min"));
-  fireEvent.input(within(dialog).getByLabelText("Other durations (minutes, comma-separated)"), { target: { value: "105" } });
+  expect(within(dialog).queryByLabelText(/Other durations/)).toBeNull();
+  expect(within(dialog).getAllByRole("checkbox").map((input) => input.getAttribute("value"))).toEqual(["60", "90", "120"]);
   fireEvent.input(within(dialog).getByLabelText("Maximum players"), { target: { value: "8" } });
   fireEvent.click(within(dialog).getByRole("button", { name: "Save program" }));
   await waitFor(() => expect(actions.saveCoachingProgramAction).toHaveBeenCalledOnce());
   expect(actions.saveCoachingProgramAction).toHaveBeenCalledWith({ fields: { name: "Junior squad", description: "", program_type: "junior",
-    durations: [60, 90, 105], min_participants: null, max_participants: 8, court_rental_included: false, is_active: true } });
+    durations: [60, 90], min_participants: null, max_participants: 8, court_rental_included: false, is_active: true } });
   await expectToast("Program created.", "success");
   expect(router.refresh).toHaveBeenCalled();
 });
@@ -69,6 +70,9 @@ it("edits program status inline, confirming deactivation", async () => {
   actions.setCoachingProgramStatusAction.mockResolvedValue({ ok: true, id: program.id });
   render(<ProgramsTable programs={[program]} />);
   const [status] = screen.getAllByRole("combobox", { name: "Status of Private lesson" });
+  fireEvent.click(status);
+  fireEvent.keyDown(status, { key: "Enter" });
+  expect(screen.queryByRole("dialog", { name: "Edit program" })).toBeNull();
   fireEvent.change(status, { target: { value: "false" } });
   expect(actions.setCoachingProgramStatusAction).not.toHaveBeenCalled();
   fireEvent.click(within(screen.getByRole("dialog", { name: "Deactivate Private lesson?" })).getByRole("button", { name: "Deactivate program" }));
@@ -176,12 +180,12 @@ it("edits an existing coach's public profile, specialties, qualifications, langu
   expect(actions.saveCoachProfileAction).toHaveBeenLastCalledWith({ ...expected, fields: { ...expected.fields, location_ids: [location.id, west.id] } });
 });
 
-it("shows Pencil and Trash2 program actions and offers explicit deactivation for history", async () => {
+it("shows only the Delete program action and offers explicit deactivation for history", async () => {
   actions.deleteCoachingProgramAction.mockResolvedValue({ ok: false, reason: "has-bookings" });
   actions.setCoachingProgramStatusAction.mockResolvedValue({ ok: true, id: program.id });
   render(<ProgramsTable programs={[program]} />);
   const row = screen.getByRole("row", { name: "Edit program Private lesson" });
-  expect(within(row).getByRole("button", { name: "Edit program" }).querySelector(".lucide-pencil")).toBeTruthy();
+  expect(within(row).queryByRole("button", { name: "Edit program" })).toBeNull();
   const button = within(row).getByRole("button", { name: "Delete program" });
   expect(button.querySelector(".lucide-trash-2")).toBeTruthy();
   fireEvent.click(button);
@@ -198,31 +202,33 @@ it.each([false, true])("confirms coach removal and reports physical deletion ver
   actions.deleteCoachProfileAction.mockResolvedValue({ ok: true, id: coach.user_id, archived });
   render(<CoachesTable coaches={[listItem(coach)]} locations={[location]} programs={[program]} />);
   const row = screen.getByRole("row", { name: "Edit coach Ana Pop" });
-  expect(within(row).getByRole("button", { name: "Edit coach" }).querySelector(".lucide-pencil")).toBeTruthy();
+  expect(within(row).queryByRole("button", { name: "Edit coach" })).toBeNull();
   const button = within(row).getByRole("button", { name: "Delete coach" });
   expect(button.querySelector(".lucide-trash-2")).toBeTruthy();
   fireEvent.click(button);
   expect(actions.deleteCoachProfileAction).not.toHaveBeenCalled();
+  expect(screen.queryByRole("dialog", { name: "Edit coach" })).toBeNull();
   const dialog = screen.getByRole("dialog", { name: "Remove Ana Pop?" });
   fireEvent.click(within(dialog).getByRole("button", { name: "Remove coach" }));
   await waitFor(() => expect(actions.deleteCoachProfileAction).toHaveBeenCalledWith({ user_id: coach.user_id }));
   await expectToast(archived ? "Coach archived and removed from the roster." : "Coach profile deleted.", "success");
 });
 
-it("removes Junior's 45 minute duration with one save and no cleanup confirmation", async () => {
+it("offers only permitted durations when editing a legacy program", async () => {
   actions.saveCoachingProgramAction.mockResolvedValue({ ok: true, id: program.id });
   render(<ProgramDialog program={{ ...program, name: "Junior coaching", program_type: "junior", durations: [45, 60] }} open />);
-  fireEvent.click(screen.getByLabelText("45 min"));
+  expect(screen.queryByLabelText("45 min")).toBeNull();
+  fireEvent.input(screen.getByLabelText("Name"), { target: { value: "Junior coaching updated" } });
   fireEvent.click(screen.getByRole("button", { name: "Save program" }));
   await waitFor(() => expect(actions.saveCoachingProgramAction).toHaveBeenCalledWith({ id: program.id,
-    fields: expect.objectContaining({ name: "Junior coaching", durations: [60] }) }));
+    fields: expect.objectContaining({ name: "Junior coaching updated", durations: [60] }) }));
   await expectToast("Program updated.", "success");
 });
 
-it("edits every program field in the existing dialog from the Pencil action", async () => {
+it("edits every program field in the existing dialog from a row click", async () => {
   actions.saveCoachingProgramAction.mockResolvedValue({ ok: true, id: program.id });
   render(<ProgramsTable programs={[program]} />);
-  fireEvent.click(within(screen.getByRole("row", { name: "Edit program Private lesson" })).getByRole("button", { name: "Edit program" }));
+  fireEvent.click(screen.getByRole("row", { name: "Edit program Private lesson" }));
   const dialog = screen.getByRole("dialog", { name: "Edit program" });
   expect((within(dialog).getByLabelText("Name") as HTMLInputElement).value).toBe(program.name);
   fireEvent.input(within(dialog).getByLabelText("Name"), { target: { value: "Partner lesson" } });
@@ -245,6 +251,7 @@ it("keeps coach removal open with a clear active-lesson explanation", async () =
   actions.deleteCoachProfileAction.mockResolvedValue({ ok: false, reason: "active-lessons" });
   render(<CoachesTable coaches={[listItem(coach)]} locations={[location]} programs={[program]} />);
   fireEvent.click(within(screen.getByRole("row", { name: "Edit coach Ana Pop" })).getByRole("button", { name: "Delete coach" }));
+  expect(screen.queryByRole("dialog", { name: "Edit coach" })).toBeNull();
   const dialog = screen.getByRole("dialog", { name: "Remove Ana Pop?" });
   fireEvent.click(within(dialog).getByRole("button", { name: "Remove coach" }));
   expect((await within(dialog).findByRole("alert")).textContent).toContain("Handle those lessons first");
@@ -279,4 +286,20 @@ it("shows archived profiles without offering mutations or a new profile", () => 
   expect(row.textContent).toContain("Archived");
   expect(within(row).queryByRole("button")).toBeNull();
   expect(within(row).queryByRole("combobox")).toBeNull();
+});
+
+it.each(["Enter", " "])("opens program editing from the keyboard with %s", (key) => {
+  render(<ProgramsTable programs={[program]} />);
+  const row = screen.getByRole("row", { name: "Edit program Private lesson" });
+  expect(row.tabIndex).toBe(0);
+  fireEvent.keyDown(row, { key });
+  expect(screen.getByRole("dialog", { name: "Edit program" })).toBeTruthy();
+});
+
+it.each(["Enter", " "])("opens coach editing from the keyboard with %s", (key) => {
+  render(<CoachesTable coaches={[listItem(coach)]} locations={[location]} programs={[program]} />);
+  const row = screen.getByRole("row", { name: "Edit coach Ana Pop" });
+  expect(row.tabIndex).toBe(0);
+  fireEvent.keyDown(row, { key });
+  expect(screen.getByRole("dialog", { name: "Edit coach" })).toBeTruthy();
 });

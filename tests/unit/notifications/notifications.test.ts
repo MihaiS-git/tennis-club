@@ -1,3 +1,7 @@
+vi.mock("@/lib/db/repositories/club-settings.repository", () => ({
+  readClubSettings: vi.fn(async () => ({ officialEmail: "club@example.com", senderName: "My Club", emailsEnabled: true })),
+  emailDispatchAllowed: vi.fn(async () => ({ officialEmail: "club@example.com", senderName: "My Club", emailsEnabled: true })),
+}));
 import type { EntityManager } from "typeorm";
 import { beforeEach, expect, test, vi } from "vitest";
 import { resolveNotificationChannels } from "@/lib/notifications/policy";
@@ -92,4 +96,12 @@ test("repository inserts use database conflict handling", async () => {
     createdAt: event.occurredAt, updatedAt: event.occurredAt });
   expect(builder.orIgnore).toHaveBeenCalledTimes(2);
   expect(execute).toHaveBeenCalledTimes(2);
+});
+
+test("disabled customer mail preserves the account's in-app notification", async () => {
+  const { readClubSettings } = await import("@/lib/db/repositories/club-settings.repository");
+  vi.mocked(readClubSettings).mockResolvedValueOnce({ officialEmail: "", senderName: "", emailsEnabled: false });
+  const manager = { query: vi.fn().mockResolvedValue([row()]) } as unknown as EntityManager;
+  await recordNotification(manager, event);
+  expect(messages.size).toBe(1); expect(deliveries.size).toBe(0);
 });

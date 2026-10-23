@@ -98,7 +98,7 @@ function CoachRow({ item, locations, programs, mobile }: {
     if (!nextOpen) rowRef.current?.focus();
   }} />, document.body);
   const actions = editable ? <span className="inline-flex gap-2" onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>
-    <Button type="button" variant="secondary" size="small" className="gap-1.5 whitespace-nowrap" aria-label={coach ? "Edit coach" : "Configure profile"} onClick={() => setOpen(true)}><Pencil size={14} aria-hidden="true" />{!coach && "Configure profile"}</Button>
+    {!coach && <Button type="button" variant="secondary" size="small" className="gap-1.5 whitespace-nowrap" aria-label="Configure profile" onClick={() => setOpen(true)}><Pencil size={14} aria-hidden="true" />Configure profile</Button>}
     {coach && <CoachingDeleteButton kind="coach" id={coach.user_id} name={coach.display_name} />}
   </span> : <span className="text-xs text-muted-foreground">Archived</span>;
   const locationNames = names(coach?.location_ids ?? [], locations, "Archived location");

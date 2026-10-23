@@ -1,5 +1,6 @@
 "use server";
 
+import { retryMessageDelivery } from "@/lib/notifications/admin-delivery";
 import { revalidatePath } from "next/cache";
 import { deleteOwnMessage, messageAccess, readOwnMessage, unreadOwnMessage, updateOwnMessages } from "@/lib/notifications/inbox";
 
@@ -34,4 +35,11 @@ export async function deleteMessageAction(id: unknown) {
   if (!await deleteOwnMessage(access.userId, id)) throw new Error("Notification unavailable");
   revalidatePath("/messages");
   return { ok: true };
+}
+
+export async function retryMessageDeliveryAction(messageId: unknown) {
+  const result = await retryMessageDelivery(messageId);
+  revalidatePath("/messages");
+  revalidatePath("/messages/[messageId]", "page");
+  return result;
 }

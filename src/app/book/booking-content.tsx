@@ -94,7 +94,9 @@ async function BookingDay({ location, date, today, now, coaching }: {
 async function CoachingDay({ location, date, today, now, data, params }: {
   location: BookLocation; date: string; today: string; now: Date; data: PublicCoaching; params: BookParams;
 }) {
-  const options = coachingBookingOptions(data, location);
+  let options: Awaited<ReturnType<typeof coachingBookingOptions>>;
+  try { options = await coachingBookingOptions(data, location, now); }
+  catch { return <><Alert>Coaching information is temporarily unavailable. Please try again.</Alert></>; }
   const pricedProgram = (candidate: typeof options[number]) => candidate.programs.find(item =>
     item.bookable && item.durations.some(length => length.price));
   const coach = params.coach ? options.find(option => option.id === params.coach)
@@ -116,7 +118,7 @@ async function CoachingDay({ location, date, today, now, data, params }: {
   } catch { unavailable = true; }
   const starts = availability?.durations.find(item => item.durationMinutes === duration?.durationMinutes)?.starts;
   const bookable = coach?.programs.filter(item => item.bookable) ?? [];
-  const status = !options.length ? `No coaches currently teach at ${location.name}.`
+  const status = !options.length ? `No coaches currently offer online-bookable lessons at ${location.name}.`
     : !coach ? "Choose a coach to see their programs."
     : !coach.programs.length ? `${coach.displayName} has no programs assigned yet.`
     : !bookable.length ? `None of ${coach.displayName}’s programs can be booked online.`

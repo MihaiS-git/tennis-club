@@ -52,11 +52,11 @@ export function UserProfileDetails({ user, section }: { user: AdminUserDetails; 
     </div>
   </div> : <ProfileSection title="Tennis profile">
     <div className="flex min-w-0 flex-col items-start gap-5 sm:flex-row sm:gap-6">
-      <div className="w-28 shrink-0">
-        <div className="flex size-28 items-center justify-center rounded-control border border-border bg-surface-muted p-2">
+      <div className="w-28 shrink-0 sm:w-52">
+        <div className="flex aspect-square w-full items-center justify-center overflow-hidden rounded-control border border-border bg-surface-muted">
           {avatarSrc && failedAvatar !== avatarSrc
             // eslint-disable-next-line @next/next/no-img-element -- Private authenticated avatar endpoint, without image optimization caching.
-            ? <img src={avatarSrc} alt="User avatar" className="h-auto max-h-full w-auto max-w-full object-contain" onError={() => setFailedAvatar(avatarSrc)} />
+            ? <img src={avatarSrc} alt="User avatar" className="size-full object-cover" onError={() => setFailedAvatar(avatarSrc)} />
             : <UserRound aria-hidden="true" className="size-9 text-muted-foreground" />}
         </div>
         {(!avatarSrc || failedAvatar === avatarSrc) && <p className="mt-2 text-center text-xs leading-5 text-muted-foreground">
