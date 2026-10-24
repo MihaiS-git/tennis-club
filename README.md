@@ -359,8 +359,10 @@ wall time controls eligibility. Without a refund, both lifecycle rows commit ato
 commit instead: the booking stays confirmed until the refund is verified, is cancelled
 then. Any incomplete refund preserves the original booking and reservation, including
 when other refunds have succeeded. Known transient provider failures permit new executions;
-permanent or ambiguous failures preserve the outstanding obligation, record a financial
-exception and stay visible to Admin for external resolution. Refund execution runs after commit in the same request; an unconfirmed
+ambiguous failures, and permanent failures after a partial refund, preserve the outstanding
+obligation, record a financial exception and stay visible to Admin for external resolution.
+When every refund is permanently refused and no money moved, the request is abandoned: the
+obligations are voided, the booking stays confirmed and a new cancellation may be requested. Refund execution runs after commit in the same request; an unconfirmed
 outcome is completed by a signed Stripe refund webhook or the Admin "Check with Stripe" action.
 Repeated requests reuse the existing request and refunds; other duplicate cancellations
 return a safe failure.
@@ -461,7 +463,10 @@ rescheduling explicitly rejects lessons. `/book?mode=coaching` now reuses the ex
 single-day timetable, customer dialog and Payment Element for both lesson types. One customer
 books and pays for the complete session (one player for Private, two for Semi-private).
 Configured coach overrides take precedence over club defaults; excluded court rental is
-added once to the session price. Group and Junior online booking remain deferred.
+added once to the session price. Group and Junior sessions are not booked online: the
+coach or club organizes them and reserves the court, payment is made at the club, and the
+club publishes informational rates per person per 60 minutes by player count on `/coaching`
+(set under Admin → Coaching → Prices).
 See [coaching booking](docs/coaching.md#step-6-coaching-mode-on-book).
 
 ---
@@ -1674,23 +1679,23 @@ For a **fresh, empty** local project:
 4. Run `npm run db:dev:seed` separately if fixtures are needed.
 
 The initial migration is generated from the shared TypeORM metadata and creates all
-31 application tables in their final form, including effective opening hours, booking adjustments,
+34 application tables in their final form, including effective opening hours, booking adjustments,
 immutable booking revisions, refund executions, coaching programs/prices/availability and the
-entity-less `booking_financial_exceptions` evidence table.
+entity-less `booking_financial_exceptions` evidence table, the `club_settings` singleton,
+`email_deliveries.suppressed_at` suppression evidence and the 60/90/120 coaching duration CHECK.
 It configures `btree_gist` before the eight entity-declared overlap exclusions. The
 Auth user FK is generated from a non-synchronized reference entity: Supabase alone
 owns `auth.users`. The native integrity migration installs the case-insensitive
 email expression index, payment/capture/refund/financial-exception immutability guards,
-permanent-ownership and revision immutability/linear-head guards, `admin`/`coach` roles
-and the provider-settings singleton. The
+permanent-ownership and revision immutability/linear-head guards, `admin`/`coach` roles,
+the provider-settings singleton and the disabled club-settings singleton. The
 Supabase integration migration installs browser-role restrictions, the two Auth provisioning/email-sync hooks,
 explicit email-change timestamps, private WebP avatar bucket and Storage policies.
 A secured active-account boolean helper keeps Storage working without browser
 SELECT on `public.users`. Ordinary accounts receive no RBAC roles.
 
-The three base migrations plus additive `ClubSettings1791462257927` and their DataSource registry remain the schema
-source. Apply pending TypeORM migrations before deploying Club settings; this migration
-starts transactional email disabled and preserves existing delivery history. The guarded development rebuild applies them; there are no npm migration
+The three migrations and their DataSource registry remain the schema source. Transactional
+email starts disabled with empty sender fields. The guarded development rebuild applies them; there are no npm migration
 management commands. Production migration execution will be addressed with deployment.
 Schema synchronization and automatic runtime migrations are off.
 
@@ -1757,7 +1762,10 @@ partial refunds cannot be reversed or repeated; remaining obligations retain the
 reservation. Only verified transient failures (`insufficient_funds` refund failure or
 `balance_insufficient` request rejection) authorize a replacement execution, and only
 through the Admin "Check with Stripe" action.
-Other definitive failures require external repayment resolution, preserving the booking.
+Other definitive failures after a partial refund leave that money owed and require external
+repayment resolution, preserving the booking. When every obligation is definitively refused
+and no money was returned, the change is abandoned instead: obligations are voided, the
+booking stays confirmed and the customer may request again.
 
 After the 23-hour conservative replay cutoff, a refund check fully paginates Stripe refunds for
 the PaymentIntent and matches obligation/execution metadata plus payment, amount and currency.

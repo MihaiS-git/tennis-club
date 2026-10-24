@@ -38,7 +38,7 @@ beforeEach(() => {
   mocks.inTransaction.mockImplementation(async (work: (value: unknown) => unknown) => work(manager));
   mocks.lockReservationActorFacts.mockResolvedValue({ status: "active", roles: ["coach"] });
   mocks.lockCoachProfile.mockResolvedValue({ userId: coach, locationIds: [], programIds: [program] });
-  mocks.lockCoachingProgram.mockResolvedValue({ id: program, durations: [60, 90] });
+  mocks.lockCoachingProgram.mockResolvedValue({ id: program, programType: "private", durations: [60, 90] });
   mocks.upsertCoachingPrice.mockResolvedValue("price-1");
   mocks.deleteCoachingPrice.mockResolvedValue("price-1");
 });
@@ -73,4 +73,15 @@ it("requires an active coach account offering the program and duration", async (
   mocks.lockCoachProfile.mockResolvedValueOnce(null);
   expect(await saveOwnCoachingPrice(input)).toEqual({ ok: false, reason: "not-eligible" });
   expect(mocks.upsertCoachingPrice).not.toHaveBeenCalled();
+});
+
+it("rejects own prices for Group and Junior programs, which are club-priced, but still removes obsolete ones", async () => {
+  for (const programType of ["group", "junior"]) {
+    mocks.lockCoachingProgram.mockResolvedValueOnce({ id: program, programType, durations: [60, 90] });
+    expect(await saveOwnCoachingPrice(input)).toEqual({ ok: false, reason: "club-priced" });
+  }
+  expect(mocks.upsertCoachingPrice).not.toHaveBeenCalled();
+  mocks.lockCoachingProgram.mockResolvedValueOnce({ id: program, programType: "semi_private", durations: [60, 90] });
+  expect(await saveOwnCoachingPrice(input)).toEqual({ ok: true, id: "price-1" });
+  expect(await removeOwnCoachingPrice({ program_id: program, duration_minutes: 60, currency: "RON" })).toEqual({ ok: true, id: "price-1" });
 });

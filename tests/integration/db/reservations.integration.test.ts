@@ -15,6 +15,7 @@ import { editOwnDirectReservation, cancelOwnDirectReservation } from "@/lib/rese
 import { localMinute, localToday } from "@/lib/courts/local-time";
 import { cleanupAuthFixtures, localFixtureClient } from "../auth-fixtures";
 import { ensureIntegrationAdminAnchor } from "../admin-anchor";
+import { boundedWaitMs, deferred, reached, settled } from "../concurrency";
 
 let database: DataSource;
 let service: SupabaseClient;
@@ -79,17 +80,13 @@ afterAll(async () => {
   } finally { if (database?.isInitialized) await database.destroy(); vi.unstubAllEnvs(); }
 });
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => { resolve = done; });
-  return { promise, resolve };
-}
 async function backend(manager: EntityManager) {
   const rows: unknown = await manager.query("SELECT pg_backend_pid() AS pid");
   return z.array(z.object({ pid: z.number() })).length(1).parse(rows)[0].pid;
 }
+// Bounded inside the owning test's timeout so its finally still releases and drains.
 async function waitForBlock(pid: number) {
-  const deadline = Date.now() + 8000;
+  const deadline = Date.now() + boundedWaitMs;
   while (Date.now() < deadline) {
     const rows: unknown = await database.query("SELECT pid FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid))", [pid]);
     if (z.array(z.object({ pid: z.number() })).parse(rows).length) return;
@@ -113,7 +110,7 @@ async function runner(): Promise<QueryRunner> {
 // Services run actual TypeORM transactions; spies only control acquisition order.
 test("same-slot real creates yield one success, one exact overlap result and one active row", async () => {
   const write = vi.spyOn(repository,"insertDirectReservation");
-  const results = await Promise.all([createDirectReservation(input, admin, now), createDirectReservation(input, coach, now)]);
+  const results = await settled([createDirectReservation(input, admin, now), createDirectReservation(input, coach, now)]);
   expect(results.filter((result) => result.ok)).toHaveLength(1);
   expect(write).toHaveBeenCalledTimes(1);
   expect(results.find((result) => !result.ok)).toEqual({ ok: false,
@@ -164,21 +161,24 @@ test.each(["cancel-first"])("edit/cancel preserves lifecycle with forced %s acqu
   });
   const save = () => editDirectReservationAsAdmin({ kind: "schedule", id: original.id, expectedUpdatedAt: original.updated_at,
     schedule: { courtId, date, startMinute: 720, endMinute: 780, reason: "Moved" } }, admin, now);
-  const first = order === "cancel-first" ? cancelDirectReservationAsAdmin(original.id, admin) : save();
-  const pid = await acquired.promise;
-  const second = order === "cancel-first" ? save() : cancelDirectReservationAsAdmin(original.id, admin);
-  try { await waitForBlock(pid); } finally { release.resolve(); }
-  const [a, b] = await Promise.all([first, second]); expect(a.ok).toBe(true);
+  const first: Promise<{ ok: boolean }> = order === "cancel-first" ? cancelDirectReservationAsAdmin(original.id, admin) : save();
+  let second: Promise<{ ok: boolean }> | undefined;
+  try {
+    const pid = await reached(acquired.promise, first, "the first command to write the reservation");
+    second = order === "cancel-first" ? save() : cancelDirectReservationAsAdmin(original.id, admin);
+    await waitForBlock(pid);
+  } finally { release.resolve(); await Promise.allSettled([first, second]); }
+  const [a, b] = await settled([first, second!]); expect(a.ok).toBe(true);
   if (order === "cancel-first") expect(b).toEqual({ ok: false, message: "This reservation is no longer available to edit." });
   else expect(b.ok).toBe(true);
   const final = await inTransaction((manager) => repository.findReservationForUpdate(manager, original.id));
   expect(final).toMatchObject({ status: "cancelled", cancelled_by_user_id: adminId, cancelled_at: expect.any(String),
     starts_at_minute: order === "edit-first" ? 720 : 600, reason: order === "edit-first" ? "Moved" : "Training" });
-});
+}, 15000);
 
 test("owner/Admin cancellation contenders produce exactly one success without rewriting metadata", async () => {
   const row = await seed();
-  const results = await Promise.all([cancelOwnDirectReservation(row.id, coach), cancelDirectReservationAsAdmin(row.id, admin)]);
+  const results = await settled([cancelOwnDirectReservation(row.id, coach), cancelDirectReservationAsAdmin(row.id, admin)]);
   expect(results.filter((result) => result.ok)).toHaveLength(1);
   expect(results.find((result) => !result.ok)).toEqual({ ok: false, message: "This reservation is no longer available to cancel." });
   const final = await inTransaction((manager) => repository.findReservationForUpdate(manager, row.id));
@@ -199,66 +199,78 @@ test.each(["create"])("%s reader first blocks Phase 3 writer and commits coheren
   const reader = row ? editOwnDirectReservation({ kind: "schedule", id: row.id, expectedUpdatedAt: row.updated_at,
     schedule: { courtId, date, startMinute: 720, endMinute: 780, reason: "Moved" } }, coach, now)
     : createDirectReservation({ ...input, startMinute: 720, endMinute: 780 }, coach, now);
-  const pid = await acquired.promise;
-  const writer = inTransaction((manager) => changeHours(manager, 720));
-  try { await waitForBlock(pid); } finally { release.resolve(); }
-  expect(await reader).toMatchObject({ ok: true }); await writer;
+  let writer: Promise<unknown> | undefined;
+  try {
+    const pid = await reached(acquired.promise, reader, "the reader to take the actor fence");
+    writer = inTransaction((manager) => changeHours(manager, 720));
+    await waitForBlock(pid);
+  } finally { release.resolve(); await Promise.allSettled([reader, writer]); }
+  const [result] = await settled([reader, writer!]);
+  expect(result).toMatchObject({ ok: true });
   expect((await reservation()).starts_at_minute).toBe(720);
-});
+}, 15000);
 
 test.each(["create"])("Phase 3 writer first makes %s use coherent new hours", async (kind) => {
   const row = kind === "schedule" ? await seed() : null;
-  const writer = await runner();
+  const writer = await runner(); let reader: Promise<unknown> | undefined;
   try {
     await changeHours(writer.manager, 720); const pid = await backend(writer.manager);
-    const reader = row ? editOwnDirectReservation({ kind: "schedule", id: row.id, expectedUpdatedAt: row.updated_at,
+    reader = row ? editOwnDirectReservation({ kind: "schedule", id: row.id, expectedUpdatedAt: row.updated_at,
       schedule: { courtId, date, startMinute: 720, endMinute: 780, reason: "Moved" } }, coach, now)
       : createDirectReservation({ ...input, startMinute: 720, endMinute: 780 }, coach, now);
     await waitForBlock(pid); await writer.commitTransaction();
     expect(await reader).toEqual({ ok: false, message: "Choose an interval within one opening-hours period." });
     if (row) expect((await reservation()).updated_at).toBe(row.updated_at);
-  } finally { if (writer.isTransactionActive) await writer.rollbackTransaction(); await writer.release(); }
-});
+  } finally {
+    if (writer.isTransactionActive) await writer.rollbackTransaction();
+    await Promise.allSettled([reader]); await writer.release();
+  }
+}, 15000);
 
 test.each(["role"])("%s change committed before actor fence denies the already-authorized create", async (kind) => {
-  const reached = deferred<void>(), release = deferred<void>(); const fence = accounts.lockReservationActorFacts;
+  const fenced = deferred(), release = deferred(); const fence = accounts.lockReservationActorFacts;
   vi.spyOn(accounts, "lockReservationActorFacts").mockImplementationOnce(async (...args) => {
-    reached.resolve(); await release.promise; return fence(...args);
+    fenced.resolve(); await release.promise; return fence(...args);
   });
-  const mutation = createDirectReservation(input, coach, now); await reached.promise;
+  const mutation = createDirectReservation(input, coach, now);
   try {
+    await reached(fenced.promise, mutation, "the create to reach the actor fence");
     if (kind === "role") await database.query("DELETE FROM public.user_roles WHERE user_id=$1 AND role_code='coach'", [coachId]);
     else await database.query("UPDATE public.users SET status='suspended' WHERE id=$1", [coachId]);
-  } finally { release.resolve(); }
+  } finally { release.resolve(); await Promise.allSettled([mutation]); }
   expect(await mutation).toEqual({ ok: false, message: "Unable to reserve this court. Try again." });
   const rows: unknown = await database.query("SELECT id FROM public.court_reservations WHERE court_id=$1", [courtId]); expect(rows).toEqual([]);
 });
 
 test.each(["status"])("%s change after actor fence waits for reservation transaction", async (kind) => {
-  const reached = deferred<number>(), release = deferred<void>(); const fence = accounts.lockReservationActorFacts;
+  const fenced = deferred<number>(), release = deferred(); const fence = accounts.lockReservationActorFacts;
   vi.spyOn(accounts, "lockReservationActorFacts").mockImplementationOnce(async (...args) => {
-    const result = await fence(...args); reached.resolve(await backend(args[0])); await release.promise; return result;
+    const result = await fence(...args); fenced.resolve(await backend(args[0])); await release.promise; return result;
   });
-  const mutation = createDirectReservation(input, coach, now), pid = await reached.promise;
-  const change = kind === "role" ? database.query("DELETE FROM public.user_roles WHERE user_id=$1 AND role_code='coach'", [coachId])
-    : database.query("UPDATE public.users SET status='suspended' WHERE id=$1", [coachId]);
-  try { await waitForBlock(pid); } finally { release.resolve(); }
-  expect(await mutation).toEqual({ ok: true }); await change;
-});
+  const mutation = createDirectReservation(input, coach, now); let change: Promise<unknown> | undefined;
+  try {
+    const pid = await reached(fenced.promise, mutation, "the create to take the actor fence");
+    change = kind === "role" ? database.query("DELETE FROM public.user_roles WHERE user_id=$1 AND role_code='coach'", [coachId])
+      : database.query("UPDATE public.users SET status='suspended' WHERE id=$1", [coachId]);
+    await waitForBlock(pid);
+  } finally { release.resolve(); await Promise.allSettled([mutation, change]); }
+  const [result] = await settled([mutation, change!]);
+  expect(result).toEqual({ ok: true });
+}, 15000);
 
 test("reason-only parent discovery retries in a fresh transaction after a court move", async () => {
-  const row = await seed(); const reached = deferred<void>(), release = deferred<void>(); const discovery = repository.findReservationParent;
+  const row = await seed(); const found = deferred(), release = deferred(); const discovery = repository.findReservationParent;
   vi.spyOn(repository, "findReservationParent").mockImplementationOnce(async (...args) => {
-    const parent = await discovery(...args); reached.resolve(); await release.promise; return parent;
+    const parent = await discovery(...args); found.resolve(); await release.promise; return parent;
   });
   const save = editOwnDirectReservation({ kind: "reason", id: row.id, expectedUpdatedAt: row.updated_at, reason: "After move" }, coach, now);
-  await reached.promise;
   try {
+    await reached(found.promise, save, "the edit to discover the reservation parent");
     await inTransaction(async (manager) => {
       await lockConfigurationForWrite(manager); await lockLocations(manager, [locationId, otherLocationId]);
       await manager.query("UPDATE public.courts SET location_id=$2 WHERE id=$1", [courtId, otherLocationId]);
     });
-  } finally { release.resolve(); }
+  } finally { release.resolve(); await Promise.allSettled([save]); }
   expect(await save).toEqual({ ok: true }); expect(repository.findReservationParent).toHaveBeenCalledTimes(2);
 });
 

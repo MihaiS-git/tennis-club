@@ -1,4 +1,4 @@
-import { beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { EntityManager } from "typeorm";
 const mocks = vi.hoisted(() => ({ admin: vi.fn(), fence: vi.fn(), read: vi.fn(), write: vi.fn(), user: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
 vi.mock("@/lib/logger", () => ({ logger: { info: mocks.info, warn: mocks.warn, error: mocks.error } }));
@@ -19,6 +19,7 @@ beforeEach(() => {
   mocks.user.mockResolvedValue({ data: { user: { id: "admin-id", email: "verified@example.com", email_confirmed_at: "2026-01-01" } }, error: null });
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ messageId: "<test>" }), { status: 201 })));
 });
+afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 
 test("only authorized Admin can read, update or send tests", async () => {
   mocks.admin.mockRejectedValue(new Error("Denied"));

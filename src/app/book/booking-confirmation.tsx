@@ -28,7 +28,7 @@ import { paymentHoldDurationSeconds, type OnlineCheckout } from "@/lib/payments/
 export type BookingSummaryDetails = { locationName: string; courtName: string; date: string;
   startMinute: number; endMinute: number; durationMinutes: number;
   priceMinor: number; currency: LocationCurrency;
-  coaching?: { participantCount: 1 | 2; programName: string; coachName: string; coachingAmountMinor: number; courtAmountMinor: number; courtRentalIncluded: boolean } };
+  coaching?: { participantCount: number; programName: string; coachName: string; coachingAmountMinor: number; courtAmountMinor: number; courtRentalIncluded: boolean } };
 
 export function BookingSummary({ details }: { details: BookingSummaryDetails }) {
   const dateLabel = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })
@@ -57,7 +57,7 @@ const paymentOption = "flex min-h-11 cursor-pointer items-center gap-2.5 rounded
 const stickyActions = "sticky bottom-0 z-10 -mx-4 bg-surface px-4 pb-4 sm:-mx-6 sm:px-6 sm:pb-6";
 
 export function BookingConfirmation({ selection, details, contact, onContactChange, onBack, onCommitted, onUnavailable, onAbandoned, cancellationNoticeMinutes, timezone, allowPayAtClub = false, onlinePaymentAvailable = false, authenticated = false, coaching }: {
-  coaching?: Pick<CoachingSelection, "locationId" | "programId" | "coachId" | "durationMinutes">;
+  coaching?: Pick<CoachingSelection, "locationId" | "programId" | "coachId" | "durationMinutes" | "participantCount">;
   authenticated?: boolean; onlinePaymentAvailable?: boolean; allowPayAtClub?: boolean; cancellationNoticeMinutes: number; timezone: string; selection: CalendarSelection; details: BookingSummaryDetails; contact: BookingContact;
   onContactChange: (contact: BookingContact) => void; onBack: () => void;
   onCommitted: (totalAmountMinor: number, currency: LocationCurrency, cancellationPolicy: ConfirmedCancellationPolicy | null, paymentMethod: PaymentMethod) => void;
@@ -151,7 +151,7 @@ export function BookingConfirmation({ selection, details, contact, onContactChan
     try {
       const result = coaching ? await commitCoachingBookingAction({ locationId: coaching.locationId,
         programId: coaching.programId, coachId: coaching.coachId, courtId: parsed.data.courtId, date: parsed.data.date,
-        startMinute: parsed.data.startMinute, durationMinutes: coaching.durationMinutes,
+        startMinute: parsed.data.startMinute, durationMinutes: coaching.durationMinutes, participantCount: coaching.participantCount,
         customerName: parsed.data.customerName, customerEmail: parsed.data.customerEmail, customerPhone: parsed.data.customerPhone,
         expectedTotalAmountMinor: parsed.data.expectedTotalAmountMinor, expectedCurrency: parsed.data.expectedCurrency })
         : await commitCustomerBookingAction(parsed.data);

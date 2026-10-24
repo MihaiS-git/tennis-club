@@ -27,7 +27,7 @@ const emptyContact: BookingContact = { customerName: "", customerEmail: "", cust
 // Keep contact edits while changing lesson preferences; reset the interval and review.
 export function BookingCalendar(props: Omit<Parameters<typeof BookingCalendarContent>[0], "contact" | "setContact">) {
   const [contact, setContact] = useState<BookingContact | null>(null);
-  const context = `${props.coaching?.programId ?? "court"}:${props.coaching?.coachId ?? ""}:${props.coaching?.durationMinutes ?? ""}`;
+  const context = `${props.coaching?.programId ?? "court"}:${props.coaching?.coachId ?? ""}:${props.coaching?.durationMinutes ?? ""}:${props.coaching?.participantCount ?? ""}`;
   return <BookingCalendarContent key={context} {...props} contact={contact} setContact={setContact} />;
 }
 

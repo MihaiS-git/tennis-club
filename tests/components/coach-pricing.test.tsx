@@ -26,7 +26,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 function renderRows(rows: CoachPricingRow[]) {
-  render(<CoachPricingTable view={{ currencies: [{ currency: "RON", location_names: ["East Club", "North Club"] }, { currency: "EUR", location_names: [] }], rows }} />);
+  render(<CoachPricingTable view={{ currencies: [{ currency: "RON", location_names: ["East Club", "North Club"] }, { currency: "EUR", location_names: [] }], rows, clubPricedPrograms: [] }} />);
   return screen.getByRole("table", { name: "My coaching prices" });
 }
 

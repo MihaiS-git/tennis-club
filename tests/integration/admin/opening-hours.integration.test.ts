@@ -398,95 +398,34 @@ test("pricing and opening hours both roll back on a failure after reconciliation
   } finally { await fixture.cleanup(); }
 }, 30000);
 
-const occupancies = { active: { status: "active", live: true }, held: { status: "held", live: true },
-  "expired hold": { status: "held", live: false }, cancelled: { status: "cancelled", live: false } } as const;
-test.each(Object.keys(occupancies) as (keyof typeof occupancies)[])("future %s reservations decide whether reductions and closure are rejected", async (kind) => {
-  const { status, live } = occupancies[kind];
+// Confirmed occupancy is grandfathered; a live hold is revalidated when its payment is confirmed (see below).
+const occupancies = { active: { status: "active" }, held: { status: "held" } } as const;
+test.each(Object.keys(occupancies) as (keyof typeof occupancies)[])("future %s reservations neither block reductions or closure nor change", async (kind) => {
+  const { status } = occupancies[kind];
   const fixture = await hoursFixture();
-  const { admin, location_id, courtId, service, database, userId } = fixture;
+  const { admin, location_id, courtId, service, database } = fixture;
   const reservationId = randomUUID();
   try {
     const now = await clubs.readOpeningHoursConfigurationTime(database.manager);
     const date = new Date(`${localToday("Pacific/Kiritimati", now)}T00:00:00Z`); date.setUTCDate(date.getUTCDate()+7);
     const booking_date = date.toISOString().slice(0,10), weekday = mondayWeekday(booking_date);
     assert.ok((await saveAdminPricingRule({ ...fixture.price, weekdays: [weekday], starts_at: "07:00", ends_at: "24:00" }, admin)).ok);
-    const expires = kind === "held" ? new Date(now.getTime()+3600000) : new Date(now.getTime()-60000);
     expect((await service.from("court_reservations").insert({ id: reservationId, court_id: courtId, booking_date, starts_at_minute: 420, ends_at_minute: 480, reason: "Keep me", status,
-      hold_expires_at: status === "held" ? expires.toISOString() : null,
-      ...status === "cancelled" && { cancelled_at: now.toISOString(), cancelled_by_user_id: userId } })).error).toBeNull();
-    const snapshot = async () => {
+      hold_expires_at: status === "held" ? new Date(now.getTime()+3600000).toISOString() : null })).error).toBeNull();
+    const reservation = async () => {
       const observer = database.createQueryRunner(); await observer.connect();
-      try { return await observer.query(`SELECT (SELECT to_jsonb(r) FROM public.court_reservations r WHERE id=$1) AS reservation,
-        (SELECT jsonb_agg(to_jsonb(h) ORDER BY h.id) FROM public.location_opening_hours h WHERE location_id=$2) AS hours`, [reservationId, location_id]); }
+      try { return await observer.query("SELECT to_jsonb(r) AS reservation FROM public.court_reservations r WHERE id=$1", [reservationId]); }
       finally { await observer.release(); }
     };
-    const before = await snapshot();
+    const before = await reservation();
     const change = { ...await fixture.updateFields(), location_id, replace_ids: fixture.hours.filter((h) => h.weekday === weekday).map((h) => h.id), rows: [{ weekdays: [weekday], opens_at: "08:00", closes_at: "24:00" }] };
-    const closure = { ...change, rows: [] };
-    if (live) {
-      expect(await mutateAdminOpeningHours(change, admin)).toEqual({ ok: false, reason: "booking-conflict", dates: [booking_date] });
-      expect(await mutateAdminOpeningHours(closure, admin)).toEqual({ ok: false, reason: "booking-conflict", dates: [booking_date] });
-      // A reduction that keeps the reservation inside the opening hours is still accepted.
-      expect(await mutateAdminOpeningHours({ ...change, rows: [{ weekdays: [weekday], opens_at: "07:00", closes_at: "23:00" }] }, admin)).toMatchObject({ ok: true });
-      expect((await snapshot())[0].reservation).toEqual(before[0].reservation);
-    } else {
-      const reduced = await mutateAdminOpeningHours(change, admin); assert.ok(reduced.ok);
-      expect(await mutateAdminOpeningHours({ ...closure, ...scheduleUpdate(reduced), replace_ids: reduced.intervals.filter((h) => h.weekday === weekday).map((h) => h.id) }, admin)).toMatchObject({ ok: true });
-      expect((await snapshot())[0].reservation).toEqual(before[0].reservation);
-    }
+    const reduced = await mutateAdminOpeningHours(change, admin); assert.ok(reduced.ok);
+    expect(await reservation()).toEqual(before);
+    expect(await mutateAdminOpeningHours({ ...change, ...scheduleUpdate(reduced), rows: [],
+      replace_ids: reduced.intervals.filter((h) => h.weekday === weekday).map((h) => h.id) }, admin)).toMatchObject({ ok: true });
+    expect(await reservation()).toEqual(before);
   } finally {
     expect((await service.from("court_reservations").delete().eq("id",reservationId)).error).toBeNull();
-    await fixture.cleanup();
-  }
-}, 30000);
-
-test("rejected opening-hours changes leave the hours unchanged and ignore reservations that already ended", async () => {
-  const fixture = await hoursFixture();
-  const { admin, location_id, courtId, service, database } = fixture;
-  const ids = [randomUUID(), randomUUID()];
-  try {
-    const now = await clubs.readOpeningHoursConfigurationTime(database.manager);
-    const today = localToday("Pacific/Kiritimati", now);
-    const date = new Date(`${today}T00:00:00Z`); date.setUTCDate(date.getUTCDate()+14);
-    const future = date.toISOString().slice(0,10);
-    const past = new Date(`${today}T00:00:00Z`); past.setUTCDate(past.getUTCDate()-7);
-    expect((await service.from("court_reservations").insert([
-      { id: ids[0], court_id: courtId, booking_date: future, starts_at_minute: 1320, ends_at_minute: 1440, status: "active" },
-      { id: ids[1], court_id: courtId, booking_date: past.toISOString().slice(0,10), starts_at_minute: 420, ends_at_minute: 480, status: "active" },
-    ])).error).toBeNull();
-    const hours = async () => (await listAdminLocationOpeningHours(location_id, admin)).map(({ id, weekday, opens_at_minute, closes_at_minute, updated_at }) => ({ id, weekday, opens_at_minute, closes_at_minute, updated_at }));
-    const before = await hours();
-    const all = { ...await fixture.updateFields(), location_id, replace_ids: fixture.hours.map((h) => h.id) };
-    // Several weekdays change; the evening reservation on one of them blocks the whole change.
-    expect(await mutateAdminOpeningHours({ ...all, rows: [{ weekdays: [0, 1, 2, 3, 4, 5, 6], opens_at: "08:00", closes_at: "22:00" }] }, admin))
-      .toEqual({ ok: false, reason: "booking-conflict", dates: [future] });
-    expect(await hours()).toEqual(before);
-    // Once the future booking is cancelled, the past reservation (inside the old hours,
-    // outside the new ones) does not block the same change.
-    expect((await service.from("court_reservations").update({ status: "cancelled", cancelled_at: now.toISOString(), cancelled_by_user_id: fixture.userId }).eq("id", ids[0])).error).toBeNull();
-    expect(await mutateAdminOpeningHours({ ...all, rows: [{ weekdays: [0, 1, 2, 3, 4, 5, 6], opens_at: "08:00", closes_at: "22:00" }] }, admin)).toMatchObject({ ok: true });
-  } finally {
-    expect((await service.from("court_reservations").delete().in("id", ids)).error).toBeNull();
-    await fixture.cleanup();
-  }
-}, 30000);
-
-test("a live reservation already outside the current hours does not block an unrelated change", async () => {
-  const fixture = await hoursFixture();
-  const { admin, location_id, courtId, service } = fixture;
-  const id = randomUUID();
-  try {
-    const today = localToday("Pacific/Kiritimati", await clubs.readOpeningHoursConfigurationTime(fixture.database.manager));
-    const date = new Date(`${today}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + 14);
-    const row = { id, court_id: courtId, booking_date: date.toISOString().slice(0, 10), starts_at_minute: 300, ends_at_minute: 360, status: "active" };
-    // Opening hours are 07:00–24:00; this inconsistent 05:00 row predates them.
-    expect((await service.from("court_reservations").insert(row)).error).toBeNull();
-    expect(await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id, replace_ids: fixture.hours.map((h) => h.id),
-      rows: [{ weekdays: [0, 1, 2, 3, 4, 5, 6], opens_at: "07:00", closes_at: "23:00" }] }, admin)).toMatchObject({ ok: true });
-    expect((await service.from("court_reservations").select("id,court_id,booking_date,starts_at_minute,ends_at_minute,status").eq("id", id).single()).data)
-      .toEqual(row);
-  } finally {
-    expect((await service.from("court_reservations").delete().eq("id", id)).error).toBeNull();
     await fixture.cleanup();
   }
 }, 30000);
@@ -606,7 +545,7 @@ test("effective schedules persist inclusive periods, reject overlaps and stale e
   } finally { await fixture.cleanup(); }
 }, 30000);
 
-test("future schedule rejects conflicting bookings, reconciles only its dates and preserves confirmed guest contracts and occupancy", async () => {
+test("future schedule grandfathers a confirmed booking outside its hours, reconciles only its dates and keeps the contract and occupancy", async () => {
   const fixture = await hoursFixture();
   const { admin, service, database, courtId, location_id } = fixture;
   const { createCustomerBooking } = await import("@/lib/bookings/service");
@@ -630,20 +569,16 @@ test("future schedule rejects conflicting bookings, reconciles only its dates an
     const [baseline] = await clubs.listOpeningHoursSchedules(database.manager,location_id);
     const originalHours = await clubs.listLocationOpeningHours(database.manager,location_id);
     const schedule = { operation: "create", location_id, starts_on: "2030-11-01", ends_on: "2031-03-31", replace_ids: [] } as const;
-    // Opening at 08:00 would leave the confirmed 07:00 booking outside the hours.
-    expect(await mutateAdminOpeningHours({ ...schedule, rows: [{ weekdays: [0,1,2,3,4,5,6], opens_at: "08:00", closes_at: "20:00" }] }, admin))
-      .toEqual({ ok: false, reason: "booking-conflict", dates: [date] });
-    expect(await clubs.listOpeningHoursSchedules(database.manager,location_id)).toEqual([baseline]);
-    expect(await clubs.listLocationOpeningHours(database.manager,location_id)).toEqual(originalHours);
-    expect(await contracts()).toEqual(before);
-    const future = await mutateAdminOpeningHours({ ...schedule, rows: [{ weekdays: [0,1,2,3,4,5,6], opens_at: "07:00", closes_at: "20:00" }] }, admin); assert.ok(future.ok);
+    // Opening at 08:00 leaves the confirmed 07:00 booking outside the new hours; it is kept unchanged.
+    const future = await mutateAdminOpeningHours({ ...schedule, rows: [{ weekdays: [0,1,2,3,4,5,6], opens_at: "08:00", closes_at: "20:00" }] }, admin); assert.ok(future.ok);
     expect(future.schedules!.find((s) => s.id === baseline.id)).toMatchObject({ ends_on: "2030-10-31", revision: baseline.revision + 1 });
     expect(await clubs.listLocationOpeningHours(database.manager,location_id,"2030-10-31")).toEqual(originalHours);
     const prices = await persistedPricing(fixture);
     expect(prices.filter((p) => p.weekday === 2).map((p) => [p.starts_on,p.ends_on,p.starts_at_minute,p.ends_at_minute])).toEqual([
-      [null,"2030-10-31",420,1440],["2030-11-01","2031-03-31",420,1200],["2031-04-01",null,420,1440],
+      [null,"2030-10-31",420,1440],["2030-11-01","2031-03-31",480,1200],["2031-04-01",null,420,1440],
     ]);
     expect(await contracts()).toEqual(before);
+    // New bookings follow the new hours.
     expect(await createCustomerBooking({ ...intent,startMinute: 1200,endMinute: 1260 },guest)).toMatchObject({ ok: false, availabilityChanged: true });
     const newBooking = await createCustomerBooking({ ...intent,startMinute: 480,endMinute: 540 },guest); assert.ok(newBooking.ok,JSON.stringify(newBooking));
     const location = (await listPublicLocationsWithCourts()).find((l) => l.id === location_id)!;
@@ -654,7 +589,7 @@ test("future schedule rejects conflicting bookings, reconciles only its dates an
     expect(internalDay.times[0]).toBe(420); expect(internalDay.courts[0].cells[0]).toBe("booked");
     const definition = (await listAdminPricingRules(location_id,admin)).find((p) => p.starts_on === "2030-11-01" && p.weekdays.includes(2))!;
     assert.ok((await saveAdminPricingRule({ ...fixture.price, rule_set_id: definition.rule_set_id, revision: definition.revision, weekdays: definition.weekdays,
-      starts_at: "07:00", ends_at: "20:00", starts_on: definition.starts_on, ends_on: definition.ends_on, price_per_hour: "70.29" },admin)).ok);
+      starts_at: "08:00", ends_at: "20:00", starts_on: definition.starts_on, ends_on: definition.ends_on, price_per_hour: "70.29" },admin)).ok);
     expect(await createCustomerBooking({ ...intent,startMinute: 540,endMinute: 600 },guest)).toMatchObject({ ok: false,reason: "price_changed",totalAmountMinor: 7029 });
     expect(await createCustomerBooking({ ...intent,startMinute: 540,endMinute: 600,expectedTotalAmountMinor: 7029 },guest)).toMatchObject({ ok: true });
     expect(await contracts()).toEqual(before);
@@ -664,7 +599,7 @@ test("future schedule rejects conflicting bookings, reconciles only its dates an
     const reload = clubs.listLocationOpeningHours;
     const failed = vi.spyOn(clubs,"listLocationOpeningHours").mockImplementationOnce(reload).mockRejectedValueOnce(new Error("Injected refresh failure"));
     try { await expect(mutateAdminOpeningHours({ operation: "update", location_id,schedule_id: latest.id,revision: latest.revision,starts_on: latest.starts_on,ends_on: latest.ends_on,
-      replace_ids: future.intervals.filter((h) => h.schedule_id === latest.id && h.weekday === 2).map((h) => h.id),rows: [{ weekdays: [2], opens_at: "07:00", closes_at: "19:00" }] },admin)).rejects.toThrow("Unable to refresh opening hours."); }
+      replace_ids: future.intervals.filter((h) => h.schedule_id === latest.id && h.weekday === 2).map((h) => h.id),rows: [{ weekdays: [2], opens_at: "08:00", closes_at: "19:00" }] },admin)).rejects.toThrow("Unable to refresh opening hours."); }
     finally { failed.mockRestore(); }
     expect((await clubs.listOpeningHoursSchedules(database.manager,location_id)).find((s) => s.id === latest.id)?.revision).toBe(latest.revision);
     expect(await contracts()).toEqual(before);
@@ -719,11 +654,9 @@ test.each(["hours","price","cancellation","publication"] as const)("pending capt
     assert.strictEqual(inserted.error,null); const held = inserted.data[0];
     expect((await service.from("payment_attempts").update({ provider_payment_id: "pi_policy_test" }).eq("id",held.payment_attempt_id)).error).toBeNull();
     if (policy === "hours") {
-      // The live hold blocks the Admin change; payment still revalidates hours on its own,
-      // so record the same reduction directly to exercise that independent check.
+      // The live hold does not block the Admin change; payment confirmation revalidates it against the new hours.
       expect(await mutateAdminOpeningHours({ ...await fixture.updateFields(), location_id,replace_ids: fixture.hours.filter((h) => h.weekday === weekday).map((h) => h.id),rows: [{ weekdays: [weekday], opens_at: "08:00", closes_at: "24:00" }] },admin))
-        .toEqual({ ok: false, reason: "booking-conflict", dates: [date] });
-      expect((await service.from("location_opening_hours").update({ opens_at_minute: 480 }).eq("location_id",location_id).eq("weekday",weekday)).error).toBeNull();
+        .toMatchObject({ ok: true });
     }
     if (policy === "price") {
       const [rule] = await listAdminPricingRules(location_id,admin);
@@ -804,14 +737,9 @@ test("pending holds use their playing-date policy after future schedule creation
     }
     const future = { operation:"create",location_id,starts_on:"2030-11-01",ends_on:null,
       replace_ids:[],rows: [{ weekdays: [0,1,2,3,4,5,6], opens_at:"08:00", closes_at:"20:00" }] } as const;
-    // Only the hold inside the new schedule's dates blocks it.
-    expect(await mutateAdminOpeningHours(future,admin)).toEqual({ ok:false,reason:"booking-conflict",dates:["2030-11-20"] });
-    // Payment applies the playing-date policy independently: with the schedule recorded
-    // while the second hold already lies outside it, that hold cannot be confirmed.
-    const late = await database.query("SELECT hold_expires_at FROM public.court_reservations WHERE id=$1",[held[1].reservation_id]);
-    expect((await service.from("court_reservations").update({ hold_expires_at: new Date(Date.now()-60000).toISOString() }).eq("id",held[1].reservation_id)).error).toBeNull();
+    // Live holds do not block the schedule. Payment applies each hold's playing-date policy:
+    // the hold inside the new schedule's dates now lies outside its hours and cannot be confirmed.
     assert.ok((await mutateAdminOpeningHours(future,admin)).ok);
-    expect((await service.from("court_reservations").update({ hold_expires_at: late[0].hold_expires_at.toISOString() }).eq("id",held[1].reservation_id)).error).toBeNull();
     for (const [index,hold] of held.entries()) {
       const providerPaymentId = `pi_effective_${hold.payment_attempt_id}`;
       expect((await service.from("payment_attempts").update({ provider_payment_id:providerPaymentId }).eq("id",hold.payment_attempt_id)).error).toBeNull();

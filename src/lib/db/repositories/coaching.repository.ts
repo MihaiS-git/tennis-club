@@ -12,6 +12,7 @@ import { CoachAvailabilityExceptionEntity } from "../entities/coach-availability
 import { CoachLocationEntity } from "../entities/coach-location.entity";
 import { CoachProfileEntity } from "../entities/coach-profile.entity";
 import { CoachProgramEntity } from "../entities/coach-program.entity";
+import { CoachingParticipantPriceEntity } from "../entities/coaching-participant-price.entity";
 import { CoachingPriceEntity } from "../entities/coaching-price.entity";
 import { CoachingProgramDurationEntity } from "../entities/coaching-program-duration.entity";
 import { CoachingProgramEntity } from "../entities/coaching-program.entity";
@@ -218,6 +219,34 @@ export async function deleteCoachProgramPrices(manager: EntityManager, coachUser
   await manager.getRepository(CoachingPriceEntity).delete({ coachUserId, programId: In([...programIds]) });
 }
 
+// ---- Club participant rates (Group/Junior) ----
+
+export async function listParticipantPrices(manager: EntityManager, filter: { programIds?: readonly string[] } = {}) {
+  return manager.getRepository(CoachingParticipantPriceEntity).find({
+    where: filter.programIds ? { programId: In(filter.programIds.map((id) => id.toLowerCase())) } : {},
+    order: { programId: "ASC", currency: "ASC", participantCount: "ASC" },
+  });
+}
+
+export type ParticipantPriceKey = { programId: string; participantCount: number; currency: LocationCurrency };
+
+// coaching_participant_prices_rate arbitrates concurrent saves of the same rate.
+export async function upsertParticipantPrice(manager: EntityManager, key: ParticipantPriceKey, amountMinor: number, updatedAt: Date) {
+  const rows: unknown = await manager.query(`INSERT INTO public.coaching_participant_prices
+    (program_id,participant_count,amount_minor,currency,updated_at)
+    VALUES ($1,$2,$3,$4,$5)
+    ON CONFLICT ON CONSTRAINT coaching_participant_prices_rate DO UPDATE SET amount_minor=EXCLUDED.amount_minor,updated_at=EXCLUDED.updated_at
+    RETURNING id`, [key.programId, key.participantCount, amountMinor, key.currency, updatedAt]);
+  return returnedIds.parse(rows)[0].id;
+}
+
+export async function deleteParticipantPrice(manager: EntityManager, key: ParticipantPriceKey) {
+  const result = await manager.createQueryBuilder().delete().from(CoachingParticipantPriceEntity)
+    .where({ programId: key.programId, participantCount: key.participantCount, currency: key.currency })
+    .returning("id").execute();
+  return returnedIds.parse(result.raw)[0]?.id ?? null;
+}
+
 // ---- Public projection ----
 
 const publicFactsSchema = z.object({
@@ -233,6 +262,10 @@ const publicFactsSchema = z.object({
   })),
   prices: z.array(z.object({
     program_id: z.uuid(), duration_minutes: z.number().int(), coach_user_id: z.uuid().nullable(), amount_minor: z.number().int(), currency: z.string(),
+  })),
+  // Club rates per person per 60 minutes by participant count; there are no coach rates of this kind.
+  participant_prices: z.array(z.object({
+    program_id: z.uuid(), participant_count: z.number().int(), amount_minor: z.number().int(), currency: z.string(),
   })),
 });
 export type PublicCoachingFacts = z.infer<typeof publicFactsSchema>;
@@ -258,7 +291,10 @@ export async function readPublicCoachingFacts(manager: EntityManager): Promise<P
       coalesce((SELECT jsonb_agg(jsonb_build_object('program_id',x.program_id,'duration_minutes',x.duration_minutes,
           'coach_user_id',x.coach_user_id,'amount_minor',x.amount_minor,'currency',x.currency))
         FROM public.coaching_prices x JOIN programs p ON p.id=x.program_id
-        WHERE x.coach_user_id IS NULL OR x.coach_user_id IN (SELECT user_id FROM coaches)),'[]'::jsonb) AS prices`);
+        WHERE x.coach_user_id IS NULL OR x.coach_user_id IN (SELECT user_id FROM coaches)),'[]'::jsonb) AS prices,
+      coalesce((SELECT jsonb_agg(jsonb_build_object('program_id',x.program_id,'participant_count',x.participant_count,
+          'amount_minor',x.amount_minor,'currency',x.currency) ORDER BY x.participant_count,x.currency)
+        FROM public.coaching_participant_prices x JOIN programs p ON p.id=x.program_id),'[]'::jsonb) AS participant_prices`);
   return z.array(publicFactsSchema).length(1).parse(rows)[0];
 }
 
@@ -275,6 +311,7 @@ export async function programHasBookingHistory(manager: EntityManager, programId
 
 export async function deleteUnusedProgram(manager: EntityManager, programId: string) {
   await deleteProgramPrices(manager, programId);
+  await manager.getRepository(CoachingParticipantPriceEntity).delete({ programId });
   await manager.getRepository(CoachProgramEntity).delete({ programId });
   await manager.getRepository(CoachingProgramDurationEntity).delete({ programId });
   await manager.getRepository(CoachingProgramEntity).delete({ id: programId });

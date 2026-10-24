@@ -88,6 +88,9 @@ test("Admin booking records show persisted history and verified financial operat
       [verified, `pi_${original}`, randomUUID(), `re_${marker}`]));
 
     const records = (await getAdminBookingRecords(paid, { supabase: admin }))!;
+    // Details come from the current revision, not the original or an intermediate one.
+    expect(records.booking).toMatchObject({ id: paid, status: "confirmed", account_user_id: users[0], booking_date: "2099-12-01",
+      starts_at_minute: 630, ends_at_minute: 690, total_amount_minor: 5000, currency: "RON", payment_method: "online" });
     expect(records.history.map(event => [event.label, event.status.label])).toEqual([["Booking created", "Confirmed"],
       ["Modification requested", "Failed"], ["Rescheduled", "Confirmed"], ["Price updated", "Confirmed"]]);
     expect(records.history[0].next).toMatchObject({ startMinute: 600, endMinute: 660, total: 5000 });
@@ -106,6 +109,8 @@ test("Admin booking records show persisted history and verified financial operat
     expect(records.cancellation).toEqual({ availability: "eligible", startsAt: "2099-12-01T10:30:00.000Z", refundAvailable: true });
 
     const guest = (await getAdminBookingRecords(club, { supabase: admin }))!;
+    expect(guest.booking).toMatchObject({ id: club, status: "cancelled", account_user_id: null, customer_name: `${marker} Guest`,
+      customer_email: `${marker}-guest@example.test`, payment_method: "pay_at_club", total_amount_minor: 4000 });
     expect(guest.history.map(event => event.label)).toEqual(["Booking created", "Cancelled"]);
     expect(guest.summary).toMatchObject({ paid: 0, refunded: 0, outstanding: 0, dueAtClub: 0, unrecordedAtClub: 0, activeBooking: false });
     expect(guest.operations.rows.map(row => [row.method, row.transaction_status, row.amount_minor])).toEqual([["pay_at_club", "due", 4000]]);

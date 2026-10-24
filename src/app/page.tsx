@@ -135,10 +135,10 @@ export default function Home({ searchParams }: PageProps<"/">) {
             <div className="grid gap-4 lg:gap-5">
               <article aria-labelledby="coaching-title" className="rounded-card border border-border bg-surface p-6 md:p-7 lg:p-8">
                 <h3 id="coaching-title" className="mb-5 font-heading text-xl font-semibold tracking-[-0.02em] text-primary">Coaching</h3>
-                {/* Coaching lessons are not bookable online yet; no lesson times are shown. */}
+                {/* Lesson times depend on the chosen coach, program and court, so none are shown here. */}
                 <div className="py-5 font-sans text-sm leading-6">
                   <p className="font-semibold text-foreground">Programs, coaches and prices.</p>
-                  <p className="mt-1 text-muted-foreground">See what the club offers. Lessons can’t be booked online yet.</p>
+                  <p className="mt-1 text-muted-foreground">See what the club offers and book a lesson online.</p>
                 </div>
                 <Link href="/coaching" className={`${styles.editorialLink} mt-2 inline-flex min-h-11 w-fit items-center font-sans text-sm font-semibold text-primary transition-colors hover:text-accent focus-visible:rounded-control`}>
                   <span className={`${styles.editorialLabel} underline decoration-accent underline-offset-8`}>Explore coaching</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>

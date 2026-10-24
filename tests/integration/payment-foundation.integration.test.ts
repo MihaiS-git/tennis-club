@@ -12,6 +12,11 @@ import { createCustomerBooking } from "@/lib/bookings/service";
 import { getPublicCourtDay } from "@/lib/courts/public-calendar";
 import { listPublicLocationsWithCourts } from "@/lib/courts/public";
 
+// Soft checks report a failed cleanup step without hiding test failures or skipping
+// independent steps; steps within one call depend on each other and stop at the first error.
+const cleanup = (step: string, work: () => Promise<unknown>) =>
+  expect.soft(Promise.resolve().then(work).then(() => "done"), step).resolves.toBe("done");
+
 // Real database transactions and public reads; no provider API or webhook.
 test("payment lifecycle keeps one reservation, protects overlap and releases expiry", async () => {
   const db = localFixtureClient();
@@ -28,7 +33,7 @@ test("payment lifecycle keeps one reservation, protects overlap and releases exp
     p_customer_name: "Payment Guest", p_customer_email: "payment@example.test", p_customer_phone: "123",
     p_total_amount_minor: 5000, p_currency: "RON", p_payment_method: method,
     p_provider: method === "online" ? "netopia" : null, p_hold_seconds: paymentHoldDurationSeconds });
-  const booking = async (id: string) => (await Promise.resolve({ error:null, data:(await readBookingContracts(db, { ids: [id] }))[0] })).data!;
+  const booking = async (id: string) => (await readBookingContracts(db, { ids: [id] }))[0];
   const reservation = async (id: string) => (await db.from("court_reservations").select("*").eq("id", id).single()).data!;
   const settle = async (row: { payment_attempt_id: string }, outcome: "succeeded" | "failed" | "cancelled") => {
     if (outcome === "succeeded") {
@@ -115,15 +120,18 @@ test("payment lifecycle keeps one reservation, protects overlap and releases exp
     expect(online).toMatchObject({ ok: false, message: "Online payment is unavailable. Choose Pay at club if offered, or try again later." });
   } finally {
     vi.unstubAllEnvs();
-    expect((await db.from("payment_provider_settings").update({ active_provider: previousProvider }).eq("id", true)).error).toBeNull();
-    const ids = (await db.from("court_reservations").select("id").eq("court_id", courtId)).data?.map((r) => r.id) ?? [];
-    const bookings = (await db.from("bookings").select("id").in("reservation_id", ids)).data?.map((b) => b.id) ?? [];
-    await cleanupBookingFixtures({ bookingIds: bookings });
-    expect((await db.from("court_reservations").delete().eq("court_id", courtId)).error).toBeNull();
-    expect((await db.from("location_pricing_rules").delete().eq("location_id", locationId)).error).toBeNull();
-    expect((await db.from("pricing_rule_sets").delete().eq("id", ruleId)).error).toBeNull();
-    expect((await db.from("location_opening_hours").delete().eq("location_id", locationId)).error).toBeNull();
-    expect((await db.from("courts").delete().eq("id", courtId)).error).toBeNull();
-    expect((await db.from("locations").delete().eq("id", locationId)).error).toBeNull();
+    await cleanup("restore the payment provider", async () => {
+      expect((await db.from("payment_provider_settings").update({ active_provider: previousProvider }).eq("id", true)).error).toBeNull();
+    });
+    // Booking evidence is selected by this test's court, so no lookup can turn an error into "nothing to delete".
+    await cleanup("delete bookings and club fixtures", async () => {
+      await cleanupBookingFixtures({ courtIds: [courtId] });
+      expect((await db.from("court_reservations").delete().eq("court_id", courtId)).error).toBeNull();
+      expect((await db.from("location_pricing_rules").delete().eq("location_id", locationId)).error).toBeNull();
+      expect((await db.from("pricing_rule_sets").delete().eq("id", ruleId)).error).toBeNull();
+      expect((await db.from("location_opening_hours").delete().eq("location_id", locationId)).error).toBeNull();
+      expect((await db.from("courts").delete().eq("id", courtId)).error).toBeNull();
+      expect((await db.from("locations").delete().eq("id", locationId)).error).toBeNull();
+    });
   }
 }, 30000);

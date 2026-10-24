@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { afterAll, assert, beforeAll, expect, test, vi } from "vitest";
+import { afterAll, afterEach, assert, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import type { DataSource } from "typeorm";
 import { mutateAdminOpeningHours } from "../../../src/lib/admin/opening-hours";
 import { saveCoachProfile } from "../../../src/lib/coaching/admin";
@@ -86,9 +86,6 @@ beforeAll(async () => {
   ])).error, null);
   await database.query("INSERT INTO public.courts(id,location_id,name,slug,surface,environment) VALUES($1,$2,'Working hours court',$3,'clay','outdoor')",
     [court, locationA, `working-hours-${court}`]);
-  assert.ok((await mutateAdminOpeningHours({ operation: "create", starts_on: "0001-01-01", location_id: locationA, replace_ids: [], rows: [
-    { weekdays: [0, 1, 2, 3, 4], opens_at: "07:00", closes_at: "22:00" }, { weekdays: [5], opens_at: "08:00", closes_at: "20:00" },
-  ] }, admin)).ok);
   assert.ok((await mutateAdminOpeningHours({ operation: "create", starts_on: "0001-01-01", location_id: locationB, replace_ids: [],
     rows: [{ weekdays: [0, 1, 2, 3, 4, 5, 6], opens_at: "00:00", closes_at: "24:00" }] }, admin)).ok);
   const fields = (location_ids: string[]) => ({ display_name: "Working Hours Coach", bio: "", qualifications: "", specialties: [], languages: [],
@@ -96,6 +93,21 @@ beforeAll(async () => {
   expect(await saveCoachProfile({ user_id: coach1.id, create: true, fields: fields([locationA, locationB]) }, admin)).toEqual({ ok: true, id: coach1.id });
   expect(await saveCoachProfile({ user_id: coach2.id, create: true, fields: fields([locationA]) }, admin)).toEqual({ ok: true, id: coach2.id });
   today = localToday("Europe/Bucharest", new Date());
+});
+
+// Location B's hours are shared read-only. Tests change location A's hours and the coaches'
+// working hours, so each starts from A's baseline and removes what it changed.
+beforeEach(async () => {
+  assert.ok((await mutateAdminOpeningHours({ operation: "create", starts_on: "0001-01-01", location_id: locationA, replace_ids: [], rows: [
+    { weekdays: [0, 1, 2, 3, 4], opens_at: "07:00", closes_at: "22:00" }, { weekdays: [5], opens_at: "08:00", closes_at: "20:00" },
+  ] }, admin)).ok);
+});
+
+afterEach(async () => {
+  await database.query("DELETE FROM public.court_reservations WHERE court_id=$1", [court]);
+  await database.query("DELETE FROM public.coach_weekly_availability WHERE coach_user_id=ANY($1::uuid[])", [userIds]);
+  await database.query("DELETE FROM public.location_opening_hours WHERE location_id=$1", [locationA]);
+  await database.query("DELETE FROM public.opening_hours_schedules WHERE location_id=$1", [locationA]);
 });
 
 afterAll(async () => {
@@ -115,7 +127,7 @@ afterAll(async () => {
   }
 });
 
-test("coach hours follow opening-hour validation, shrinkage, extension and future schedules", async () => {
+test("coach hours follow opening-hour validation, shrinkage, extension and future schedules; lessons are grandfathered", async () => {
   {
     // Inside: Monday and Tuesday 08:00–21:00, from today without an end.
     const inside = await changeOwnCoachAvailability(addWeekly(locationA, [0, 1], 480, 1260), coach1.client);
@@ -161,18 +173,8 @@ test("coach hours follow opening-hour validation, shrinkage, extension and futur
     const atB = await hoursAt(locationB);
     const before = await hoursAt(locationA);
     const schedule = await baseline(locationA);
-    const openingHours = await clubs.listLocationOpeningHours(database.manager, locationA);
 
-    // A live coaching lesson that the new hours would exclude rejects the whole change.
-    const unchangedBooking = await booking();
-    expect(await replaceHours(locationA, [0, 1, 2, 3, 4, 5], [{ weekdays: [0, 1, 2, 3, 4], opens_at: "09:00", closes_at: "20:00" }]))
-      .toEqual({ ok: false, reason: "booking-conflict", dates: [monday] });
-    expect(await booking()).toEqual(unchangedBooking);
-    expect(await hoursAt(locationA)).toEqual(before);
-    expect(await clubs.listLocationOpeningHours(database.manager, locationA)).toEqual(openingHours);
-    expect((await baseline(locationA)).revision).toBe(schedule.revision);
-    // Once that lesson is cancelled (its record stays), the change can proceed.
-    await database.query("UPDATE public.court_reservations SET status='cancelled',cancelled_at=now(),cancelled_by_user_id=$2 WHERE id=$1", [early, coach1.id]);
+    // The live 08:00 lesson falls outside the new 09:00 opening; it is grandfathered and never changed.
     const bookingBefore = await booking();
 
     // A failure after reconciliation rolls everything back.

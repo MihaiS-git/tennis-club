@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { DataSource, QueryRunner } from "typeorm";
-import { afterAll, beforeAll, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { z } from "zod";
 
 import { LocationEntity } from "@/lib/db/entities/location.entity";
@@ -49,6 +49,15 @@ beforeAll(async () => {
   })))).error).toBeNull();
 });
 
+// Tests rename and move these courts; each starts from its own court at its own location.
+beforeEach(async () => {
+  for (const [index, id] of courtIds.entries()) {
+    expect((await service.from("courts").update({
+      location_id: locationIds[index], name: `Lock court ${index}`, has_lighting: false,
+    }).eq("id", id)).error).toBeNull();
+  }
+});
+
 afterAll(async () => {
   try {
     if (service) {
@@ -69,9 +78,10 @@ async function pid(runner: QueryRunner) {
 }
 
 // Correctness is established by PostgreSQL's actual wait-for graph, not elapsed
-// time. The deadline only fails a test whose expected blocking never occurs.
+// time. The deadline only fails a test whose expected blocking never occurs, and stays
+// below the test timeout so that test still settles its own transactions and operations.
 async function waitForBlock(observer: QueryRunner, blocker: number) {
-  const deadline = Date.now() + 8000;
+  const deadline = Date.now() + 4000;
   while (Date.now() < deadline) {
     const rows: unknown = await observer.query(
       "SELECT pid, query FROM pg_stat_activity WHERE datname = current_database() AND $1 = ANY(pg_blocking_pids(pid))",
@@ -144,6 +154,7 @@ test.each(["court", "coverage"] as const)("%s application mutation participates 
       // The wait graph proves the lock; pg_stat_activity may truncate long SQL.
     } finally {
       await blocker.commitTransaction();
+      await Promise.allSettled([operation]);
     }
     expect(await operation).toMatchObject({ ok: true });
   });
@@ -184,22 +195,19 @@ test("multi-location locks use ascending UUID order even when submitted in rever
 });
 
 test.each(["old", "new"] as const)("court move waits for the authoritative %s location", async (parent) => {
-  expect((await service.from("courts").update({ location_id: locationIds[0] }).eq("id", courtIds[0])).error).toBeNull();
   await withParentProbe(async (blocker, observer) => {
     const operation = saveAdminCourt({ id: courtIds[0], fields: fields(locationIds[1], "Move parent probe") }, admin);
     try {
       expect((await waitForBlock(observer, await pid(blocker)))[0].query).toContain("locations");
     } finally {
       await blocker.commitTransaction();
+      await Promise.allSettled([operation]);
     }
     expect(await operation).toEqual({ ok: true, id: courtIds[0] });
   }, parent === "old" ? locationIds[0] : locationIds[1]);
 });
 
 test("opposing court moves preserve both authoritative parents without deadlock", async () => {
-  for (const [index, id] of courtIds.entries()) {
-    expect((await service.from("courts").update({ location_id: locationIds[index] }).eq("id", id)).error).toBeNull();
-  }
   const results = await Promise.all([
     saveAdminCourt({ id: courtIds[0], fields: fields(locationIds[1], "Moved one") }, admin),
     saveAdminCourt({ id: courtIds[1], fields: fields(locationIds[0], "Moved two") }, admin),

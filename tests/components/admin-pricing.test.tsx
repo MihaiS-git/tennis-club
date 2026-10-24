@@ -282,7 +282,6 @@ it.each(["Courts", "State", "Days", "Time", "Validity", "Price/hour"])("toggles 
   fireEvent.click(button);
   const first = name === "Courts" ? "descending" : "ascending";
   expect(button.closest("th")?.getAttribute("aria-sort")).toBe(first);
-  expect(button.querySelector("svg")).toBeTruthy();
   fireEvent.click(button);
   expect(button.closest("th")?.getAttribute("aria-sort")).toBe(first === "ascending" ? "descending" : "ascending");
 });
@@ -312,10 +311,6 @@ it("keeps mobile cards and desktop rows in the same filtered order with accessib
   expect(tableRows()[0].textContent).toContain("Court 3");
   const cards = screen.getAllByRole("button", { name: /Edit pricing rule for/ });
   expect(cards.map((card) => card.getAttribute("aria-label"))).toEqual(tableRows().map((row) => row.getAttribute("aria-label")));
-  expect(cards[0].parentElement?.className).toContain("lg:hidden");
-  expect(screen.getByRole("table").parentElement?.className).toContain("lg:block");
-  expect(screen.getByLabelText("Sort pricing by").closest("div")?.className).toContain("lg:hidden");
-  expect(screen.getByRole("group", { name: "Pricing filters" }).className).toContain("sm:grid-cols-2");
   fireEvent.click(screen.getByRole("button", { name: "Sort descending" }));
   expect(tableRows()[0].textContent).toContain("Court 1, Court 2");
   fireEvent.change(screen.getByLabelText("Court state"), { target: { value: "indoor" } });

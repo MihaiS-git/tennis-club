@@ -1,8 +1,10 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { configureTestEnvironment } from "./local/environment.mjs";
+import { lockTestDatabase } from "./local/runner-lock.mjs";
 
 configureTestEnvironment();
+lockTestDatabase("integration");
 
 const child = spawn(process.execPath, [
   fileURLToPath(new URL("../node_modules/vitest/vitest.mjs", import.meta.url)),

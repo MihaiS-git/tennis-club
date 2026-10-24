@@ -3,7 +3,7 @@ vi.mock("@/lib/db/repositories/club-settings.repository", () => ({
   emailDispatchAllowed: vi.fn(async () => ({ officialEmail: "club@example.com", senderName: "My Club", emailsEnabled: true })),
 }));
 import type { EntityManager } from "typeorm";
-import { beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   claim: vi.fn(), expired: vi.fn(), complete: vi.fn(), alerts: vi.fn(),
@@ -24,7 +24,6 @@ const claim = { id, recipientEmail: "player@example.com", subject: "Booked", bod
   bodyHtml: "<p>Text</p>", attempts: 1, lockedUntil: new Date("2026-10-22T12:02:00Z") };
 
 beforeEach(() => {
-  vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.clearAllMocks();
   vi.stubEnv("BREVO_API_KEY", "test-api-key");
   vi.stubEnv("BOOKING_MAIL_FROM", "club@example.com");
   vi.stubEnv("NOTIFICATION_EMAIL_MODE", "sandbox");
@@ -32,6 +31,8 @@ beforeEach(() => {
   vi.stubEnv("CI", "");
   mocks.claim.mockResolvedValue([claim]); mocks.expired.mockResolvedValue([]); mocks.complete.mockResolvedValue(true);
 });
+// resetAllMocks also drops unconsumed …Once values and returns factory mocks to their defaults.
+afterEach(() => { vi.resetAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 
 test("unit runner cannot inherit the development delivery database", () => {
   expect(process.env.DATABASE_URL).toBe("");

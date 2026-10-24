@@ -192,6 +192,7 @@ test("PostgreSQL claims, retry state, terminal alert and stale completion", asyn
       .toEqual([{ status: "accepted", provider_message_id: "brevo-first" }]);
 
     await source.query("UPDATE public.email_deliveries SET status='pending', attempts=0, provider_message_id=NULL, next_attempt_at=$2 WHERE id=$1", [id, firstDue]);
+    let previousClaim = claim;
     for (const [index, minutes] of [5, 15, 60, 360].entries()) {
       const [retryClaim] = await inTransaction(manager => claimEmailDeliveries(manager, 1));
       expect(retryClaim.id).toBe(id);
@@ -207,10 +208,19 @@ test("PostgreSQL claims, retry state, terminal alert and stale completion", asyn
       expect(rows[0].next_attempt_at).toEqual(nextAttemptAt);
       expect(rows[0].last_error).toBe("Brevo HTTP 503");
       await source.query("UPDATE public.email_deliveries SET next_attempt_at=$2 WHERE id=$1", [id, firstDue]);
+      previousClaim = retryClaim;
     }
     const [terminalClaim] = await inTransaction(manager => claimEmailDeliveries(manager, 1));
     expect(terminalClaim.id).toBe(id);
     expect(terminalClaim.attempts).toBe(5);
+    // While the row is processing under the new lease, an earlier attempt or a different lease cannot complete it.
+    const stale = { id, status: "accepted" as const, nextAttemptAt: now, providerMessageId: "brevo-stale", lastError: null };
+    expect(await completeEmailAttempt(source.manager, { ...stale, attempts: previousClaim.attempts,
+      lockedUntil: previousClaim.lockedUntil })).toBe(false);
+    expect(await completeEmailAttempt(source.manager, { ...stale, attempts: terminalClaim.attempts,
+      lockedUntil: new Date(terminalClaim.lockedUntil.getTime() - 1) })).toBe(false);
+    expect(await source.query("SELECT status,attempts,locked_until,provider_message_id FROM public.email_deliveries WHERE id=$1", [id]))
+      .toEqual([{ status: "processing", attempts: 5, locked_until: terminalClaim.lockedUntil, provider_message_id: null }]);
     expect(await inTransaction(async manager => {
       const completed = await completeEmailAttempt(manager, { id, attempts: terminalClaim.attempts,
         lockedUntil: terminalClaim.lockedUntil, status: "failed", nextAttemptAt: now,

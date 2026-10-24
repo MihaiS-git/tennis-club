@@ -102,7 +102,7 @@ afterEach(() => { vi.restoreAllMocks(); });
 
 const advancedRevision = () => vi.mocked(revisions.advanceRevision).mock.calls.at(-1)![1].revision;
 
-test("first payment confirmation commits the confirmed revision snapshot in one transaction", async () => {
+test("first payment confirmation writes the confirmed revision snapshot inside one transaction callback", async () => {
   expect(await processOnlinePaymentEvent(event)).toBe("succeeded");
   expect(committed).toBe(true);
   expect(inTransaction).toHaveBeenCalledTimes(1);
@@ -175,7 +175,7 @@ test.each(["owner", "admin"] as const)("%s cancellation returns every refund obl
   expect(revisions.advanceRevision).not.toHaveBeenCalled();
   expect(reservations.updateCustomerReservationCancellation).not.toHaveBeenCalled();
 });
-test("cancellation commits atomically in one transaction", async () => {
+test("cancellation runs its writes inside one transaction callback", async () => {
   await confirmedBooking();
   expect(await cancelCustomerBookingCommand(id, id, "owner")).toEqual({ outcome: "cancelled", refundIds: [] });
   expect(committed).toBe(true); expect(inTransaction).toHaveBeenCalledTimes(1);

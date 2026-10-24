@@ -10,7 +10,8 @@ import { ModalDialog } from "@/components/modal-dialog";
 import { useEditableFormBaseline } from "@/components/use-editable-form-baseline";
 import type { AdminCoachingCurrency, AdminCoachingPrice, AdminCoachingProgram } from "@/lib/coaching/admin";
 import {
-  coachingProgramDurations, coachingProgramFieldsSchema, coachingProgramTypeLabels, coachingProgramTypes, formatCoachingDuration,
+  coachingFieldErrors, coachingProgramDurations, coachingProgramFieldsSchema, coachingProgramTypeLabels, coachingProgramTypes, formatCoachingDuration,
+  hasParticipantRates, type CoachingProgramType,
 } from "@/lib/coaching/validation";
 import { majorAmountSchema, minorToMajor, type LocationCurrency } from "@/lib/pricing/money";
 import { saveCoachingProgramAction } from "../actions";
@@ -27,6 +28,15 @@ function programFields(form: HTMLFormElement) {
     max_participants: optionalNumber(formText(data, "max_participants")),
     court_rental_included: formText(data, "court_rental_included") === "true", is_active: formText(data, "is_active") === "true",
   };
+}
+
+// Participant-limit problems shown while editing; Save stays disabled until they are fixed.
+type LimitField = "min_participants" | "max_participants";
+function limitErrors(fields: unknown): Partial<Record<LimitField, string>> {
+  const parsed = coachingProgramFieldsSchema.safeParse(fields);
+  if (parsed.success) return {};
+  const { min_participants, max_participants } = coachingFieldErrors(parsed.error.issues);
+  return { min_participants, max_participants };
 }
 
 const priceKey = (currency: LocationCurrency, minutes: number) => `${currency}:${minutes}`;
@@ -65,8 +75,10 @@ function useClubPrices(program: AdminCoachingProgram | undefined, prices: readon
   error, setErrors, changes, reset };
 }
 
+// Group/Junior programs have no duration prices: their club rates per player count are set under Prices.
 function selectedDurations(form: HTMLFormElement) {
-  return programFields(form).durations;
+  const fields = programFields(form);
+  return coachingProgramTypes.some((type) => type === fields.program_type && hasParticipantRates(type)) ? [] : fields.durations;
 }
 
 export function ProgramDialog({ program, currencies = [], prices = [], open: controlledOpen, onOpenChange }: {
@@ -81,13 +93,23 @@ export function ProgramDialog({ program, currencies = [], prices = [], open: con
   const open = controlledOpen ?? internalOpen;
   const setOpen = onOpenChange ?? setInternalOpen;
   const [pending, setPending] = useState(false);
-  const { setFieldErrors, errorProps, fieldError } = useFieldErrors(prefix);
+  const { fieldErrors, setFieldErrors, errorProps, fieldError } = useFieldErrors(prefix);
+  // An existing program with missing or invalid limits shows why at once.
+  const [limits, setLimits] = useState(() => program ? limitErrors({ name: program.name, description: program.description,
+    program_type: program.program_type, durations: program.durations, min_participants: program.min_participants,
+    max_participants: program.max_participants, court_rental_included: program.court_rental_included, is_active: program.is_active }) : {});
+  const limitProps = (field: LimitField) => fieldErrors[field] || !limits[field] ? errorProps(field)
+    : { "aria-invalid": true, "aria-describedby": `${prefix}-${field}-error` };
+  const limitError = (field: LimitField) => fieldError(field)
+    || (limits[field] && <p id={`${prefix}-${field}-error`} className="mt-1 text-sm text-danger">{limits[field]}</p>);
   const { attach, dirty, valid, sync, submitted, commit } = useEditableFormBaseline(editableFields, undefined,
     (form) => coachingProgramFieldsSchema.safeParse(programFields(form)).success);
   const durations = program ? coachingProgramDurations.filter((minutes) => program.durations.includes(minutes)) : [60];
   const [selected, setSelected] = useState<number[]>(durations);
+  const [programType, setProgramType] = useState<CoachingProgramType>(program?.program_type ?? "private");
+  const participantRated = hasParticipantRates(programType);
   const clubPrices = useClubPrices(program, prices);
-  const priceChanges = clubPrices.changes(currencies, selected);
+  const priceChanges = clubPrices.changes(currencies, participantRated ? [] : selected);
   const priceChanged = priceChanges.saved.length > 0 || priceChanges.removed.length > 0;
   // Removing a duration deletes its prices on save (existing rule); state that before saving.
   const droppedPrices = (program?.durations ?? []).filter((minutes) => !selected.includes(minutes)).flatMap((minutes) => {
@@ -97,8 +119,11 @@ export function ProgramDialog({ program, currencies = [], prices = [], open: con
   });
   function onFormChange(event: React.FormEvent<HTMLFormElement>) {
     sync();
-    const next = selectedDurations(event.currentTarget);
-    if (next.join() !== selected.join()) setSelected(next);
+    setLimits(limitErrors(programFields(event.currentTarget)));
+    const fields = programFields(event.currentTarget);
+    if (fields.durations.join() !== selected.join()) setSelected(fields.durations);
+    const type = coachingProgramTypes.find((candidate) => candidate === fields.program_type);
+    if (type && type !== programType) setProgramType(type);
   }
 
   async function submit(form: HTMLFormElement) {
@@ -136,7 +161,7 @@ export function ProgramDialog({ program, currencies = [], prices = [], open: con
 
   return <>
     {!program && controlledOpen === undefined && <Button type="button" variant="secondary" size="small" fullWidth={false}
-      onClick={() => { setFieldErrors({}); clubPrices.reset(); setSelected(durations); setOpen(true); }}>Create program</Button>}
+      onClick={() => { setFieldErrors({}); setLimits({}); clubPrices.reset(); setSelected(durations); setProgramType("private"); setOpen(true); }}>Create program</Button>}
     <ModalDialog ref={dialogRef} active={open} aria-labelledby={`${prefix}-title`}
       onClose={() => setOpen(false)} onCancel={(event) => { if (pendingRef.current) event.preventDefault(); }}
       className="fixed inset-0 m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-2xl overflow-y-auto rounded-card border border-border bg-surface p-0 text-foreground shadow-floating backdrop:bg-foreground/50">
@@ -174,17 +199,18 @@ export function ProgramDialog({ program, currencies = [], prices = [], open: con
               {fieldError("durations")}
             </fieldset>
             <div className="grid gap-4 sm:grid-cols-2">
+              <p id={`${prefix}-participants-hint`} className={`${hintClass} sm:col-span-2`}>Required for active programs (1–100). Private and Semi-private lessons are booked online for a player count within these limits; Group and Junior prices are set for each count.</p>
               <div>
                 <label htmlFor={`${prefix}-min_participants`} className={labelClass}>Minimum players</label>
                 <Input id={`${prefix}-min_participants`} name="min_participants" type="number" min={1} max={100} placeholder="Not set"
-                  defaultValue={program?.min_participants ?? ""} {...errorProps("min_participants")} />
-                {fieldError("min_participants")}
+                  defaultValue={program?.min_participants ?? ""} {...limitProps("min_participants")} />
+                {limitError("min_participants")}
               </div>
               <div>
                 <label htmlFor={`${prefix}-max_participants`} className={labelClass}>Maximum players</label>
                 <Input id={`${prefix}-max_participants`} name="max_participants" type="number" min={1} max={100} placeholder="Not set"
-                  defaultValue={program?.max_participants ?? ""} {...errorProps("max_participants")} />
-                {fieldError("max_participants")}
+                  defaultValue={program?.max_participants ?? ""} {...limitProps("max_participants")} />
+                {limitError("max_participants")}
               </div>
             </div>
             <div>
@@ -203,7 +229,13 @@ export function ProgramDialog({ program, currencies = [], prices = [], open: con
               <p className={hintClass}>Inactive programs are hidden from the public Coaching page.</p>
               {fieldError("is_active")}
             </div>
-            <ClubPrices prefix={prefix} currencies={currencies} durations={selected} prices={clubPrices} dropped={droppedPrices} />
+            {participantRated ? <p className="rounded-control border border-border px-3 py-2.5 text-sm text-muted-foreground">
+              {coachingProgramTypeLabels[programType]} sessions are organized by the coach or club and paid at the club. Set their club prices
+              per person for 60 minutes, by number of players, under Prices.
+              {droppedPrices.length > 0 && <span role="status" className="mt-1 block text-foreground">
+                Saving also removes the earlier lesson-length prices stored for {droppedPrices.map(({ minutes }) => formatCoachingDuration(minutes)).join(", ")}.
+              </span>}
+            </p> : <ClubPrices prefix={prefix} currencies={currencies} durations={selected} prices={clubPrices} dropped={droppedPrices} />}
             {/* Kept in view while long price lists scroll. */}
             <div className="sticky bottom-0 -mx-5 -mb-5 flex justify-end border-t border-border bg-surface px-5 py-4 sm:-mx-6 sm:-mb-6 sm:px-6">
               <Button type="submit" fullWidth={false} disabled={pending || !valid || !priceChanges.valid || (program ? !dirty && !priceChanged : false)} aria-busy={pending}>

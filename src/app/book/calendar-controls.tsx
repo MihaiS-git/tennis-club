@@ -18,7 +18,7 @@ function relativeDay(date: string, today: string) {
 
 export function CalendarControls({ locations, locationId, date, today, timezone, coaching }: {
   locations: readonly { id: string; name: string }[]; locationId?: string; date: string | null; today: string; timezone?: string;
-  coaching?: { program?: string; coach?: string; duration?: string };
+  coaching?: { program?: string; coach?: string; duration?: string; participants?: string };
 }) {
   const router = useRouter();
   const [resetPending, startReset] = useTransition();

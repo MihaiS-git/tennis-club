@@ -66,9 +66,8 @@ schedule therefore preserves compatible prices for reconciliation.
 
 Partial definitions retain unaffected rows and partition rule sets as needed to keep
 the editor's court × weekday representation valid. New reconciled date/time/price slices retain rectangular court × weekday definitions; empty parents are removed. The configuration fence and location
-lock serialize opening-hours and pricing writes. An opening-hours change that would leave a live, not yet ended court or coaching
-reservation outside the opening hours on a date it changes is rejected with those
-dates; reservations are never modified by configuration changes. Existing booking
+lock serialize opening-hours and pricing writes. Opening-hours changes never reject or modify existing
+court or coaching reservations, including future ones left outside the revised hours. Existing booking
 price/currency, payment-method and cancellation snapshots, payment attempts and refunds
 remain intact. Calendars extend their visible range to any occupancy outside the
 applicable hours, while rejecting new bookings outside them. Pending holds revalidate playing-date hours, amount/currency,

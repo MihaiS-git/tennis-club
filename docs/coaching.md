@@ -5,7 +5,9 @@ Coaches and Admins manage private coach availability (see [Coach availability](#
 Reservation Steps 1–6 support Private and Semi-private lessons on `/book?mode=coaching`, using protected
 coach/court holds and the existing combined-payment, settlement, expiry and refund lifecycle.
 Coaching packages remain deferred. Customer lesson rescheduling uses the shared My Activity editor
-(see "Lesson rescheduling").
+(see "Lesson rescheduling"). Group and Junior sessions are organized by the coach or club, who
+reserve the court through the existing staff reservation; they are paid at the club and are never
+booked or paid online (see [Online booking by program type](#online-booking-by-program-type)).
 
 ## Data model
 
@@ -15,11 +17,12 @@ Browser roles have no grants on any of them.
 
 | Table | Purpose |
 | --- | --- |
-| `coaching_programs` | Name, description, `program_type` (`private`, `semi_private`, `group`, `junior`), optional min/max participants, `court_rental_included`, `is_active`. Unused programs may be deleted; booking history requires deactivation. |
+| `coaching_programs` | Name, description, `program_type` (`private`, `semi_private`, `group`, `junior`), min/max participants (nullable in storage; required, 1 ≤ min ≤ max ≤ 100, for an active program), `court_rental_included`, `is_active`. Unused programs may be deleted; booking history requires deactivation. |
 | `coaching_program_durations` | Any nonempty subset of 60, 90 and 120 minutes, for every program type. |
 | `coach_profiles` | Public coaching profile keyed by `user_id`: display name, bio, qualifications, specialties, languages, `is_public`. A sibling of `player_profiles`. |
 | `coach_locations`, `coach_programs` | Where a coach teaches and which programs they offer. |
-| `coaching_prices` | A club-wide default (`coach_user_id IS NULL`) or one coach's override for a program duration in one `currency`, with `amount_minor`. Prices name no location. |
+| `coaching_prices` | A club-wide default (`coach_user_id IS NULL`) or one coach's override for a program duration in one `currency`, with `amount_minor`. Prices name no location. Used by Private and Semi-private programs. |
+| `coaching_participant_prices` | Group/Junior club rate per person per 60 minutes: program × `participant_count` × `currency` (unique `coaching_participant_prices_rate`), positive `amount_minor`. No coach or duration column; informational only, never a checkout price. |
 
 Program types are configurable labels for offerings the Admin creates; migrations seed
 nothing and the application assumes no program exists (see [Development seed](#development-seed)).
@@ -73,6 +76,23 @@ The booking location determines the currency; amounts are never converted. After
 currency change, prices in the old currency stay stored but no longer apply to that location
 until prices exist in its new currency. Duplicate matches throw.
 
+### Group and Junior rates
+
+Group and Junior programs have no duration prices and no coach overrides. The club sets
+informational rates per person per 60 minutes for each participant count in each pricing
+currency (`saveClubParticipantPrices` in `src/lib/coaching/admin.ts`, same lock order as club
+prices). Missing rates stay missing: nothing is seeded, defaulted, interpolated or tiered, and
+there are no separate 90/120-minute rates. Court rental is never included in these rates.
+Saved counts must lie in the program's current `min_participants`–`max_participants` range
+(`participants-required` without a valid range) and the currency must be charged by a current
+location (`invalid-currency`); amounts must be positive. Removal accepts any stored count.
+
+Rates outside the current range (after the Admin narrows it) and obsolete duration prices or
+coach overrides left from before a program became Group/Junior stay stored but are ignored by
+the public projection, the coach view and booking; the Admin can remove out-of-range rates and a
+coach can still remove an obsolete override. `saveClubCoachingPrice` and `saveOwnCoachingPrice`
+return `club-priced` for these programs, and the Program dialog accepts no duration prices for them.
+
 ## Admin
 
 `/admin/coaching` (Programs, Coaches, Prices) is active-Admin-only at the layout and
@@ -94,7 +114,16 @@ validates with Zod, authorizes, and runs short READ COMMITTED transactions:
 The UI follows the Admin conventions: compact tables, inline program status (deactivation
 confirms), inline coach visibility and inline club prices, and one Create/Edit dialog each
 for programs and coaches. The Prices page shows individual coach prices read-only; the Admin
-cannot edit them.
+cannot edit them. Each Group/Junior program appears on Prices once per currency with an editable
+table of rates by player count (create, edit, explicit Remove); Save is disabled without changes
+or with invalid entries, server errors appear beside the rows and entered values are kept.
+
+An active program needs explicit participant limits: saving an active program without both limits
+is `invalid-input` with field errors (the dialog shows them inline and keeps Save disabled), and
+activating a stored program whose limits are missing or invalid returns `participants-required`.
+Stored values are never changed automatically; an existing incomplete program stays as stored
+(and unbookable) until an Admin enters its limits. Confirmed bookings keep the participant count
+recorded in their revision evidence regardless of later limit changes.
 
 The Program Create/Edit dialog also edits club prices: one input per selected duration and
 pricing currency (currencies of current locations, plus any currency that still holds prices,
@@ -114,6 +143,16 @@ from the existing public location eligibility, so non-public locations and coach
 are omitted. Club prices are listed per currency charged by a public location; a coach's own
 prices are listed in the currencies of that coach's public locations. Each data section has empty and unavailable states, and
 nothing is invented.
+
+The "Group and junior sessions" section (`CoachingGroupPrices`, `#group-prices`) lists each
+active Group/Junior program with its description, participant range and durations, and one club
+rate table per currency (player count → price per person / 60 min), only for counts inside the
+current range and currencies of public locations. A program without rates shows a short
+"not published yet" state. The section explains that sessions are organized by the coach or club,
+who reserve the court; rates are indicative; court rental and other costs are confirmed by the
+club; participants contact the club or coach and pay at the club; these sessions cannot be booked
+online. It contains no booking links. Coach profiles list rates and lessons only for Private and
+Semi-private programs.
 
 The homepage coaching section names the active programs from the same read
 (`readPublicCoaching` on the public locations), with neutral copy when none are published
@@ -235,11 +274,9 @@ covered by no schedule are closed. The pure rules are in `src/lib/coaching/worki
   trimmed to the intersection (possibly several intervals), entirely outside or on closed dates are
   removed. A row whose result differs by date is split at the period boundary; earlier dates and
   history keep their hours. Extensions never extend working hours.
-- Before any write, the change is rejected (`booking-conflict`, with the dates) if a live court or
-  coaching reservation at the location that fits the current opening hours would fall outside the new
-  ones on an affected date and has not yet ended. Live means active, or held with an unexpired hold or
-  an accepted capture, the occupancy rule of booking commands; containment is the booking rule
-  (`fitsOpeningHours`). Nothing is cancelled or moved: the Admin moves or cancels those bookings first.
+- Existing court and coaching reservations never block the change and are never cancelled or moved.
+  Confirmed ones keep their terms and stay visible as occupancy, also outside the new hours; a pending
+  checkout hold is revalidated against the new hours when its payment is confirmed.
 - Other locations, other dates, and bookings with their payment records are never changed. A failure
   rolls back the opening-hours change, pricing and working hours together. The Admin is told when
   coach working hours were adjusted.
@@ -295,9 +332,13 @@ TypeScript decisions. Tests: `tests/integration/db/coaching-reservations.integra
 ## Lesson availability and quotes
 
 `src/lib/coaching/lesson-quote.ts` is pure: callers supply one location date's facts and nothing is
-read, locked or written. Private and Semi-private programs are offered (one coach, one paying customer, one court).
-Private has one player; Semi-private has two players. One customer books the complete session,
-with no second account, enrollment, booking or payment. Group and Junior remain excluded.
+read, locked or written. Only Private and Semi-private programs are offered
+(one coach, one paying customer, one court); Group and Junior are `not-offered`. The customer names the participant count, which must
+lie within the program's configured `min_participants`/`max_participants` (`coachingParticipantRange`).
+Both limits must be set with 1 ≤ min ≤ max ≤ 100, the same rule for every type; a program with a
+missing or invalid range is `not-offered`, has no offers or availability, and is not listed for
+selection. There is no default range and nothing is inferred from the type. One customer books
+the complete session, with no second account, enrollment, seat, booking or payment per participant.
 
 - `quoteCoachingLesson(day, request)` decides one lesson (program, court, start, duration).
 - `listCoachingLessonOffers(day, { programId, durationMinutes })` lists every offerable start on
@@ -309,8 +350,10 @@ Rules, in order (the first failure is the result's `reason`):
 1. `invalid-time`: 30-minute start, a 60/90/120-minute duration, ending by midnight.
 2. `not-offered`: eligibility comes from `projectPublicCoachProfile` over the public coaching facts
    (active program, public coach with an active account holding the `coach` role, assigned to the
-   program and, independently, to the location). The program must be `private` or `semi_private`. The location must be publicly eligible
+   program and, independently, to the location). The program type is not restricted. The location must be publicly eligible
    (`isPubliclyEligible`); callers pass only such locations and their active courts.
+   Then `invalid-participants`: the requested count must lie in the program's range. Offer listings
+   skip this check, since every permitted count receives the same offers and price.
 3. `invalid-duration`: the duration must be configured for the program.
 4. `unpriced`: `resolveCoachingPrice` in the location's currency (override, else club default).
 5. `invalid-time`: the lesson must last its duration in real time at the location's timezone,
@@ -357,7 +400,7 @@ Tests: `tests/unit/coaching/lesson-quote.test.ts`,
 ## Lesson booking creation
 
 `createCoachingBooking(input, reader?)` in `src/lib/coaching/booking.ts` atomically creates one
-pending Private or Semi-private lesson with the court-booking lifecycle: a `pending_payment` booking, its `created`
+pending lesson of any program type with the court-booking lifecycle: a `pending_payment` booking, its `created`
 revision, one `held` court reservation naming the coach (`coach_user_id`) and one `pending` online
 payment attempt sharing the hold deadline. It starts no Stripe checkout itself. The `/book` coaching Server Action delegates to
 `commitCoachingCheckout`, which starts the shared checkout after commit. Guests book without an account and are never matched by email;
@@ -530,12 +573,14 @@ page, with mode links and shared location/date navigation. Selection order is
   link with several locations lists them and carries the coach into the first location choice.
 - Coach: every public eligible coach assigned to the location (`coach_locations`). The list is
   never filtered by date, working hours, reservations, courts, programs or prices.
-- Program: the selected coach's own `coach_programs` assignments (active programs). Group and
-  Junior assignments are listed but disabled (not bookable online). Nothing is derived from the location.
+- Program: the selected coach's own `coach_programs` assignments (active programs), of any type.
+  Nothing is derived from the location.
 - Duration: the program's configured subset of 60, 90 and 120 minutes,
   each labelled with its effective price (`coachingBookingOptions` in
   `src/lib/coaching/booking-options.ts`): the coach's override, else the club default, in the
   location's currency; otherwise "price unavailable", which blocks lesson starts and checkout.
+- Players: the program's configured participant range (`participants=<count>`, defaulting to the
+  minimum). A count outside the range is reported and blocks lesson starts and checkout.
 - Date/Time: only then is `readPublicCoachingLessonAvailability` called; it intersects the coach's
   windows at the location, exceptions, coach and court occupancy, opening hours and court rules.
 
@@ -626,8 +671,9 @@ the local development database (`127.0.0.1:54322/postgres`) before any Auth or d
   (`c0ac0000-0000-4000-8000-00000000000{1-4}`), durations, participant limits and court inclusion.
 - Coaches: four public profiles assigned to existing current locations (none are created);
   the fixture's location indexes wrap to the locations that exist.
-- Prices: club-wide RON defaults and a few coach overrides, written only when a current
-  location charges in RON; locations in other currencies are reported as unpriced.
+- Prices: club-wide RON defaults and a few coach overrides for Private and Semi-private,
+  written only when a current location charges in RON; locations in other currencies are
+  reported as unpriced. Group and Junior rates are not seeded; the Admin sets them under Prices.
 
 One READ COMMITTED transaction takes the Admin coaching lock order (configuration share fence →
 locations → programs → coach account facts → profiles). Only missing records are inserted:
@@ -650,22 +696,25 @@ npm run test:integration -- tests/integration/admin/coaching.integration.test.ts
 ```
 
 
-## Private and Semi-private online selection
+## Online booking by program type
 
-The former private-only filters were an implementation scope limit, not a product rule.
-The shared online eligibility predicate now accepts `private` and `semi_private` at both the
-public availability and locked quote boundaries. `createCoachingBooking` reuses that quote;
-`commitCoachingCheckout` delegates to creation and the unchanged post-commit Stripe flow.
-No new lifecycle, database tables or migration is needed.
+Only Private and Semi-private programs (`isOnlineCoachingProgramType`) are bookable online. The
+type is checked at every boundary: booking options (`coachingBookingOptions`), public lesson
+availability (`projectCoachingLessonAvailability`), the pure quote (`lessonDay` returns
+`not-offered`), and therefore `createCoachingBooking` and `commitCoachingCheckout`, which reuse the
+locked quote. The Coaching mode never lists Group/Junior programs, and a coach whose only programs
+are Group/Junior is not a selector option. Historical Group/Junior bookings keep their revisions,
+financial records, settlement, cancellation, refund and rescheduling lifecycle unchanged.
 
-The Coaching mode shows actual configured program names without a disabled program placeholder,
+Within the online types, eligibility depends on configuration (active, assigned, priced,
+available, valid participant range). The Coaching mode shows actual configured program names,
 selects the first eligible program (including the sole option), and offers only priced configured
 durations on the existing court grid. Switching programs preserves the coach and customer contact
 while clearing the previous duration, interval and review. The whole lesson must fit coach and court
-availability. Group and Junior are excluded even when assigned and priced.
+availability.
 
-The configured coaching amount is the complete session price, including for two-player Semi-private
-lessons. The existing resolver chooses the coach override, then club default; no applicable price
+The configured coaching amount is the complete session price for any permitted participant count;
+there is no per-participant pricing online. The existing resolver chooses the coach override, then club default; no applicable price
 means unavailable. Included rental adds zero; excluded rental adds the selected court's full interval
 price once. There is one combined Stripe payment. New revisions snapshot the participant count beside
 the historical program/coach names and agreed amounts; confirmation carries those terms unchanged.
@@ -686,8 +735,8 @@ npm run typecheck
 
 The integration tests use the existing isolated PostgreSQL test project and mocked Stripe SDK calls.
 They cover guest/account checkout, both price sources, included/excluded rental, historical confirmation,
-configured durations, and coach/court conflicts through the same semi-private path. No database reset
-or real payment is required.
+configured durations, coach/court conflicts through the same semi-private path, Group/Junior
+rejection and preserved historical Group/Junior lessons. No database reset or real payment is required.
 
 ## Removing programs and coaches
 
@@ -782,13 +831,11 @@ identical start and end dates. Focused range integration coverage is in
 `tests/integration/admin/coach-availability.integration.test.ts`; list coverage is in
 `tests/integration/admin/coaching-lists.integration.test.ts`.
 
-### Canonical duration correction
+### Canonical durations
 
-`CanonicalCoachingDurations1791462257928` tightens the configuration CHECK to 60/90/120.
-It never changes booked lessons, revisions or financial records. Existing unsupported
-configuration is retained for explicit Admin cleanup, hidden from customer offerings;
-the CHECK applies to all new/updated rows and is validated immediately when no legacy rows exist.
-The earlier applied migration stays immutable. Apply the additive migration before deployment.
+The initial schema restricts `coaching_program_durations` to 60, 90 and 120 minutes with
+`coaching_program_durations_minutes_check`, matching the TypeScript duration list. The CHECK
+applies to configuration only; booked lessons and revisions keep their own snapshots.
 
 Rescheduling notifications always retain the eligible customer/Coach in-app messages.
 Email is optional and queues only when Admin has enabled configured delivery in Club settings;

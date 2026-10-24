@@ -21,6 +21,9 @@ export const coachingFailureMessages: Record<Failure, string> = {
   "invalid-location": "Select a current location.",
   "invalid-program": "Select an existing program and duration.",
   "not-offered": "The coach must offer this program before an individual price can be set.",
+  "participants-required": "Set the program's minimum and maximum players first.",
+  "club-priced": "Group and Junior prices are set by the club per number of players, not per lesson length or coach.",
+  "invalid-currency": "Use a currency charged by one of the club's current locations.",
 };
 
 // Field errors keyed by field name, rendered beside the failed control.

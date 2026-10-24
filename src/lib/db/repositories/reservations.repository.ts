@@ -311,16 +311,6 @@ export async function listCustomerEditOccupancy(manager: EntityManager, location
 
 // Live court and coaching occupancy at a location from a local date, on every court.
 // Called under the exclusive configuration fence, which excludes booking commands.
-export async function listLocationLiveOccupancy(manager: EntityManager, locationId: string, fromDate: string) {
-  const rows: unknown = await manager.query(
-    `SELECT r.booking_date::text,r.starts_at_minute,r.ends_at_minute FROM public.court_reservations r
-     JOIN public.courts c ON c.id=r.court_id
-     WHERE c.location_id=$1 AND r.booking_date>=$2::date
-       AND (r.status='active' OR (r.status='held' AND (r.hold_expires_at>clock_timestamp() OR ${acceptedCaptureOccupancy})))
-     ORDER BY r.booking_date,r.starts_at_minute,r.id`, [locationId, fromDate]);
-  return z.array(z.object({ booking_date: z.iso.date(), starts_at_minute: z.number().int(), ends_at_minute: z.number().int() })).parse(rows);
-}
-
 // Caller holds the location, booking, reservation and attempt locks and has
 // accepted a manual-capture authorization. The hold ends exactly at the attempt
 // deadline plus the operational grace, which records acceptance durably.

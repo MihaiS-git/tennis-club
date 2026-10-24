@@ -1393,8 +1393,12 @@ E2E_ALLOW_HOLD_OVERRIDE=1, never production). See docs/payments-memberships.md.
 Refund-backed cancellation/reduction requires every obligation to succeed. Preserve the
 original booking and reservation and all verified partial refunds while any obligation is
 incomplete. Replacement executions require affirmative transient provider failure evidence
-and an explicit Admin "Check with Stripe"; no scheduler or webhook retries them;
-unknown/permanent refusal is exceptional and never voids the obligation. Past the safe
+and an explicit Admin "Check with Stripe"; no scheduler or webhook retries them.
+An unknown outcome never voids an obligation. When every obligation of the change is
+definitively refused (no money returned), the failed refund executions are final: the
+obligations are voided, the change is `unsuccessful` with a recorded rejection exception,
+the booking stays confirmed and a fresh request may follow. After any partial success, a
+definitive refusal leaves its obligation owed as an explicit exception. Past the safe
 idempotency replay window use fully paginated Stripe refund evidence only; missing evidence
 is explicitly unresolved and never authorizes blind resend.
 

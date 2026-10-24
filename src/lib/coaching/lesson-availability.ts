@@ -17,7 +17,7 @@ import type { LocationCurrency } from "@/lib/pricing/money";
 import type { CoachingEvidence } from "@/lib/bookings/revision";
 import { listCoachingLessonOffers, listCoachingRescheduleOffers, type CoachingLessonDay, type CoachingLessonQuote } from "./lesson-quote";
 import { projectPublicCoachProfile } from "./public";
-import { isCoachingDuration, isOnlineCoachingProgramType } from "./validation";
+import { coachingParticipantRange, isCoachingDuration, isOnlineCoachingProgramType } from "./validation";
 
 const coachingLessonAvailabilitySchema = z.object({
   locationId: z.uuid(), programId: z.uuid(), coachId: z.uuid(), date: z.iso.date(),
@@ -31,7 +31,7 @@ export type PublicLessonStart = { startMinute: number; endMinute: number; starts
 export type PublicCoachingLessonAvailability = {
   location: { id: string; name: string; timezone: string };
   coach: { id: string; displayName: string };
-  program: { id: string; name: string; participantCount: 1 | 2; courtRentalIncluded: boolean };
+  program: { id: string; name: string; participants: { min: number; max: number }; courtRentalIncluded: boolean };
   date: string;
   currency: LocationCurrency;
   // Priced lesson durations on the court grid; empty starts means nothing is free that day.
@@ -93,14 +93,17 @@ export function projectCoachingLessonAvailability(day: CoachingLessonDay, progra
   const profile = projectPublicCoachProfile(day.coaching,
     [{ id: locationId, name: day.location.name, currency: day.location.currency }], day.coach.userId);
   const program = profile?.programs.find((candidate) => candidate.id === programId.toLowerCase());
-  if (!profile || !program || !isOnlineCoachingProgramType(program.type) || !profile.locations.some((location) => location.id === locationId)) return null;
+  const participants = program && coachingParticipantRange(program);
+  // Group/Junior programs are never offered online, so they have no public lesson availability.
+  if (!profile || !program || !isOnlineCoachingProgramType(program.type) || !participants
+    || !profile.locations.some((location) => location.id === locationId)) return null;
   const durations = program.durations.filter((durationMinutes) => isCoachingDuration(durationMinutes)
     && profile.lessons.some((lesson) => lesson.currency === day.location.currency && lesson.programId === program.id
       && lesson.durationMinutes === durationMinutes && lesson.price !== null));
   return {
     location: { id: locationId, name: day.location.name, timezone: day.location.timezone },
     coach: { id: profile.id, displayName: profile.displayName },
-    program: { id: program.id, name: program.name, participantCount: program.type === "semi_private" ? 2 : 1,
+    program: { id: program.id, name: program.name, participants,
       courtRentalIncluded: program.courtRentalIncluded },
     date: day.date, currency: day.location.currency,
     durations: durations.map((durationMinutes) => ({ durationMinutes,

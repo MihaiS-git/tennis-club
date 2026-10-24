@@ -76,8 +76,13 @@ test("Admin bookings list guest, account, cancelled and historical bookings with
     const manager = (await getDataSource()).manager;
     expect(await findAdminBookingDetails(manager, bookingIds[20])).toMatchObject({ id: bookingIds[20], status: "cancelled",
       account_user_id: users[0], customer_email: `${marker}-20@example.test`, payment_method: "online", created_at: expect.stringMatching(/^2026-09-21T10:00:00/) });
-    expect(await findAdminBookingDetails(manager, bookingIds[21])).toMatchObject({ account_user_id: null, location_name: "Bookings archived",
-      court_name: "Old court", booking_date: "2020-03-01", total_amount_minor: 1021 });
+    expect(await findAdminBookingDetails(manager, bookingIds[21])).toEqual({ id: bookingIds[21], status: "confirmed",
+      account_user_id: null, location_name: "Bookings archived", location_timezone: "UTC", court_name: "Old court",
+      booking_date: "2020-03-01", starts_at_minute: 600, ends_at_minute: 660,
+      customer_name: `${marker} Historic Guest`, customer_email: `${marker}-21@example.test`, customer_phone: "123",
+      cancellation_notice_minutes: 1440, total_amount_minor: 1021, currency: "RON", payment_method: "online",
+      created_at: expect.stringMatching(/^2026-09-22T10:00:00/), includes_coaching: false, coach_user_id: null,
+      coach_name: null, coaching_program_name: null, coaching: null });
     expect(await findAdminBookingDetails(manager, randomUUID())).toBeNull();
 
     // Losing the Admin role, or suspension, denies the list before any rows are returned.

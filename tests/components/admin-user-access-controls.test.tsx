@@ -3,7 +3,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-import type { UserRole } from "../../../src/lib/auth/account";
+import type { UserRole } from "../../src/lib/auth/account";
 
 const { updateUserStatusAction, updateUserRoleAction, success, error, refresh } = vi.hoisted(() => ({
   updateUserStatusAction: vi.fn(),
@@ -13,12 +13,12 @@ const { updateUserStatusAction, updateUserRoleAction, success, error, refresh } 
   error: vi.fn(),
 }));
 
-vi.mock("../../../src/app/admin/users/actions", () => ({ updateUserStatusAction, updateUserRoleAction }));
+vi.mock("../../src/app/admin/users/actions", () => ({ updateUserStatusAction, updateUserRoleAction }));
 vi.mock("sonner", () => ({ toast: { success, error, loading: vi.fn(() => "user-operation") } }));
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
-import { UserAccessControls } from "../../../src/app/admin/users/user-access-controls";
-import type { AdminUserListItem } from "../../../src/lib/admin/users";
+import { UserAccessControls } from "../../src/app/admin/users/user-access-controls";
+import type { AdminUserListItem } from "../../src/lib/admin/users";
 
 const userId = "84c64ef2-6925-4901-a137-f01395541411";
 const user = {

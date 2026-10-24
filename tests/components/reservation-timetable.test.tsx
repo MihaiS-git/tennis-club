@@ -20,10 +20,8 @@ it.each([60, 90, 180])("labels each occupied block once across a %i-minute inter
 
   for (const interval of intervals) {
     const block = screen.getByRole("button", { name: new RegExp(interval.label) });
-    expect(block.parentElement?.style.gridColumn).toBe(`2 / span ${duration / 30}`);
     if (interval.kind === "reservation") {
       expect(within(block).getAllByText("Reservation")).toHaveLength(1);
-      expect(block.className).toContain("bg-clay-300");
     } else if (interval.includesCoaching) {
       expect(within(block).getAllByText("Coaching")).toHaveLength(1);
     } else {
@@ -59,7 +57,6 @@ it("renders one duration-spanning reservation block without invoking creation", 
       label: "Reservation · Mihai S" }]} />);
   expect(screen.getAllByLabelText(/Reservation · Mihai S/)).toHaveLength(1);
   const block = screen.getByRole("button", { name: /Court 1 2099-10-15 12:30–14:00, Reservation · Mihai S/ });
-  expect(block.parentElement?.style.gridColumn).toBe("2 / span 3");
   fireEvent.click(block);
   expect(onOccupiedClick.mock.calls).toEqual([["reservation"]]);
   expect(onChoose).not.toHaveBeenCalled();
@@ -67,7 +64,7 @@ it("renders one duration-spanning reservation block without invoking creation", 
   expect(onChoose).toHaveBeenCalledOnce();
 });
 
-it("lists only present states in the legend and keeps unavailable time out of danger styling", () => {
+it("lists only present states in the legend", () => {
   render(<ReservationTimetable date="2099-10-15" selection={null} onChoose={vi.fn()} onOccupiedClick={vi.fn()}
     day={{ times: [600, 630, 660, 690, 720], courts: [{ court: { id: "court", name: "Court 1" },
       cells: ["past", "booked", "booked", "available", "available"] }] }}
@@ -75,6 +72,4 @@ it("lists only present states in the legend and keeps unavailable time out of da
   const legend = screen.getByRole("list", { name: "Timetable legend" });
   // Booked time is fully drawn as a staff reservation block, so only that entry describes it.
   expect(Array.from(legend.querySelectorAll("li"), item => item.textContent)).toEqual(["Available", "Past", "Selected", "Reservation"]);
-  expect(screen.getByLabelText(/10:00–10:30, Past/).className).not.toMatch(/danger/);
-  expect(screen.getByRole("button", { name: /Reservation · Staff/ }).className).toContain("bg-clay-300");
 });

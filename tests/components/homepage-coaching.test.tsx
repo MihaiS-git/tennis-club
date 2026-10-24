@@ -28,19 +28,19 @@ async function renderHome() {
   return document;
 }
 
-it("links to coaching without implying online lesson booking or invented lesson times", async () => {
+it("links to coaching, states that lessons can be booked online and invents no lesson times", async () => {
   const home = within((await renderHome()).body);
   const coachingLinks = home.getAllByRole("link").filter((link) => link.getAttribute("href") === "/coaching");
   expect(coachingLinks.length).toBeGreaterThan(0);
-  for (const link of coachingLinks) expect(link.textContent).not.toMatch(/book/i);
   const card = home.getByRole("article", { name: "Coaching" });
-  expect(card.textContent).toContain("Lessons can’t be booked online yet.");
+  expect(card.textContent).toContain("book a lesson online");
+  expect(card.textContent).not.toMatch(/can’t be booked|not bookable/i);
   expect(card.textContent).not.toMatch(/\d{1,2}:\d{2}|availability|slot/i);
   expect(within(card).getByRole("link", { name: /Explore coaching/ }).getAttribute("href")).toBe("/coaching");
 });
 
 const program = (id: string, name: string) => ({ id, name, description: "", type: "private" as const, durations: [60],
-  minParticipants: null, maxParticipants: null, courtRentalIncluded: true, prices: [] });
+  minParticipants: null, maxParticipants: null, courtRentalIncluded: true, prices: [], participantPrices: [] });
 const show = async (coaching: PublicCoaching | Error) =>
   render(await HomeCoachingPrograms({ coaching: coaching instanceof Error ? Promise.reject(coaching) : Promise.resolve(coaching) }));
 

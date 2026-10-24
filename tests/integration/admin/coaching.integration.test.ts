@@ -4,7 +4,7 @@ import { afterAll, afterEach, assert, beforeAll, expect, test, vi } from "vitest
 import { getDataSource } from "../../../src/lib/db/data-source";
 import * as coachingRepository from "../../../src/lib/db/repositories/coaching.repository";
 import {
-  deleteCoachingProgram, deleteCoachProfile, loadAdminCoaching, removeClubCoachingPrice, saveClubCoachingPrice, saveCoachingProgram, saveCoachProfile,
+  deleteCoachingProgram, deleteCoachProfile, loadAdminCoaching, removeClubCoachingPrice, saveClubCoachingPrice, saveClubParticipantPrices, saveCoachingProgram, saveCoachProfile,
   setCoachingProgramStatus, setCoachVisibility,
 } from "../../../src/lib/coaching/admin";
 import { loadOwnCoachPricing, removeOwnCoachingPrice, saveOwnCoachingPrice } from "../../../src/lib/coaching/coach-pricing";
@@ -54,6 +54,7 @@ afterAll(async () => {
   const database = await getDataSource();
   try {
     await database.query("DELETE FROM public.coaching_prices WHERE program_id = ANY($1::uuid[])", [programIds]);
+    await database.query("DELETE FROM public.coaching_participant_prices WHERE program_id = ANY($1::uuid[])", [programIds]);
     await database.query("DELETE FROM public.coach_availability_exceptions WHERE coach_user_id = ANY($1::uuid[])", [userIds]);
     await database.query("DELETE FROM public.coach_weekly_availability WHERE coach_user_id = ANY($1::uuid[])", [userIds]);
     await database.query("DELETE FROM public.coach_profiles WHERE user_id = ANY($1::uuid[])", [userIds]);
@@ -92,6 +93,11 @@ test("coaching administration enforces Admin authorization, coach eligibility, c
   assert.ok(created.ok); programIds.push(created.id);
   expect(await saveCoachingProgram({ fields: { ...programFields, min_participants: 3, max_participants: 2 } }, admin.client))
     .toMatchObject({ ok: false, reason: "invalid-input", fieldErrors: { max_participants: expect.any(String) } });
+  // Active programs are bookable online and need both explicit limits.
+  expect(await saveCoachingProgram({ fields: { ...programFields, min_participants: null } }, admin.client))
+    .toMatchObject({ ok: false, reason: "invalid-input", fieldErrors: { min_participants: "Enter the minimum players for an active program." } });
+  expect(await saveCoachingProgram({ id: created.id, fields: { ...programFields, max_participants: null } }, admin.client))
+    .toMatchObject({ ok: false, reason: "invalid-input", fieldErrors: { max_participants: "Enter the maximum players for an active program." } });
   expect(await saveCoachingProgram({ id: created.id, fields: { ...programFields, name: "Integration private coaching", durations: [60, 90, 120] } }, admin.client))
     .toEqual({ ok: true, id: created.id });
   expect(await saveCoachingProgram({ id: randomUUID(), fields: programFields }, admin.client)).toEqual({ ok: false, reason: "not-found" });
@@ -214,6 +220,13 @@ test("coaching administration enforces Admin authorization, coach eligibility, c
   expect(await removeClubCoachingPrice({ ...key, currency: "EUR" }, admin.client)).toMatchObject({ ok: true });
   expect(await setCoachingProgramStatus({ id: created.id, is_active: false }, admin.client)).toEqual({ ok: true, id: created.id });
   expect((await ours()).programs).toEqual([]);
+  // A stored incomplete configuration is kept as is and cannot be activated until an Admin completes it.
+  await database.query("UPDATE public.coaching_programs SET max_participants=NULL WHERE id=$1", [created.id]);
+  expect(await setCoachingProgramStatus({ id: created.id, is_active: true }, admin.client)).toEqual({ ok: false, reason: "participants-required" });
+  expect(await database.query("SELECT is_active,min_participants,max_participants FROM public.coaching_programs WHERE id=$1", [created.id]))
+    .toEqual([{ is_active: false, min_participants: 1, max_participants: null }]);
+  expect(await setCoachingProgramStatus({ id: created.id, is_active: false }, admin.client)).toEqual({ ok: true, id: created.id });
+  await database.query("UPDATE public.coaching_programs SET max_participants=1 WHERE id=$1", [created.id]);
   expect((await ours()).coaches.find((item) => item.id === coach.id)?.programs).toEqual([]);
 
   // Browser roles have no direct access to coaching tables.
@@ -296,11 +309,11 @@ test("coach pricing view resolves per active-location currency; assignment remov
 test("duration edits clean all currencies, overrides and stale currencies atomically; program and coach deletion clean owned configuration", async () => {
   const admin = await account(["admin"]);
   const coach = await account(["coach"]);
-  const created = await saveCoachingProgram({ fields: { ...programFields, name: "Junior cleanup", program_type: "junior", durations: [60, 90, 120] } }, admin.client);
+  const created = await saveCoachingProgram({ fields: { ...programFields, name: "Lesson cleanup", durations: [60, 90, 120] } }, admin.client);
   assert.ok(created.ok); programIds.push(created.id);
   expect(await saveCoachingProgram({ fields: { ...programFields, program_type: "junior", durations: [45] } }, admin.client))
     .toMatchObject({ ok: false, reason: "invalid-input" });
-  const fields = { ...programFields, name: "Junior cleanup", program_type: "junior", durations: [60, 90, 120] };
+  const fields = { ...programFields, name: "Lesson cleanup", durations: [60, 90, 120] };
   expect(await saveCoachProfile({ user_id: coach.id, create: true, fields: coachFields({ location_ids: locationIds, program_ids: [created.id] }) }, admin.client)).toMatchObject({ ok: true });
   const db = await getDataSource();
   for (const currency of ["RON", "EUR"]) for (const duration of [60, 90, 120]) {
@@ -368,6 +381,15 @@ test("duration edits clean all currencies, overrides and stale currencies atomic
   expect(await db.query("SELECT 1 FROM public.coach_programs WHERE program_id=$1", [created.id])).toEqual([]);
   expect(await db.query("SELECT 1 FROM public.coach_profiles WHERE user_id=$1", [otherCoach.id])).toHaveLength(1);
   expect((await coachingRepository.listCoachingPrograms(db.manager)).some(p => p.id === created.id)).toBe(false);
+
+  // Deleting an unused Junior program also removes its club rates per player count.
+  const junior = await saveCoachingProgram({ fields: { ...programFields, name: "Junior cleanup", program_type: "junior", min_participants: 4, max_participants: 8 } }, admin.client);
+  assert.ok(junior.ok); programIds.push(junior.id);
+  expect(await saveClubParticipantPrices({ program_id: junior.id, currency: "RON", prices: [{ participant_count: 4, amount: "50" }], removed: [] }, admin.client))
+    .toEqual({ ok: true, id: junior.id });
+  expect(await coachingRepository.listParticipantPrices(db.manager, { programIds: [junior.id] })).toHaveLength(1);
+  expect(await deleteCoachingProgram({ id: junior.id }, admin.client)).toEqual({ ok: true, id: junior.id });
+  expect(await coachingRepository.listParticipantPrices(db.manager, { programIds: [junior.id] })).toEqual([]);
 });
 
 test("booking history blocks program deletion and archives coaches without changing historical contracts or accounts", async () => {
@@ -425,7 +447,7 @@ test("booking history blocks program deletion and archives coaches without chang
     expect(await readPublicCoach(coach.id, [{ id: locationIds[0], name: "East", currency: "RON" }])).toBeNull();
     expect(await db.transaction(manager => coachingRepository.lockCoachProfileForBooking(manager, coach.id))).toBeNull();
     expect(await createCoachingBooking({ locationId: locationIds[0], programId: created.id, coachId: coach.id, courtId, date: "2099-01-01", startMinute: 600,
-      durationMinutes: 90, customerName: "Guest", customerEmail: "guest@example.test", customerPhone: "123", expectedTotalAmountMinor: 10000, expectedCurrency: "RON" }, publicClient()))
+      durationMinutes: 90, participantCount: 1, customerName: "Guest", customerEmail: "guest@example.test", customerPhone: "123", expectedTotalAmountMinor: 10000, expectedCurrency: "RON" }, publicClient()))
       .toMatchObject({ ok: false, reason: "not-offered" });
     expect((await service.auth.admin.getUserById(coach.id)).data.user?.id).toBe(coach.id);
     expect(await db.query("SELECT role_code FROM public.user_roles WHERE user_id=$1", [coach.id])).toEqual([{ role_code: "coach" }]);

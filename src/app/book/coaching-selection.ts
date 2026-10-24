@@ -5,5 +5,5 @@ import type { PublicLessonStart } from "@/lib/coaching/lesson-availability";
 export type CoachingSelection = {
   locationId: string; programId: string; coachId: string;
   programName: string; coachName: string; durationMinutes: number;
-  participantCount: 1 | 2; courtRentalIncluded: boolean; starts: PublicLessonStart[];
+  participantCount: number; courtRentalIncluded: boolean; starts: PublicLessonStart[];
 };

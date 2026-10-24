@@ -1,19 +1,11 @@
 import { randomUUID } from "node:crypto";
 
 import { createClient } from "@supabase/supabase-js";
-import { expect, test, type APIRequestContext } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { DataSource } from "typeorm";
-import { z } from "zod";
 
+import { deleteMailpitMessagesTo, mailpitMessageIds, mailpitMessageText } from "../local/mailpit";
 import { localServiceRoleKey } from "./helpers/supabase";
-
-const mailpitMessagesSchema = z.object({
-  messages: z.array(z.object({
-    ID: z.string(),
-    To: z.array(z.object({ Address: z.string() })),
-  })),
-});
-const mailpitMessageSchema = z.object({ Text: z.string() });
 
 function testEmail(journey: string): string {
   return `e2e-${journey}-${randomUUID()}@example.test`;
@@ -51,37 +43,31 @@ async function deleteTestUser(email: string): Promise<void> {
   }
 }
 
-async function findEmailLink(
-  request: APIRequestContext,
-  email: string,
-  type: "signup" | "recovery",
-): Promise<string> {
+// Polls the recipient's Mailpit messages (bounded by the poll timeout) for the Auth link.
+async function findEmailLink(email: string, type: "signup" | "recovery"): Promise<string> {
   let link = "";
   await expect.poll(async () => {
-    const inboxResponse = await request.get(`${process.env.MAILPIT_URL}/api/v1/messages`);
-    expect(inboxResponse.ok()).toBe(true);
-    const inbox = mailpitMessagesSchema.parse(await inboxResponse.json());
-    const message = inbox.messages.find((candidate) =>
-      candidate.To.some((recipient) => recipient.Address === email));
-    if (!message) return "";
-
-    const detailResponse = await request.get(
-      `${process.env.MAILPIT_URL}/api/v1/message/${message.ID}`,
-    );
-    expect(detailResponse.ok()).toBe(true);
-    const detail = mailpitMessageSchema.parse(await detailResponse.json());
-    const urls = detail.Text.match(/https?:\/\/[^\s<>)]+/g) ?? [];
-    link = urls.find((candidate) => {
-      const url = new URL(candidate);
-      return url.pathname === "/auth/v1/verify" && url.searchParams.get("type") === type;
-    }) ?? "";
+    for (const id of await mailpitMessageIds(email)) {
+      const urls = (await mailpitMessageText(id)).match(/https?:\/\/[^\s<>)]+/g) ?? [];
+      link = urls.find((candidate) => {
+        const url = new URL(candidate);
+        return url.pathname === "/auth/v1/verify" && url.searchParams.get("type") === type;
+      }) ?? "";
+      if (link) break;
+    }
     return link;
   }, { timeout: 30_000, intervals: [250, 500, 1_000] }).not.toBe("");
 
   return link;
 }
 
-test("signup requires email confirmation before the account is accessible", async ({ page, request }) => {
+// Soft checks keep a test failure primary, report each cleanup failure and still run the rest.
+async function cleanupJourney(email: string): Promise<void> {
+  await expect.soft(deleteTestUser(email), "delete test user").resolves.toBeUndefined();
+  await expect.soft(deleteMailpitMessagesTo(email), "delete test mail").resolves.toBeUndefined();
+}
+
+test("signup requires email confirmation before the account is accessible", async ({ page }) => {
   const email = testEmail("signup");
   const password = "Signup-password-123";
   try {
@@ -96,7 +82,7 @@ test("signup requires email confirmation before the account is accessible", asyn
     await page.goto("/account");
     await expect(page).toHaveURL(/\/login$/);
 
-    const link = await findEmailLink(request, email, "signup");
+    const link = await findEmailLink(email, "signup");
     const callbackRequest = page.waitForRequest((browserRequest) =>
       new URL(browserRequest.url()).pathname === "/auth/callback");
     await page.goto(link);
@@ -107,11 +93,11 @@ test("signup requires email confirmation before the account is accessible", asyn
     await expect(page.getByText(email, { exact: true })).toBeVisible();
     await expect(page.getByRole("list", { name: "Assigned roles" }).getByRole("listitem")).toHaveCount(0);
   } finally {
-    await deleteTestUser(email);
+    await cleanupJourney(email);
   }
 });
 
-test("recovery email permits password reset and sign-in with the new password", async ({ page, request }) => {
+test("recovery email permits password reset and sign-in with the new password", async ({ page }) => {
   const email = testEmail("recovery");
   const oldPassword = "Old-password-123";
   const newPassword = "New-password-456";
@@ -123,7 +109,7 @@ test("recovery email permits password reset and sign-in with the new password", 
     await page.getByRole("button", { name: "Send reset link" }).click();
     await expect(page).toHaveURL(/\/forgot-password$/);
 
-    const link = await findEmailLink(request, email, "recovery");
+    const link = await findEmailLink(email, "recovery");
     const callbackRequest = page.waitForRequest((browserRequest) =>
       new URL(browserRequest.url()).pathname === "/auth/callback");
     await page.goto(link);
@@ -141,6 +127,6 @@ test("recovery email permits password reset and sign-in with the new password", 
     await page.getByRole("button", { name: "Sign in" }).click();
     await expect(page).toHaveURL(/\/$/);
   } finally {
-    await deleteTestUser(email);
+    await cleanupJourney(email);
   }
 });

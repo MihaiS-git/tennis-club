@@ -12,7 +12,7 @@ const now = new Date("2026-10-23T09:00:00Z"); // Friday, 12:00 local.
 const price = { durationMinutes: 60, amountMinor: 20000, currency: "RON" } as const;
 const program: PublicCoaching["programs"][number] = {
   id: "private", name: "Private", description: "", type: "private", durations: [60],
-  minParticipants: null, maxParticipants: null, courtRentalIncluded: false, prices: [price],
+  minParticipants: 1, maxParticipants: 1, courtRentalIncluded: false, prices: [price], participantPrices: [],
 };
 const coach: PublicCoaching["coaches"][number] = {
   id: "coach", displayName: "Coach", bio: "", qualifications: "", specialties: [], languages: [],
@@ -26,6 +26,16 @@ const options = (facts = data()) => coachingBookingOptions(facts, central, now);
 beforeEach(() => {
   source.mockReset().mockResolvedValue({ manager: {} });
   schedules.mockReset().mockResolvedValue({ weekly: [weekly], extra: [] });
+});
+
+it("offers only Private and Semi-private programs for online booking", async () => {
+  const types = ["private", "semi_private", "group", "junior"] as const;
+  const programs = types.map((type) => ({ ...program, id: type, name: type, type, minParticipants: 1, maxParticipants: 6 }));
+  const facts = { programs, coaches: [{ ...coach, programs: programs.map(({ id, name }) => ({ id, name })) }] };
+  expect((await options(facts))[0].programs.map((item) => item.type)).toEqual(["private", "semi_private"]);
+  // A coach assigned only Group/Junior programs offers nothing bookable online.
+  const clubOnly = { programs, coaches: [{ ...coach, programs: programs.slice(2).map(({ id, name }) => ({ id, name })) }] };
+  expect(await options(clubOnly)).toEqual([]);
 });
 
 it("uses working hours at the selected location for a coach assigned to two locations", async () => {
@@ -73,20 +83,22 @@ it("ignores an ended extra interval today but accepts one that has not ended", a
   expect(await options()).toHaveLength(1);
 });
 
-it.each(["group", "junior"] as const)("excludes a coach offering only unsupported %s lessons", async type => {
+it("offers a Semi-private program with its configured participant range", async () => {
   const facts = data();
-  facts.programs[0].type = type;
-  expect(await options(facts)).toEqual([]);
-  expect(schedules).not.toHaveBeenCalled();
+  facts.programs[0] = { ...facts.programs[0], type: "semi_private", minParticipants: 2, maxParticipants: 3 };
+  expect(await options(facts)).toMatchObject([{ id: coach.id, programs: [{ id: "private", type: "semi_private", participants: { min: 2, max: 3 },
+    durations: [{ durationMinutes: 60, price: { amountMinor: 20000, source: "club" } }] }] }]);
 });
 
-it("keeps a coach offering Private plus Group and leaves Group disabled", async () => {
+it.each([[null, 4], [2, null], [null, null], [5, 3], [0, 4], [1, 101]])(
+  "never offers a program without valid explicit participant limits (min=%s, max=%s)", async (minParticipants, maxParticipants) => {
   const facts = data();
-  facts.programs.push({ ...program, id: "group", name: "Group", type: "group" });
-  facts.coaches[0].programs = [...coach.programs, { id: "group", name: "Group" }];
-  const result = await options(facts);
-  expect(result).toHaveLength(1);
-  expect(result[0].programs.find(item => item.id === "group")?.bookable).toBe(false);
+  facts.programs.push({ ...program, id: "semi", name: "Semi-private", type: "semi_private", minParticipants: 2, maxParticipants: 2 });
+  facts.coaches[0].programs = [...coach.programs, { id: "semi", name: "Semi-private" }];
+  facts.programs[0] = { ...facts.programs[0], minParticipants, maxParticipants };
+  expect((await options(facts))[0].programs.map(item => [item.id, item.participants])).toEqual([["semi", { min: 2, max: 2 }]]);
+  facts.programs.pop();
+  expect(await options(facts)).toEqual([]);
 });
 
 it("excludes online lessons with no effective price or only another currency's price", async () => {

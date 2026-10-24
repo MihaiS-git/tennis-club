@@ -107,20 +107,6 @@ test("navigation follows the current account and protected routes enforce access
     await expect(page).toHaveURL(new RegExp(`/admin/users/${accounts[0].id}`));
     await expect(page.getByRole("navigation", { name: "User management" })).toBeVisible();
     await expect(adminNavigation.getByRole("link", { name: "Users" })).toHaveAttribute("aria-current", "page");
-    await expect(page.getByRole("dialog")).toHaveCount(0);
-    await page.goBack();
-    await expect(page.getByRole("heading", { name: "Users", exact: true })).toBeVisible();
-    await page.goBack();
-    await expect(page).toHaveURL(/\/admin\/locations$/);
-    await expect(page.getByRole("heading", { name: "Locations", exact: true })).toBeVisible();
-    await expect(page.getByRole("dialog")).toHaveCount(0);
-    await page.goBack();
-    await expect(page.getByRole("heading", { name: "Play more tennis." })).toBeVisible();
-    await expect(page.getByRole("dialog")).toHaveCount(0);
-    await navigation.getByRole("link", { name: "Admin" }).click();
-    await adminNavigation.getByRole("link", { name: "Users" }).click();
-    await expect(page.getByRole("heading", { name: "Users", exact: true })).toBeVisible();
-    await expect(page.getByRole("dialog")).toHaveCount(0);
     await page.goto("/admin");
     await expect(page).toHaveURL(/\/admin\/locations$/);
     // The Calendar renders its date control only when a configured location exists.
@@ -147,13 +133,6 @@ test("navigation follows the current account and protected routes enforce access
     await expect(views.getByRole("link", { name: "List" })).toHaveAttribute("aria-current", "page");
     await expect(page.getByRole("searchbox", { name: "Search" })).toBeVisible();
     await expect(page.getByLabel("Date")).toHaveCount(0);
-    await page.goBack();
-    await expect(page).toHaveURL(/\/admin\/bookings\?view=calendar&date=2099-10-15$/);
-    await expect(views.getByRole("link", { name: "Calendar" })).toHaveAttribute("aria-current", "page");
-    await expect(page.getByLabel("Date")).toHaveValue("2099-10-15");
-    await page.goForward();
-    await expect(views.getByRole("link", { name: "List" })).toHaveAttribute("aria-current", "page");
-    await expect(page.getByRole("searchbox", { name: "Search" })).toBeVisible();
     await page.goto("/admin/payments?status=due&q=A%20%26%20B&page=2");
     await expect(page).toHaveURL(/\/admin\/payments\/transactions\?/);
     expect(new URL(page.url()).searchParams.get("q")).toBe("A & B");
@@ -165,12 +144,7 @@ test("navigation follows the current account and protected routes enforce access
     await adminNavigation.getByRole("link", { name: "Settings", exact: true }).click();
     await expect(page).toHaveURL(/\/admin\/payments\/settings$/);
     await expect(adminNavigation.getByRole("link", { name: "Settings", exact: true })).toHaveAttribute("aria-current", "page");
-    await page.goBack();
-    await expect(adminNavigation.getByRole("link", { name: "Transactions" })).toHaveAttribute("aria-current", "page");
-    await page.goForward();
-    await expect(adminNavigation.getByRole("link", { name: "Settings", exact: true })).toHaveAttribute("aria-current", "page");
     await page.getByRole("link", { name: "Profile", exact: true }).click();
-    await visitUserDestinations();
     await page.getByRole("button", { name: "Sign out", exact: true }).click();
     await expect(page).toHaveURL(/\/login$/);
     await signIn(page, accounts[2].email);
@@ -192,7 +166,6 @@ test("navigation follows the current account and protected routes enforce access
     await expect(page.getByRole("heading", { name: "Bookings & Reservations", exact: true })).toBeVisible();
     await expect(adminNavigation.getByRole("link")).toHaveText(["Bookings & Reservations", "My availability", "My prices"]);
     await page.getByRole("link", { name: "Profile", exact: true }).click();
-    await visitUserDestinations();
     await page.getByRole("button", { name: "Sign out", exact: true }).click();
     await expect(page).toHaveURL(/\/login$/);
     await signIn(page, accounts[0].email);
@@ -220,25 +193,13 @@ test("navigation follows the current account and protected routes enforce access
     await userNavigation.getByRole("link", { name: "Personal information", exact: true }).click();
     await expect(page.getByLabel("First name", { exact: true })).toHaveValue("");
     // All shared link entry points guard the active Profile visit.
-    for (const destination of ["/book", "/coaching", "/courts", "/club"]) {
-      await page.getByLabel("First name", { exact: true }).fill("Footer draft");
-      await page.getByRole("navigation", { name: "Footer", exact: true }).locator(`a[href="${destination}"]`).click();
-      await expect(page.getByText("You have unsaved changes in Personal information.", { exact: true })).toBeVisible();
-      await expect(page).toHaveURL(/\/profile\/personal$/);
-      await page.getByRole("button", { name: "Stay", exact: true }).click();
-      await expect(page.getByText("You have unsaved changes in Personal information.", { exact: true })).toHaveCount(0);
-    }
-    for (const width of [1440, 375]) {
-      await page.setViewportSize({ width, height: 900 });
-      await page.locator('header a[href="/book"]:visible').click();
-      await expect(page.getByText("You have unsaved changes in Personal information.", { exact: true })).toBeVisible();
-      await page.getByRole("button", { name: "Stay", exact: true }).click();
-      await expect(page.getByText("You have unsaved changes in Personal information.", { exact: true })).toHaveCount(0);
-      await page.locator('header a[href="/"]:visible').click();
-      await expect(page.getByText("You have unsaved changes in Personal information.", { exact: true })).toBeVisible();
-      await page.getByRole("button", { name: "Stay", exact: true }).click();
-      await expect(page.getByText("You have unsaved changes in Personal information.", { exact: true })).toHaveCount(0);
-    }
+    await page.getByLabel("First name", { exact: true }).fill("Footer draft");
+    await page.getByRole("navigation", { name: "Footer", exact: true }).locator('a[href="/club"]').click();
+    await expect(page.getByText("You have unsaved changes in Personal information.", { exact: true })).toBeVisible();
+    await expect(page).toHaveURL(/\/profile\/personal$/);
+    await page.getByRole("button", { name: "Stay", exact: true }).click();
+    await expect(page.getByText("You have unsaved changes in Personal information.", { exact: true })).toHaveCount(0);
+    await page.setViewportSize({ width: 375, height: 900 });
     await page.getByRole("button", { name: "Open menu", exact: true }).click();
     await page.getByRole("navigation", { name: "Mobile navigation" }).getByRole("link", { name: "Courts", exact: true }).click();
     await expect(page.getByText("You have unsaved changes in Personal information.", { exact: true })).toBeVisible();

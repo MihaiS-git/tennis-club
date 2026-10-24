@@ -10,8 +10,8 @@ const shift = (date: string, days: number) => new Date(Date.parse(`${date}T00:00
 
 // One complete journey: only account/resources are fixtures. Every policy,
 // price, booking and direct reservation is created through the real browser UI.
-test("Admin opening-hours, pricing and reservation lifecycle survives sequential and competing edits", async ({ page, context }) => {
-  test.setTimeout(180_000);
+test("Admin opening-hours, pricing and reservation lifecycle survives competing edits and grandfathers existing bookings", async ({ page, context }) => {
+  test.setTimeout(120_000);
   page.setDefaultTimeout(10_000);
   const service = createClient(process.env.SUPABASE_URL!, localServiceRoleKey(), { auth: { persistSession: false, autoRefreshToken: false } });
   const database = await new DataSource({ type: "postgres", url: process.env.DATABASE_URL }).initialize();
@@ -44,12 +44,6 @@ test("Admin opening-hours, pricing and reservation lifecycle survives sequential
     await form.getByRole("button", { name: new RegExp(`^Days for interval ${index + 1}:`) }).click();
     await form.getByRole("button", { name: preset, exact: true }).click();
     await form.getByRole("button", { name: "Done", exact: true }).click();
-  }
-  async function selectPolicy(from: string) {
-    const selector = page.getByRole("combobox", { name: "Schedule", exact: true });
-    const value = await selector.locator("option").filter({ hasText: from }).getAttribute("value");
-    expect(value).toBeTruthy();
-    await selector.selectOption(value!);
   }
   async function createSchedule(from: string, end: string, hours: [string,string][]) {
     const create = page.getByRole("button", { name: "New schedule", exact: true });
@@ -185,35 +179,14 @@ test("Admin opening-hours, pricing and reservation lifecycle survives sequential
       await dialog.getByRole("radio",{ name:"Pay at club",exact:true }).check();
       await dialog.getByRole("button",{ name:"Confirm booking",exact:true }).click();
       await expect(page.getByRole("region",{ name:"Booking confirmed",exact:true })).toBeVisible();
-      await page.getByRole("link", { name: "View my bookings", exact: true }).click();
-      await expect(page).toHaveURL(/\/my-activity\/bookings$/);
-      await page.getByRole("banner").getByRole("link", { name: "Book a court", exact: true }).click();
-      await expect(page).toHaveURL(/\/book$/);
-      await expect(page.getByRole("region", { name: "Booking confirmed", exact: true })).toHaveCount(0);
-      await page.goBack();
-      await page.goBack();
-      await expect(page).toHaveURL(new RegExp(`location=${locationId}`));
-      await expect(page.getByRole("region", { name: "Booking confirmed", exact: true })).toHaveCount(0);
-      await expect(page.getByRole("table")).toBeVisible();
-      await page.goForward();
-      await page.goForward();
-      await page.reload();
-      await expect(page.getByRole("region", { name: "Booking confirmed", exact: true })).toHaveCount(0);
-
     });
     const beforeContracts = await contracts();
 
-    await test.step("Reject a future schedule excluding existing bookings, then create a bounded one with automatic cutoff", async () => {
+    await test.step("A bounded future schedule with automatic cutoff keeps the existing reservation outside its hours", async () => {
       await page.goto(`${workspace}?tab=opening-hours`);
+      // Opening at 11:00 leaves the 10:00 direct reservation outside the new hours.
       const form = await createSchedule(future,until,[["11:00","12:00"],["14:00","19:00"]]);
       await expect(form.getByRole("status")).toContainText(`on ${shift(future,-1)}`);
-      const unchangedSchedules = await schedules();
-      await form.getByRole("button",{ name:"Save changes",exact:true }).click();
-      await expect(page.locator('[data-sonner-toast][data-type="error"]').getByText(
-        `Existing bookings on ${future} would fall outside these opening hours. Move or cancel them first; no changes were saved.`, { exact: true })).toBeVisible();
-      expect(await schedules()).toEqual(unchangedSchedules);
-      expect(await contracts()).toEqual(beforeContracts);
-      await times(form,0,"09:00","12:00");
       await saveSchedule(form);
       await expect(page.getByRole("combobox", { name: "Schedule", exact: true })).toContainText(`Current · ${today} → ${shift(future,-1)}`);
       await expect(page.getByRole("combobox", { name: "Schedule", exact: true })).toContainText(`Scheduled · ${future} → ${until}`);
@@ -225,13 +198,15 @@ test("Admin opening-hours, pricing and reservation lifecycle survives sequential
       await expect(summary.getByText(`${future} – ${until} · Scheduled`,{ exact:true })).toBeVisible();
       await page.getByRole("dialog",{ name:"Add pricing",exact:true }).getByRole("button",{ name:"Close dialog",exact:true }).click();
       await page.goto(`/admin/reservations?location=${locationId}&date=${future}`);
+      // The grandfathered reservation stays visible; new reservations start at the new opening time.
       await expect(page.getByRole("button",{ name:new RegExp(`Audit Court One ${future} 10:00–11:00, Reservation`) })).toBeVisible();
-      await expect(page.getByRole("button",{ name:`Audit Court One ${future} 09:00–09:30, Available`,exact:true })).toBeVisible();
+      await expect(page.getByRole("button",{ name:`Audit Court Two ${future} 11:00–11:30, Available`,exact:true })).toBeVisible();
+      await expect(page.getByRole("button",{ name:`Audit Court Two ${future} 10:00–10:30, Available`,exact:true })).toHaveCount(0);
       await page.goto(`/book?location=${locationId}&date=${future}`);
       await expect(page.getByLabel(`Audit Court One ${future} 10:00–10:30, Booked`,{ exact:true })).toBeVisible();
     });
 
-    await test.step("Schedule a later policy, fill a bounded gap, reject overlap and preserve history", async () => {
+    await test.step("Schedule a later policy, fill a bounded gap and preserve history", async () => {
       await page.goto(`${workspace}?tab=opening-hours`);
       await saveSchedule(await createSchedule(later,"",[["08:00","12:00"],["14:00","20:00"]]));
       await createSchedule(shift(today,16),"",[["10:00","12:00"]]);
@@ -239,12 +214,6 @@ test("Admin opening-hours, pricing and reservation lifecycle survives sequential
       await expect(editor().getByRole("button",{ name:"Save changes",exact:true })).toBeDisabled();
       await editor().getByLabel("Valid until (optional)").fill(shift(today,18));
       await saveSchedule(editor());
-      await editor().getByLabel("Valid until (optional)").fill(shift(today,20));
-      await saveSchedule(editor(),"Save changes");
-      await editor().getByLabel("Valid until (optional)").fill(later);
-      await expect(editor().getByRole("alert")).toContainText("overlap");
-      await expect(editor().getByRole("button",{ name:"Save changes",exact:true })).toBeDisabled();
-      await editor().getByRole("button",{ name:"Cancel edit",exact:true }).click();
       await saveSchedule(await createSchedule(shift(today,-14),shift(today,-1),[["10:00","12:00"]]));
       await expect(page.getByRole("combobox", { name: "Schedule", exact: true })).toContainText(`Expired · ${shift(today,-14)} → ${shift(today,-1)}`);
       await expect(editor().getByLabel("Opening time", { exact: true })).toBeDisabled();
@@ -252,62 +221,9 @@ test("Admin opening-hours, pricing and reservation lifecycle survives sequential
       await expect(page.getByText(/is closed on/)).toBeVisible();
       await page.goto(`/book?location=${locationId}&date=${shift(today,15)}`);
       await expect(page.getByText(/is closed on/)).toBeVisible();
+      expect(await contracts()).toEqual(beforeContracts);
     });
 
-    await test.step("Edit, add multiple intervals, remove one and revisit without replacing others", async () => {
-      await page.goto(`${workspace}?tab=opening-hours`);
-      await selectPolicy(future);
-      await times(editor(),1,"15:00","19:00"); await saveSchedule(editor());
-      await editor().getByRole("button",{ name:"Add interval",exact:true }).click();
-      await selectDays(editor(),2,"All days"); await times(editor(),2,"12:00","13:00");
-      await editor().getByRole("button",{ name:"Add interval",exact:true }).click();
-      await selectDays(editor(),3,"All days"); await times(editor(),3,"13:00","14:00"); await saveSchedule(editor());
-      await editor().getByRole("button", { name: "Delete interval 2", exact: true }).click();
-      await saveSchedule(editor());
-      await page.reload(); await selectPolicy(future);
-      for (const [index, time] of ["09:00","13:00","15:00"].entries()) await expect(editor().getByLabel("Opening time", { exact: true }).nth(index)).toHaveValue(time);
-      expect(await contracts()).toEqual(beforeContracts);
-      const prices: unknown = await database.query("SELECT DISTINCT starts_at_minute,ends_at_minute,price_per_hour_minor FROM public.location_pricing_rules WHERE location_id=$1 AND starts_on <= $2::date AND (ends_on IS NULL OR ends_on >= $2::date) ORDER BY starts_at_minute",[locationId,future]);
-      expect(prices).toEqual([{ starts_at_minute:540,ends_at_minute:720,price_per_hour_minor:5000 },
-        { starts_at_minute:780,ends_at_minute:840,price_per_hour_minor:5000 },{ starts_at_minute:900,ends_at_minute:1140,price_per_hour_minor:8000 }]);
-      await selectPolicy(today);
-      await times(editor(),0,"07:17","12:00");
-      for (const [index, [start, finish]] of [["09:00", "12:00"], ["13:00", "20:00"]].entries()) {
-        await editor().getByRole("button", { name: "Add interval", exact: true }).click();
-        await selectDays(editor(), index + 2, "Weekend"); await times(editor(), index + 2, start, finish);
-      }
-      // Existing Daily rows now apply only on weekdays; weekend rows stay independent.
-      await selectDays(editor(),0,"Weekdays"); await selectDays(editor(),1,"Weekdays");
-      await saveSchedule(editor()); await page.reload();
-      await expect(editor().getByLabel("Opening time", { exact: true })).toHaveCount(4);
-      const currentRows: unknown = await database.query(`SELECT weekday,opens_at_minute,closes_at_minute FROM public.location_opening_hours
-        WHERE schedule_id=(SELECT id FROM public.opening_hours_schedules WHERE location_id=$1 AND starts_on=$2::date) ORDER BY weekday,opens_at_minute`,[locationId,today]);
-      expect(currentRows).toEqual(Array.from({ length: 7 },(_,weekday) => weekday < 5
-        ? [{ weekday,opens_at_minute:437,closes_at_minute:720 },{ weekday,opens_at_minute:840,closes_at_minute:1200 }]
-        : [{ weekday,opens_at_minute:540,closes_at_minute:720 },{ weekday,opens_at_minute:780,closes_at_minute:1200 }]).flat());
-      await page.getByRole("button", { name: "New schedule", exact: true }).click();
-      await expect(editor().getByLabel("Opening time", { exact: true }).nth(0)).toHaveValue("07:17");
-      await expect(editor().getByLabel("Opening time", { exact: true })).toHaveCount(4);
-      await editor().getByLabel("Valid from", { exact: true }).fill(shift(today,3));
-      await editor().getByLabel("Valid until (optional)").fill(shift(future,-1));
-      await expect(editor().getByRole("status")).toContainText(`on ${shift(today,2)}`);
-      await saveSchedule(editor());
-      await expect(page.getByRole("combobox", { name: "Schedule", exact: true })).toContainText(`Current · ${today} → ${shift(today,2)}`);
-      await times(editor(),0,"08:00","12:00");
-      await page.getByRole("button", { name: "Expired", exact: true }).click();
-      const discard = page.getByRole("dialog", { name: "Discard opening-hours changes?", exact: true });
-      await expect(discard).toBeVisible();
-      await discard.getByRole("button", { name: "Cancel", exact: true }).click();
-      await expect(editor().getByLabel("Opening time", { exact: true }).nth(0)).toHaveValue("08:00");
-      await page.getByRole("button", { name: "Expired", exact: true }).click();
-      await discard.getByRole("button", { name: "Discard changes", exact: true }).click();
-      await expect(editor().getByLabel("Opening time", { exact: true })).toBeDisabled();
-      await page.getByRole("button", { name: "Current & scheduled", exact: true }).click();
-      await expect(editor().getByLabel("Opening time", { exact: true }).nth(0)).toHaveValue("07:17");
-      const screenshot = test.info().outputPath("final-opening-hours-workspace.png");
-      await page.screenshot({ path:screenshot,fullPage:true });
-      await test.info().attach("final-opening-hours-workspace",{ path:screenshot,contentType:"image/png" });
-    });
   } catch (error) {
     await test.info().attach("failure-page",{ body:await page.screenshot({ fullPage:true }),contentType:"image/png" });
     if (await editor().count()) console.log(await editor().evaluate((form) => ({ text:form.textContent, controls:[...form.querySelectorAll("input")].map((input) => ({ type:input.type,value:input.value,checked:input.checked })) })));

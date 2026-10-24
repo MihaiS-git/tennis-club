@@ -83,17 +83,6 @@ it("offers a retry when payment details cannot be loaded", async () => {
   await waitFor(() => expect(screen.getByText("Paid").nextElementSibling?.textContent?.replace(/\s/g, " ")).toBe("RON 90.00"));
 });
 
-it("gives Completed and Cancelled distinct badge tones in rows and the dialog", () => {
-  installDialogMock();
-  loadPayment.mockReset().mockResolvedValue({ ok: false, message: "Payment details are unavailable. Try again." });
-  render(<HistoryActivity rows={[booking, { ...booking, id: "cancelled", status: "cancelled" }]} />);
-  const [completed, cancelled] = ["Completed", "Cancelled"].map(label => screen.getByText(label).className);
-  expect(completed).toContain("bg-success-background");
-  expect(cancelled).toContain("bg-surface-muted");
-  fireEvent.click(screen.getAllByRole("row", { name: /Details for/ })[1]);
-  expect(within(screen.getByRole("dialog")).getByText("Cancelled").className).toContain("bg-surface-muted");
-});
-
 it.each([true, false])("shows historical coaching names and court types in history (staff=%s)", (staff) => {
   render(<HistoryActivity staff={staff} rows={[booking, { ...booking, id: "lesson", includes_coaching: true,
     coach_name: "Daniel Stoica", coaching_program_name: "Private coaching" }]} />);

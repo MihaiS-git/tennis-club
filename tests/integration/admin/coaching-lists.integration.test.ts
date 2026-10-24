@@ -3,6 +3,7 @@ import { afterAll, assert, expect, test } from "vitest";
 import { getDataSource } from "@/lib/db/data-source";
 import { listPriceGroupsPage, listProgramsPage } from "@/lib/db/repositories/coaching-lists.repository";
 import { priceFiltersSchema, programFiltersSchema } from "@/lib/coaching/admin-filters";
+import { participantRateProgramTypes } from "@/lib/coaching/validation";
 import { cleanupAuthFixtures, localFixtureClient } from "../auth-fixtures";
 
 const service = localFixtureClient();
@@ -25,7 +26,7 @@ test("program and grouped price queries filter, sort, count and paginate without
       "INSERT INTO public.locations(id,name,slug,timezone,currency) VALUES($1,$2,$3,'UTC',$4)", [location, `${prefix} location ${i}`, location, i ? "EUR" : "RON"]);
     for (const [i, program] of programs.entries()) {
       await runner.query(`INSERT INTO public.coaching_programs(id,name,description,program_type,court_rental_included,is_active)
-        VALUES($1,$2,'',$3,true,$4)`, [program, `${prefix} ${String(i).padStart(2, "0")}`, i % 2 ? "group" : "private", i % 3 !== 0]);
+        VALUES($1,$2,'',$3,true,$4)`, [program, `${prefix} ${String(i).padStart(2, "0")}`, i % 2 ? "semi_private" : "private", i % 3 !== 0]);
       await runner.query("INSERT INTO public.coaching_program_durations(program_id,duration_minutes) VALUES($1,60),($1,90)", [program]);
       await runner.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,amount_minor,currency)
         VALUES($1,60,$2,'RON')`, [program, (i + 1) * 100]);
@@ -53,7 +54,7 @@ test("program and grouped price queries filter, sort, count and paginate without
       expect(sort === "type" ? asc.programs[0].programType : asc.programs[0].isActive)
         .not.toEqual(sort === "type" ? desc.programs[0].programType : desc.programs[0].isActive);
     }
-    const prices = (input: Record<string, unknown>) => listPriceGroupsPage(runner.manager, priceFiltersSchema.parse(input));
+    const prices = (input: Record<string, unknown>) => listPriceGroupsPage(runner.manager, priceFiltersSchema.parse(input), participantRateProgramTypes);
     const groups = await prices({ search: prefix, currency: "RON", duration: "60" });
     expect(groups).toMatchObject({ total: 23, totalPages: 2 });
     expect(groups.groups.map(g => g.program_id)).toEqual(programs.slice(0, 20));
@@ -100,6 +101,41 @@ test("program and grouped price queries filter, sort, count and paginate without
     expect(listed.every(price => price.currency === "RON" && price.durationMinutes === 60 && programs.some(id => id === price.programId))).toBe(true);
     for (const page of ["0", "-1", "bad", "2.5"]) expect((await prices({ ...sorted, page })).page).toBe(1);
     expect((await prices({ ...sorted, page: "999" })).groups).toEqual(pages.at(-1)?.groups);
+  } finally {
+    await runner.rollbackTransaction(); await runner.release();
+  }
+});
+
+test("Group and Junior programs list one rate group per currency with every stored rate, never duration or coach targets", async () => {
+  const database = await getDataSource();
+  const runner = database.createQueryRunner();
+  await runner.connect(); await runner.startTransaction();
+  try {
+    const prefix = `Rates ${randomUUID()}`;
+    const [group, junior] = [randomUUID(), randomUUID()];
+    const location = randomUUID();
+    await runner.query("INSERT INTO public.locations(id,name,slug,timezone,currency) VALUES($1,$2,$3,'UTC','RON')", [location, `${prefix} location`, location]);
+    for (const [id, type, name] of [[group, "group", "Group"], [junior, "junior", "Junior"]]) {
+      await runner.query(`INSERT INTO public.coaching_programs(id,name,description,program_type,court_rental_included,is_active,min_participants,max_participants)
+        VALUES($1,$2,'',$3,false,true,3,6)`, [id, `${prefix} ${name}`, type]);
+      await runner.query("INSERT INTO public.coaching_program_durations(program_id,duration_minutes) VALUES($1,60),($1,90)", [id]);
+    }
+    // An obsolete duration price of a Group program stays stored but does not create a duration group.
+    await runner.query("INSERT INTO public.coaching_prices(program_id,duration_minutes,amount_minor,currency) VALUES($1,60,9999,'RON')", [group]);
+    await runner.query(`INSERT INTO public.coaching_participant_prices(program_id,participant_count,amount_minor,currency)
+      VALUES($1,3,6000,'RON'),($1,4,5000,'RON'),($1,8,1000,'RON')`, [group]);
+    const prices = (input: Record<string, unknown>) => listPriceGroupsPage(runner.manager, priceFiltersSchema.parse(input), participantRateProgramTypes);
+    const result = await prices({ search: prefix, currency: "RON", sort: "amount", dir: "asc" });
+    expect(result.groups).toEqual([
+      { program_id: group, currency: "RON", duration_minutes: null },
+      { program_id: junior, currency: "RON", duration_minutes: null },
+    ]);
+    expect(result.prices).toEqual([]);
+    // The rate outside the 3–6 range is listed so it can be removed, but does not set the lowest amount.
+    expect(result.participantPrices.map(price => [price.participantCount, price.amountMinor])).toEqual([[3, 6000], [4, 5000], [8, 1000]]);
+    expect((await prices({ search: prefix, currency: "RON", duration: "60" })).total).toBe(0);
+    expect((await prices({ search: prefix, currency: "RON", scope: "coach" })).total).toBe(0);
+    expect((await prices({ search: prefix, currency: "RON", scope: "club" })).groups.map(g => g.program_id)).toEqual([group]);
   } finally {
     await runner.rollbackTransaction(); await runner.release();
   }

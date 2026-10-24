@@ -8,7 +8,7 @@ import { listPublicLocationsWithCourts } from "@/lib/courts/public";
 import { EditorialHero } from "../editorial-hero";
 import styles from "../page.module.css";
 import { PageSectionNav } from "../page-section-nav";
-import { CoachingCoaches, CoachingPrices, CoachingPrograms } from "./coaching-sections";
+import { CoachingCoaches, CoachingGroupPrices, CoachingPrices, CoachingPrograms } from "./coaching-sections";
 
 export const metadata: Metadata = {
   title: "Coaching | Tennis Club",
@@ -19,6 +19,7 @@ const sections = [
   { id: "programs", label: "Programs" },
   { id: "coaches", label: "Coaches" },
   { id: "prices", label: "Prices" },
+  { id: "group-prices", label: "Group & junior" },
   { id: "how-it-works", label: "How it works" },
   { id: "faq", label: "FAQ" },
 ];
@@ -27,7 +28,7 @@ const steps = [
   { title: "Choose a program", text: "Each program describes who it suits, how long a lesson lasts, how many players take part and whether the court is included in the price." },
   { title: "Meet the coaches", text: "Coach profiles show their background, specialties, the languages they coach in, where they teach and the programs they offer." },
   { title: "Check the price", text: "Club prices apply at every location and are charged in the location’s currency. Where a coach has an individual price, it is shown on their profile." },
-  { title: "Choose a lesson", text: "Choose your location, coach and lesson length, then select an available court and time. Pay online to confirm your lesson." },
+  { title: "Choose a lesson", text: "For a Private or Semi-private lesson, choose your location, coach and lesson length, then select an available court and time. Pay online to confirm your lesson. Group and Junior sessions are arranged with the coach or club." },
 ];
 
 const questions = [
@@ -35,7 +36,7 @@ const questions = [
   { question: "Is the court included in the price?", answer: "Each program states whether court rental is included. Where it is not included, the price shown covers the coaching only." },
   { question: "Why do some coaches have a different price?", answer: "The club sets a standard price for each program and lesson length. Some coaches have an individual price, also set by the club, which is shown on their profile and in the price list." },
   { question: "Why are prices shown in different currencies?", answer: "Each lesson is charged in its location’s currency. Prices are set separately in each currency and are never converted." },
-  { question: "Can I book or pay for a lesson online?", answer: "Private and Semi-private lessons use the booking timetable and one online payment for the complete session. Group and Junior programs are not available for online booking." },
+  { question: "Can I book or pay for a lesson online?", answer: "Private and Semi-private lessons use the booking timetable and one online payment for the complete session. Group and Junior sessions cannot be booked or paid online: they are organized by the coach or club and paid at the club." },
 ];
 
 // One public read per request, shared by every data-backed section. Only
@@ -121,7 +122,7 @@ export default function CoachingPage() {
             <p className={`${eyebrowClassName} text-accent-on-dark`}>Prices</p>
             <h2 id="coaching-prices-title" className={`${headingClassName} mt-4 max-w-[12ch]`}>What a lesson costs.</h2>
             <p className={`${bodyClassName} mt-6 max-w-xl text-ivory`}>
-              Prices are per lesson, the same at every location that charges in that currency. Each line states whether court rental is included.
+              Private and Semi-private prices are per lesson, the same at every location that charges in that currency. Each line states whether court rental is included.
             </p>
             <p className="mt-4 max-w-xl font-sans text-sm leading-6 text-ivory">
               The club price applies to every coach unless a coach has an individual price, listed beneath it.
@@ -130,6 +131,33 @@ export default function CoachingPage() {
           <Suspense fallback={<p role="status" className="border-t border-ivory/30 pt-5 font-sans text-base text-ivory">Loading prices…</p>}>
             <CoachingPrices coaching={coaching} />
           </Suspense>
+        </div>
+      </section>
+
+      <section id="group-prices" aria-labelledby="coaching-group-prices-title" className={`${sectionClassName} bg-chalk`}>
+        <div className="mx-auto max-w-7xl">
+          <div className={`${styles.reveal} grid gap-6 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:items-end lg:gap-16`}>
+            <div>
+              <p className={`${eyebrowClassName} text-accent`}>Coaching prices</p>
+              <h2 id="coaching-group-prices-title" className={`${headingClassName} mt-4 max-w-[13ch] text-foreground`}>Group and junior sessions.</h2>
+            </div>
+            <div className={`${bodyClassName} max-w-xl space-y-3 text-muted-foreground`}>
+              <p>Group and Junior sessions are organized by the coach or the club, who also reserve the court. They cannot be booked online.</p>
+              <p className="font-sans text-sm leading-6 md:text-base md:leading-7">
+                The published club rates are indicative and shown <strong className="font-semibold text-foreground">per person for 60 minutes</strong>.
+                Court rental arrangements and any additional costs are confirmed by the club. To take part, contact the club or your coach;
+                payment is made at the club.
+              </p>
+            </div>
+          </div>
+          <div className="mt-10 md:mt-14">
+            <Suspense fallback={<p role="status" className="border-t border-border pt-5 font-sans text-base text-muted-foreground">Loading prices…</p>}>
+              <CoachingGroupPrices coaching={coaching} />
+            </Suspense>
+          </div>
+          <Link href="/club#visit" className={`${styles.editorialLink} mt-6 inline-flex min-h-11 w-fit items-center font-sans text-base font-semibold text-primary transition-colors hover:text-accent focus-visible:rounded-control`}>
+            <span className={`${styles.editorialLabel} underline decoration-accent underline-offset-8`}>Contact the club</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
+          </Link>
         </div>
       </section>
 

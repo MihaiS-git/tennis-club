@@ -25,6 +25,18 @@ const facts: PublicCoachingFacts = {
     { program_id: ids.program, duration_minutes: 60, coach_user_id: ids.bo, amount_minor: 15000, currency: "RON" },
     // No visible location charges in GBP, so it is never shown.
     { program_id: ids.program, duration_minutes: 60, coach_user_id: null, amount_minor: 9000, currency: "GBP" },
+    // Obsolete duration prices of a Group program (club and coach) are never used.
+    { program_id: ids.group, duration_minutes: 90, coach_user_id: null, amount_minor: 7000, currency: "RON" },
+    { program_id: ids.group, duration_minutes: 90, coach_user_id: ids.bo, amount_minor: 6500, currency: "RON" },
+  ],
+  participant_prices: [
+    { program_id: ids.group, participant_count: 3, amount_minor: 8000, currency: "RON" },
+    { program_id: ids.group, participant_count: 5, amount_minor: 6000, currency: "RON" },
+    { program_id: ids.group, participant_count: 4, amount_minor: 1800, currency: "EUR" },
+    // Outside the current 3–6 range: stored history, not a current rate.
+    { program_id: ids.group, participant_count: 8, amount_minor: 4000, currency: "RON" },
+    // No visible location charges in GBP.
+    { program_id: ids.group, participant_count: 3, amount_minor: 7000, currency: "GBP" },
   ],
 };
 const visible = [{ id: ids.east, name: "East", currency: "RON" as const }, { id: ids.west, name: "West", currency: "EUR" as const }];
@@ -34,7 +46,23 @@ describe("projectPublicCoaching", () => {
 
   it("shows club-wide prices only in the currencies of visible locations", () => {
     expect(result.programs[0].prices).toEqual([{ durationMinutes: 60, amountMinor: 12000, currency: "RON" }]);
+    expect(result.programs[0].participantPrices).toEqual([]);
+  });
+
+  it("publishes Group/Junior club rates by player count, per currency, inside the current range only", () => {
     expect(result.programs[1].prices).toEqual([]);
+    // Missing counts (4 and 6 in RON) are not filled in; EUR is kept separate from RON.
+    expect(result.programs[1].participantPrices).toEqual([
+      { participantCount: 4, amountMinor: 1800, currency: "EUR" },
+      { participantCount: 3, amountMinor: 8000, currency: "RON" },
+      { participantCount: 5, amountMinor: 6000, currency: "RON" },
+    ]);
+  });
+
+  it("publishes no Group/Junior rates when the program has no valid player range", () => {
+    const incomplete = projectPublicCoaching({ ...facts, programs: facts.programs.map((program) =>
+      program.id === ids.group ? { ...program, max_participants: null } : program) }, visible);
+    expect(incomplete.programs[1].participantPrices).toEqual([]);
   });
 
   it("lists coach locations, programs and only their individual rates", () => {
@@ -51,7 +79,7 @@ describe("projectPublicCoaching", () => {
   });
 
   it("renders nothing invented when nothing is configured", () => {
-    expect(projectPublicCoaching({ programs: [], coaches: [], prices: [] }, visible)).toEqual({ programs: [], coaches: [] });
+    expect(projectPublicCoaching({ programs: [], coaches: [], prices: [], participant_prices: [] }, visible)).toEqual({ programs: [], coaches: [] });
   });
 });
 
@@ -60,11 +88,10 @@ describe("projectPublicCoachProfile", () => {
     const bo = projectPublicCoachProfile(facts, visible, ids.bo.toUpperCase());
     expect(bo?.programs.map((program) => [program.name, program.durations, program.courtRentalIncluded])).toEqual([["Group", [90], false], ["Private", [60], true]]);
     expect(bo?.locations).toEqual([{ id: ids.east, name: "East" }, { id: ids.west, name: "West" }]);
+    // Group lessons have no coach lesson prices: Bo's obsolete Group override is not listed.
     expect(bo?.lessons.map((lesson) => [lesson.currency, lesson.programName, lesson.durationMinutes, lesson.price])).toEqual([
       // West charges in EUR; the RON club default is never converted.
-      ["EUR", "Group", 90, null],
       ["EUR", "Private", 60, null],
-      ["RON", "Group", 90, null],
       ["RON", "Private", 60, { amountMinor: 15000, currency: "RON", source: "coach" }],
     ]);
     const ana = projectPublicCoachProfile(facts, visible, ids.ana);

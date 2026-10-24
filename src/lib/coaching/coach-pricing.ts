@@ -15,7 +15,7 @@ import { adminCoachingCurrencies, coachIneligibility, type AdminCoachingCurrency
 import { requireActiveCoach } from "./authorization";
 import { resolveCoachingPrice, type ResolvedCoachingPrice } from "./pricing";
 import {
-  coachingFieldErrors, coachingPriceMutationSchema, coachingPriceRemovalSchema, type CoachingMutationResult,
+  coachingFieldErrors, coachingPriceMutationSchema, coachingPriceRemovalSchema, isOnlineCoachingProgramType, type CoachingMutationResult,
 } from "./validation";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
@@ -25,7 +25,8 @@ export type CoachPricingRow = {
   program_id: string; program_name: string; program_active: boolean; duration_minutes: number; currency: LocationCurrency;
   club_amount_minor: number | null; coach_amount_minor: number | null; effective: ResolvedCoachingPrice | null;
 };
-export type CoachPricingView = { currencies: AdminCoachingCurrency[]; rows: CoachPricingRow[] };
+// Assigned Group/Junior programs are listed by name only: their rates belong to the club.
+export type CoachPricingView = { currencies: AdminCoachingCurrency[]; rows: CoachPricingRow[]; clubPricedPrograms: { id: string; name: string }[] };
 
 // Pricing currencies are those of the coach's active assigned locations; locations sharing
 // a currency share its prices. A currency still holding this coach's own override stays
@@ -33,16 +34,20 @@ export type CoachPricingView = { currencies: AdminCoachingCurrency[]; rows: Coac
 async function readOwnPricing(manager: EntityManager, coachUserId: string): Promise<CoachPricingView | null> {
   const profile = await coaching.findCoachProfile(manager, coachUserId);
   if (!profile) return null;
-  const [programIds, locations, programs] = await readIndependently(manager, [
+  const [assignedIds, locations, allPrograms] = await readIndependently(manager, [
     () => coaching.listCoachProgramIds(manager, profile.userId), () => listCoachAvailabilityLocations(manager, profile.locationIds),
     () => coaching.listCoachingPrograms(manager),
   ]);
+  // Only Private/Semi-private programs have coach overrides; obsolete Group/Junior overrides are not shown.
+  const assigned = allPrograms.filter((program) => assignedIds.includes(program.id));
+  const programs = assigned.filter((program) => isOnlineCoachingProgramType(program.programType));
+  const programIds = programs.map((program) => program.id);
   const prices = programIds.length ? (await coaching.listCoachingPrices(manager, { programIds }))
     .filter((price) => price.coachUserId === null || price.coachUserId === profile.userId) : [];
   const currencies = adminCoachingCurrencies(locations.filter((location) => location.isActive && location.archivedAt === null),
     prices.filter((price) => price.coachUserId !== null));
   const amount = (price: { amountMinor: number } | undefined) => price?.amountMinor ?? null;
-  const rows = programs.filter((program) => programIds.includes(program.id)).flatMap((program) => program.durations.flatMap((duration) =>
+  const rows = programs.flatMap((program) => program.durations.flatMap((duration) =>
     currencies.map(({ currency }): CoachPricingRow => {
       const matching = prices.filter((price) => price.programId === program.id && price.durationMinutes === duration && price.currency === currency);
       return {
@@ -52,7 +57,9 @@ async function readOwnPricing(manager: EntityManager, coachUserId: string): Prom
         effective: resolveCoachingPrice(matching, { programId: program.id, durationMinutes: duration, currency, coachUserId: profile.userId }),
       };
     })));
-  return { currencies, rows };
+  const clubPricedPrograms = assigned.filter((program) => !isOnlineCoachingProgramType(program.programType))
+    .map((program) => ({ id: program.id, name: program.name }));
+  return { currencies, rows, clubPricedPrograms };
 }
 
 // The signed-in coach's prices; null until an Admin creates their coaching profile.
@@ -108,6 +115,8 @@ async function applyOwnPrice(manager: EntityManager, key: coaching.CoachingPrice
   const program = await coaching.lockCoachingProgram(manager, key.programId, "pessimistic_read");
   if (!program || !program.durations.includes(key.durationMinutes)) return { ok: false, reason: "invalid-program" };
   if (!profile.programIds.includes(program.id)) return { ok: false, reason: "not-offered" };
+  // Group/Junior rates are club-only; the hidden UI control is not the only guard.
+  if (!isOnlineCoachingProgramType(program.programType)) return { ok: false, reason: "club-priced" };
   if (amount === null) throw new Error("Price amount missing");
   return { ok: true, id: await coaching.upsertCoachingPrice(manager, key, amount, new Date()) };
 }

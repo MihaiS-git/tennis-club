@@ -10,6 +10,15 @@ const captureReceiptFixtureSchema = z.strictObject({
   currency: z.enum(["EUR", "USD", "GBP", "RON", "CHF"]),
 });
 
+// Trigger bypasses rely on the caller's transaction to roll the DDL back on any failure;
+// a pooled manager would autocommit DISABLE TRIGGER and leave it behind after an error.
+function assertTransactionManager(manager: EntityManager) {
+  const runner = manager.queryRunner;
+  if (!runner || runner.isReleased || !runner.isTransactionActive) {
+    throw new Error("Trigger-bypass fixtures require an EntityManager bound to an active transaction.");
+  }
+}
+
 export async function insertCaptureReceiptFixture(manager: EntityManager, input: unknown) {
   assertTestEnvironment();
   const value = captureReceiptFixtureSchema.parse(input);
@@ -25,6 +34,7 @@ export async function insertCaptureReceiptFixture(manager: EntityManager, input:
 // Caller owns a transaction; privileged DDL is rolled back on any failure.
 export async function setAdjustmentExpiryFixture(manager: EntityManager, id: string, expiresAt: string) {
   assertTestEnvironment();
+  assertTransactionManager(manager);
   await manager.query("ALTER TABLE public.booking_adjustments DISABLE TRIGGER booking_adjustments_immutable");
   await manager.query(`UPDATE public.booking_adjustments SET expires_at=$2::timestamptz,
     capture_accepted_at=CASE WHEN capture_accepted_at IS NULL THEN NULL
@@ -36,6 +46,7 @@ export async function setAdjustmentExpiryFixture(manager: EntityManager, id: str
 // production immutable-request trigger.
 export async function setPaymentAttemptExpiryFixture(manager: EntityManager, id: string, expiresAt: string) {
   assertTestEnvironment();
+  assertTransactionManager(manager);
   await manager.query("ALTER TABLE public.payment_attempts DISABLE TRIGGER payment_attempts_immutable");
   await manager.query("UPDATE public.payment_attempts SET expires_at=$2::timestamptz WHERE id=$1", [id, expiresAt]);
   await manager.query("ALTER TABLE public.payment_attempts ENABLE TRIGGER payment_attempts_immutable");
@@ -44,6 +55,7 @@ export async function setPaymentAttemptExpiryFixture(manager: EntityManager, id:
 // Disposable fixtures must delete evidence explicitly; production FKs never cascade it.
 export async function cleanupBookingEvidence(manager: EntityManager, selection: { bookingIds: string[] } | { reservationIds: string[] } | { courtIds: string[] }) {
   assertTestEnvironment();
+  assertTransactionManager(manager);
   // Isolated fixture teardown is privileged, serialized and transaction-scoped.
   // No runtime bypass setting exists for immutable revisions.
   await manager.query("SET CONSTRAINTS ALL DEFERRED");

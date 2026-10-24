@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 import type { PublicCoach, PublicCoaching, PublicCoachingProgram } from "@/lib/coaching/public";
-import { coachingProgramTypeLabels, formatCoachingDuration, formatParticipants } from "@/lib/coaching/validation";
+import { coachingProgramTypeLabels, formatCoachingDuration, formatParticipants, hasParticipantRates } from "@/lib/coaching/validation";
 import { formatMoney, type LocationCurrency } from "@/lib/pricing/money";
 import styles from "../page.module.css";
 
@@ -36,10 +36,11 @@ function Empty({ children, dark = false }: { children: React.ReactNode; dark?: b
   return <p className={`max-w-xl border-t pt-5 font-sans text-base leading-7 ${dark ? "border-ivory/30 text-ivory" : "border-border text-muted-foreground"}`}>{children}</p>;
 }
 
-// Lowest club price per currency; locations may charge in different currencies.
-export function startingPrices(program: Pick<PublicCoachingProgram, "prices">) {
+// Lowest club price per currency; locations may charge in different currencies. Group/Junior
+// programs use their club rates per person per 60 minutes.
+export function startingPrices(program: Pick<PublicCoachingProgram, "prices" | "participantPrices">) {
   const lowest = new Map<LocationCurrency, number>();
-  for (const price of program.prices) {
+  for (const price of [...program.prices, ...program.participantPrices]) {
     const current = lowest.get(price.currency);
     if (current === undefined || price.amountMinor < current) lowest.set(price.currency, price.amountMinor);
   }
@@ -69,7 +70,9 @@ export async function CoachingPrograms({ coaching }: { coaching: Promise<PublicC
           <dt className="text-muted-foreground">Court</dt>
           <dd className="font-medium text-foreground">{rentalLabel(program.courtRentalIncluded)}</dd>
           <dt className="text-muted-foreground">Price</dt>
-          <dd className="font-medium text-foreground">{from.length ? `From ${from.join(" · ")}` : "Not yet published"}</dd>
+          <dd className="font-medium text-foreground">{from.length ? `From ${from.join(" · ")}${hasParticipantRates(program.type) ? " per person / 60 min" : ""}` : "Not yet published"}</dd>
+          {hasParticipantRates(program.type) && <><dt className="text-muted-foreground">Booking</dt>
+            <dd className="font-medium text-foreground">Arranged with the coach or club · Paid at the club</dd></>}
         </dl>
       </li>;
     })}
@@ -190,4 +193,43 @@ export async function CoachingPrices({ coaching }: { coaching: Promise<PublicCoa
       </ul>
     </section>)}
   </div>;
+}
+
+// Group and Junior club rates per person per 60 minutes, one table per program and currency.
+// Only persisted club rates inside the program's current player range are listed; there are
+// no coach rates for these programs and missing player counts are not filled in.
+export async function CoachingGroupPrices({ coaching }: { coaching: Promise<PublicCoaching> }) {
+  const data = await settle(coaching);
+  if (!data) return <Unavailable />;
+  const programs = data.programs.filter((program) => hasParticipantRates(program.type));
+  if (!programs.length) return <Empty>No group or junior programs are published at the moment.</Empty>;
+  return <ul aria-label="Group and junior coaching prices" className="grid gap-x-8 md:grid-cols-2">
+    {programs.map((program) => {
+      const participants = formatParticipants(program.minParticipants, program.maxParticipants);
+      const currencies = [...new Set(program.participantPrices.map((price) => price.currency))].sort();
+      return <li key={program.id} className="flex flex-col border-t-2 border-accent py-7">
+        <p className={`${eyebrowClassName} text-accent`}>{coachingProgramTypeLabels[program.type]} coaching</p>
+        <h3 className="mt-3 font-heading text-2xl font-semibold tracking-[-0.025em] text-primary md:text-3xl">{program.name}</h3>
+        {program.description && <p className="mt-3 max-w-xl whitespace-pre-line font-sans text-base leading-7 text-muted-foreground">{program.description}</p>}
+        <dl className="mt-5 grid grid-cols-[7.5rem_minmax(0,1fr)] gap-x-4 gap-y-2 font-sans text-sm leading-6">
+          {participants && <><dt className="text-muted-foreground">Group size</dt><dd className="font-medium text-foreground">{participants}</dd></>}
+          {program.durations.length > 0 && <><dt className="text-muted-foreground">Session length</dt>
+            <dd className="font-medium text-foreground">{program.durations.map(formatCoachingDuration).join(" · ")}</dd></>}
+        </dl>
+        {currencies.length ? currencies.map((currency) => <table key={currency} className="mt-5 w-full max-w-md font-sans text-sm"
+          aria-label={`${program.name} club prices in ${currency}`}>
+          <thead className="border-b border-border text-left text-xs font-semibold text-muted-foreground">
+            <tr><th scope="col" className="py-2 pr-4">Number of players</th>
+              <th scope="col" className="py-2 text-right">Club price per person / 60 min</th></tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {program.participantPrices.filter((price) => price.currency === currency).map((price) => <tr key={price.participantCount}>
+              <td className="py-2 pr-4 tabular-nums text-foreground">{price.participantCount}</td>
+              <td className="py-2 text-right font-semibold tabular-nums text-foreground">{formatMoney(price.amountMinor, price.currency)}</td>
+            </tr>)}
+          </tbody>
+        </table>) : <p className="mt-5 font-sans text-sm leading-6 text-muted-foreground">Prices for this program have not been published yet. Contact the club for details.</p>}
+      </li>;
+    })}
+  </ul>;
 }

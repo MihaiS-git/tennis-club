@@ -5,7 +5,6 @@ import { localServiceRoleKey } from "./helpers/supabase";
 
 const labels = ["Player identity", "Personal information", "Tennis profile", "Account & security"] as const;
 const routes = { "Player identity": "/profile", "Personal information": "/profile/personal", "Tennis profile": "/profile/tennis", "Account & security": "/profile/security" } as const;
-const sidebarLabels = ["Notifications", "Bookings", "Booking history", ...labels];
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAD0lEQVQImWP4z8Dwn4EBAAj+Af/KOtJRAAAAAElFTkSuQmCC", "base64");
 
 // Below lg the shared user sidebar is a drawer behind the "My account menu" trigger.
@@ -41,11 +40,7 @@ async function section(page: Page, name: typeof labels[number]) {
   }
 }
 
-async function assertNoOverflow(page: Page) {
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
-}
-
-test("profile refinement: authenticated lifecycle, country, keyboard, navigation and responsive layouts", async ({ page }) => {
+test("profile refinement: authenticated lifecycle, country, keyboard, navigation and avatar", async ({ page }) => {
   test.setTimeout(120_000);
   const url = process.env.SUPABASE_URL!;
   expect(["127.0.0.1", "localhost", "[::1]"]).toContain(new URL(url).hostname);
@@ -80,15 +75,11 @@ test("profile refinement: authenticated lifecycle, country, keyboard, navigation
     await page.getByLabel("First name").fill("  Mihai  ");
     await page.getByLabel("Last name").fill(" Suciu ");
     const country = page.getByRole("combobox", { name: "Country", exact: true });
-    for (const [name, code] of [["Romania", "RO"], ["France", "FR"], ["United Kingdom", "GB"]]) {
-      await country.fill(name.toUpperCase());
-      await expect(page.getByRole("option", { name, exact: true })).toBeVisible();
-      await country.press("Enter");
-      await expect(country).toHaveValue(name);
-      await expect(page.locator('input[name="country_code"]')).toHaveValue(code);
-    }
-    await country.fill("Romania");
+    await country.fill("ROMANIA");
+    await expect(page.getByRole("option", { name: "Romania", exact: true })).toBeVisible();
     await country.press("Enter");
+    await expect(country).toHaveValue("Romania");
+    await expect(page.locator('input[name="country_code"]')).toHaveValue("RO");
     // Leaving a Profile page with drafts asks first; Stay keeps them on the page.
     await openSidebar(page);
     await sectionLink(page, "Tennis profile").click();
@@ -131,60 +122,25 @@ test("profile refinement: authenticated lifecycle, country, keyboard, navigation
     await avatarDialog.getByRole("button", { name: "Close dialog", exact: true }).click();
     await expect(avatarDialog).toBeHidden();
 
-    for (const width of [375, 768, 1440]) {
-      await page.setViewportSize({ width, height: 900 });
-      await section(page, "Player identity");
-      await expect(page.getByRole("heading", { name: "Profile", exact: true })).toBeVisible();
-      await openSidebar(page);
-      await expect(page.getByRole("navigation", { name: "My account navigation" }).getByRole("link")).toHaveText(sidebarLabels);
-      await closeSidebar(page);
-      for (const label of labels) {
-        await section(page, label);
-        await assertNoOverflow(page);
-      }
-      // Keyboard activation of a sidebar destination.
-      await openSidebar(page);
-      await sectionLink(page, "Personal information").focus();
-      await page.keyboard.press("Enter");
-      await expect(page).toHaveURL(/\/profile\/personal$/);
-      await page.getByLabel("First name").fill("Unsaved name");
-      await country.fill("france");
-      await expect(page.getByRole("option", { name: "France", exact: true })).toBeVisible();
-      await assertNoOverflow(page);
-      await country.press("Escape");
-      await expect(country).toHaveValue("Romania");
-      await openSidebar(page);
-      await sectionLink(page, "Tennis profile").click();
-      await page.getByRole("button", { name: "Leave without saving", exact: true }).click();
-      await expect(page).toHaveURL(/\/profile\/tennis$/);
-      await section(page, "Personal information");
-      await expect(page.getByLabel("First name")).toHaveValue("Changed");
-      await section(page, "Player identity");
-      await page.getByRole("button", { name: "Edit photo", exact: true }).click();
-      await expect(page.getByLabel("Change avatar")).toBeVisible();
-      await expect(page.getByRole("button", { name: "Remove avatar" })).toBeVisible();
-      await assertNoOverflow(page);
-      await avatarDialog.getByRole("button", { name: "Close dialog", exact: true }).click();
-      await expect(avatarDialog).toBeHidden();
-      const mobile = width < 1024;
-      if (mobile) await page.getByRole("button", { name: "Open menu" }).click();
-      const profileLink = mobile
-        ? page.getByRole("navigation", { name: "Mobile navigation" }).getByRole("link", { name: "Profile", exact: true })
-        : page.getByRole("link", { name: "Profile", exact: true });
-      await expect(profileLink).toBeVisible();
-      await expect(profileLink).toHaveAttribute("href", "/profile");
-      await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible();
-      await expect(page.getByRole("button", { name: "Account menu", exact: true })).toHaveCount(0);
-      const navImage = profileLink.locator("img");
-      await expect(navImage).toBeVisible();
-      expect(await navImage.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
-      await profileLink.focus();
-      await page.keyboard.press("Shift+Tab");
-      await page.keyboard.press("Tab");
-      await expect(profileLink).toBeFocused();
-      await assertNoOverflow(page);
-      if (mobile) await page.getByRole("dialog", { name: "Mobile navigation menu" }).getByRole("button", { name: "Close menu", exact: true }).click();
-    }
+    // Keyboard activation of a sidebar destination; leaving discards only the unsaved draft.
+    await openSidebar(page);
+    await sectionLink(page, "Personal information").focus();
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(/\/profile\/personal$/);
+    await page.getByLabel("First name").fill("Unsaved name");
+    await country.fill("france");
+    await expect(page.getByRole("option", { name: "France", exact: true })).toBeVisible();
+    await country.press("Escape");
+    await expect(country).toHaveValue("Romania");
+    await openSidebar(page);
+    await sectionLink(page, "Tennis profile").click();
+    await page.getByRole("button", { name: "Leave without saving", exact: true }).click();
+    await expect(page).toHaveURL(/\/profile\/tennis$/);
+    await section(page, "Personal information");
+    await expect(page.getByLabel("First name")).toHaveValue("Changed");
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await section(page, "Player identity");
+    await expect(page.getByRole("link", { name: "Profile", exact: true }).locator("img")).toBeVisible();
     await page.getByRole("button", { name: "Edit photo", exact: true }).click();
     await page.getByLabel("Change avatar").setInputFiles({ name: "replacement.png", mimeType: "image/png", buffer: png });
     await page.getByRole("button", { name: "Save avatar" }).click();

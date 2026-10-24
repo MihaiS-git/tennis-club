@@ -10,7 +10,7 @@ afterEach(() => { cleanup(); push.mockClear(); replace.mockClear(); refresh.mock
 const club = (amountMinor: number) => ({ amountMinor, currency: "RON" as const, source: "club" as const });
 const controls = (props: Partial<Parameters<typeof CoachingControls>[0]> = {}) => render(<CoachingControls locationId="one" date="2099-10-15"
   coaches={[{ id: "ana", displayName: "Ana" }, { id: "dan", displayName: "Dan" }]} coachId="ana" programId="private" durationMinutes={60}
-  programs={[{ id: "private", name: "Private", bookable: true }, { id: "technique", name: "Technique", bookable: true }]}
+  programs={[{ id: "private", name: "Private" }, { id: "technique", name: "Technique" }]} participants={{ min: 1, max: 4 }} participantCount={1}
   durations={[{ durationMinutes: 60, price: club(20000) }, { durationMinutes: 90, price: { amountMinor: 35000, currency: "RON", source: "coach" } }]}
   courtRentalIncluded={false} {...props} />);
 const lastPush = () => Object.fromEntries(new URL(push.mock.calls.at(-1)![0], "http://localhost").searchParams);
@@ -39,7 +39,8 @@ it("clears lesson choices when recovering from an invalid location", () => {
 it.each([
   ["Coach", "dan", { coach: "dan" }],
   ["Program", "technique", { coach: "ana", program: "technique" }],
-  ["Lesson duration", "90", { coach: "ana", program: "private", duration: "90" }],
+  ["Lesson duration", "90", { coach: "ana", program: "private", duration: "90", participants: "1" }],
+  ["Players", "3", { coach: "ana", program: "private", duration: "60", participants: "3" }],
 ] as const)("changing %s sends only the valid upstream selections for server defaults", (label, value, expected) => {
   controls();
   fireEvent.change(screen.getByRole("combobox", { name: label }), { target: { value } });
@@ -51,13 +52,16 @@ it("renders resolved defaults without navigation or a selected time", () => {
   expect((screen.getByRole("combobox", { name: "Coach" }) as HTMLSelectElement).value).toBe("ana");
   expect((screen.getByRole("combobox", { name: "Program" }) as HTMLSelectElement).value).toBe("private");
   expect((screen.getByRole("combobox", { name: "Lesson duration" }) as HTMLSelectElement).value).toBe("60");
+  expect((screen.getByRole("combobox", { name: "Players" }) as HTMLSelectElement).value).toBe("1");
   expect(push).not.toHaveBeenCalled();
   expect(screen.queryByRole("region", { name: "Selected interval" })).toBeNull();
 });
 
-it("orders Coach → Program → Duration and disables each selector until its prerequisite is chosen", () => {
-  controls({ coachId: "", programId: "", durationMinutes: 0, programs: [], durations: [] });
-  expect(screen.getAllByRole("combobox").map(select => select.getAttribute("aria-label"))).toEqual(["Coach", "Program", "Lesson duration"]);
+it("orders Coach → Program → Duration → Players and disables each selector until its prerequisite is chosen", () => {
+  controls({ coachId: "", programId: "", durationMinutes: 0, programs: [], durations: [], participants: null, participantCount: 0 });
+  expect(screen.getAllByRole("combobox").map(select => select.getAttribute("aria-label"))).toEqual(["Coach", "Program", "Lesson duration", "Players"]);
+  expect((screen.getByRole("combobox", { name: "Players" }) as HTMLSelectElement).disabled).toBe(true);
+  expect(screen.getByRole("combobox", { name: "Players" }).textContent).toBe("Choose a program first");
   expect((screen.getByRole("combobox", { name: "Coach" }) as HTMLSelectElement).disabled).toBe(false);
   expect((screen.getByRole("combobox", { name: "Program" }) as HTMLSelectElement).disabled).toBe(true);
   expect(screen.getByRole("combobox", { name: "Program" }).textContent).toBe("Choose a coach first");
@@ -68,15 +72,25 @@ it("orders Coach → Program → Duration and disables each selector until its p
   expect(screen.getByRole("combobox", { name: "Coach" }).textContent).toBe("No coaches at this location");
 });
 
-it("lists the coach's programs, marking those that cannot be booked online", () => {
-  controls({ programId: "", durationMinutes: 0, durations: [],
-    programs: [{ id: "private", name: "Private", bookable: true }, { id: "group", name: "Group", bookable: false }] });
+it("lists every assigned program as selectable, whatever its type", () => {
+  controls({ programId: "", durationMinutes: 0, durations: [], participants: null, participantCount: 0,
+    programs: [{ id: "private", name: "Private" }, { id: "group", name: "Group" }, { id: "junior", name: "Junior" }] });
   const options = [...(screen.getByRole("combobox", { name: "Program" }) as HTMLSelectElement).options];
-  expect(options.map(option => [option.text, option.disabled])).toEqual([["Choose a program", true], ["Private", false], ["Group (not bookable online)", true]]);
+  expect(options.map(option => [option.text, option.disabled])).toEqual([["Choose a program", true], ["Private", false], ["Group", false], ["Junior", false]]);
   cleanup();
   controls({ programId: "", durationMinutes: 0, durations: [], programs: [] });
   expect((screen.getByRole("combobox", { name: "Program" }) as HTMLSelectElement).disabled).toBe(true);
   expect(screen.getByRole("combobox", { name: "Program" }).textContent).toBe("No programs assigned");
+});
+
+it("offers exactly the program's configured participant counts", () => {
+  controls({ programId: "group", participants: { min: 3, max: 6 }, participantCount: 0 });
+  const players = screen.getByRole("combobox", { name: "Players" }) as HTMLSelectElement;
+  expect(players.value).toBe("");
+  expect([...players.options].map(option => option.text)).toEqual(["Choose the number of players", "3 players", "4 players", "5 players", "6 players"]);
+  cleanup();
+  controls({ participants: { min: 1, max: 1 }, participantCount: 1 });
+  expect([...(screen.getByRole("combobox", { name: "Players" }) as HTMLSelectElement).options].map(option => option.text)).toEqual(["Choose the number of players", "1 player"]);
 });
 
 it("shows each duration's effective price, the selected price source and court rental terms", () => {

@@ -7,7 +7,7 @@ import { listLocationCoachBookingAvailability } from "@/lib/db/repositories/coac
 import { mondayWeekday } from "@/lib/pricing/resolution";
 import type { LocationCurrency } from "@/lib/pricing/money";
 import type { PublicCoaching } from "./public";
-import { isCoachingDuration, isOnlineCoachingProgramType, type CoachingProgramType } from "./validation";
+import { coachingParticipantRange, isCoachingDuration, isOnlineCoachingProgramType, type OnlineCoachingProgramType } from "./validation";
 
 // Effective coaching amount for one duration in the location's currency:
 // the coach's override ?? the club default; null means unpriced (no checkout).
@@ -16,9 +16,9 @@ export type CoachingDurationOption = {
   price: { amountMinor: number; currency: LocationCurrency; source: "coach" | "club" } | null;
 };
 type CoachingProgramOption = {
-  id: string; name: string; type: CoachingProgramType; courtRentalIncluded: boolean;
-  // Private and Semi-private lessons are booked online; other assigned programs are listed but not selectable.
-  bookable: boolean;
+  id: string; name: string; type: OnlineCoachingProgramType; courtRentalIncluded: boolean;
+  // The participant counts one booking may name, from the program's explicit configuration.
+  participants: { min: number; max: number };
   durations: CoachingDurationOption[];
 };
 type CoachingCoachOption = { id: string; displayName: string; programs: CoachingProgramOption[] };
@@ -31,9 +31,15 @@ export async function coachingBookingOptions(data: PublicCoaching, location: Pic
   const programs = new Map(data.programs.map(program => [program.id, program]));
   const options = data.coaches.filter(coach => coach.locations.some(item => item.id.toLowerCase() === locationId)).map(coach => ({
     id: coach.id, displayName: coach.displayName,
-    programs: coach.programs.flatMap(({ id }) => programs.get(id) ?? []).map(program => ({
+    // Only Private/Semi-private programs with valid participant limits are bookable online;
+    // Group/Junior programs are organized by the coach or club and are not offered here.
+    programs: coach.programs.flatMap(({ id }) => programs.get(id) ?? []).flatMap(program => {
+      const participants = coachingParticipantRange(program);
+      const { type } = program;
+      return participants && isOnlineCoachingProgramType(type) ? [{ ...program, type, participants }] : [];
+    }).map(program => ({
       id: program.id, name: program.name, type: program.type, courtRentalIncluded: program.courtRentalIncluded,
-      bookable: isOnlineCoachingProgramType(program.type),
+      participants: program.participants,
       // Only canonical lesson durations are offered.
       durations: program.durations.filter(isCoachingDuration).map(durationMinutes => {
         const matches = (price: { durationMinutes: number; currency: LocationCurrency }) =>
@@ -44,7 +50,7 @@ export async function coachingBookingOptions(data: PublicCoaching, location: Pic
         return { durationMinutes, price: price && { amountMinor: price.amountMinor, currency: price.currency, source: price.source } };
       }),
     })),
-  })).filter(coach => coach.programs.some(program => program.bookable && program.durations.some(duration => duration.price)));
+  })).filter(coach => coach.programs.some(program => program.durations.some(duration => duration.price)));
   if (!options.length) return [];
   const today = localToday(location.timezone, now);
   const minute = localMinute(location.timezone, now);

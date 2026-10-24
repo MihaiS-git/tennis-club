@@ -3,10 +3,11 @@ import { appendBookingContractFixture } from "../checkout-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import sharp from "sharp";
-import { afterAll, beforeAll, expect, test } from "vitest";
+import { afterAll, beforeAll, expect, onTestFinished, test } from "vitest";
 import type { DataSource } from "typeorm";
 import { getDataSource } from "@/lib/db/data-source";
 import { localFixtureClient } from "../auth-fixtures";
+import { deleteMailpitMessagesTo } from "../../local/mailpit";
 import { saveAdminLocation, setAdminLocationPublication } from "@/lib/admin/locations";
 import { saveAdminCourt } from "@/lib/admin/courts";
 import { mutateAdminOpeningHours } from "@/lib/admin/opening-hours";
@@ -55,11 +56,8 @@ afterAll(async () => {
 
 test("registered migrations match application metadata without schema changes", async () => {
   expect((await database.query("SELECT name FROM public.migrations ORDER BY timestamp")).map((row: { name: string }) => row.name))
-    .toEqual(["InitialApplicationSchema1791462257924", "ApplicationNativeIntegrity1791462257925", "SupabaseAuthStorage1791462257926", "ClubSettings1791462257927", "CanonicalCoachingDurations1791462257928"]);
+    .toEqual(["InitialApplicationSchema1791462257924", "ApplicationNativeIntegrity1791462257925", "SupabaseAuthStorage1791462257926"]);
   expect(await database.query("SELECT to_regclass('public.job_leases') AS job_leases")).toEqual([{ job_leases: null }]);
-  // No application notification persistence exists.
-  expect(await database.query(`SELECT table_name FROM information_schema.tables WHERE table_schema='public'
-    AND (table_name LIKE '%notification%' OR table_name LIKE '%inbox%')`)).toEqual([]);
   expect(await database.query(`SELECT table_name,column_name FROM information_schema.columns WHERE table_schema='public'
     AND column_name='recovery_version'`)).toEqual([]);
   const diff = await database.driver.createSchemaBuilder().log();
@@ -72,6 +70,68 @@ test("registered migrations match application metadata without schema changes", 
   expect(booking.findColumnWithPropertyName("accountUserId")).toMatchObject({ databaseName: "account_user_id", isNullable: true });
   expect(booking.foreignKeys.find(key => key.name === "bookings_account_user_id_fkey"))
     .toMatchObject({ onDelete: "RESTRICT" });
+});
+
+test("initial schema defines disabled club email settings, suppression evidence and canonical coaching durations", async () => {
+  expect(await database.query("SELECT id,official_email,sender_name,emails_enabled FROM public.club_settings"))
+    .toEqual([{ id: true, official_email: "", sender_name: "", emails_enabled: false }]);
+  expect(await database.query(`SELECT is_nullable,data_type FROM information_schema.columns
+    WHERE table_schema='public' AND table_name='email_deliveries' AND column_name='suppressed_at'`))
+    .toEqual([{ is_nullable: "YES", data_type: "timestamp with time zone" }]);
+  expect(await database.query(`SELECT has_table_privilege('anon','public.club_settings','SELECT') AS anon,
+    has_table_privilege('authenticated','public.club_settings','SELECT') AS authenticated`))
+    .toEqual([{ anon: false, authenticated: false }]);
+  const runner = database.createQueryRunner();
+  await runner.startTransaction();
+  try {
+    const rejects = async (sql: string, code: string, constraint: string) => {
+      await runner.query("SAVEPOINT initial_schema");
+      try { await expect(runner.query(sql)).rejects.toMatchObject({ driverError: { code, constraint } }); }
+      finally { await runner.query("ROLLBACK TO SAVEPOINT initial_schema"); }
+    };
+    await rejects("INSERT INTO public.club_settings(id) VALUES (true)", "23505", "club_settings_pkey");
+    await rejects("INSERT INTO public.club_settings(id) VALUES (false)", "23514", "club_settings_singleton");
+    await rejects("UPDATE public.club_settings SET emails_enabled=true", "23514", "club_settings_sender");
+    for (const minutes of [45, 75, 150])
+      await rejects(`INSERT INTO public.coaching_program_durations(program_id,duration_minutes) VALUES ('${randomUUID()}',${minutes})`,
+        "23514", "coaching_program_durations_minutes_check");
+    // Canonical durations pass the check and reach the program foreign key.
+    for (const minutes of [60, 90, 120])
+      await rejects(`INSERT INTO public.coaching_program_durations(program_id,duration_minutes) VALUES ('${randomUUID()}',${minutes})`,
+        "23503", "coaching_program_durations_program_id_fkey");
+  } finally { await runner.rollbackTransaction(); await runner.release(); }
+});
+
+test("initial schema stores Group and Junior club rates per program, player count and currency only", async () => {
+  expect(await database.query(`SELECT column_name FROM information_schema.columns
+    WHERE table_schema='public' AND table_name='coaching_participant_prices' ORDER BY column_name`))
+    .toEqual(["amount_minor", "created_at", "currency", "id", "participant_count", "program_id", "updated_at"].map(column_name => ({ column_name })));
+  expect(await database.query(`SELECT has_table_privilege('anon','public.coaching_participant_prices','SELECT') AS anon,
+    has_table_privilege('authenticated','public.coaching_participant_prices','SELECT') AS authenticated`))
+    .toEqual([{ anon: false, authenticated: false }]);
+  const runner = database.createQueryRunner();
+  await runner.startTransaction();
+  try {
+    const rejects = async (sql: string, code: string, constraint: string) => {
+      await runner.query("SAVEPOINT rates");
+      try { await expect(runner.query(sql)).rejects.toMatchObject({ driverError: { code, constraint } }); }
+      finally { await runner.query("ROLLBACK TO SAVEPOINT rates"); }
+    };
+    const program = randomUUID();
+    await runner.query(`INSERT INTO public.coaching_programs(id,name,description,program_type,court_rental_included,is_active,min_participants,max_participants)
+      VALUES($1,$2,'','group',false,false,3,6)`, [program, `Rates ${program}`]);
+    const insert = (count: number, amount: number, currency = "RON") => `INSERT INTO public.coaching_participant_prices(program_id,participant_count,amount_minor,currency)
+      VALUES('${program}',${count},${amount},'${currency}')`;
+    await runner.query(insert(3, 6000));
+    await rejects(insert(3, 5000), "23505", "coaching_participant_prices_rate");
+    await runner.query(insert(3, 1500, "EUR"));
+    await rejects(insert(4, 0), "23514", "coaching_participant_prices_amount_check");
+    await rejects(insert(0, 100), "23514", "coaching_participant_prices_participants_check");
+    await rejects(insert(4, 100, "JPY"), "23514", "coaching_participant_prices_currency_check");
+    await rejects(insert(4, 100).replace(program, randomUUID()), "23503", "coaching_participant_prices_program_id_fkey");
+    // Rates are never silently destroyed with their program.
+    await rejects(`DELETE FROM public.coaching_programs WHERE id='${program}'`, "23503", "coaching_participant_prices_program_id_fkey");
+  } finally { await runner.rollbackTransaction(); await runner.release(); }
 });
 
 test("booking ownership is permanent for guests and accounts, without blocking aggregate updates", async () => {
@@ -165,12 +225,62 @@ smoke("browser database roles have no application table or column privileges, in
   } finally { await runner.rollbackTransaction(); await runner.release(); }
 });
 
+smoke("public-schema default privileges expose no future migration-role objects to browser roles", async () => {
+  // Migrations run as postgres. Supabase's stock supabase_admin defaults grant browser roles
+  // everything, cannot be altered by postgres, and stay harmless only while it owns nothing here.
+  expect(await database.query("SELECT current_user AS actor")).toEqual([{ actor: "postgres" }]);
+  expect(await database.query(`SELECT c.relname AS name FROM pg_class c WHERE c.relnamespace='public'::regnamespace
+    AND c.relowner<>current_user::regrole UNION ALL SELECT p.proname FROM pg_proc p
+    WHERE p.pronamespace='public'::regnamespace AND p.proowner<>current_user::regrole`)).toEqual([]);
+  // Global entries combine with schema entries, so a schema-level REVOKE cannot cancel them.
+  const defaults = (grantees: string) => database.query(`SELECT DISTINCT d.defaclobjtype AS type FROM pg_default_acl d
+    CROSS JOIN aclexplode(d.defaclacl) a WHERE d.defaclrole=current_user::regrole AND d.defaclobjtype IN ('r','S')
+    AND d.defaclnamespace IN (0::oid,'public'::regnamespace::oid)
+    AND (CASE a.grantee WHEN 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END)=ANY($1::text[]) ORDER BY 1`, [grantees]);
+  expect(await defaults("{PUBLIC,anon,authenticated}")).toEqual([]);
+  expect(await defaults("{service_role}")).toEqual([{ type: "S" }, { type: "r" }]);
+  expect(await database.query(`SELECT role, has_schema_privilege(role,'public','USAGE') AS usage,
+    has_schema_privilege(role,'public','CREATE') AS create FROM unnest(ARRAY['anon','authenticated','service_role']) role`))
+    .toEqual(["anon", "authenticated", "service_role"].map((role) => ({ role, usage: true, create: false })));
+  expect(await database.query(`SELECT p.proname AS name, role FROM pg_proc p, unnest(ARRAY['public','anon','authenticated']) role
+    WHERE p.pronamespace='public'::regnamespace AND has_function_privilege(role,p.oid,'EXECUTE') ORDER BY 1,2`))
+    .toEqual([{ name: "has_active_avatar_account", role: "authenticated" }]);
+  const runner = database.createQueryRunner();
+  await runner.startTransaction();
+  try {
+    await runner.query("CREATE TABLE public.cutover_default_acl_probe(id integer GENERATED ALWAYS AS IDENTITY, note text)");
+    const grantees = (relation: string) => runner.query(`SELECT array_agg(grantee::text ORDER BY grantee) AS grantees FROM (SELECT DISTINCT
+      pg_get_userbyid(a.grantee) AS grantee FROM pg_class c CROSS JOIN aclexplode(c.relacl) a WHERE c.oid=$1::regclass) g`, [relation]);
+    const sequence = "public.cutover_default_acl_probe_id_seq";
+    expect(await grantees("public.cutover_default_acl_probe")).toEqual([{ grantees: ["postgres", "service_role"] }]);
+    expect(await grantees(sequence)).toEqual([{ grantees: ["postgres", "service_role"] }]);
+    expect(await runner.query(`SELECT role FROM unnest(ARRAY['public','anon','authenticated']) role
+      WHERE has_table_privilege(role,'public.cutover_default_acl_probe','SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+      OR has_any_column_privilege(role,'public.cutover_default_acl_probe','SELECT,INSERT,UPDATE,REFERENCES')
+      OR has_sequence_privilege(role,'${sequence}','USAGE,SELECT,UPDATE')`)).toEqual([]);
+    for (const role of ["anon", "authenticated"]) {
+      await runner.query("SAVEPOINT browser_probe");
+      try {
+        await runner.query(`SET LOCAL ROLE ${role}`);
+        await expect(runner.query("SELECT * FROM public.cutover_default_acl_probe")).rejects.toMatchObject({ driverError: { code: "42501" } });
+      } finally { await runner.query("ROLLBACK TO SAVEPOINT browser_probe"); }
+    }
+    await runner.query("SET LOCAL ROLE service_role");
+    await runner.query("INSERT INTO public.cutover_default_acl_probe(note) VALUES ('server')");
+    expect(await runner.query("SELECT note FROM public.cutover_default_acl_probe")).toEqual([{ note: "server" }]);
+  } finally { await runner.rollbackTransaction(); await runner.release(); }
+  expect(await database.query("SELECT to_regclass('public.cutover_default_acl_probe') AS probe")).toEqual([{ probe: null }]);
+});
+
 smoke("real Auth signup/email sync and private active-account Storage work without application grants", async () => {
   const owner = client(), anonymous = client(), service = localFixtureClient();
   const email = `cutover-${randomUUID()}@example.test`, password = "cutover-storage-password-123";
+  // Signup mails a confirmation to this recipient; remove only its messages, after any outcome.
+  onTestFinished(() => deleteMailpitMessagesTo(email));
   const signup = await owner.auth.signUp({ email, password });
+  if (signup.data.user) userIds.push(signup.data.user.id);
   expect(signup.error).toBeNull(); expect(signup.data.user).toBeTruthy();
-  const id = signup.data.user!.id; userIds.push(id);
+  const id = signup.data.user!.id;
   if (!signup.data.session) {
     expect((await service.auth.admin.updateUserById(id, { email_confirm: true })).error).toBeNull();
     expect((await owner.auth.signInWithPassword({ email, password })).error).toBeNull();
@@ -179,17 +289,24 @@ smoke("real Auth signup/email sync and private active-account Storage work witho
   expect(original[0]).toMatchObject({ email, status: "active" });
   expect(await database.query("SELECT * FROM public.user_roles WHERE user_id=$1", [id])).toEqual([]);
   const changedEmail = `changed-${randomUUID()}@example.test`;
+  onTestFinished(() => deleteMailpitMessagesTo(changedEmail));
   expect((await service.auth.admin.updateUserById(id, { email: changedEmail })).error).toBeNull();
   const changed = await database.query("SELECT email,updated_at::text FROM public.users WHERE id=$1", [id]);
   expect(changed[0].email).toBe(changedEmail); expect(changed[0].updated_at).not.toBe(original[0].updated_at);
   expect((await anonymous.from("users").select("id")).error).toBeTruthy();
   expect((await owner.from("users").select("id")).error).toBeTruthy();
-  const path = `${id}/avatar.webp`, bucket = owner.storage.from("profile-avatars");
+  const path = `${id}/avatar.webp`, foreignPath = `${randomUUID()}/avatar.webp`, bucket = owner.storage.from("profile-avatars");
+  // Registered before any upload: removes this test's objects (including an unexpectedly accepted
+  // foreign path) with the privileged client, before afterAll deletes the account.
+  onTestFinished(async () => {
+    expect((await service.storage.from("profile-avatars").remove([path, foreignPath])).error).toBeNull();
+    expect(await database.query("SELECT name FROM storage.objects WHERE bucket_id='profile-avatars' AND name=ANY($1)", [[path, foreignPath]])).toEqual([]);
+  });
   const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: "red" } }).webp().toBuffer();
   expect((await bucket.upload(path, bytes, { contentType: "image/webp" })).error).toBeNull();
   expect((await bucket.download(path)).error).toBeNull();
   expect((await bucket.upload(path, bytes, { contentType: "image/webp", upsert: true })).error).toBeNull();
-  expect((await bucket.upload(`${randomUUID()}/avatar.webp`, bytes, { contentType: "image/webp" })).error).toBeTruthy();
+  expect((await bucket.upload(foreignPath, bytes, { contentType: "image/webp" })).error).toBeTruthy();
   expect((await bucket.upload(path, bytes, { contentType: "image/png", upsert: true })).error).toBeTruthy();
   expect((await anonymous.storage.from("profile-avatars").download(path)).error).toBeTruthy();
   const publicResponse = await fetch(`${process.env.SUPABASE_URL}/storage/v1/object/public/profile-avatars/${path}`);

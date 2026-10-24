@@ -11,7 +11,7 @@ export default async function AdminCoachingPricesPage({ searchParams }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const params = await searchParams;
-  const { programs, coaches, currencies, prices, filters, groups, total, page, totalPages } = await loadPricesPage({ ...params, search: params.q });
+  const { programs, coaches, currencies, prices, participantPrices, filters, groups, total, page, totalPages } = await loadPricesPage({ ...params, search: params.q });
   const sortLinks = Object.fromEntries((["program", "currency", "duration", "amount"] as const).map(column => [column, {
     href: coachingListHref(path, filters, { sort: column, dir: filters.sort === column && filters.dir === "asc" ? "desc" : "asc", page: 1 }),
     direction: filters.sort === column ? filters.dir : undefined,
@@ -26,6 +26,8 @@ export default async function AdminCoachingPricesPage({ searchParams }: {
     <p className="mb-4 max-w-3xl text-sm text-muted-foreground">
       Club prices apply club-wide to every coach offering the program, in each currency. A lesson is charged in its location’s
       currency, never converted. Coaches set their own individual prices, which replace the club price for that coach only.
+      Group and Junior programs have club rates only, per person for 60 minutes by number of players; they are published on the
+      Coaching page for information and paid at the club.
     </p>
     <ManagementTableToolbar searchLabel="Price search" placeholder="Program, coach name or email" controls={[
       { name: "currency", label: "Currency", options: [{ value: "", label: "All currencies" }, ...currencies.map(({ currency }) => ({ value: currency, label: currency }))] },
@@ -35,7 +37,7 @@ export default async function AdminCoachingPricesPage({ searchParams }: {
       ...filters.scope === "club" ? [] : [{ name: "coach", label: "Coach", options: [{ value: "", label: "All coaches" }, ...coaches.map(coach => ({ value: coach.user_id, label: `${coach.display_name} (${coach.email})` }))] }],
     ]} />
     <p className="mb-3 text-sm text-muted-foreground">{total} pricing {total === 1 ? "group" : "groups"}. Amount sorting uses the lowest matching entered price in each group; unset prices appear last. Compare amounts within a currency.</p>
-    {currencies.length ? <PricesTable rows={rows} coaches={coaches} prices={prices} filters={filters} sortLinks={sortLinks}
+    {currencies.length ? <PricesTable rows={rows} coaches={coaches} prices={prices} participantPrices={participantPrices} filters={filters} sortLinks={sortLinks}
       filtered={Boolean(filters.search || filters.currency || filters.program || filters.duration || filters.scope || filters.coach)} />
       : <p className="text-sm text-muted-foreground">No locations yet. Coaching prices are set in the currencies the club’s locations use.</p>}
     <div className="mt-6"><Pagination currentPage={page} totalPages={totalPages} buildHref={next => coachingListHref(path, filters, { page: next })} /></div>

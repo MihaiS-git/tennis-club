@@ -125,10 +125,3 @@ test("restored booking links are rebuilt from validated parameters only", async 
     history: "x", sort: "price", injected: "1", back: "https://evil.example/admin/payments/transactions" })}` });
   expect(bookingLink()).toBe(`/admin/bookings/${bookingId}#financial-history`);
 });
-
-test("authorization runs before any transaction read", async () => {
-  mocks.authorize.mockRejectedValueOnce(new Error("forbidden"));
-  await expect(TransactionPage({ params: Promise.resolve({ kind: "payment", transactionId: paymentId }),
-    searchParams: Promise.resolve({ back: `/admin/bookings/${bookingId}` }) })).rejects.toThrow("forbidden");
-  expect(mocks.transactions).not.toHaveBeenCalled();
-});

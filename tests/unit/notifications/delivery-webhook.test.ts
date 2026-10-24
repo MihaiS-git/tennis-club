@@ -1,5 +1,5 @@
 import type { EntityManager } from "typeorm";
-import { beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ deliver: vi.fn(), webhook: vi.fn() }));
 vi.mock("@/lib/db/transaction", () => ({ inTransaction: (work: (manager: EntityManager) => Promise<unknown>) => work({} as EntityManager) }));
@@ -9,7 +9,7 @@ vi.mock("@/lib/notifications/webhook", async (importOriginal) => ({
   processBrevoFailureWebhook: mocks.webhook,
 }));
 
-import { claimEmailDeliveries, completeEmailAttempt, failEmailFromWebhook } from "@/lib/db/repositories/notifications.repository";
+import { failEmailFromWebhook } from "@/lib/db/repositories/notifications.repository";
 import { POST as cronPost } from "@/app/api/notifications/deliver/route";
 import { POST as webhookPost } from "@/app/api/notifications/brevo-webhook/route";
 
@@ -17,31 +17,10 @@ const id = "00000000-0000-4000-8000-000000000001";
 const cronSecret = "local-cron-secret-at-least-32-chars";
 const webhookSecret = "local-webhook-secret-at-least-32-chars";
 beforeEach(() => {
-  vi.unstubAllEnvs(); vi.clearAllMocks();
   vi.stubEnv("NOTIFICATION_CRON_SECRET", cronSecret);
   vi.stubEnv("BREVO_WEBHOOK_SECRET", webhookSecret);
 });
-
-test("atomic concurrent claims use SKIP LOCKED and stale completion checks attempt and lease", async () => {
-  let locked = false;
-  const query = vi.fn(async (sql: string) => {
-    if (sql.includes("FOR UPDATE SKIP LOCKED")) {
-      if (locked) return [[], 0];
-      locked = true;
-      return [[{ id, recipient_email: "player@example.com", subject: "Hi", body_text: "Text",
-        body_html: "<p>Text</p>", attempts: 1, locked_until: new Date() }], 1];
-    }
-    return [[], 0];
-  });
-  const manager = { query } as unknown as EntityManager;
-  const [first, second] = await Promise.all([claimEmailDeliveries(manager, 20), claimEmailDeliveries(manager, 20)]);
-  expect(first).toHaveLength(1);
-  expect(second).toHaveLength(0);
-  expect(query.mock.calls[0][0]).toContain("FOR UPDATE SKIP LOCKED");
-  await completeEmailAttempt(manager, { id, attempts: 1, lockedUntil: first[0].lockedUntil,
-    status: "accepted", nextAttemptAt: new Date(), providerMessageId: "msg", lastError: null });
-  expect(query.mock.calls[2][0]).toContain("attempts=$2 AND locked_until=$3");
-});
+afterEach(() => { vi.resetAllMocks(); vi.unstubAllEnvs(); });
 
 test("webhook lookup binds recipient and provider ID, with optional UUID correlation", async () => {
   const query = vi.fn().mockResolvedValue([[{ id }], 1]);

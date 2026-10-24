@@ -2,7 +2,7 @@ vi.mock("@/lib/db/repositories/club-settings.repository", () => ({
   readClubSettings: vi.fn(async () => ({ officialEmail: "club@example.com", senderName: "My Club", emailsEnabled: true })),
   emailDispatchAllowed: vi.fn(async () => ({ officialEmail: "club@example.com", senderName: "My Club", emailsEnabled: true })),
 }));
-import { beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { EntityManager } from "typeorm";
 
 const mocks = vi.hoisted(() => ({ profile: vi.fn(), admin: vi.fn(), fence: vi.fn(), find: vi.fn(),
@@ -26,7 +26,6 @@ const delivery = { id: deliveryId, eventKey: "booking.confirmed:revision", recip
   subject: "Booking confirmed", status: "failed" as const, attempts: 1, lastError: "Brevo HTTP 401",
   providerMessageId: null, createdAt: new Date(), updatedAt: new Date(), nextAttemptAt: new Date() };
 beforeEach(() => {
-  vi.clearAllMocks(); vi.unstubAllEnvs();
   vi.stubEnv("BREVO_API_KEY", "mock-key"); vi.stubEnv("BOOKING_MAIL_FROM", "club@example.test");
   vi.stubEnv("NOTIFICATION_EMAIL_MODE", "sandbox");
   mocks.admin.mockResolvedValue({ userId: id }); mocks.fence.mockResolvedValue(true);
@@ -36,6 +35,8 @@ beforeEach(() => {
   mocks.complete.mockResolvedValue(true);
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ messageId: "<accepted>" }), { status: 201 })));
 });
+// resetAllMocks also drops unconsumed …Once values and returns factory mocks to their defaults.
+afterEach(() => { vi.resetAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 
 test("active Admin gets persisted delivery details via an owned notification", async () => {
   expect(await adminMessageDelivery(id)).toMatchObject({ recipientEmail: "guest@example.test", bookingHref: `/admin/bookings/${id}`,

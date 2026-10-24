@@ -6,6 +6,7 @@
     "playwright.config.ts",
     "playwright.stripe-live.config.ts",
     "tests/local/assert-next-server-environment.mjs",
+    "tests/local/runner-lock-helper.mjs",
     "tests/e2e/fixtures/stripe-server.mjs",
     "tests/e2e/recovery-verification.config.ts",
     "tests/e2e-live/**/*.e2e.ts",

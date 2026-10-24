@@ -11,7 +11,7 @@ const input={id,courtId:id,date:"2099-10-15",startMinute:600,endMinute:660,save:
 beforeEach(() => { transaction.mockReset(); });
 test.each([
   ["23P01","court_reservation_no_overlap",true],
-])("maps SQLSTATE %s constraint %s outside the rolled-back transaction", async (code,constraint,conflict) => {
+])("maps SQLSTATE %s constraint %s from a failed transaction to a controlled result", async (code,constraint,conflict) => {
   transaction.mockRejectedValue(new QueryFailedError("command",[],Object.assign(new Error("private database details"),{code,constraint})));
   expect(await runBookingReschedule(input, id)).toEqual({ok:false,message:conflict
     ? "That court is no longer available. The booking has not changed." : "Unable to reschedule this booking. Try again."});

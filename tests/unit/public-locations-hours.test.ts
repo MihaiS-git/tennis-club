@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const facts = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/db/data-source", () => ({ getDataSource: async () => ({ manager: {} }) }));
@@ -22,6 +22,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-10-14T22:30:00Z"));
 });
+afterEach(() => { vi.useRealTimers(); });
 
 it("resolves today's opening hours from the effective schedule in each location's timezone", async () => {
   const hours = [

@@ -26,10 +26,10 @@ import { createClient } from "@/lib/supabase/server";
 import { readCoachingLessonDay } from "./lesson-availability";
 import { quoteCoachingLesson, type CoachingLessonUnavailableReason } from "./lesson-quote";
 
-import { coachingDurationSchema } from "./validation";
+import { coachingDurationSchema, participantCountSchema } from "./validation";
 
-// One complete private or semi-private lesson: one coach, one payer, one court. The
-// customer identity comes from the verified session, never from this input.
+// One complete lesson of any program: one coach, one payer, one court and the number of
+// participants it is booked for. The customer identity comes from the verified session, never from this input.
 export const coachingBookingInputSchema = z.strictObject({
   locationId: z.uuid(),
   programId: z.uuid(),
@@ -38,6 +38,7 @@ export const coachingBookingInputSchema = z.strictObject({
   date: z.iso.date(),
   startMinute: z.number().int().min(0).max(1439),
   durationMinutes: coachingDurationSchema,
+  participantCount: participantCountSchema,
   ...bookingContactShape,
   expectedTotalAmountMinor: minorAmountSchema,
   expectedCurrency: z.enum(locationCurrencies),
@@ -59,6 +60,7 @@ const messages: Record<CoachingBookingFailure, string> = {
   "account-inactive": "This account cannot create a booking.",
   "location-unavailable": "This location is not available for lessons.",
   "not-offered": "This coach does not offer this lesson here.",
+  "invalid-participants": "Choose a number of players this program allows.",
   "invalid-duration": "This lesson length is not offered.",
   "invalid-time": "Choose a lesson start on a 30-minute boundary that fits the lesson length.",
   unpriced: "This lesson has no published price.",
@@ -117,7 +119,7 @@ async function reserveLesson(manager: EntityManager, intent: Intent, customerId:
   if (!day) throw new Error("Malformed lesson day.");
   if (intent.date < day.today) return failure("past");
   const quoted = quoteCoachingLesson(day, { programId: intent.programId, courtId: court.id,
-    startMinute: intent.startMinute, durationMinutes: intent.durationMinutes });
+    startMinute: intent.startMinute, durationMinutes: intent.durationMinutes, participantCount: intent.participantCount });
   if (!quoted.ok) return failure(quoted.reason);
   const { quote } = quoted;
   if (quote.totalAmountMinor !== intent.expectedTotalAmountMinor || quote.currency !== intent.expectedCurrency)
@@ -140,7 +142,7 @@ async function reserveLesson(manager: EntityManager, intent: Intent, customerId:
     pricingEvidence: lessonPricingEvidence(quote.evidence.courtPricing, { programId: quote.program.id, coachUserId: quote.coach.userId,
       locationId: quote.location.id, durationMinutes: quote.durationMinutes, source: quote.evidence.coachingPrice.source,
       amountMinor: quote.coachingAmountMinor, currency: quote.currency, courtRentalIncluded: quote.program.courtRentalIncluded,
-      participantCount: quote.program.participantCount }, quote.evidence.courtRentalMinor),
+      participantCount: intent.participantCount }, quote.evidence.courtRentalMinor),
     coachUserId: quote.coach.userId, coachingProgramId: quote.program.id, coachName: quote.coach.displayName,
     coachingProgramName: quote.program.name,
   }, { id: randomUUID(), bookingId, kind: "created", operationKey: "created", intentHash: "created",

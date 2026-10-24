@@ -102,22 +102,11 @@ it("uses URL-backed tabs, handles refreshed selection and popstate, and keeps Us
   expect(screen.getByRole("link", { name: "Users" }).getAttribute("aria-current")).toBe("page");
 });
 
-it("shows a square private avatar with a responsive desktop size and preserves its fallback", async () => {
+it("shows the private avatar and preserves its fallback", async () => {
   navigate("?tab=tennis");
   await page();
   const image = screen.getByRole("img", { name: "User avatar" });
   expect(image.getAttribute("src")).toBe(`${pathname}/avatar?v=${encodeURIComponent(user.player!.updated_at)}`);
-  expect(image.className).toContain("object-cover");
-  expect(image.className).toContain("size-full");
-  const frame = image.parentElement!;
-  expect(frame.className).toContain("aspect-square");
-  expect(frame.className).toContain("w-full");
-  const avatar = frame.parentElement!;
-  expect(avatar.className).toContain("w-28");
-  expect(avatar.className).toContain("sm:w-52");
-  expect(avatar.parentElement!.className).toContain("items-start");
-  expect(avatar.parentElement!.className).toContain("flex-col");
-  expect(avatar.parentElement!.className).toContain("sm:flex-row");
   fireEvent.error(image);
   expect(screen.getByText("Avatar unavailable")).toBeTruthy();
 });

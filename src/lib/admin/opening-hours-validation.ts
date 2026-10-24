@@ -70,7 +70,6 @@ export type OpeningHoursMutationResult =
     workingHoursAdjusted?: boolean }
   | { ok: false; reason: "invalid-input"; fieldErrors: Record<string, string> }
   | { ok: false; reason: "overlap"; weekdays: number[] }
-  | { ok: false; reason: "booking-conflict"; dates: string[] }
   | { ok: false; reason: "stale" | "period-overlap" }
   | { ok: false; reason: "not-found" | "archived" | "unchanged" };
 

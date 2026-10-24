@@ -86,10 +86,7 @@ complete; their acceptance/failure evidence is retained and suppressed retries s
 ineligible. Accepted, sandbox-accepted and ambiguous deliveries retain the existing
 no-resend rules. No network calls run inside database transactions.
 
-Pause the notification Cron job and drain old application workers, then roll out
-additive TypeORM migration `ClubSettings1791462257927` before the new application
-code. Resume Cron after deploying the new code. It creates the singleton, denies browser-role access, adds suppression evidence,
-and suppresses existing unsent deliveries because delivery starts disabled. It does not
-reset or replace existing tables. Configure the sender and deliberately enable email
-after rollout. Rollback requires a reviewed migration preserving suppression evidence;
-removing the marker could resurrect old mail.
+The initial TypeORM schema defines `club_settings` and `email_deliveries.suppressed_at`;
+the native integrity migration inserts the disabled singleton and the Supabase migration
+denies browser-role access. Configure the sender and deliberately enable email after a
+fresh install. Removing the suppression marker could resurrect old mail.

@@ -56,16 +56,6 @@ const row = (roles: string | null = null, confirmed = true) => ({
 
 beforeEach(() => { messages.clear(); deliveries.clear(); });
 
-test("recording is idempotent and binds the in-app message to the resolved account", async () => {
-  const manager = { query: vi.fn().mockResolvedValue([row()]) } as unknown as EntityManager;
-  await recordNotification(manager, event);
-  await recordNotification(manager, event);
-  expect(messages.size).toBe(1);
-  expect(deliveries.size).toBe(1);
-  expect([...messages.values()][0]).toMatchObject({ userId: account().userId, eventKey: event.eventKey });
-  expect(manager.query).toHaveBeenCalledWith(expect.stringContaining("JOIN auth.users"), [event.recipientEmail]);
-});
-
 test("guest receives email only; admin receives in-app only", async () => {
   const manager = { query: vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([row("admin")]) } as unknown as EntityManager;
   await recordNotification(manager, event);

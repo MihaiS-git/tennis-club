@@ -63,7 +63,7 @@ export async function commitCoachingBookingAction(input: unknown): Promise<Commi
     if (!result.ok) {
       if ("reason" in result && result.reason === "price_changed") return result;
       const availabilityChanged = "availabilityChanged" in result && result.availabilityChanged
-        || "reason" in result && ["not-offered", "invalid-duration", "unpriced", "coach-unavailable", "coach-booked",
+        || "reason" in result && ["not-offered", "invalid-participants", "invalid-duration", "unpriced", "coach-unavailable", "coach-booked",
           "court-unavailable", "location-unavailable", "past", "changed"].includes(result.reason);
       if (availabilityChanged) revalidatePath("/book");
       return { ok: false, message: result.message, availabilityChanged };

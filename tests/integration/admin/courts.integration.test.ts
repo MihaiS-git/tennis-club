@@ -9,7 +9,7 @@ import { listPublicLocationsWithCourts } from "../../../src/lib/courts/public";
 import { cleanupAuthFixtures, localFixtureClient } from "../auth-fixtures";
 import { ensureIntegrationAdminAnchor } from "../admin-anchor";
 
-test("court administration persists edits, moves and status with real authorization and RLS", async () => {
+test("court administration persists edits, moves and status with Next.js authorization and denied browser grants", async () => {
   const service = localFixtureClient();
   await ensureIntegrationAdminAnchor(service);
   const userIds: string[] = [];

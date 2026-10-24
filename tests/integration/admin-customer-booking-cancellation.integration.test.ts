@@ -54,7 +54,7 @@ test("Admin cancellation atomically preserves snapshots, frees occupancy and mov
         payment_method: "pay_at_club", customer_name: "Guest", customer_email: "guest@example.test", customer_phone: "+40 999",
         cancellation_notice_minutes: 120, total_amount_minor: 7000, currency: "RON" },
     ])).error, null);
-    const beforeBooking = (await Promise.resolve({ error:null, data:(await readBookingContracts(service, { ids: [bookingId] }))[0] })).data!;
+    const beforeBooking = (await readBookingContracts(service, { ids: [bookingId] }))[0];
     const beforeReservation = (await service.from("court_reservations").select("*").eq("id", reservationId).single()).data!;
     expect((await listOwnUpcomingCustomerBookings(owner.client)).map((item) => item.id)).toContain(bookingId);
     expect((await listOwnUpcomingCustomerBookings(owner.client)).map((item) => item.id)).not.toContain(guestBookingId);
@@ -71,7 +71,7 @@ test("Admin cancellation atomically preserves snapshots, frees occupancy and mov
     const winner = (await service.from("court_reservations").select("cancelled_by_user_id").eq("id",reservationId).single()).data!.cancelled_by_user_id;
     expect((await cancelCustomerBookingAsAdmin(bookingId, admin.client)).ok).toBe(true);
     expect((await cancelCustomerBookingAsAdmin(randomUUID(), admin.client)).ok).toBe(false);
-    const afterBooking = (await Promise.resolve({ error:null, data:(await readBookingContracts(service, { ids: [bookingId] }))[0] })).data!;
+    const afterBooking = (await readBookingContracts(service, { ids: [bookingId] }))[0];
     const afterReservation = (await service.from("court_reservations").select("*").eq("id", reservationId).single()).data!;
     expect(afterBooking.status).toBe("cancelled");
     expect(afterReservation.status).toBe("cancelled");
@@ -105,10 +105,10 @@ test("Admin cancellation atomically preserves snapshots, frees occupancy and mov
         customer_email: "started@example.test", customer_phone: "+40 123", cancellation_notice_minutes: 120, total_amount_minor: 5000, currency: "RON" },
     ])).error, null);
     for (const id of [pastBookingId, startedBookingId]) {
-      const bookingBefore = (await Promise.resolve({ error:null, data:(await readBookingContracts(service, { ids: [id] }))[0] })).data!;
+      const bookingBefore = (await readBookingContracts(service, { ids: [id] }))[0];
       const reservationBefore = (await service.from("court_reservations").select("*").eq("id", bookingBefore.reservation_id).single()).data!;
       expect(await cancelCustomerBookingAsAdmin(id, admin.client)).toEqual({ ok: false, message: "This booking is no longer available to cancel." });
-      expect((await Promise.resolve({ error:null, data:(await readBookingContracts(service, { ids: [id] }))[0] })).data).toEqual(bookingBefore);
+      expect((await readBookingContracts(service, { ids: [id] }))[0]).toEqual(bookingBefore);
       expect((await service.from("court_reservations").select("*").eq("id", bookingBefore.reservation_id).single()).data).toEqual(reservationBefore);
     }
     const directBefore = (await service.from("court_reservations").select("*").eq("id", pastDirectId).single()).data!;

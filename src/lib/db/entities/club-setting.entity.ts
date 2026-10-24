@@ -5,7 +5,7 @@ import { Check, Column, Entity, PrimaryColumn } from "typeorm";
 @Check("club_settings_singleton", "id")
 @Check("club_settings_sender", "NOT emails_enabled OR (length(trim(official_email)) > 0 AND length(trim(sender_name)) > 0)")
 export class ClubSettingEntity {
-  @PrimaryColumn({ type: "boolean", default: true })
+  @PrimaryColumn({ type: "boolean", default: true, primaryKeyConstraintName: "club_settings_pkey" })
   id!: boolean;
   @Column({ name: "official_email", type: "text", default: "" })
   officialEmail!: string;

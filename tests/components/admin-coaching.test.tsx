@@ -3,12 +3,13 @@ import { expectToast } from "../helpers/notifications";
 import { installDialogMock } from "../helpers/dialog";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { AdminCoach, AdminCoachingLocation, AdminCoachingPrice, AdminCoachingProgram } from "@/lib/coaching/admin";
+import type { AdminCoach, AdminCoachingLocation, AdminCoachingPrice, AdminCoachingProgram, AdminParticipantPrice } from "@/lib/coaching/admin";
 
 const actions = vi.hoisted(() => ({
   deleteCoachingProgramAction: vi.fn(), deleteCoachProfileAction: vi.fn(),
   saveCoachingProgramAction: vi.fn(), setCoachingProgramStatusAction: vi.fn(), saveCoachProfileAction: vi.fn(),
   setCoachVisibilityAction: vi.fn(), saveClubCoachingPriceAction: vi.fn(), removeClubCoachingPriceAction: vi.fn(),
+  saveClubParticipantPricesAction: vi.fn(),
 }));
 const router = vi.hoisted(() => ({ refresh: vi.fn(), push: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => router, usePathname: () => "/admin/coaching/prices" }));
@@ -20,6 +21,8 @@ import { CoachesTable } from "@/app/admin/coaching/coaches/coaches-table";
 import { CoachDialog } from "@/app/admin/coaching/coaches/coach-dialog";
 import { PriceEditor } from "@/app/admin/coaching/prices/price-editor";
 import { PricesTable } from "@/app/admin/coaching/prices/prices-table";
+import { ParticipantPriceEditor } from "@/app/admin/coaching/prices/participant-price-editor";
+import { coachingFailureMessages } from "@/app/admin/coaching/coaching-form";
 import { priceFiltersSchema } from "@/lib/coaching/admin-filters";
 
 const location: AdminCoachingLocation = { id: "b1000000-0000-4000-8000-000000000001", name: "East Club", currency: "RON", is_active: true };
@@ -45,13 +48,46 @@ it("creates a program with the explicit fields and selected durations", async ()
   fireEvent.click(within(dialog).getByLabelText("90 min"));
   expect(within(dialog).queryByLabelText(/Other durations/)).toBeNull();
   expect(within(dialog).getAllByRole("checkbox").map((input) => input.getAttribute("value"))).toEqual(["60", "90", "120"]);
+  const save = within(dialog).getByRole("button", { name: "Save program" }) as HTMLButtonElement;
   fireEvent.input(within(dialog).getByLabelText("Maximum players"), { target: { value: "8" } });
-  fireEvent.click(within(dialog).getByRole("button", { name: "Save program" }));
+  // An active program cannot be saved without both limits.
+  expect(within(dialog).getByText("Enter the minimum players for an active program.")).toBeTruthy();
+  expect(within(dialog).getByLabelText("Minimum players").getAttribute("aria-invalid")).toBe("true");
+  expect(save.disabled).toBe(true);
+  fireEvent.input(within(dialog).getByLabelText("Minimum players"), { target: { value: "9" } });
+  expect(within(dialog).getByText("Maximum must be at least the minimum.")).toBeTruthy();
+  expect(save.disabled).toBe(true);
+  fireEvent.input(within(dialog).getByLabelText("Minimum players"), { target: { value: "4" } });
+  expect(within(dialog).queryByText(/Enter the minimum players|Maximum must be at least/)).toBeNull();
+  fireEvent.click(save);
   await waitFor(() => expect(actions.saveCoachingProgramAction).toHaveBeenCalledOnce());
   expect(actions.saveCoachingProgramAction).toHaveBeenCalledWith({ fields: { name: "Junior squad", description: "", program_type: "junior",
-    durations: [60, 90], min_participants: null, max_participants: 8, court_rental_included: false, is_active: true } });
+    durations: [60, 90], min_participants: 4, max_participants: 8, court_rental_included: false, is_active: true } });
   await expectToast("Program created.", "success");
   expect(router.refresh).toHaveBeenCalled();
+});
+
+it("sets Group and Junior prices under Prices, not per duration in the program dialog", () => {
+  render(<ProgramDialog />);
+  fireEvent.click(screen.getByRole("button", { name: "Create program" }));
+  const dialog = screen.getByRole("dialog", { name: "Create program" });
+  expect(within(dialog).queryByText(/under Prices/)).toBeNull();
+  fireEvent.change(within(dialog).getByLabelText("Program type"), { target: { value: "group" } });
+  expect(within(dialog).getByText(/per person for 60 minutes, by number of players, under Prices/)).toBeTruthy();
+  expect(within(dialog).queryByLabelText(/Club price/)).toBeNull();
+});
+
+it("shows an existing active program's missing limits at once and saves once both are set", async () => {
+  actions.saveCoachingProgramAction.mockResolvedValue({ ok: true, id: program.id });
+  render(<ProgramDialog program={{ ...program, min_participants: null, max_participants: null }} open onOpenChange={() => undefined} />);
+  const dialog = screen.getByRole("dialog", { name: "Edit program" });
+  expect(within(dialog).getByText("Enter the minimum players for an active program.")).toBeTruthy();
+  expect(within(dialog).getByText("Enter the maximum players for an active program.")).toBeTruthy();
+  fireEvent.input(within(dialog).getByLabelText("Minimum players"), { target: { value: "1" } });
+  fireEvent.input(within(dialog).getByLabelText("Maximum players"), { target: { value: "1" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save program" }));
+  await waitFor(() => expect(actions.saveCoachingProgramAction).toHaveBeenCalledWith({ id: program.id,
+    fields: expect.objectContaining({ min_participants: 1, max_participants: 1, is_active: true }) }));
 });
 
 it("keeps the draft and shows the server's field error beside the control", async () => {
@@ -134,7 +170,7 @@ it("edits club prices per currency and shows coach overrides read-only for coach
   const boOverride: AdminCoachingPrice = { ...override, id: "p3", coach_user_id: bo.user_id, amount_minor: 9000 };
   const cyOverride: AdminCoachingPrice = { ...override, id: "p4", coach_user_id: cy.user_id, amount_minor: 1000 };
   render(<PricesTable rows={[{ program, durationMinutes: 60, currency: { currency: "RON", location_names: [location.name] } }]}
-    coaches={[coach, bo, cy]} prices={[club, override, boOverride, cyOverride]} filters={priceFiltersSchema.parse({})} filtered={false} sortLinks={{}} />);
+    coaches={[coach, bo, cy]} prices={[club, override, boOverride, cyOverride]} participantPrices={[]} filters={priceFiltersSchema.parse({})} filtered={false} sortLinks={{}} />);
   const table = screen.getByRole("table", { name: "Coaching prices" });
   expect((within(table).getByLabelText("Club price for Private lesson, 60 min, RON") as HTMLInputElement).value).toBe("120.00");
   expect(table.textContent).toContain("East Club");
@@ -187,7 +223,6 @@ it("shows only the Delete program action and offers explicit deactivation for hi
   const row = screen.getByRole("row", { name: "Edit program Private lesson" });
   expect(within(row).queryByRole("button", { name: "Edit program" })).toBeNull();
   const button = within(row).getByRole("button", { name: "Delete program" });
-  expect(button.querySelector(".lucide-trash-2")).toBeTruthy();
   fireEvent.click(button);
   expect(screen.queryByRole("dialog", { name: "Edit program" })).toBeNull();
   const dialog = screen.getByRole("dialog", { name: "Delete Private lesson?" });
@@ -204,7 +239,6 @@ it.each([false, true])("confirms coach removal and reports physical deletion ver
   const row = screen.getByRole("row", { name: "Edit coach Ana Pop" });
   expect(within(row).queryByRole("button", { name: "Edit coach" })).toBeNull();
   const button = within(row).getByRole("button", { name: "Delete coach" });
-  expect(button.querySelector(".lucide-trash-2")).toBeTruthy();
   fireEvent.click(button);
   expect(actions.deleteCoachProfileAction).not.toHaveBeenCalled();
   expect(screen.queryByRole("dialog", { name: "Edit coach" })).toBeNull();
@@ -302,4 +336,87 @@ it.each(["Enter", " "])("opens coach editing from the keyboard with %s", (key) =
   expect(row.tabIndex).toBe(0);
   fireEvent.keyDown(row, { key });
   expect(screen.getByRole("dialog", { name: "Edit coach" })).toBeTruthy();
+});
+
+const groupProgram: AdminCoachingProgram = { ...program, id: "a1000000-0000-4000-8000-000000000003", name: "Group drills",
+  program_type: "group", durations: [60, 90], min_participants: 3, max_participants: 5, court_rental_included: false };
+const rate = (participant_count: number, amount_minor: number): AdminParticipantPrice =>
+  ({ id: `r${participant_count}`, program_id: groupProgram.id, participant_count, amount_minor, currency: "RON" });
+
+it("lists a Group program once per currency with club-only rates by player count", () => {
+  render(<PricesTable rows={[{ program: groupProgram, durationMinutes: null, currency: { currency: "RON", location_names: [location.name] } }]}
+    coaches={[coach]} prices={[]} participantPrices={[rate(3, 6000)]} filters={priceFiltersSchema.parse({})} filtered={false} sortLinks={{}} />);
+  const table = screen.getByRole("table", { name: "Coaching prices" });
+  expect(table.textContent).toContain("Per person / 60 min");
+  expect(table.textContent).toContain("Club prices only");
+  expect(table.textContent).not.toContain("Ana Pop");
+  const form = within(table).getByRole("form", { name: "Group drills club prices in RON" });
+  expect(within(form).getAllByRole("textbox").map((input) => (input as HTMLInputElement).value)).toEqual(["60.00", "", ""]);
+});
+
+it("creates, edits and removes Group rates by player count and saves only the changes", async () => {
+  actions.saveClubParticipantPricesAction.mockResolvedValue({ ok: true, id: groupProgram.id });
+  render(<ParticipantPriceEditor program={groupProgram} currency="RON" chargeable prices={[rate(3, 6000), rate(4, 5000)]} />);
+  const save = screen.getByRole("button", { name: "Save prices" }) as HTMLButtonElement;
+  const input = (count: number) => screen.getByLabelText(`${count} players, Group drills club price per person for 60 minutes in RON`) as HTMLInputElement;
+  expect(save.disabled).toBe(true);
+  fireEvent.change(input(3), { target: { value: "60" } });
+  // The same amount is not a change.
+  expect(save.disabled).toBe(true);
+  fireEvent.change(input(3), { target: { value: "55.50" } });
+  fireEvent.change(input(5), { target: { value: "45" } });
+  fireEvent.click(screen.getByRole("button", { name: "Remove Group drills RON price for 4 players" }));
+  expect(input(4).disabled).toBe(true);
+  expect(save.disabled).toBe(false);
+  fireEvent.click(save);
+  await waitFor(() => expect(actions.saveClubParticipantPricesAction).toHaveBeenCalledWith({ program_id: groupProgram.id, currency: "RON",
+    prices: [{ participant_count: 3, amount: "55.50" }, { participant_count: 5, amount: "45" }], removed: [4] }));
+  await expectToast("Prices saved.", "success");
+  expect(router.refresh).toHaveBeenCalled();
+});
+
+it("blocks invalid Group rates and keeps entered values with the server's errors", async () => {
+  actions.saveClubParticipantPricesAction
+    .mockResolvedValueOnce({ ok: false, reason: "invalid-input", fieldErrors: { "prices.0": "Use a player count from 3 to 4." } })
+    .mockResolvedValueOnce({ ok: false, reason: "invalid-currency" });
+  render(<ParticipantPriceEditor program={groupProgram} currency="RON" chargeable prices={[rate(3, 6000)]} />);
+  const save = screen.getByRole("button", { name: "Save prices" }) as HTMLButtonElement;
+  const input = (count: number) => screen.getByLabelText(`${count} players, Group drills club price per person for 60 minutes in RON`) as HTMLInputElement;
+  for (const value of ["0", "-5", "12.345", "abc"]) {
+    fireEvent.change(input(4), { target: { value } });
+    expect(input(4).getAttribute("aria-invalid")).toBe("true");
+    expect(save.disabled).toBe(true);
+  }
+  // Clearing a saved rate is not a removal; Remove is explicit.
+  fireEvent.change(input(4), { target: { value: "" } });
+  fireEvent.change(input(3), { target: { value: "" } });
+  expect(screen.getByText("Enter a price, or use Remove to clear it.")).toBeTruthy();
+  expect(save.disabled).toBe(true);
+  fireEvent.change(input(3), { target: { value: "60" } });
+  fireEvent.change(input(5), { target: { value: "40" } });
+  fireEvent.click(save);
+  expect(await screen.findByText("Use a player count from 3 to 4.")).toBeTruthy();
+  expect(input(5).value).toBe("40");
+  // The rejected entry must change before it can be saved again.
+  expect(save.disabled).toBe(true);
+  fireEvent.change(input(5), { target: { value: "35" } });
+  fireEvent.click(save);
+  expect((await screen.findByRole("alert")).textContent).toBe(coachingFailureMessages["invalid-currency"]);
+  expect(input(5).value).toBe("35");
+  expect(router.refresh).not.toHaveBeenCalled();
+});
+
+it("keeps Group rates outside the current player range removable but unpublished, and explains a missing range", async () => {
+  actions.saveClubParticipantPricesAction.mockResolvedValue({ ok: true, id: groupProgram.id });
+  render(<ParticipantPriceEditor program={groupProgram} currency="RON" chargeable prices={[rate(8, 3000)]} />);
+  expect(screen.getByText(/Outside the current player range, not published/)).toBeTruthy();
+  expect(screen.getByText(/8 players: 30.00 RON/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Remove Group drills RON price for 8 players" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save prices" }));
+  await waitFor(() => expect(actions.saveClubParticipantPricesAction).toHaveBeenCalledWith({ program_id: groupProgram.id, currency: "RON", prices: [], removed: [8] }));
+  cleanup();
+  render(<ParticipantPriceEditor program={{ ...groupProgram, max_participants: null }} currency="RON" chargeable prices={[]} />);
+  expect(screen.getByText(/Set the program’s minimum and maximum players under Programs/)).toBeTruthy();
+  expect(screen.queryByRole("textbox")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Save prices" })).toBeNull();
 });

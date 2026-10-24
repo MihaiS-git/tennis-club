@@ -6,7 +6,7 @@ vi.mock("@/lib/reservations/revalidation", () => ({ revalidateCourtActivity: vi.
 import { commitCoachingBookingAction } from "@/app/book/actions";
 const intent = { locationId: "a1111111-1111-4111-8111-111111111111", programId: "b1111111-1111-4111-8111-111111111111",
   coachId: "c1111111-1111-4111-8111-111111111111", courtId: "d1111111-1111-4111-8111-111111111111",
-  date: "2099-10-15", startMinute: 600, durationMinutes: 90, customerName: "Guest", customerEmail: "guest@example.test",
+  date: "2099-10-15", startMinute: 600, durationMinutes: 90, participantCount: 4, customerName: "Guest", customerEmail: "guest@example.test",
   customerPhone: "123", expectedTotalAmountMinor: 18000, expectedCurrency: "RON" };
 beforeEach(() => { checkout.mockReset(); revalidate.mockReset(); });
 it("validates server input and rejects supplied account identity or payment method", async () => {

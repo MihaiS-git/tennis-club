@@ -153,9 +153,6 @@ export function OpeningHours({ locationId, intervals, schedules = [], today = ""
         toast.dismiss(notification); setFieldErrors(result.fieldErrors);
       } else if (result.reason === "overlap") {
         toast.error(`${result.weekdays.map((day) => weekdays[day]).join(", ") || "Selected days"} conflict with existing opening hours. Check the intervals; no changes were saved.`, { id: notification });
-      } else if (result.reason === "booking-conflict") {
-        const shown = result.dates.slice(0, 5).join(", ") + (result.dates.length > 5 ? ` and ${result.dates.length - 5} more dates` : "");
-        toast.error(`Existing bookings on ${shown} would fall outside these opening hours. Move or cancel them first; no changes were saved.`, { id: notification });
       } else if (result.reason === "period-overlap") {
         toast.error("These dates overlap another schedule. Edit its validity dates explicitly; scheduled future policies cannot be adjusted automatically.", { id: notification });
       } else if (result.reason === "stale") {

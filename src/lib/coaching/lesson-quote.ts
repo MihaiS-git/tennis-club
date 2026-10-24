@@ -12,7 +12,9 @@ import type { PricingRule } from "@/lib/pricing/validation";
 import { resolveCoachAvailability, type AvailabilityException, type WeeklyAvailabilityInterval } from "./availability-schedule";
 import type { ResolvedCoachingPrice } from "./pricing";
 import { projectPublicCoachProfile } from "./public";
-import { isCoachingDuration, isOnlineCoachingProgramType } from "./validation";
+import {
+  coachingParticipantRange, isCoachingDuration, isOnlineCoachingProgramType, isPermittedParticipantCount, type OnlineCoachingProgramType,
+} from "./validation";
 
 const maxAmountMinor = 2147483647;
 
@@ -42,13 +44,15 @@ export type CoachingLessonDay = {
   };
 };
 
-export type CoachingLessonRequest = { programId: string; courtId: string; startMinute: number; durationMinutes: number };
+// One lesson for one paying customer; the participant count must lie in the program's configured range.
+export type CoachingLessonRequest = { programId: string; courtId: string; startMinute: number; durationMinutes: number; participantCount: number };
 
 export type CoachingLessonQuote = {
   location: { id: string; name: string; timezone: string };
   court: { id: string; name: string };
   coach: { userId: string; displayName: string };
-  program: { id: string; name: string; type: "private" | "semi_private"; participantCount: 1 | 2; courtRentalIncluded: boolean };
+  // participants is the program's permitted range; the price never depends on the count.
+  program: { id: string; name: string; type: OnlineCoachingProgramType; participants: { min: number; max: number }; courtRentalIncluded: boolean };
   date: string;
   startMinute: number;
   endMinute: number;
@@ -69,7 +73,7 @@ export type CoachingLessonQuote = {
 };
 
 export type CoachingLessonUnavailableReason =
-  | "invalid-time" | "not-offered" | "invalid-duration" | "unpriced"
+  | "invalid-time" | "not-offered" | "invalid-participants" | "invalid-duration" | "unpriced"
   | "coach-unavailable" | "coach-booked" | "court-unavailable";
 
 export type CoachingLessonResult = { ok: true; quote: CoachingLessonQuote } | { ok: false; reason: CoachingLessonUnavailableReason };
@@ -99,7 +103,7 @@ function lessonSchedule(day: Omit<CoachingLessonDay, "coaching">) {
   const courtDay = buildCourtDay({ date: day.date, today: day.today, currentMinute: day.currentMinute, courts: day.location.courts,
     hours: day.hours, coverage: day.coverage, pricing: day.pricing, reservations: day.courtOccupancy });
 
-  return (request: Omit<CoachingLessonRequest, "programId">) => {
+  return (request: Omit<CoachingLessonRequest, "programId" | "participantCount">) => {
     const { startMinute, durationMinutes } = request;
     if (!isLessonInterval(startMinute, durationMinutes)) return { ok: false as const, reason: "invalid-time" as const };
     const endMinute = startMinute + durationMinutes;
@@ -135,12 +139,19 @@ function lessonDay(day: CoachingLessonDay) {
     [{ id: locationId, name: day.location.name, currency: day.location.currency }], key(day.coach.userId));
   const schedule = lessonSchedule(day);
 
-  return (request: CoachingLessonRequest): CoachingLessonResult => {
+  // Offers list starts for any permitted count; a quote names the customer's count.
+  return (request: Omit<CoachingLessonRequest, "participantCount"> & { participantCount?: number }): CoachingLessonResult => {
     const { startMinute, durationMinutes } = request;
     if (!isLessonInterval(startMinute, durationMinutes)) return { ok: false, reason: "invalid-time" };
     const program = profile?.programs.find((candidate) => candidate.id === key(request.programId));
-    if (!profile || !program || !isOnlineCoachingProgramType(program.type) || !profile.locations.some((location) => location.id === locationId))
+    // Only Private/Semi-private programs with valid configured participant limits are
+    // offered online; Group/Junior sessions are organized by the coach or club.
+    const participants = program && coachingParticipantRange(program);
+    if (!profile || !program || !isOnlineCoachingProgramType(program.type) || !participants
+      || !profile.locations.some((location) => location.id === locationId))
       return { ok: false, reason: "not-offered" };
+    if (request.participantCount !== undefined && !isPermittedParticipantCount(participants, request.participantCount))
+      return { ok: false, reason: "invalid-participants" };
     // Club-wide price in the location's currency; a lesson without one never reaches payment.
     const lesson = profile.lessons.find((candidate) => candidate.currency === day.location.currency
       && candidate.programId === program.id && candidate.durationMinutes === durationMinutes);
@@ -157,8 +168,7 @@ function lessonDay(day: CoachingLessonDay) {
       location: { id: locationId, name: day.location.name, timezone: day.location.timezone },
       court: slot.court,
       coach: { userId: profile.id, displayName: profile.displayName },
-      program: { id: program.id, name: program.name, type: program.type, participantCount: program.type === "semi_private" ? 2 : 1,
-        courtRentalIncluded: program.courtRentalIncluded },
+      program: { id: program.id, name: program.name, type: program.type, participants, courtRentalIncluded: program.courtRentalIncluded },
       date: day.date, startMinute, endMinute: slot.endMinute, durationMinutes, startsAt: slot.startsAt, endsAt: slot.endsAt,
       coachingAmountMinor: lesson.price.amountMinor, courtAmountMinor, totalAmountMinor, currency: lesson.price.currency,
       evidence: {
@@ -180,7 +190,7 @@ export function quoteCoachingLesson(day: CoachingLessonDay, request: CoachingLes
 // Every offerable start of one program duration on the day, on every available court
 // (in the supplied court order), each court and start once. Offers at one start are
 // alternatives for a single lesson; courts may quote different prices.
-export function listCoachingLessonOffers(day: CoachingLessonDay, request: Omit<CoachingLessonRequest, "courtId" | "startMinute">): CoachingLessonQuote[] {
+export function listCoachingLessonOffers(day: CoachingLessonDay, request: Omit<CoachingLessonRequest, "courtId" | "startMinute" | "participantCount">): CoachingLessonQuote[] {
   const quote = lessonDay(day);
   const courtIds = [...new Set(day.location.courts.map((court) => court.id.toLowerCase()))];
   const offers: CoachingLessonQuote[] = [];

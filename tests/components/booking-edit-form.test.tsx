@@ -33,13 +33,6 @@ function renderBooking(scope: "admin" | "owner" = "admin", paymentMethod: "onlin
 const saveButton = () => screen.getByRole("button", { name: "Save changes" });
 const extendInterval = () => fireEvent.click(screen.getByRole("button", { name: /Court A 2099-10-15 11:00–11:30/ }));
 
-it("renders an explicit empty refund collection without refund entries", async () => {
-  quote.mockResolvedValue({ ok: true, totalAmountMinor: 7500 });
-  renderBooking("owner");
-  await screen.findByText("Current reservation");
-  expect(screen.queryByText(/^Refund /)).toBeNull();
-});
-
 it.each(["admin", "owner"] as const)("requires a current quote for %s rescheduling and disables a reverted interval", async (scope) => {
   let finish: (value: { ok: true; totalAmountMinor: number }) => void = () => { throw new Error("Not quoting"); };
   quote.mockResolvedValueOnce({ ok: true, totalAmountMinor: 7500 })
@@ -129,6 +122,8 @@ it("preselects the current interval and requires price acknowledgement and recon
   const onSaved = vi.fn(async () => {});
   render(<BookingEditForm booking={booking} location={location} onCancel={vi.fn()} onPendingChange={vi.fn()} onSaved={onSaved} />);
   await screen.findByText("Current reservation");
+  // An explicit empty refund collection renders no refund entries.
+  expect(screen.queryByText(/^Refund /)).toBeNull();
   expect(screen.getByRole("button", { name: "Save changes" })).toHaveProperty("disabled", true);
   expect(screen.queryByRole("textbox", { name: "Reason" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: /Court A 2099-10-15 11:00–11:30/ }));
@@ -250,10 +245,9 @@ it("reports the unpaid modification for X and offers no other dismissal or recov
   expect(abandon).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Simulate verified modification payment" }));
   expect(onAdjustment).toHaveBeenLastCalledWith(null);
-});
 
-it("always opens a fresh form even if the server once knew of an earlier modification", async () => {
-  quote.mockResolvedValue({ ok: true, totalAmountMinor: 7500 });
+  // Reopening is always a fresh form, even when the server still reports the earlier modification.
+  cleanup();
   load.mockResolvedValue({ day: { times: [600, 630, 660, 690], courts: [{ court, cells: ["available", "available", "available", "available"] }] },
     booking: { ...booking, payment_method: "online", court_id: court.id, starts_at_minute: 600, ends_at_minute: 660, total_amount_minor: 7500,
       location_id: location.id, location_timezone: "UTC", updated_at: "2026-10-01T12:00:00Z",

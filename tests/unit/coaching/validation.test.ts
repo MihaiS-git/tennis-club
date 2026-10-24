@@ -1,20 +1,23 @@
 import { describe, expect, it } from "vitest";
 import {
   coachingFieldErrors, coachingPriceMutationSchema, coachingProgramMutationSchema, coachProfileMutationSchema,
-  formatParticipants, parseTextList,
+  formatParticipants, parseTextList, participantPriceMutationSchema,
 } from "@/lib/coaching/validation";
 
 const fields = { name: "Private lesson", description: "", program_type: "private", durations: [60, 90],
-  min_participants: null, max_participants: 1, court_rental_included: true, is_active: true };
+  min_participants: 1, max_participants: 1, court_rental_included: true, is_active: true };
 
 describe("coaching program validation", () => {
-  it("accepts configurable program types and optional participant limits", () => {
+  it("accepts every program type and requires explicit participant limits only for active programs", () => {
     for (const program_type of ["private", "semi_private", "group", "junior"]) {
       for (const durations of [[60], [90], [120], [60, 90], [60, 120], [90, 120], [60, 90, 120]]) {
         expect(coachingProgramMutationSchema.safeParse({ fields: { ...fields, program_type, durations } }).success).toBe(true);
       }
     }
-    expect(coachingProgramMutationSchema.safeParse({ fields: { ...fields, max_participants: null } }).success).toBe(true);
+    for (const [min_participants, max_participants] of [[1, 100], [3, 6], [8, 8]])
+      expect(coachingProgramMutationSchema.safeParse({ fields: { ...fields, min_participants, max_participants } }).success).toBe(true);
+    // An inactive program keeps incomplete limits until an Admin completes them.
+    expect(coachingProgramMutationSchema.safeParse({ fields: { ...fields, min_participants: null, max_participants: null, is_active: false } }).success).toBe(true);
   });
 
   it.each([undefined, "a1000000-0000-4000-8000-000000000001"])("restricts create/update durations (id=%s)", (id) => {
@@ -32,6 +35,8 @@ describe("coaching program validation", () => {
     const cases: [Record<string, unknown>, string][] = [
       [{ durations: [] }, "durations"], [{ durations: [60, 60] }, "durations"], [{ durations: [62] }, "durations"],
       [{ durations: [10] }, "durations"], [{ min_participants: 4, max_participants: 2 }, "max_participants"],
+      [{ min_participants: null }, "min_participants"], [{ max_participants: null }, "max_participants"],
+      [{ min_participants: 0 }, "min_participants"], [{ max_participants: 101 }, "max_participants"],
       [{ program_type: "camp" }, "program_type"], [{ name: " " }, "name"],
     ];
     for (const [change, field] of cases) {
@@ -74,5 +79,38 @@ describe("coach profile and price validation", () => {
     expect(formatParticipants(2, 4)).toBe("2–4 players");
     expect(formatParticipants(null, 6)).toBe("Up to 6 players");
     expect(formatParticipants(3, null)).toBe("At least 3 players");
+  });
+});
+
+describe("Group and Junior rate validation", () => {
+  const rates = { program_id: "a1000000-0000-4000-8000-000000000001", currency: "RON", prices: [{ participant_count: 3, amount: "55.50" }], removed: [4] };
+
+  it("accepts positive rates in minor units by player count and explicit removals", () => {
+    expect(participantPriceMutationSchema.parse(rates)).toEqual({ ...rates, prices: [{ participant_count: 3, amount: 5550 }] });
+    expect(participantPriceMutationSchema.safeParse({ ...rates, prices: [] }).success).toBe(true);
+  });
+
+  it("rejects missing, zero or malformed amounts, invalid counts, currencies, conflicts and empty submissions", () => {
+    const invalid = [
+      { prices: [{ participant_count: 3, amount: "0" }] }, { prices: [{ participant_count: 3, amount: "-1" }] },
+      { prices: [{ participant_count: 3, amount: "1.234" }] }, { prices: [{ participant_count: 3, amount: "" }] },
+      { prices: [{ participant_count: 0, amount: "10" }] }, { prices: [{ participant_count: 2.5, amount: "10" }] },
+      { prices: [{ participant_count: 101, amount: "10" }] }, { currency: "JPY" }, { currency: "ron" },
+      { prices: [{ participant_count: 3, amount: "10" }, { participant_count: 3, amount: "12" }] },
+      { removed: [3] }, { removed: [4, 4] }, { prices: [], removed: [] },
+      { prices: [{ participant_count: 3, amount: "10", duration_minutes: 60 }] }, { coach_user_id: null },
+    ];
+    for (const change of invalid) expect(participantPriceMutationSchema.safeParse({ ...rates, ...change }).success, JSON.stringify(change)).toBe(false);
+    const result = participantPriceMutationSchema.safeParse({ ...rates, prices: [{ participant_count: 5, amount: "10" }, { participant_count: 6, amount: "0" }], removed: [] });
+    expect(result.success).toBe(false);
+    if (!result.success) expect(Object.keys(coachingFieldErrors(result.error.issues))).toEqual(["prices.1"]);
+  });
+
+  it("does not accept per-duration club prices for Group and Junior programs", () => {
+    const club_prices = [{ duration_minutes: 60, currency: "RON", amount: "100" }];
+    for (const program_type of ["group", "junior"]) {
+      expect(coachingProgramMutationSchema.safeParse({ fields: { ...fields, program_type, min_participants: 3, max_participants: 6 }, club_prices }).success).toBe(false);
+    }
+    expect(coachingProgramMutationSchema.safeParse({ fields, club_prices }).success).toBe(true);
   });
 });

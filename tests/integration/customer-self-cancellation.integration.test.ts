@@ -45,10 +45,10 @@ test("self-cancellation enforces account ownership, snapshot notice, staff exemp
     return { id: bookingId, reservationId, courtId, start };
   }
   const read = async (item: Awaited<ReturnType<typeof booking>>) => {
-    const b = await Promise.resolve({ error:null, data:(await readBookingContracts(service, { ids: [item.id] }))[0] });
+    const [booking] = await readBookingContracts(service, { ids: [item.id] });
     const r = await service.from("court_reservations").select("*").eq("id", item.reservationId).single();
-    assert.strictEqual(b.error, null); assert.strictEqual(r.error, null);
-    return { booking: b.data!, reservation: r.data! };
+    assert.ok(booking); assert.strictEqual(r.error, null);
+    return { booking, reservation: r.data! };
   };
   try {
     assert.strictEqual((await service.from("locations").insert({ id: locationId, name: "Self cancellation",

@@ -4,12 +4,21 @@ import { majorAmountSchema } from "@/lib/pricing/money";
 
 export const coachingProgramTypes = ["private", "semi_private", "group", "junior"] as const;
 export type CoachingProgramType = typeof coachingProgramTypes[number];
-export function isOnlineCoachingProgramType(type: CoachingProgramType): type is "private" | "semi_private" {
-  return type === "private" || type === "semi_private";
-}
 export const coachingProgramTypeLabels: Record<CoachingProgramType, string> = {
   private: "Private", semi_private: "Semi-private", group: "Group", junior: "Junior",
 };
+
+// Private and Semi-private lessons are booked and paid online, priced per session duration
+// with optional coach overrides. Group and Junior sessions are organized by the coach or club,
+// paid at the club, and published only as club rates per person per 60 minutes by player count.
+export type OnlineCoachingProgramType = "private" | "semi_private";
+export function isOnlineCoachingProgramType(type: CoachingProgramType): type is OnlineCoachingProgramType {
+  return type === "private" || type === "semi_private";
+}
+export function hasParticipantRates(type: CoachingProgramType) {
+  return !isOnlineCoachingProgramType(type);
+}
+export const participantRateProgramTypes = coachingProgramTypes.filter(hasParticipantRates);
 
 export const coachingProgramDurations = [60, 90, 120] as const;
 
@@ -43,7 +52,22 @@ export function parseTextList(value: string) {
   return items;
 }
 
-const optionalCount = z.union([z.null(), z.number().int().min(1, "Use at least 1.").max(100, "Use at most 100.")]);
+// The configurable participant bounds; a lesson books one count within its program's range.
+const maxProgramParticipants = 100;
+const optionalCount = z.union([z.null(), z.number().int().min(1, "Use at least 1.").max(maxProgramParticipants, "Use at most 100.")]);
+export const participantCountSchema = z.number().int().min(1).max(maxProgramParticipants);
+
+// The participant counts one lesson of the program may be booked for: its explicitly
+// configured limits, 1 ≤ min ≤ max ≤ 100. Null (not bookable online) when either is
+// missing or invalid; nothing is inferred from the program type or filled in.
+export function coachingParticipantRange(program: { minParticipants: number | null; maxParticipants: number | null }) {
+  const { minParticipants: min, maxParticipants: max } = program;
+  if (!Number.isInteger(min) || !Number.isInteger(max) || min! < 1 || min! > max! || max! > maxProgramParticipants) return null;
+  return { min: min!, max: max! };
+}
+export function isPermittedParticipantCount(range: { min: number; max: number }, count: number) {
+  return Number.isInteger(count) && range.min <= count && count <= range.max;
+}
 
 export const coachingProgramFieldsSchema = z.strictObject({
   name: z.string().trim().min(1, "Enter a program name.").max(100, "Use at most 100 characters."),
@@ -57,6 +81,13 @@ export const coachingProgramFieldsSchema = z.strictObject({
   court_rental_included: z.boolean(),
   is_active: z.boolean(),
 }).superRefine((fields, context) => {
+  // Active programs are bookable online, which requires both limits.
+  if (fields.is_active && fields.min_participants === null) {
+    context.addIssue({ code: "custom", path: ["min_participants"], message: "Enter the minimum players for an active program." });
+  }
+  if (fields.is_active && fields.max_participants === null) {
+    context.addIssue({ code: "custom", path: ["max_participants"], message: "Enter the maximum players for an active program." });
+  }
   if (fields.min_participants !== null && fields.max_participants !== null && fields.min_participants > fields.max_participants) {
     context.addIssue({ code: "custom", path: ["max_participants"], message: "Maximum must be at least the minimum." });
   }
@@ -76,7 +107,9 @@ export const coachingProgramMutationSchema = z.strictObject({
   const seen = new Set<string>();
   value.club_prices?.forEach((price, index) => {
     const key = clubPriceKeyText(price);
-    if (!value.fields.durations.includes(price.duration_minutes)) {
+    if (hasParticipantRates(value.fields.program_type)) {
+      context.addIssue({ code: "custom", path: ["club_prices", index, "amount"], message: "Group and Junior programs use per-player rates set under Prices." });
+    } else if (!value.fields.durations.includes(price.duration_minutes)) {
       context.addIssue({ code: "custom", path: ["club_prices", index, "amount"], message: "Select this duration before setting its price." });
     } else if (seen.has(key)) {
       context.addIssue({ code: "custom", path: ["club_prices", index, "amount"], message: "Enter each price once." });
@@ -121,17 +154,37 @@ export const coachingPriceRemovalSchema = coachingPriceMutationSchema.omit({ amo
   duration_minutes: z.number().int().min(15).max(480),
 });
 
+// Club rates per person per 60 minutes for player counts of a Group/Junior program in one
+// currency. Omitted counts are unchanged; an empty amount is never sent and removal is explicit.
+// Removal accepts any count, so rates left outside a changed range can still be cleared.
+export const participantPriceMutationSchema = z.strictObject({
+  program_id: z.uuid(), currency: coachingCurrencySchema,
+  prices: z.array(z.strictObject({ participant_count: participantCountSchema, amount: majorAmountSchema })).max(100),
+  removed: z.array(participantCountSchema).max(100),
+}).superRefine((value, context) => {
+  const saved = new Set<number>();
+  value.prices.forEach((price, index) => {
+    if (saved.has(price.participant_count)) context.addIssue({ code: "custom", path: ["prices", index, "amount"], message: "Enter each player count once." });
+    saved.add(price.participant_count);
+  });
+  value.removed.forEach((count, index) => {
+    if (saved.has(count)) context.addIssue({ code: "custom", path: ["removed", index], message: "A price cannot be both saved and removed." });
+  });
+  if (new Set(value.removed).size !== value.removed.length) context.addIssue({ code: "custom", path: ["removed"], message: "Remove each player count once." });
+  if (!value.prices.length && !value.removed.length) context.addIssue({ code: "custom", path: ["form"], message: "There are no changes to save." });
+});
+
 export type CoachingMutationResult =
   | { ok: true; id: string; archived?: boolean }
   | { ok: false; reason: "invalid-input"; fieldErrors: Record<string, string> }
-  | { ok: false; reason: "has-bookings" | "active-lessons" | "not-found" | "has-prices" | "has-availability" | "not-eligible" | "already-exists" | "invalid-location" | "invalid-program" | "not-offered" };
+  | { ok: false; reason: "has-bookings" | "active-lessons" | "not-found" | "has-prices" | "has-availability" | "not-eligible" | "already-exists" | "invalid-location" | "invalid-program" | "not-offered" | "participants-required" | "club-priced" | "invalid-currency" };
 
 export function coachingFieldErrors(issues: readonly z.core.$ZodIssue[]) {
   const fieldErrors: Record<string, string> = {};
   for (const issue of issues) {
-    // Program club prices are reported per submitted entry, e.g. "club_prices.2".
-    if ((issue.path[0] === "club_prices" || issue.path[0] === "removed_club_prices") && typeof issue.path[1] === "number") {
-      fieldErrors[`${issue.path[0]}.${issue.path[1]}`] ??= issue.message;
+    // Submitted price entries are reported per entry, e.g. "club_prices.2" or "prices.0".
+    if (["club_prices", "removed_club_prices", "prices", "removed"].includes(String(issue.path[0])) && typeof issue.path[1] === "number") {
+      fieldErrors[`${String(issue.path[0])}.${issue.path[1]}`] ??= issue.message;
       continue;
     }
     const field = issue.path.find((part) => typeof part === "string" && part !== "fields");

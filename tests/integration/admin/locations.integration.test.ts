@@ -7,7 +7,7 @@ import { listPublicLocationsWithCourts } from "../../../src/lib/courts/public";
 import { cleanupAuthFixtures, localFixtureClient } from "../auth-fixtures";
 import { ensureIntegrationAdminAnchor } from "../admin-anchor";
 
-test("admin location workflow uses real authorization, RLS and persistence", async () => {
+test("admin location workflow uses Next.js authorization, denied browser grants and persistence", async () => {
   const service = localFixtureClient();
   await ensureIntegrationAdminAnchor(service);
   const userIds: string[] = [];

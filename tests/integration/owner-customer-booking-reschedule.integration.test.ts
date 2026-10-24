@@ -68,7 +68,7 @@ test("Owner rescheduling preserves rows, enforces notice/ownership and shares pr
       starts_at_minute: 600, ends_at_minute: 660 });
     expect((await service.from("payment_attempts").insert({ booking_id: bookingId, method: "pay_at_club",
       amount_minor: 8000, currency: "RON", status: "due" })).error).toBeNull();
-    const beforeBooking = (await Promise.resolve({ error:null, data:(await readBookingContracts(service, { ids: [bookingId] }))[0] })).data!;
+    const beforeBooking = (await readBookingContracts(service, { ids: [bookingId] }))[0];
     const beforeReservation = (await service.from("court_reservations").select("*").eq("id", reservationId).single()).data!;
     const context = await getOwnBookingEditDay(bookingId, date, owner.client, now);
     expect(context.booking.occupancy).toEqual([{ court_id: courtId, starts_at_minute: 660, ends_at_minute: 720 }]);
@@ -76,7 +76,7 @@ test("Owner rescheduling preserves rows, enforces notice/ownership and shares pr
       expectedRevisionId: context.booking.current_revision_id, courtId, date,
       startMinute: 720, endMinute: 780, save: true, expectedTotal: 9001, priceAcknowledged: false };
     expect(await rescheduleOwnCustomerBooking(input, owner.client)).toMatchObject({ ok: false, reason: "price_changed", totalAmountMinor: 9001 });
-    expect((await Promise.resolve({ error:null, data:(await readBookingContracts(service, { ids: [bookingId] }))[0] })).data).toEqual(beforeBooking);
+    expect((await readBookingContracts(service, { ids: [bookingId] }))[0]).toEqual(beforeBooking);
     expect((await service.from("court_reservations").select("*").eq("id", reservationId).single()).data).toEqual(beforeReservation);
     // A quote changing again must be acknowledged again; neither row is written.
     await service.from("location_pricing_rules").update({ price_per_hour_minor: 10001 }).eq("court_id", courtId);
@@ -91,7 +91,7 @@ test("Owner rescheduling preserves rows, enforces notice/ownership and shares pr
 
     expect(await rescheduleOwnCustomerBooking({ ...input, expectedTotal: 10001, priceAcknowledged: true }, owner.client))
       .toEqual({ ok: true, totalAmountMinor: 10001 });
-    const afterBooking = (await Promise.resolve({ error:null, data:(await readBookingContracts(service, { ids: [bookingId] }))[0] })).data!;
+    const afterBooking = (await readBookingContracts(service, { ids: [bookingId] }))[0];
     const afterReservation = (await service.from("court_reservations").select("*").eq("id", reservationId).single()).data!;
     for (const key of ["id", "reservation_id", "account_user_id", "customer_name", "customer_email", "customer_phone",
       "currency", "cancellation_notice_minutes", "created_at", "status"] as const) expect(afterBooking[key]).toBe(beforeBooking[key]);
@@ -103,7 +103,7 @@ test("Owner rescheduling preserves rows, enforces notice/ownership and shares pr
     expect(afterReservation).toMatchObject({ starts_at_minute: 720, ends_at_minute: 780 });
     expect(await rescheduleOwnCustomerBooking({ ...input, expectedTotal: 10001, priceAcknowledged: true }, owner.client))
       .toMatchObject({ ok: true });
-    expect((await Promise.resolve({ error:null, data:(await readBookingContracts(service, { ids: [bookingId] }))[0] })).data).toEqual(afterBooking);
+    expect((await readBookingContracts(service, { ids: [bookingId] }))[0]).toEqual(afterBooking);
     expect((await service.from("court_reservations").select("*").eq("id", reservationId).single()).data).toEqual(afterReservation);
     const personal = (await listOwnUpcomingCustomerBookings(owner.client)).filter((b) => b.id === bookingId);
     expect(personal).toHaveLength(1);

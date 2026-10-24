@@ -18,8 +18,9 @@ const webhook = "localhost:3100/api/payments/stripe/webhook";
 const date = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
 const courts = ["C1", "C2", "C3", "C4", "C5", "C6"];
 let db: DataSource,
-  listener: ChildProcess | null = null,
-  previousProvider: string | null = null;
+  listener: { child: ChildProcess; exited: Promise<void> } | null = null,
+  // undefined until read, so teardown never "restores" a value it did not observe.
+  previousProvider: string | null | undefined;
 const auth = () =>
   createClient(process.env.SUPABASE_URL!, localServiceRoleKey(), {
     auth: { persistSession: false, autoRefreshToken: false },
@@ -38,29 +39,63 @@ function stripe(args: string[]) {
     }),
   );
 }
+// One forwarder at a time: a restart waits for the previous process to exit.
 async function startListener() {
-  if (listener) return;
+  if (listener?.child.exitCode === null && listener.child.signalCode === null)
+    return;
+  await stopListener();
   const child = spawn("stripe", ["listen", "--forward-to", webhook], {
     stdio: ["ignore", "pipe", "pipe"],
   });
-  listener = child;
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error("stripe listen did not become ready")),
-      30_000,
-    );
-    const ready = (chunk: Buffer) => {
-      if (chunk.toString().includes("Ready!")) {
-        clearTimeout(timer);
-        resolve();
-      }
-    };
-    child.stdout?.on("data", ready);
-    child.stderr?.on("data", ready);
+  // A failed spawn emits "error" and never "exit".
+  const exited = new Promise<void>((resolve) => {
+    child.once("exit", () => resolve());
+    child.once("error", () => resolve());
   });
+  listener = { child, exited };
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error("stripe listen did not become ready")),
+        30_000,
+      );
+      const settle = (error?: Error) => {
+        clearTimeout(timer);
+        if (error) reject(error);
+        else resolve();
+      };
+      const ready = (chunk: Buffer) => {
+        if (chunk.toString().includes("Ready!")) settle();
+      };
+      child.stdout?.on("data", ready);
+      child.stderr?.on("data", ready);
+      child.once("error", (error) =>
+        settle(new Error("stripe listen failed to start", { cause: error })),
+      );
+      child.once("exit", (code, signal) =>
+        settle(
+          new Error(
+            `stripe listen exited before it was ready (${signal ?? `code ${code}`})`,
+          ),
+        ),
+      );
+    });
+  } catch (error) {
+    await stopListener();
+    throw error;
+  }
 }
-function stopListener() {
-  listener?.kill("SIGINT");
+// Interrupts the forwarder and keeps its reference until the process has exited.
+async function stopListener() {
+  if (!listener) return;
+  const { child, exited } = listener;
+  if (child.exitCode === null && child.signalCode === null) child.kill("SIGINT");
+  const forced = setTimeout(() => child.kill("SIGKILL"), 10_000);
+  try {
+    await exited;
+  } finally {
+    clearTimeout(forced);
+  }
   listener = null;
 }
 // Delivers a recorded event again through the running CLI listener.
@@ -84,6 +119,17 @@ const q = async <T = Record<string, unknown>>(
   sql: string,
   params: unknown[] = [],
 ) => (await db.query(sql, params)) as T[];
+// Soft checks report a failed cleanup step without hiding test failures or skipping
+// independent steps; steps within one call depend on each other and stop at the first error.
+const cleanup = (step: string, work: () => Promise<unknown>) =>
+  expect
+    .soft(
+      Promise.resolve()
+        .then(work)
+        .then(() => "done"),
+      step,
+    )
+    .resolves.toBe("done");
 
 test.beforeAll(async () => {
   db = await new DataSource({
@@ -131,34 +177,49 @@ test.beforeAll(async () => {
   await startListener();
 });
 test.afterAll(async () => {
-  stopListener();
+  await cleanup("stop stripe listen", stopListener);
+  if (!db?.isInitialized) return;
   try {
-    if (bookings.length)
-      await db.transaction((m) =>
-        cleanupBookingEvidence(m, { bookingIds: bookings }),
+    // Bookings and reservations reference the users, so they go first.
+    await cleanup("delete bookings and club fixtures", async () => {
+      if (bookings.length)
+        await db.transaction((m) =>
+          cleanupBookingEvidence(m, { bookingIds: bookings }),
+        );
+      await q(
+        "DELETE FROM public.court_reservations WHERE court_id=ANY($1::uuid[])",
+        [[...courtIds.values()]],
       );
-    await q(
-      "DELETE FROM public.court_reservations WHERE court_id=ANY($1::uuid[])",
-      [[...courtIds.values()]],
-    );
-    await q("DELETE FROM public.location_pricing_rules WHERE location_id=$1", [
-      locationId,
-    ]);
-    await q("DELETE FROM public.pricing_rule_sets WHERE location_id=$1", [
-      locationId,
-    ]);
-    await q("DELETE FROM public.location_opening_hours WHERE location_id=$1", [
-      locationId,
-    ]);
-    await q("DELETE FROM public.opening_hours_schedules WHERE location_id=$1", [
-      locationId,
-    ]);
-    await q("DELETE FROM public.courts WHERE location_id=$1", [locationId]);
-    await q("DELETE FROM public.locations WHERE id=$1", [locationId]);
-    await q("UPDATE public.payment_provider_settings SET active_provider=$1", [
-      previousProvider,
-    ]);
-    for (const id of users) await auth().auth.admin.deleteUser(id);
+      await q("DELETE FROM public.location_pricing_rules WHERE location_id=$1", [
+        locationId,
+      ]);
+      await q("DELETE FROM public.pricing_rule_sets WHERE location_id=$1", [
+        locationId,
+      ]);
+      await q("DELETE FROM public.location_opening_hours WHERE location_id=$1", [
+        locationId,
+      ]);
+      await q("DELETE FROM public.opening_hours_schedules WHERE location_id=$1", [
+        locationId,
+      ]);
+      await q("DELETE FROM public.courts WHERE location_id=$1", [locationId]);
+      await q("DELETE FROM public.locations WHERE id=$1", [locationId]);
+    });
+    if (previousProvider !== undefined)
+      await cleanup("restore payment provider", () =>
+        q("UPDATE public.payment_provider_settings SET active_provider=$1", [
+          previousProvider,
+        ]),
+      );
+    // Application references before Auth: public.users restricts Auth deletion.
+    for (const id of users)
+      await cleanup(`delete user ${id}`, async () => {
+        await q("DELETE FROM public.player_profiles WHERE user_id=$1", [id]);
+        await q("DELETE FROM public.user_roles WHERE user_id=$1", [id]);
+        await q("DELETE FROM public.users WHERE id=$1", [id]);
+        const { error } = await auth().auth.admin.deleteUser(id);
+        if (error) throw error;
+      });
   } finally {
     await db.destroy();
   }
@@ -173,9 +234,9 @@ async function signedInBooking(page: Page, court: string) {
     password,
     email_confirm: true,
   });
+  if (account.data.user) users.push(account.data.user.id);
   expect(account.error).toBeNull();
   const userId = account.data.user!.id;
-  users.push(userId);
   const reservationId = randomUUID(),
     bookingId = randomUUID(),
     attemptId = randomUUID(),
@@ -459,7 +520,7 @@ test.describe("live lifecycle", () => {
   }) => {
     const { bookingId, court } = await signedInBooking(page, "C4");
     await proposeExtension(page, court);
-    stopListener();
+    await stopListener();
     const [pending] = await adjustments(bookingId);
     await fillCard(page, "4242424242424242");
     await pay(page);
@@ -528,14 +589,11 @@ test.describe("live lifecycle", () => {
   });
 });
 
-test("late success: payment after the shortened hold is refunded once, never applied, and the hold is released", async ({
-  page,
-}) => {
-  test.skip(
-    process.env.LIVE_LATE !== "1",
-    "Requires the server started with the hold override.",
-  );
-  const { bookingId, court } = await signedInBooking(page, "C5");
+// Adjustment PaymentIntents use manual capture: confirming one only authorizes it.
+// Both late scenarios open a surcharge on the shortened-hold server and confirm it
+// at Stripe after the cutoff, while the listener is stopped and the customer is gone.
+async function confirmAfterCutoff(page: Page, courtName: string) {
+  const { bookingId, court } = await signedInBooking(page, courtName);
   await proposeExtension(page, court);
   const [pending] = await adjustments(bookingId);
   const [{ cutoff }] = await q<{ cutoff: Date }>(
@@ -543,24 +601,100 @@ test("late success: payment after the shortened hold is refunded once, never app
     [pending.id],
   );
   expect(cutoff.getTime() - Date.now()).toBeLessThanOrEqual(61_000);
-  // The customer leaves without X; the provider completes only after the cutoff.
   await page.close();
-  stopListener();
+  await stopListener();
   await new Promise((resolve) =>
     setTimeout(resolve, Math.max(0, cutoff.getTime() - Date.now()) + 5_000),
   );
-  stripe([
+  const authorized = stripe([
     "payment_intents",
     "confirm",
     pending.provider_payment_id!,
     "--payment-method",
     "pm_card_visa",
   ]);
-  await startListener();
-  const succeeded = eventFor(
-    "payment_intent.succeeded",
-    pending.provider_payment_id!,
+  expect(authorized).toMatchObject({
+    status: "requires_capture",
+    amount_capturable: 2500,
+    amount_received: 0,
+  });
+  return { bookingId, pending, paymentId: pending.provider_payment_id! };
+}
+// Stripe lists events account-wide and asynchronously; poll the latest page for this intent.
+async function awaitEvent(type: string, paymentIntent: string) {
+  let id = "";
+  await expect
+    .poll(
+      () => {
+        try {
+          id = eventFor(type, paymentIntent);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      { timeout: 30_000 },
+    )
+    .toBe(true);
+  return id;
+}
+const receipts = async (paymentId: string) =>
+  (
+    await q<{ n: number }>(
+      "SELECT count(*)::integer AS n FROM public.payment_capture_receipts WHERE provider_payment_id=$1",
+      [paymentId],
+    )
+  )[0].n;
+
+test("late authorization: an authorization after the shortened hold is cancelled at Stripe and collects no money", async ({
+  page,
+}) => {
+  test.skip(
+    process.env.LIVE_LATE !== "1",
+    "Requires the server started with the hold override.",
   );
+  const { bookingId, pending, paymentId } = await confirmAfterCutoff(page, "C5");
+  await startListener();
+  const authorized = await awaitEvent(
+    "payment_intent.amount_capturable_updated",
+    paymentId,
+  );
+  resend(authorized);
+  await expect
+    .poll(() => stripe(["payment_intents", "retrieve", paymentId]).status, {
+      timeout: 30_000,
+    })
+    .toBe("canceled");
+  expect(stripe(["payment_intents", "retrieve", paymentId])).toMatchObject({
+    amount_received: 0,
+  });
+  expect(await receipts(paymentId)).toBe(0);
+  expect(await refunds(bookingId)).toEqual([]);
+  expect(await contract(bookingId)).toMatchObject({
+    total: 5000,
+    end: 1020,
+    rescheduled: 0,
+  });
+  expect(await holdStatuses(pending.id)).toEqual(["released"]);
+  expect((await adjustments(bookingId))[0].status).not.toBe("applied");
+});
+
+test("late capture: funds captured after the shortened hold are refunded once, never applied, and the hold is released", async ({
+  page,
+}) => {
+  test.skip(
+    process.env.LIVE_LATE !== "1",
+    "Requires the server started with the hold override.",
+  );
+  const { bookingId, pending, paymentId } = await confirmAfterCutoff(page, "C6");
+  // Arrange authoritative captured funds at Stripe before the application observes anything.
+  stripe(["payment_intents", "capture", paymentId]);
+  expect(stripe(["payment_intents", "retrieve", paymentId])).toMatchObject({
+    status: "succeeded",
+    amount_received: 2500,
+  });
+  await startListener();
+  const succeeded = await awaitEvent("payment_intent.succeeded", paymentId);
   resend(succeeded);
   await expect
     .poll(async () => (await refunds(bookingId)).length, { timeout: 30_000 })
@@ -578,6 +712,7 @@ test("late success: payment after the shortened hold is refunded once, never app
       { timeout: 30_000 },
     )
     .toBe(1);
+  expect(await receipts(paymentId)).toBe(1);
   expect(await refunds(bookingId)).toEqual([
     { amount_minor: 2500, reason: "failed_adjustment_compensation" },
   ]);

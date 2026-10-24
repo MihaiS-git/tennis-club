@@ -135,15 +135,15 @@ test.each(["online", "pay_at_club", null])("staff projection requires a contract
   ]);
 });
 
-test("staff DTOs require identity, contacts, payments and refund state", () => {
-  expectTypeOf<Omit<AdminReservation, "creator_email">>().not.toExtend<AdminReservation>();
-  expectTypeOf<Omit<AdminReservation, "creator_phone">>().not.toExtend<AdminReservation>();
-  expectTypeOf<Omit<AdminReservation, "payment_method">>().not.toExtend<AdminReservation>();
-  expectTypeOf<Omit<AdminBooking, "account_user_id">>().not.toExtend<AdminBooking>();
-  expectTypeOf<Omit<AdminBooking, "payment_status">>().not.toExtend<AdminBooking>();
-  expectTypeOf<Omit<AdminBooking, "stripe_refund_available">>().not.toExtend<AdminBooking>();
-  expectTypeOf<Omit<BookingEditContext, "refunds">>().not.toExtend<BookingEditContext>();
-});
+// Compile-time contract, enforced by `npm run typecheck` rather than registered as a runtime case:
+// staff DTOs require identity, contacts, payments and refund state.
+expectTypeOf<Omit<AdminReservation, "creator_email">>().not.toExtend<AdminReservation>();
+expectTypeOf<Omit<AdminReservation, "creator_phone">>().not.toExtend<AdminReservation>();
+expectTypeOf<Omit<AdminReservation, "payment_method">>().not.toExtend<AdminReservation>();
+expectTypeOf<Omit<AdminBooking, "account_user_id">>().not.toExtend<AdminBooking>();
+expectTypeOf<Omit<AdminBooking, "payment_status">>().not.toExtend<AdminBooking>();
+expectTypeOf<Omit<AdminBooking, "stripe_refund_available">>().not.toExtend<AdminBooking>();
+expectTypeOf<Omit<BookingEditContext, "refunds">>().not.toExtend<BookingEditContext>();
 
 test.each([false, true])("projects complete nullable staff details (captured Stripe payment=%s)", async captured => {
   const direct = { ...target, includes_coaching: false, coach_name: null, coaching_program_name: null, coaching: null, location_name: null, court_name: null, location_timezone: null, kind: "reservation", creator_name: captured ? "Coach" : null,

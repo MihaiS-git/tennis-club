@@ -38,6 +38,7 @@ import { CoachProgramEntity } from "./entities/coach-program.entity";
 import { CoachAvailabilityExceptionEntity } from "./entities/coach-availability-exception.entity";
 import { CoachWeeklyAvailabilityEntity } from "./entities/coach-weekly-availability.entity";
 import { CoachingPriceEntity } from "./entities/coaching-price.entity";
+import { CoachingParticipantPriceEntity } from "./entities/coaching-participant-price.entity";
 import { CoachingProgramDurationEntity } from "./entities/coaching-program-duration.entity";
 import { CoachingProgramEntity } from "./entities/coaching-program.entity";
 
@@ -55,7 +56,7 @@ const entities = {
   UserEntity, UserMessageEntity, EmailDeliveryEntity, RoleEntity, UserRoleEntity, PlayerProfileEntity, LocationEntity, CourtEntity,
   CourtCoveragePeriodEntity, LocationOpeningHoursEntity, LocationPricingRuleEntity, PricingRuleSetEntity,
   CoachingProgramEntity, CoachingProgramDurationEntity, CoachProfileEntity, CoachLocationEntity, CoachProgramEntity,
-  CoachingPriceEntity, CoachWeeklyAvailabilityEntity, CoachAvailabilityExceptionEntity,
+  CoachingPriceEntity, CoachingParticipantPriceEntity, CoachWeeklyAvailabilityEntity, CoachAvailabilityExceptionEntity,
 };
 
 // TypeORM keys its relation dependency graph by constructor name. Production

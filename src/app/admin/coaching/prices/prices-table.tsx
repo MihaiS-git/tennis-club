@@ -1,15 +1,18 @@
 import { SortableTableHeading, type TableSortLink } from "@/components/sortable-table-heading";
 import type { PriceFilters } from "@/lib/coaching/admin-filters";
-import type { AdminCoach, AdminCoachingCurrency, AdminCoachingPrice, AdminCoachingProgram } from "@/lib/coaching/admin";
+import type { AdminCoach, AdminCoachingCurrency, AdminCoachingPrice, AdminCoachingProgram, AdminParticipantPrice } from "@/lib/coaching/admin";
 import { formatCoachingDuration } from "@/lib/coaching/validation";
 import { formatMoney } from "@/lib/pricing/money";
+import { ParticipantPriceEditor } from "./participant-price-editor";
 import { PriceEditor } from "./price-editor";
 
-type Row = { program: AdminCoachingProgram; durationMinutes: number; currency: AdminCoachingCurrency };
+// A null duration is a Group/Junior program's club rates by number of players.
+type Row = { program: AdminCoachingProgram; durationMinutes: number | null; currency: AdminCoachingCurrency };
 
 // Club defaults are edited inline. Individual coach prices belong to each coach and are read-only here.
-export function PricesTable({ rows, coaches, prices, filters, filtered, sortLinks }: {
-  rows: Row[]; coaches: AdminCoach[]; prices: AdminCoachingPrice[]; filters: PriceFilters; filtered: boolean; sortLinks: Record<string, TableSortLink>;
+export function PricesTable({ rows, coaches, prices, participantPrices, filters, filtered, sortLinks }: {
+  rows: Row[]; coaches: AdminCoach[]; prices: AdminCoachingPrice[]; participantPrices: AdminParticipantPrice[];
+  filters: PriceFilters; filtered: boolean; sortLinks: Record<string, TableSortLink>;
 }) {
   if (!rows.length) return <p className="rounded-card border border-border bg-surface px-4 py-5 text-sm text-muted-foreground">
     {filtered ? "No coaching prices match these filters." : "No coaching programs yet. Create a program with at least one duration under Programs, then set its prices here."}
@@ -29,16 +32,35 @@ export function PricesTable({ rows, coaches, prices, filters, filtered, sortLink
       <tbody className="divide-y divide-border">
         {rows.map((row) => {
           const { currency } = row.currency;
+          if (row.durationMinutes === null) return <tr key={`${currency}-${row.program.id}`} className="align-top">
+            <td className="px-4 py-3">
+              <p className="font-semibold text-foreground">{row.program.name}</p>
+              <p className="text-xs text-muted-foreground">Organized by the coach or club · Paid at the club{row.program.is_active ? "" : " · Inactive"}</p>
+            </td>
+            <td className="px-4 py-3">
+              <p className="font-semibold text-foreground">{currency}</p>
+              <p className="text-xs text-muted-foreground">{row.currency.location_names.length ? row.currency.location_names.join(", ") : "No current location"}</p>
+            </td>
+            <td className="px-4 py-3">Per person / 60 min</td>
+            <td className="px-4 py-3">
+              <ParticipantPriceEditor key={participantPrices.filter((price) => price.program_id === row.program.id && price.currency === currency)
+                .map((price) => `${price.participant_count}:${price.amount_minor}`).join() + `|${row.program.min_participants}-${row.program.max_participants}`}
+                program={row.program} currency={currency} chargeable={row.currency.location_names.length > 0}
+                prices={participantPrices.filter((price) => price.program_id === row.program.id && price.currency === currency)} />
+            </td>
+            <td className="px-4 py-3 text-muted-foreground">Club prices only</td>
+          </tr>;
+          const durationMinutes = row.durationMinutes;
           const search = filters.search?.toLowerCase();
           const programMatches = !search || row.program.name.toLowerCase().includes(search);
           const showClub = filters.scope !== "coach" && !filters.coach && programMatches;
-          const matching = prices.filter((price) => price.currency === currency && price.program_id === row.program.id && price.duration_minutes === row.durationMinutes);
+          const matching = prices.filter((price) => price.currency === currency && price.program_id === row.program.id && price.duration_minutes === durationMinutes);
           const offering = coaches.filter((coach) => coach.program_ids.includes(row.program.id)
             && (!filters.coach || coach.user_id === filters.coach)
             && (programMatches || (search && `${coach.display_name} ${coach.email}`.toLowerCase().includes(search))));
           const overrides = matching.filter((price) => price.coach_user_id !== null && offering.some(coach => coach.user_id === price.coach_user_id));
-          const label = `${row.program.name}, ${formatCoachingDuration(row.durationMinutes)}, ${currency}`;
-          return <tr key={`${currency}-${row.program.id}-${row.durationMinutes}`} className="align-top">
+          const label = `${row.program.name}, ${formatCoachingDuration(durationMinutes)}, ${currency}`;
+          return <tr key={`${currency}-${row.program.id}-${durationMinutes}`} className="align-top">
             <td className="px-4 py-3">
               <p className="font-semibold text-foreground">{row.program.name}</p>
               <p className="text-xs text-muted-foreground">
@@ -49,10 +71,10 @@ export function PricesTable({ rows, coaches, prices, filters, filtered, sortLink
               <p className="font-semibold text-foreground">{currency}</p>
               <p className="text-xs text-muted-foreground">{row.currency.location_names.length ? row.currency.location_names.join(", ") : "No current location"}</p>
             </td>
-            <td className="whitespace-nowrap px-4 py-3">{formatCoachingDuration(row.durationMinutes)}</td>
+            <td className="whitespace-nowrap px-4 py-3">{formatCoachingDuration(durationMinutes)}</td>
             <td className="px-4 py-3">
               {showClub ? <PriceEditor label={`Club price for ${label}`} emptyHint="Not set"
-                target={{ program_id: row.program.id, duration_minutes: row.durationMinutes, currency }}
+                target={{ program_id: row.program.id, duration_minutes: durationMinutes, currency }}
                 price={matching.find((price) => price.coach_user_id === null)} /> : "—"}
             </td>
             <td className="px-4 py-3">

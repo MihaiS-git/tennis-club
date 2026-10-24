@@ -101,6 +101,10 @@ test("coaching contracts carry coach, program and agreed amounts that must match
   expect(semiConfirmed.coachingProgramName).toBe("Semi-private coaching");
   expect(semiConfirmed.pricingEvidence.coaching?.participantCount).toBe(2);
   expect(semiConfirmed.pricingEvidence).toEqual(semiCreated.pricingEvidence);
+  // Group and Junior counts follow their program's range; the snapshot only bounds them to 1–100.
+  const withCount=(participantCount:number)=>({...coaching,pricingEvidence:{...coaching.pricingEvidence,coaching:{...coaching.pricingEvidence.coaching,participantCount}}});
+  expect(buildBookingRevision(withCount(8),operation,null).pricingEvidence.coaching?.participantCount).toBe(8);
+  for(const participantCount of [0,101,2.5]) expect(()=>buildBookingRevision(withCount(participantCount),operation,null)).toThrow();
   // Court bookings remain coachless.
   expect(buildBookingRevision(terms,operation,null)).not.toHaveProperty("pricingEvidence.coaching");
 });

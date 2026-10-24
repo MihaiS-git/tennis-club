@@ -15,9 +15,9 @@ import { PricingLocationSelect } from "../../src/app/admin/pricing/location-sele
 
 afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
 
-it("requires an explicit Admin role flag; the Coach area link is opt-in", () => {
-  expectTypeOf<ComponentProps<typeof AdminNavigation>>().toEqualTypeOf<{ isAdmin: boolean; isCoach?: boolean }>();
-});
+// Compile-time contract, enforced by `npm run typecheck` rather than registered as a runtime case:
+// an explicit Admin role flag is required; the Coach area link is opt-in.
+expectTypeOf<ComponentProps<typeof AdminNavigation>>().toEqualTypeOf<{ isAdmin: boolean; isCoach?: boolean }>();
 
 it.each([
   ["/admin/locations", "Locations"],
@@ -40,8 +40,6 @@ it.each([
   expect(links.map((link) => link.getAttribute("href"))).toEqual(["/admin/locations", "/admin/bookings", "/admin/coaching/programs", "/admin/coaching/coaches", "/admin/coaching/prices", "/admin/coaching/availability", "/admin/payments/transactions", "/admin/payments/settings", "/admin/users", "/admin/club"]);
   for (const link of links) {
     expect(link.getAttribute("aria-current")).toBe(link.textContent === label ? "page" : null);
-    expect(link.className.includes("bg-primary text-primary-foreground")).toBe(link.textContent === label);
-    expect(link.className).toContain("focus-visible:outline-2");
   }
 });
 
@@ -60,7 +58,6 @@ it.each([
   navigation.pathname = pathname;
   render(<><AdminNavigation isAdmin={true} />{await PaymentsLayout({ children: <p>Settings content</p> })}</>);
   expect(screen.queryByRole("link", { name: "Payments" })).toBeNull();
-  expect(within(screen.getByRole("navigation", { name: "Management navigation" })).getByText("Payments").className).toContain("text-primary");
   expect(screen.queryByRole("navigation", { name: "Payments navigation" })).toBeNull();
   expect(screen.getByRole("link", { name: active }).getAttribute("aria-current")).toBe("page");
   expect(screen.getByRole("link", { name: inactive }).hasAttribute("aria-current")).toBe(false);

@@ -174,6 +174,7 @@ export class ApplicationNativeIntegrity1791462257925 implements MigrationInterfa
     await queryRunner.query(`CREATE UNIQUE INDEX email_deliveries_event_recipient_key ON public.email_deliveries (event_key, lower(recipient_email))`);
     await queryRunner.query(`INSERT INTO public.roles(code) VALUES ('admin'), ('coach')`);
     await queryRunner.query(`INSERT INTO public.payment_provider_settings(id) VALUES (true)`);
+    await queryRunner.query(`INSERT INTO public.club_settings(id) VALUES (true)`);
   }
 
   async down(queryRunner: QueryRunner): Promise<void> {
@@ -209,6 +210,7 @@ export class ApplicationNativeIntegrity1791462257925 implements MigrationInterfa
     for (const name of ["validate_booking_revision_head", "validate_booking_revision_append", "protect_booking_revision"]) {
       await queryRunner.query(`DROP FUNCTION public.${name}()`);
     }
+    await queryRunner.query(`DELETE FROM public.club_settings WHERE id = true`);
     await queryRunner.query(`DELETE FROM public.payment_provider_settings WHERE id = true`);
     await queryRunner.query(`DELETE FROM public.roles WHERE code IN ('admin', 'coach')`);
     await queryRunner.query(`DROP INDEX public.email_deliveries_event_recipient_key`);

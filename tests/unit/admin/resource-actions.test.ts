@@ -35,7 +35,7 @@ it.each([
 });
 
 it("refreshes pricing, readiness and public discovery only after committed opening-hours changes", async () => {
-  mocks.openingHours.mockResolvedValueOnce({ ok: false, reason: "booking-conflict", message: "Existing reservations" });
+  mocks.openingHours.mockResolvedValueOnce({ ok: false, reason: "stale" });
   await mutateOpeningHoursAction({});
   expect(mocks.revalidate).not.toHaveBeenCalled();
   mocks.openingHours.mockResolvedValueOnce({ ok: true, intervals: [], pricingAdjusted: true });

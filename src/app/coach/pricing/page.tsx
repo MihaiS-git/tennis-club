@@ -11,10 +11,15 @@ export default async function CoachPricingPage() {
   return <>
     <AdminPageHeader title="My prices" description="Your price for each assigned program and duration, in the currencies of your active locations. Your price replaces the club price for your lessons; remove it to use the club price again. Changes apply to new bookings only." />
     {!view ? <p className={emptyClass}>Your coaching profile has not been set up yet. Ask an Admin to create it and assign your programs and locations.</p>
-      : !view.rows.length ? <p className={emptyClass}>
-        {view.currencies.length ? "No programs are assigned to you yet. Ask an Admin to assign the programs you offer."
-          : "You have no active locations yet. Prices are set in the currencies your locations use."}
-      </p>
-      : <CoachPricingTable view={view} />}
+      : <>
+        {!view.rows.length ? <p className={emptyClass}>
+          {!view.currencies.length ? "You have no active locations yet. Prices are set in the currencies your locations use."
+            : view.clubPricedPrograms.length ? "None of your assigned programs has individual coach prices."
+            : "No programs are assigned to you yet. Ask an Admin to assign the programs you offer."}
+        </p> : <CoachPricingTable view={view} />}
+        {view.clubPricedPrograms.length > 0 && <p className="mt-4 text-sm text-muted-foreground">
+          {view.clubPricedPrograms.map((program) => program.name).join(", ")}: Group and Junior rates are set by the club per number of players and cannot be changed here.
+        </p>}
+      </>}
   </>;
 }

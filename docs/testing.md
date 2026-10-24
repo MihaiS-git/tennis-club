@@ -32,7 +32,13 @@ Auth and Storage infrastructure still comes from native Supabase startup.
 Tests retain their existing fixtures, including the persistent integration Admin anchor.
 
 Run integration and E2E suites sequentially, with no concurrent runs against this
-shared disposable stack. Integration files use `--no-file-parallelism` because
+shared disposable stack. This is enforced: the integration runner, both Playwright
+configs (and the recovery-verification variant) and the initializer take a PostgreSQL
+session advisory lock through `tests/local/runner-lock.mjs` before any other work. A
+second run fails at once and names the run holding the lock. The lock is held by a
+helper process while the runner or any process it started is alive, and is released
+with that session, also after a crash or SIGKILL; there is no lock file to clear.
+Unit/component runs do not take it. Integration files use `--no-file-parallelism` because
 final-admin tests temporarily suspend other test administrators; changes are restored
 in `finally`. Unit/component tests remain independent: `npm test` needs no Supabase.
 Integration provisioning checks require `psql`. E2E requires Google Chrome.
@@ -79,11 +85,11 @@ Do not use `db:dev:rebuild`, `db:dev:seed` or development `supabase db reset` fo
 The normal development Supabase configuration, application environment and seed
 scripts are independent of this workflow.
 
-The three journeys cover signup through the actual Mailpit confirmation link and `/auth/callback` through `/account` to `/profile`; forgot-password through the actual Mailpit recovery link and `/auth/callback` to reset and subsequent sign-in; and unauthenticated account redirect, login, account access, logout, and renewed redirect. Each journey creates a unique test user. The recovery journey checks the `/forgot-password` destination after the notice is consumed, follows the recovery link to `/reset-password`, submits a new password, and signs in with it. The signup journey checks the account profile and empty role list after confirmation.
+`tests/e2e/auth.e2e.ts` has two journeys: signup through the actual Mailpit confirmation link and `/auth/callback` through `/account` to `/profile`, and forgot-password through the actual Mailpit recovery link and `/auth/callback` to reset and subsequent sign-in. Unauthenticated redirects, login, per-role access and logout are covered by `tests/e2e/navigation.e2e.ts`. Each journey creates a unique test user. The recovery journey checks the `/forgot-password` destination after the notice is consumed, follows the recovery link to `/reset-password`, submits a new password, and signs in with it. The signup journey checks the account profile and empty role list after confirmation.
 
 ## Profile coverage
 
-`tests/unit/profile/` covers personal/tennis validation, session-owned explicit mutations, active-account requirements, system-field rejection, actual avatar decoding, size/dimension limits, WebP normalization, aspect ratio, no enlargement, orientation/metadata removal, avatar compensation, and authenticated image delivery. `tests/components/profile-forms.test.tsx` covers inline errors, retained values, pending feedback, read-only rating, avatar controls, and client file-selection rejection/error clearing. `tests/components/user-navigation.test.tsx` covers the shared user sidebar (destinations, active links, Admin-identical styling, drawer, Sign out); `profile-unsaved-changes.test.tsx` covers per-page draft protection through the sidebar, navbar and Sign out; navbar tests cover the direct `/profile` avatar link.
+`tests/unit/profile/` covers personal/tennis validation, session-owned explicit mutations, active-account requirements, system-field rejection, actual avatar decoding, size/dimension limits, WebP normalization, aspect ratio, no enlargement, orientation/metadata removal, avatar compensation, and authenticated image delivery. `tests/components/profile-forms.test.tsx` covers inline errors, retained values, pending feedback, read-only rating, avatar controls, and client file-selection rejection/error clearing. `tests/components/user-navigation.test.tsx` covers the shared user sidebar (destinations, active links, drawer, no Sign out); `profile-unsaved-changes.test.tsx` covers per-page draft protection through the sidebar, navbar and Sign out; navbar tests cover the direct `/profile` avatar link.
 
 `tests/integration/profile/profile.integration.test.ts` exercises real application saves and authorization; missing profile schema fails validation instead of skipping the test. `tests/integration/profile/avatar.integration.test.ts` separately exercises access/input rejection, authenticated image retrieval, and real Storage upload/replacement/removal. Only the request-cookie client factory is substituted for endpoint tests. `tests/integration/db/player-profiles.integration.test.ts` and `tests/integration/db/accounts.integration.test.ts` cover profile persistence and application-owned timestamps. Existing test fixtures do not automatically create player profiles.
 
@@ -161,9 +167,12 @@ expiry at the final SQL write. Existing Stripe/cancellation/Admin suites remain 
 
 `tests/e2e/booking-adjustments.e2e.ts` exercises My Activity Edit, original/new/difference
 prices, X discarding an unpaid modification, a fresh Edit, an additional payment and a partial refund through the real
-Next.js/TypeORM services. Playwright starts a loopback Stripe HTTP fixture on 3111,
-uses intentionally fake fixture credentials and intercepts Stripe.js in this test.
-It makes no real Stripe transaction. Production routing to the fixture is rejected
+Next.js/TypeORM services. `tests/e2e/initial-checkout.e2e.ts` completes a guest's initial
+online court and coaching checkout from `/book` and verifies the confirmed booking, active
+occupancy and captured payment attempt. Playwright starts a loopback Stripe HTTP fixture on 3111
+(`tests/e2e/fixtures/stripe-server.mjs`), uses intentionally fake fixture credentials, and these
+tests replace Stripe.js with `tests/e2e/helpers/stripe.ts`. The stub only authorizes the
+manual-capture intent; the application server captures it. No real Stripe transaction is made. Production routing to the fixture is rejected
 unless the exact isolated test database, project marker, fake secret and URL match.
 Test environment setup clears inherited Stripe fixture/provider variables before
 Playwright opts into these explicit fake credentials. Application server/build remain
@@ -185,15 +194,21 @@ forwarding to port 3100 and uses `stripe events resend` to deliver delayed/dupli
 Playwright starts the guarded Next.js test server itself and requires port 3100 to be free;
 it will not reuse a separately running development server.
 
+Standard E2E (`npm run test:e2e`, `playwright.config.ts`) runs `tests/e2e/` only and never
+contacts Stripe. The live suites in `tests/e2e-live/` run only through
+`playwright.stripe-live.config.ts`.
+
 ```bash
 npx playwright test -c playwright.stripe-live.config.ts
-# Late success: Playwright starts the server with the test-only hold override.
+# Late authorization and late capture: Playwright starts the server with the test-only hold override.
 E2E_ALLOW_HOLD_OVERRIDE=1 BOOKING_HOLD_SECONDS_OVERRIDE=60 LIVE_LATE=1 npx playwright test -c playwright.stripe-live.config.ts
 ```
 
 `BOOKING_HOLD_SECONDS_OVERRIDE` (15–600) is honored only when `NODE_ENV=test` or
-`E2E_ALLOW_HOLD_OVERRIDE=1`, and never when `NODE_ENV=production`. Card payments settle
-synchronously, so browser "pending" is a delayed webhook; processing branches are
+`E2E_ALLOW_HOLD_OVERRIDE=1`, and never when `NODE_ENV=production`. Adjustment intents use manual capture, so a
+late `payment_intents confirm` is only an authorization: the late-authorization case expects
+Stripe cancellation with no capture or refund, and the late-capture case captures through the
+Stripe CLI first and then expects one compensation refund. Browser "pending" is a delayed webhook; processing branches are
 covered by `tests/integration/db/booking-mutations.integration.test.ts`.
 
 ## Consolidated schema generation
@@ -316,17 +331,15 @@ test-only stop/start without backup above, then initialize the isolated database
 `tests/unit/coaching/` covers price resolution (override, default, missing, currency
 change), validation, the public and coach-profile projections, Admin authorization before
 any database access, and the development seed's local-only guard. Component tests cover the public `/coaching` page, Admin coaching tables and
-dialogs, homepage coaching programs, coach profile pages, and the shared public hero and
-section menu (`public-page-layout.test.tsx`). `coaching-seed.integration.test.ts` covers seed
-idempotency, preserved Admin edits, duplicate-free prices, coach eligibility and public coach reads. `tests/integration/admin/coaching.integration.test.ts`
+dialogs, homepage coaching programs and coach profile pages. `tests/integration/coaching-booking.integration.test.ts`
+and `coaching-lesson-availability.integration.test.ts` cover lesson quotes, checkout and coach/court availability. `tests/integration/admin/coaching.integration.test.ts`
 exercises real Admin saves, coach eligibility, dependency rejection, unique/composite FK
 constraints, public visibility, currency handling and denied browser grants.
 
 
 ## Club settings
 
-After applying pending additive TypeORM migrations with the existing isolated initializer
-(no reset needed), run:
+After initializing the isolated test database, run:
 
 ```bash
 node --conditions=react-server --import=./scripts/ts-loader.mjs scripts/initialize-test-database.ts
@@ -337,5 +350,5 @@ npm run test:integration -- tests/integration/club-settings.integration.test.ts 
 Club tests use mocked HTTP only. The settings integration test rolls back its settings
 and delivery fixtures, tests persistent suppression and denied browser grants, and makes
 no provider requests. Notification integration fixtures explicitly enable email while
-testing channel policies and restore the original settings afterward. Migration history
-now includes additive `ClubSettings1791462257927` after the three base migrations.
+testing channel policies and restore the original settings afterward. The migration cutover
+test verifies the disabled singleton, suppression column and canonical coaching durations.

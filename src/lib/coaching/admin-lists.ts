@@ -6,9 +6,10 @@ import { listAdminLocations } from "@/lib/db/repositories/clubs.repository";
 import { inReadSnapshot, readIndependently } from "@/lib/db/transaction";
 import { listCoachesPage, listPriceGroupsPage, listProgramsPage } from "@/lib/db/repositories/coaching-lists.repository";
 import {
-  adminCoachingCurrencies, adminCoachingPrice, readAdminCoaching, type AdminCoach, type AdminCoachingLocation, type AdminCoachingProgram,
+  adminCoachingCurrencies, adminCoachingPrice, adminParticipantPrice, readAdminCoaching, type AdminCoach, type AdminCoachingLocation, type AdminCoachingProgram,
 } from "./admin";
 import { coachFiltersSchema, priceFiltersSchema, programFiltersSchema } from "./admin-filters";
+import { participantRateProgramTypes } from "./validation";
 
 export async function loadProgramsPage(input: unknown, supabase?: Parameters<typeof requireActiveAdmin>[0]) {
   await requireActiveAdmin(supabase);
@@ -38,9 +39,11 @@ export async function loadPricesPage(input: unknown, supabase?: Parameters<typeo
   const filters = priceFiltersSchema.parse(input);
   return inReadSnapshot(async manager => {
     const data = await readAdminCoaching(manager, false);
-    const result = await listPriceGroupsPage(manager, filters);
+    const result = await listPriceGroupsPage(manager, filters, participantRateProgramTypes);
     const prices = result.prices.map(adminCoachingPrice);
-    return { ...data, ...result, filters, prices, currencies: adminCoachingCurrencies(data.locations, prices) };
+    const participantPrices = result.participantPrices.map(adminParticipantPrice);
+    return { ...data, ...result, filters, prices, participantPrices,
+      currencies: adminCoachingCurrencies(data.locations, [...prices, ...participantPrices]) };
   });
 }
 

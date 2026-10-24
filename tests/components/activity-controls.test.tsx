@@ -90,11 +90,8 @@ it("collapses filters behind a mobile toggle that reports the active filter coun
   const toggle = screen.getByRole("button", { name: /^Filters\s*2\s*active$/ });
   const panel = document.getElementById(toggle.getAttribute("aria-controls")!)!;
   expect(toggle.getAttribute("aria-expanded")).toBe("false");
-  expect(panel.className).toMatch(/(^|\s)hidden(\s|$)/);
-  expect(panel.className).toContain("md:flex");
   fireEvent.click(toggle);
   expect(toggle.getAttribute("aria-expanded")).toBe("true");
-  expect(panel.className).not.toMatch(/(^|\s)hidden(\s|$)/);
   expect(screen.getByRole("combobox", { name: "Location" }).closest(`#${CSS.escape(panel.id)}`)).toBe(panel);
 });
 

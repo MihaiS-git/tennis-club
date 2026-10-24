@@ -9,6 +9,7 @@ import * as pricing from "../../../src/lib/db/repositories/pricing.repository";
 import * as clubs from "../../../src/lib/db/repositories/clubs.repository";
 import { listAdminPricingRules, saveAdminPricingRule, removeAdminPricingRule } from "../../../src/lib/admin/pricing";
 import { mutateAdminOpeningHours } from "../../../src/lib/admin/opening-hours";
+import { localToday } from "../../../src/lib/courts/local-time";
 import { cleanupAuthFixtures, localFixtureClient } from "../auth-fixtures";
 import { ensureIntegrationAdminAnchor } from "../admin-anchor";
 
@@ -130,7 +131,10 @@ test("multi-court rule-set lifecycle is atomic and scoped to active admins", asy
     const sundayPrice = (await service.from("location_pricing_rules").select("ends_at_minute,ends_on").eq("location_id", location_id)
       .eq("weekday", 6).eq("court_id", court3).eq("starts_at_minute", 1080)).data ?? [];
     expect(sundayClose).toBe(1200);
-    expect(sundayPrice.filter((row) => !row.ends_on || row.ends_on >= new Date().toISOString().slice(0,10)).every((row) => row.ends_at_minute <= 1200)).toBe(true);
+    // A pricing save that won the race is trimmed from the location's today; the slice ending
+    // yesterday is retained history. Use the location date, not UTC, which can lag it.
+    const today = localToday("Europe/Bucharest", new Date());
+    expect(sundayPrice.filter((row) => !row.ends_on || row.ends_on >= today).every((row) => row.ends_at_minute <= 1200)).toBe(true);
     await expect(listAdminPricingRules(pricingLocationId, member)).rejects.toThrow();
     await expect(saveAdminPricingRule(base, member)).rejects.toThrow();
     await expect(removeAdminPricingRule({ location_id, rule_set_id: setId, revision: await revision(pricingLocationId,setId,admin) }, member)).rejects.toThrow();

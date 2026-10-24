@@ -11,6 +11,11 @@ import { listPublicLocationsWithCourts } from "@/lib/courts/public";
 import { mondayWeekday } from "@/lib/pricing/resolution";
 import { localFixtureClient } from "./auth-fixtures";
 
+// Soft checks report a failed cleanup step without hiding test failures or skipping
+// independent steps; steps within one call depend on each other and stop at the first error.
+const cleanup = (step: string, work: () => Promise<unknown>) =>
+  expect.soft(Promise.resolve().then(work).then(() => "done"), step).resolves.toBe("done");
+
 test("customer booking persists both rows, snapshots contact and price, and rolls back conflicts", async () => {
   const service = localFixtureClient();
   const reader = () => createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_PUBLISHABLE_KEY!, {
@@ -26,13 +31,13 @@ test("customer booking persists both rows, snapshots contact and price, and roll
   const rows = async () => {
     const reservations = await service.from("court_reservations").select("*").eq("court_id", courtId);
     assert.strictEqual(reservations.error, null);
-    const bookings = await Promise.resolve({ error:null, data:(await readBookingContracts(service, { reservationIds: reservations.data!.map((row) => row.id) })) });
-    assert.strictEqual(bookings.error, null);
-    return { bookings: bookings.data!, reservations: reservations.data! };
+    const bookings = await readBookingContracts(service, { reservationIds: reservations.data!.map((row) => row.id) });
+    return { bookings, reservations: reservations.data! };
   };
   const allBookings = async () => {
-    const result = await Promise.resolve({ error:null, data:(await readBookingContracts(service, { reservationIds: (await service.from("court_reservations").select("id").eq("court_id", courtId)).data?.map((row) => row.id) ?? [] })) });
-    assert.strictEqual(result.error, null); return result.data!;
+    const reservations = await service.from("court_reservations").select("id").eq("court_id", courtId);
+    assert.strictEqual(reservations.error, null);
+    return readBookingContracts(service, { reservationIds: reservations.data!.map((row) => row.id) });
   };
   try {
     assert.strictEqual((await service.from("locations").insert({ id: locationId, slug: `booking-${locationId}`,
@@ -153,17 +158,21 @@ test("customer booking persists both rows, snapshots contact and price, and roll
     expect(await count()).toEqual(orphanBefore);
     expect((await allBookings()).map((row) => row.total_amount_minor).sort()).toEqual([6000, 7000]);
   } finally {
-    const reservationIds = (await service.from("court_reservations").select("id").in("court_id", [courtId, inactiveCourtId])).data?.map((row) => row.id) ?? [];
-    await cleanupBookingFixtures({ reservationIds });
-    assert.strictEqual((await service.from("court_reservations").delete().in("court_id", [courtId, inactiveCourtId])).error, null);
-    assert.strictEqual((await service.from("location_pricing_rules").delete().eq("location_id", locationId)).error, null);
-    assert.strictEqual((await service.from("pricing_rule_sets").delete().eq("location_id", locationId)).error, null);
-    assert.strictEqual((await service.from("location_opening_hours").delete().eq("location_id", locationId)).error, null);
-    assert.strictEqual((await service.from("courts").delete().eq("location_id", locationId)).error, null);
-    assert.strictEqual((await service.from("locations").delete().eq("id", locationId)).error, null);
+    // Booking evidence is selected by this test's courts, so no lookup can turn an error into "nothing to delete".
+    await cleanup("delete bookings and club fixtures", async () => {
+      await cleanupBookingFixtures({ courtIds: [courtId, inactiveCourtId] });
+      assert.strictEqual((await service.from("court_reservations").delete().in("court_id", [courtId, inactiveCourtId])).error, null);
+      assert.strictEqual((await service.from("location_pricing_rules").delete().eq("location_id", locationId)).error, null);
+      assert.strictEqual((await service.from("pricing_rule_sets").delete().eq("location_id", locationId)).error, null);
+      assert.strictEqual((await service.from("location_opening_hours").delete().eq("location_id", locationId)).error, null);
+      assert.strictEqual((await service.from("courts").delete().eq("location_id", locationId)).error, null);
+      assert.strictEqual((await service.from("locations").delete().eq("id", locationId)).error, null);
+    });
     for (const id of userIds) {
-      assert.strictEqual((await service.from("users").delete().eq("id", id)).error, null);
-      assert.strictEqual((await service.auth.admin.deleteUser(id)).error, null);
+      await cleanup(`delete user ${id}`, async () => {
+        assert.strictEqual((await service.from("users").delete().eq("id", id)).error, null);
+        assert.strictEqual((await service.auth.admin.deleteUser(id)).error, null);
+      });
     }
   }
 });
@@ -179,7 +188,11 @@ test("direct checkout uses the public eligibility of every schedule, not only th
   const intent = { paymentMethod: "pay_at_club", courtId, date, startMinute: 600, endMinute: 660,
     customerName: "Guest", customerEmail: "guest@example.test", customerPhone: "123",
     expectedTotalAmountMinor: 5000, expectedCurrency: "RON" };
-  const reservationIds = async () => (await service.from("court_reservations").select("id").eq("court_id", courtId)).data?.map((row) => row.id) ?? [];
+  const reservationIds = async () => {
+    const reservations = await service.from("court_reservations").select("id").eq("court_id", courtId);
+    assert.strictEqual(reservations.error, null);
+    return reservations.data!.map((row) => row.id);
+  };
   const listed = async () => (await listPublicLocationsWithCourts()).some((location) => location.id === locationId);
   try {
     assert.strictEqual((await service.from("locations").insert({ id: locationId, slug: `booking-${locationId}`,

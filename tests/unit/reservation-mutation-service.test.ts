@@ -37,7 +37,7 @@ test.each(operations)("$name denies non-staff before persistence", async ({ call
   mocks.account.mockResolvedValue({ state: "active", userId: id, roles: [] });
   await expect(call()).rejects.toThrow(); expect(command).not.toHaveBeenCalled();
 });
-test.each([operations[4]])("$name sanitizes errors after transaction rollback", async ({ call, command, failure }) => {
+test.each([operations[4]])("$name sanitizes database errors raised by the command", async ({ call, command, failure }) => {
   for (const code of ["23503", "23514", "23505", "40P01", "40001"]) {
     command.mockRejectedValue(databaseFailure(code));
     expect(await call()).toEqual({ ok: false, message: failure });

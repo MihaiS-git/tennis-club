@@ -24,7 +24,8 @@ const SEED_CURRENCY = "RON";
 type ProgramFixture = {
   id: string; name: string; description: string; type: CoachingProgramType; durations: number[];
   min: number | null; max: number | null; courtIncluded: boolean;
-  // Club price per duration.
+  // Club price per duration (Private/Semi-private only). Group/Junior rates per player
+  // count are entered by an Admin under Prices; the seed never invents them.
   clubPrices: Record<number, number>;
 };
 
@@ -36,11 +37,11 @@ export const demoPrograms: ProgramFixture[] = [
     description: "Two players of a similar level share the coach and the drills. The price is per lesson for the pair; the court is rented separately.",
     clubPrices: { 60: 26000, 90: 36000 } },
   { id: "c0ac0000-0000-4000-8000-000000000003", name: "Group coaching", type: "group", durations: [90], min: 3, max: 6, courtIncluded: true,
-    description: "Small adult groups grouped by level, with structured drills and supervised points. The price is per player per session.",
-    clubPrices: { 90: 9000 } },
+    description: "Small adult groups grouped by level, with structured drills and supervised points.",
+    clubPrices: {} },
   { id: "c0ac0000-0000-4000-8000-000000000004", name: "Junior coaching", type: "junior", durations: [60, 90], min: 4, max: 8, courtIncluded: true,
-    description: "Sessions for players aged 6 to 16, focused on coordination, footwork and enjoying the game. The price is per child per session.",
-    clubPrices: { 60: 7500, 90: 11250 } },
+    description: "Sessions for players aged 6 to 16, focused on coordination, footwork and enjoying the game.",
+    clubPrices: {} },
 ];
 
 type CoachFixture = {
@@ -72,8 +73,7 @@ export const demoCoaches: CoachFixture[] = [
     bio: "A former club-league captain, Daniel coaches adults who want a more reliable game rather than a new one. He is known for patient technical work on groundstrokes and for groups that leave tired but smiling.",
     qualifications: "Romanian Tennis Federation Level 2 coach\nCertified fitness instructor",
     specialties: ["Groundstrokes", "Fitness", "Adult groups"], languages: ["Romanian", "English"],
-    programIds: [privateId, groupId], locations: [1],
-    overrides: [{ programId: groupId, durationMinutes: 90, amountMinor: 10000 }] },
+    programIds: [privateId, groupId], locations: [1], overrides: [] },
   { email: "demo-coach-sofia@example.test", displayName: "Sofia Petrescu",
     bio: "Sofia competed on the ITF junior circuit and spent four years playing college tennis in the United States. She coaches juniors moving into competition and adults who enjoy doubles, with a particular eye for net play and positioning.",
     qualifications: "Romanian Tennis Federation Level 3 coach\nPTR Professional",

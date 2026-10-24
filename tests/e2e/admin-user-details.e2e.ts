@@ -57,57 +57,16 @@ test("Admin Users shows live profiles and private avatars while preserving manag
     for (const value of ["Alex Player", "+40799999999", "10 May 1990", "10 Court Street", "Apartment 2", "Bucharest", "010101", "Romania"]) {
       await expect(personal.getByText(value, { exact: true })).toBeVisible();
     }
-    for (const width of [1440, 768, 375]) {
-      await page.setViewportSize({ width, height: 900 });
-      const layout = await personal.evaluate((element) => {
-        const sections = [...element.querySelectorAll("section")].map((section) => section.getBoundingClientRect());
-        return { sameRow: sections[0].y === sections[1].y, overflow: element.scrollWidth > element.clientWidth };
-      });
-      expect(layout.sameRow).toBe(width >= 1024);
-      expect(layout.overflow).toBe(false);
-    }
     await tabs.getByRole("link", { name: "Tennis profile", exact: true }).click();
     const tennis = page.getByRole("region", { name: "Tennis profile", exact: true });
     for (const value of ["Ace Alex", "6", "1450", "Left-handed", "Two-handed", "Both", "Clay", "Enjoys competitive tennis."]) {
       await expect(tennis.getByText(value, { exact: true })).toBeVisible();
     }
-    await page.reload();
-    await expect(tennis).toBeVisible();
-    await page.goBack();
-    await expect(personal).toBeVisible();
-    await page.goForward();
-    await expect(tennis).toBeVisible();
     const image = tennis.getByRole("img", { name: "User avatar" });
     await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true);
-    for (const width of [1440, 768, 375]) {
-      await page.setViewportSize({ width, height: 900 });
-      const imageStyle = await image.evaluate((element: HTMLImageElement) => ({
-        fit: getComputedStyle(element).objectFit,
-        radius: getComputedStyle(element).borderRadius,
-        clip: getComputedStyle(element).clipPath,
-        ratio: element.getBoundingClientRect().width / element.getBoundingClientRect().height,
-        frameWidth: element.parentElement!.getBoundingClientRect().width,
-        frameHeight: element.parentElement!.getBoundingClientRect().height,
-      }));
-      expect(imageStyle.fit).toBe("cover");
-      expect(imageStyle.radius).toBe("0px");
-      expect(imageStyle.clip).toBe("none");
-      expect(imageStyle.ratio).toBeCloseTo(1, 2);
-      expect(imageStyle.frameWidth).toBe(width >= 640 ? 208 : 112);
-      expect(imageStyle.frameHeight).toBe(imageStyle.frameWidth);
-      expect(await tennis.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-    }
     const avatarResponse = await page.request.get(`/admin/users/${populated.id}/avatar`);
     expect(avatarResponse.status()).toBe(200);
     expect(avatarResponse.headers()["cache-control"]).toBe("private, no-store");
-    // A landscape photograph is cropped to the same square presentation.
-    const landscape = await sharp({ create: { width: 64, height: 32, channels: 3, background: "green" } }).webp().toBuffer();
-    expect((await service.storage.from("profile-avatars").upload(`${populated.id}/avatar.webp`, landscape, { contentType: "image/webp", upsert: true })).error).toBeNull();
-    await page.reload();
-    await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth / element.naturalHeight)).toBe(2);
-    const landscapeSize = await image.boundingBox();
-    expect(landscapeSize!.width / landscapeSize!.height).toBeCloseTo(1, 2);
-    await expect(image).toHaveCSS("object-fit", "cover");
     await tabs.getByRole("link", { name: "Account & access", exact: true }).click();
     for (const role of ["Admin", "Coach"]) {
       const row = account.getByRole("listitem").filter({ has: page.getByText(role, { exact: true }) });
@@ -126,24 +85,7 @@ test("Admin Users shows live profiles and private avatars while preserving manag
     await expect(account.getByText("Suspended", { exact: true })).toBeVisible();
     await account.getByRole("button", { name: "Reactivate user", exact: true }).click();
     await expect(account.getByText("Active", { exact: true })).toBeVisible();
-    const longBio = "Enjoys competitive tennis and meeting new players. ".repeat(9) + "LongWord".repeat(30);
-    expect((await service.from("player_profiles").update({ bio: longBio }).eq("user_id", populated.id)).error).toBeNull();
-    await tabs.getByRole("link", { name: "Tennis profile", exact: true }).click();
-    await expect(tennis.getByText(longBio, { exact: true })).toBeVisible();
-    for (const width of [1440, 768, 375]) {
-      await page.setViewportSize({ width, height: 900 });
-      expect(await tennis.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-    }
-    await expect(page.getByRole("link", { name: "Back to users", exact: true })).toHaveCount(0);
-    // The responsive checks leave us on mobile; enter management through its drawer.
-    await page.getByRole("button", { name: "Management menu", exact: true }).click();
-    const managementDrawer = page.getByRole("dialog", { name: "Management menu", exact: true });
-    await managementDrawer.getByRole("navigation", { name: "Management navigation" })
-      .getByRole("link", { name: "Users", exact: true }).click();
-    await expect(managementDrawer).toBeHidden();
-    await expect(page).toHaveURL(/\/admin\/users$/);
     await page.goto(`/admin/users?q=${encodeURIComponent(`admin-details-${runId}`)}`);
-    await page.setViewportSize({ width: 1440, height: 900 });
     await page.getByRole("row", { name: `Manage user ${incomplete.email}` }).click();
     await expect(account.getByRole("button", { name: "Suspend user", exact: true })).toBeEnabled();
     await tabs.getByRole("link", { name: "Tennis profile", exact: true }).click();

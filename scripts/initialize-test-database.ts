@@ -1,7 +1,9 @@
 import { configureTestEnvironment, assertTestEnvironment } from "../tests/local/environment.mjs";
+import { lockTestDatabase } from "../tests/local/runner-lock.mjs";
 
 configureTestEnvironment();
 assertTestEnvironment();
+lockTestDatabase("initialize");
 // Import after resolving the isolated URL: the migration DataSource is module-scoped.
 const { default: database } = await import("../src/lib/db/migration-data-source.mjs");
 await database.initialize();

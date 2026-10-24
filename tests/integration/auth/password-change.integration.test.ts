@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { assert, test } from "vitest";
+import { assert, onTestFinished, test, vi } from "vitest";
 
 import { createClient } from "@supabase/supabase-js";
-import { z } from "zod";
 
 import { cleanupAuthFixtures, localFixtureClient } from "../auth-fixtures";
+import { deleteMailpitMessagesTo, mailpitMessageIds, mailpitMessageText } from "../../local/mailpit";
 
 import { changePasswordWithVerification } from "../../../src/lib/auth/password-change";
 
@@ -19,15 +19,9 @@ function requiredEnvironmentVariable(
 
 const supabaseUrl = requiredEnvironmentVariable("SUPABASE_URL");
 const publishableKey = requiredEnvironmentVariable("SUPABASE_PUBLISHABLE_KEY");
-const mailpitMessagesSchema = z.object({
-  messages: z.array(
-    z.object({
-      ID: z.string(),
-      To: z.array(z.object({ Address: z.string() })),
-    }),
-  ),
-});
-const mailpitMessageSchema = z.object({ Text: z.string() });
+// Auth sends confirmation mail before signUp returns; the bound only absorbs SMTP latency.
+const mailTimeout = 10_000;
+const mailTestTimeout = 30_000;
 
 function createAuthClient() {
   return createClient(supabaseUrl, publishableKey, {
@@ -59,28 +53,13 @@ function provisioningCounts(userId: string): number[] {
 }
 
 async function confirmationLinkFor(email: string): Promise<string> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const messagesResponse = await fetch(
-      `${process.env.MAILPIT_URL}/api/v1/messages`,
-    );
-    const messages = mailpitMessagesSchema.parse(await messagesResponse.json());
-    const message = messages.messages.find((candidate) =>
-      candidate.To.some((recipient) => recipient.Address === email),
-    );
-
-    if (message) {
-      const messageResponse = await fetch(
-        `${process.env.MAILPIT_URL}/api/v1/message/${message.ID}`,
-      );
-      const detail = mailpitMessageSchema.parse(await messageResponse.json());
-      const link = detail.Text.match(/https?:\/\/[^ )]+/)?.[0];
+  return vi.waitFor(async () => {
+    for (const id of await mailpitMessageIds(email)) {
+      const link = (await mailpitMessageText(id)).match(/https?:\/\/[^ )]+/)?.[0];
       if (link) return link;
     }
-
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-
-  throw new Error(`Confirmation email was not delivered for ${email}.`);
+    throw new Error(`Confirmation email was not delivered for ${email}.`);
+  }, { timeout: mailTimeout, interval: 100 });
 }
 
 async function confirmSignUp(
@@ -112,6 +91,7 @@ test("signup provisions the application profile and zero roles", async () => {
   const createdIds: string[] = [];
   try {
     const email = `profile-provisioning-${randomUUID()}@example.test`;
+    onTestFinished(() => deleteMailpitMessagesTo(email));
     const client = createAuthClient();
     const signUp = await client.auth.signUp({
       email,
@@ -163,13 +143,14 @@ test("signup provisions the application profile and zero roles", async () => {
   } finally {
     await cleanupAuthFixtures(service, createdIds);
   }
-});
+}, mailTestTimeout);
 
 test("current-password verification protects a real Supabase password change", async () => {
   const service = localFixtureClient();
   const createdIds: string[] = [];
   try {
     const email = `password-change-${randomUUID()}@example.test`;
+    onTestFinished(() => deleteMailpitMessagesTo(email));
     const oldPassword = "old-password-123";
     const newPassword = "new-password-456";
     const authenticatedClient = createAuthClient();
@@ -244,4 +225,4 @@ test("current-password verification protects a real Supabase password change", a
   } finally {
     await cleanupAuthFixtures(service, createdIds);
   }
-});
+}, mailTestTimeout);

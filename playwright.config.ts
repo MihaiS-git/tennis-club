@@ -1,8 +1,10 @@
 import { defineConfig } from "@playwright/test";
 
 import { configureTestEnvironment } from "./tests/local/environment.mjs";
+import { lockTestDatabase } from "./tests/local/runner-lock.mjs";
 
 configureTestEnvironment();
+lockTestDatabase("e2e");
 const appUrl = "http://localhost:3100";
 process.env.STRIPE_SECRET_KEY = "sk_test_IsolatedFixture";
 process.env.STRIPE_PUBLISHABLE_KEY = "pk_test_IsolatedFixture";

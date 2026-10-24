@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { PricingRule } from "@/lib/pricing/validation";
 import { getCalendarSelection } from "@/lib/courts/interval-selection";
 import { resolvePricingRule } from "@/lib/pricing/resolution";
+import { participantCountSchema } from "@/lib/coaching/validation";
 
 type RevisionKind = "created" | "confirmed" | "rescheduled" | "cancelled";
 type RevisionScope = "guest" | "customer" | "coach_owner" | "admin_owner" | "admin" | "provider";
@@ -10,8 +11,8 @@ const currencySchema = z.enum(["EUR", "USD", "GBP", "RON", "CHF"]);
 // default, and the court rental it adds (zero when the program includes it).
 // The slots still explain the court's rental value, charged or not.
 const coachingEvidenceSchema = z.strictObject({
-  // Older private contracts predate this snapshot.
-  participantCount: z.union([z.literal(1), z.literal(2)]).optional(),
+  // The count the lesson was booked for, within its program's range then. Older private contracts predate this snapshot.
+  participantCount: participantCountSchema.optional(),
   programId: z.uuid(), coachUserId: z.uuid(), locationId: z.uuid(), durationMinutes: z.number().int().min(60).max(1440),
   source: z.enum(["coach", "club"]), amountMinor: z.number().int().positive().max(2147483647), currency: currencySchema,
   courtRentalIncluded: z.boolean(), courtRentalMinor: z.number().int().positive().max(2147483647),

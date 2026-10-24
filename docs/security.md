@@ -70,10 +70,16 @@ private Storage retain their own security; no browser table access is restored f
 
 The development rebuild recreates `public` with Supabase's stock usage-only schema ACL,
 so effective schema, table, sequence and function privileges match the isolated test
-database. Default-privilege entries still differ in two harmless ways: the rebuilt schema
-has no stock `supabase_admin` defaults and no stock `postgres` function defaults, and
-both only grant more on future objects. Every application function's grants are set
-explicitly by migrations.
+database. Default-privilege entries still differ: `DROP SCHEMA` removes schema-scoped
+entries, so the rebuilt schema lacks the stock `supabase_admin` and `postgres` function
+defaults. The stock `supabase_admin` entry grants browser roles everything on objects that
+role creates in `public`; `postgres` cannot alter it. It stays harmless because migrations
+run as `postgres` and `supabase_admin` (image initialization, Realtime, Analytics) creates
+no `public` objects. `migration-cutover.integration.test.ts` requires `postgres` ownership
+of every `public` object, no global or `public` browser defaults for it, and a rolled-back
+probe table without browser grants. Every application function's grants are set
+explicitly by migrations, because PostgreSQL's built-in default grants `PUBLIC` EXECUTE on
+new functions and a schema-level revoke cannot remove it.
 
 ## Public and private player data
 

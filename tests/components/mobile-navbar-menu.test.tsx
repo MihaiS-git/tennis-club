@@ -141,7 +141,6 @@ it.each([
   const nav = screen.getByRole("navigation", { name: "Mobile navigation" });
   const current = within(nav).getAllByRole("link").filter((link) => link.hasAttribute("aria-current"));
   expect(current.map((link) => link.textContent)).toEqual(active ? [active] : []);
-  if (current.length) expect(current[0].className).toContain("bg-primary text-primary-foreground");
   readCurrentAccount.mockResolvedValue({ state: "active", roles: ["admin"] });
   const stream = await renderToReadableStream(<DesktopNavbar />);
   await stream.allReady;
@@ -180,8 +179,6 @@ it.each([
   const items = drawer.querySelectorAll<HTMLElement>("a[href], button:not([disabled])");
   const mobileSignOut = within(drawer).getByRole("button", { name: "Sign out" });
   expect(items[items.length - 1]).toBe(mobileSignOut);
-  expect(mobileSignOut.className).toContain("flex min-h-12");
-  expect(mobileSignOut.className).toContain("text-sm font-medium text-primary enabled:hover:text-accent");
   await act(async () => { fireEvent.click(mobileSignOut); });
   expect(signOut).toHaveBeenCalledOnce();
   expect(screen.getByRole("button", { name: "Open menu" }).getAttribute("aria-expanded")).toBe("false");

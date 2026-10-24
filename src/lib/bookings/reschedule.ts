@@ -32,7 +32,7 @@ const bookingEditContextSchema = z.object({
   // A coaching lesson's immutable coach, program and duration, and the starts it can move to on the date.
   coaching: z.object({
     coach: z.object({ id: z.uuid(), name: z.string() }),
-    program: z.object({ id: z.uuid(), name: z.string(), participantCount: z.union([z.literal(1), z.literal(2)]), courtRentalIncluded: z.boolean() }),
+    program: z.object({ id: z.uuid(), name: z.string(), participantCount: z.number().int().positive(), courtRentalIncluded: z.boolean() }),
     durationMinutes: z.number().int(), coachingAmountMinor: z.number().int(),
     starts: z.array(z.object({ startMinute: z.number().int(), endMinute: z.number().int(), startsAt: z.string(), endsAt: z.string(),
       courts: z.array(z.object({ id: z.uuid(), name: z.string(), coachingAmountMinor: z.number().int(),

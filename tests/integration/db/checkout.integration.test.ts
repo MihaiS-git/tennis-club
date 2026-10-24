@@ -20,6 +20,7 @@ import { createCustomerBooking } from "@/lib/bookings/service";
 import { commitCustomerCheckout } from "@/lib/bookings/checkout";
 import { startOnlineCheckout, readOnlineCheckout } from "@/lib/payments/checkout";
 import { cleanupAuthFixtures, localFixtureClient } from "../auth-fixtures";
+import { boundedWaitMs, deferred, reached, settled } from "../concurrency";
 
 let database: DataSource, service: SupabaseClient, guest: SupabaseClient, member: SupabaseClient;
 let userId: string, previousProvider: string | null;
@@ -107,16 +108,13 @@ async function stored() {
     p.expires_at::text,p.completed_at,p.amount_minor FROM public.bookings b JOIN public.booking_revisions v ON v.id=b.current_revision_id JOIN public.court_reservations r ON r.id=b.reservation_id
     JOIN public.payment_attempts p ON p.booking_id=b.id WHERE r.court_id=$1 ORDER BY r.starts_at_minute,b.created_at`, [courtId]);
 }
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => { resolve = done; }); return { promise, resolve };
-}
 async function pid(manager: EntityManager) {
   const rows: unknown = await manager.query("SELECT pg_backend_pid() AS pid");
   return z.array(z.object({ pid: z.number() })).length(1).parse(rows)[0].pid;
 }
+// Bounded inside the owning test's timeout so its finally still releases and drains.
 async function waitForBlock(blocker: number) {
-  const deadline = Date.now() + 8000;
+  const deadline = Date.now() + boundedWaitMs;
   while (Date.now() < deadline) {
     const rows: unknown = await database.query("SELECT pid,query FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid))", [blocker]);
     const blocked = z.array(z.object({ pid: z.number(), query: z.string() })).parse(rows);
@@ -139,17 +137,19 @@ test.each(["pay_at_club", "online"] as const)("concurrent identical %s submissio
     await insert(...args); acquired.resolve(await pid(args[0])); await release.promise;
   });
   const first = createCustomerBooking({ ...input, paymentMethod: method }, guest, now);
-  const blocker = await acquired.promise;
-  const second = createCustomerBooking({ ...input, paymentMethod: method }, guest, now);
-  try { expect((await waitForBlock(blocker))[0].query).toContain("locations"); }
-  finally { release.resolve(); }
-  const results = await Promise.all([first, second]);
+  let second: ReturnType<typeof createCustomerBooking> | undefined;
+  try {
+    const blocker = await reached(acquired.promise, first, "the first submission to insert its reservation");
+    second = createCustomerBooking({ ...input, paymentMethod: method }, guest, now);
+    expect((await waitForBlock(blocker))[0].query).toContain("locations");
+  } finally { release.resolve(); await Promise.allSettled([first, second]); }
+  const results = await settled([first, second!]);
   expect(results.filter((result) => result.ok)).toHaveLength(1);
   expect(results.find((result) => !result.ok)).toEqual({ ok: false, availabilityChanged: true,
     message: "That court is no longer available for the selected time." });
   expect(write).toHaveBeenCalledTimes(1);
   expect(await counts()).toEqual({ reservations: 1, bookings: 1, attempts: 1 });
-});
+}, 15000);
 
 test("Pay at club commits contact/policy snapshots and due payment", async () => {
   expect(await createCustomerBooking(input, guest, now)).toMatchObject({ ok: true, status: "confirmed", holdExpiresAt: null,
@@ -198,18 +198,22 @@ test.each(["pricing"] as const)("checkout first blocks %s writer and persists co
   vi.spyOn(reservations, "findCheckoutOccupancy").mockImplementationOnce(async (...args) => {
     const value = await read(...args); acquired.resolve(await pid(args[0])); await release.promise; return value;
   });
-  const checkout = createCustomerBooking(input, guest, now); const blocker = await acquired.promise;
-  const writer = inTransaction((manager) => changeConfiguration(manager, kind));
-  try { expect((await waitForBlock(blocker))[0].query).toContain("pg_advisory_xact_lock"); }
-  finally { release.resolve(); }
-  expect(await checkout).toMatchObject({ ok: true, totalAmountMinor: 5000 }); await writer;
+  const checkout = createCustomerBooking(input, guest, now); let writer: Promise<unknown> | undefined;
+  try {
+    const blocker = await reached(acquired.promise, checkout, "checkout to read occupancy");
+    writer = inTransaction((manager) => changeConfiguration(manager, kind));
+    expect((await waitForBlock(blocker))[0].query).toContain("pg_advisory_xact_lock");
+  } finally { release.resolve(); await Promise.allSettled([checkout, writer]); }
+  const [result] = await settled([checkout, writer!]);
+  expect(result).toMatchObject({ ok: true, totalAmountMinor: 5000 });
   expect(await stored()).toMatchObject([{ total_amount_minor: 5000 }]);
-});
+}, 15000);
 test.each(["resource", "pricing"] as const)("%s writer first makes checkout use coherent new facts", async (kind) => {
   const writer = database.createQueryRunner(); await writer.connect(); await writer.startTransaction();
+  let checkout: ReturnType<typeof createCustomerBooking> | undefined;
   try {
     await changeConfiguration(writer.manager, kind); const blocker = await pid(writer.manager);
-    const checkout = createCustomerBooking(input, guest, now);
+    checkout = createCustomerBooking(input, guest, now);
     await waitForBlock(blocker); await writer.commitTransaction();
     expect(await checkout).toEqual(kind === "pricing" ? { ok: false, reason: "price_changed", totalAmountMinor: 7000, currency: "RON" }
       : kind === "resource" ? { ok: false, message: "That court is not available for booking." }
@@ -219,16 +223,22 @@ test.each(["resource", "pricing"] as const)("%s writer first makes checkout use 
       expect(await createCustomerBooking({ ...input, expectedTotalAmountMinor: 7000 }, guest, now)).toMatchObject({ ok: true, totalAmountMinor: 7000 });
       expect(await stored()).toMatchObject([{ total_amount_minor: 7000, amount_minor: 7000 }]);
     }
-  } finally { if (writer.isTransactionActive) await writer.rollbackTransaction(); await writer.release(); }
-});
+  } finally {
+    if (writer.isTransactionActive) await writer.rollbackTransaction();
+    await Promise.allSettled([checkout]); await writer.release();
+  }
+}, 15000);
 
 test("suspension before account fence rejects already-authorized checkout; guest takes no account fence", async () => {
-  const reached = deferred<void>(), release = deferred<void>(); const fence = accounts.lockCheckoutAccountStatus;
+  const fenced = deferred(), release = deferred(); const fence = accounts.lockCheckoutAccountStatus;
   vi.spyOn(accounts, "lockCheckoutAccountStatus").mockImplementationOnce(async (...args) => {
-    reached.resolve(); await release.promise; return fence(...args);
+    fenced.resolve(); await release.promise; return fence(...args);
   });
-  const checkout = createCustomerBooking(input, member, now); await reached.promise;
-  try { await database.query("UPDATE public.users SET status='suspended' WHERE id=$1", [userId]); } finally { release.resolve(); }
+  const checkout = createCustomerBooking(input, member, now);
+  try {
+    await reached(fenced.promise, checkout, "checkout to reach the account fence");
+    await database.query("UPDATE public.users SET status='suspended' WHERE id=$1", [userId]);
+  } finally { release.resolve(); await Promise.allSettled([checkout]); }
   expect(await checkout).toEqual({ ok: false, message: "Unable to create this booking. Try again." });
   expect(await counts()).toEqual({ reservations: 0, bookings: 0, attempts: 0 });
   vi.mocked(accounts.lockCheckoutAccountStatus).mockClear();
@@ -240,12 +250,16 @@ test("suspension after account fence waits for checkout and preserves submitted 
   vi.spyOn(accounts, "lockCheckoutAccountStatus").mockImplementationOnce(async (...args) => {
     const value = await fence(...args); acquired.resolve(await pid(args[0])); await release.promise; return value;
   });
-  const checkout = createCustomerBooking(input, member, now); const blocker = await acquired.promise;
-  const writer = database.query("UPDATE public.users SET status='suspended' WHERE id=$1", [userId]);
-  try { await waitForBlock(blocker); } finally { release.resolve(); }
-  expect(await checkout).toMatchObject({ ok: true }); await writer;
+  const checkout = createCustomerBooking(input, member, now); let writer: Promise<unknown> | undefined;
+  try {
+    const blocker = await reached(acquired.promise, checkout, "checkout to take the account fence");
+    writer = database.query("UPDATE public.users SET status='suspended' WHERE id=$1", [userId]);
+    await waitForBlock(blocker);
+  } finally { release.resolve(); await Promise.allSettled([checkout, writer]); }
+  const [result] = await settled([checkout, writer!]);
+  expect(result).toMatchObject({ ok: true });
   expect(await stored()).toMatchObject([{ account_user_id: userId, customer_email: "Guest@Example.test" }]);
-});
+}, 15000);
 
 test("Pay-at-club permission changed before configuration lock is authoritatively rejected", async () => {
   await database.query("UPDATE public.locations SET allow_pay_at_club=false WHERE id=$1", [locationId]);
@@ -323,19 +337,24 @@ test("provider selection waits behind checkout's settings SHARE lock and stored 
   vi.spyOn(payments, "findSelectedPaymentProvider").mockImplementationOnce(async (...args) => {
     const value = await read(...args); acquired.resolve(await pid(args[0])); await release.promise; return value;
   });
-  const checkout = createCustomerBooking({ ...input, paymentMethod: "online" }, guest, now); const blocker = await acquired.promise;
-  const change = database.query("UPDATE public.payment_provider_settings SET active_provider=NULL WHERE id");
-  try { expect((await waitForBlock(blocker))[0].query).toContain("payment_provider_settings"); } finally { release.resolve(); }
-  expect(await checkout).toMatchObject({ ok: true }); await change;
+  const checkout = createCustomerBooking({ ...input, paymentMethod: "online" }, guest, now); let change: Promise<unknown> | undefined;
+  try {
+    const blocker = await reached(acquired.promise, checkout, "checkout to read the selected provider");
+    change = database.query("UPDATE public.payment_provider_settings SET active_provider=NULL WHERE id");
+    expect((await waitForBlock(blocker))[0].query).toContain("payment_provider_settings");
+  } finally { release.resolve(); await Promise.allSettled([checkout, change]); }
+  const [result] = await settled([checkout, change!]);
+  expect(result).toMatchObject({ ok: true });
   expect(await stored()).toMatchObject([{ provider: "stripe" }]);
-});
+}, 15000);
 test("attachment locks booking before attempt and an existing capability cannot be replaced", async () => {
   const held = await online(); const blocker = database.createQueryRunner(); await blocker.connect(); await blocker.startTransaction();
   createPayment.mockResolvedValue({ id: "pi_lock_order", client_secret: "secret" });
   const lockBooking = vi.spyOn(bookings, "lockCheckoutBooking"), lockAttempt = vi.spyOn(payments, "lockCheckoutAttempt");
+  let start: ReturnType<typeof startOnlineCheckout> | undefined;
   try {
     await bookings.lockCheckoutBooking(blocker.manager, held.bookingId); lockBooking.mockClear();
-    const start = startOnlineCheckout(held.paymentAttemptId);
+    start = startOnlineCheckout(held.paymentAttemptId);
     expect((await waitForBlock(await pid(blocker.manager)))[0].query).toContain("bookings");
     expect(lockAttempt).not.toHaveBeenCalled();
     await blocker.commitTransaction(); const checkout = await start;
@@ -345,8 +364,11 @@ test("attachment locks booking before attempt and an existing capability cannot 
     expect(createPayment.mock.calls.map((call) => call[1])).toEqual([
       { idempotencyKey: `court-payment-${held.paymentAttemptId}` }, { idempotencyKey: `court-payment-${held.paymentAttemptId}` },
     ]);
-  } finally { if (blocker.isTransactionActive) await blocker.rollbackTransaction(); await blocker.release(); }
-});
+  } finally {
+    if (blocker.isTransactionActive) await blocker.rollbackTransaction();
+    await Promise.allSettled([start]); await blocker.release();
+  }
+}, 15000);
 test("checkout retains per-cell adjacent-hours selection and covered mixed-rate rounding", async () => {
   await database.query("DELETE FROM public.location_pricing_rules WHERE location_id=$1", [locationId]);
   await database.query("DELETE FROM public.location_opening_hours WHERE location_id=$1", [locationId]);
@@ -383,10 +405,12 @@ async function occupancyRace<T,U>(first:()=>Promise<T>, second:()=>Promise<U>) {
   vi.spyOn(reservations,"findCheckoutOccupancy").mockImplementationOnce(async (...args)=>{
     const rows=await read(...args); acquired.resolve(await pid(args[0])); await release.promise; return rows;
   });
-  const a=first(), blocker=await acquired.promise, b=second();
-  try { expect((await waitForBlock(blocker))[0].query).toContain("locations"); }
-  finally { release.resolve(); }
-  return Promise.all([a,b]);
+  const a=first(); let b:Promise<U>|undefined;
+  try {
+    const blocker=await reached(acquired.promise,a,"the first command to read occupancy"); b=second();
+    expect((await waitForBlock(blocker))[0].query).toContain("locations");
+  } finally { release.resolve(); await Promise.allSettled([a,b]); }
+  return settled<[T,U]>([a,b!]);
 }
 async function direct(startMinute=600) {
   return createDirectReservationCommand({locationId,courtId,date,startMinute,endMinute:startMinute+60,reason:"Training"},userId,now);
@@ -398,14 +422,14 @@ test.each(["direct"])("%s first rejects a conflicting customer/direct reservatio
   const results=await (first==="customer" ? occupancyRace(customer,()=>direct()) : occupancyRace(()=>direct(),customer));
   expect(results[0]).toMatchObject({ok:true}); expect(results[1]).toMatchObject({ok:false,message:expect.stringContaining("no longer available")});
   expect(customerWrite.mock.calls.length+directWrite.mock.calls.length).toBe(1);
-});
+},15000);
 test("adjacent customer and direct reservations both commit", async () => {
   await database.query("INSERT INTO public.user_roles(user_id,role_code) VALUES($1,'coach') ON CONFLICT DO NOTHING",[userId]);
   const results=await occupancyRace(()=>createCustomerBooking(input,guest,now),()=>direct(660));
   expect(results).toMatchObject([{ok:true},{ok:true}]);
   expect(await database.query("SELECT starts_at_minute,ends_at_minute FROM public.court_reservations WHERE court_id=$1 AND status='active' ORDER BY starts_at_minute",[courtId]))
     .toEqual([{starts_at_minute:600,ends_at_minute:660},{starts_at_minute:660,ends_at_minute:720}]);
-});
+},15000);
 async function ownerReschedule(bookingId:string) {
   const context=await readCustomerBookingEditContext(bookingId,date,userId);
   if (!context) throw new Error("Missing booking edit context");
@@ -421,7 +445,7 @@ test.each(["creation"])("%s first prevents overlapping reschedule/new checkout b
   const results=await (first==="reschedule" ? occupancyRace(reschedule,create) : occupancyRace(create,reschedule));
   expect(results[0]).toMatchObject({ok:true}); expect(results[1]).toMatchObject({ok:false,message:expect.stringContaining("no longer available")});
   expect(update.mock.calls.length+insert.mock.calls.length).toBe(1);
-});
+},15000);
 async function attachedOnline() {
   const created=await online(); createPayment.mockResolvedValue({id:`pi_${created.paymentAttemptId}`,client_secret:"secret"});
   await startOnlineCheckout(created.paymentAttemptId);
@@ -451,27 +475,36 @@ test("settlement fenced before expiry commits after expiry while replacement wai
     const changed=await write(...args); expect(changed).toBe(true); acquired.resolve(await pid(args[0])); await release.promise; return changed;
   });
   const insert=vi.spyOn(reservations,"insertCustomerReservation");
-  const settlement=processOnlinePaymentEvent(successEvent(created)),blocker=await acquired.promise;
-  await waitForDeadline(created.reservationId);
-  const replacement=createCustomerBooking(input,guest,now);
-  try { expect((await waitForBlock(blocker))[0].query).toContain("locations"); } finally {release.resolve();}
-  expect(await settlement).toBe("succeeded"); expect(await replacement).toMatchObject({ok:false,availabilityChanged:true});
+  const settlement=processOnlinePaymentEvent(successEvent(created)); let replacement:ReturnType<typeof createCustomerBooking>|undefined;
+  try {
+    const blocker=await reached(acquired.promise,settlement,"settlement to fence the attempt");
+    await waitForDeadline(created.reservationId);
+    replacement=createCustomerBooking(input,guest,now);
+    expect((await waitForBlock(blocker))[0].query).toContain("locations");
+  } finally {release.resolve(); await Promise.allSettled([settlement,replacement]);}
+  const [settledAs,replaced]=await settled([settlement,replacement!]);
+  expect(settledAs).toBe("succeeded"); expect(replaced).toMatchObject({ok:false,availabilityChanged:true});
   expect(insert).not.toHaveBeenCalled(); expect(await stored()).toMatchObject([{booking_status:"confirmed",reservation_status:"active",attempt_status:"succeeded"}]);
-});
+},15000);
 test("expiry versus real insertion serializes cleanup, then late success is reconciled without reopening occupancy", async () => {
   const created=await attachedOnline();await expireDeadline(created);
   const acquired=deferred<number>(),release=deferred<void>(),write=bookings.updateSettlementBookingStatus;
   vi.spyOn(bookings,"updateSettlementBookingStatus").mockImplementationOnce(async (...args)=>{
     await write(...args); acquired.resolve(await pid(args[0])); await release.promise;
   });
-  const expiry=expirePaymentHolds({locationId}),blocker=await acquired.promise,replacement=createCustomerBooking(input,guest,now);
-  try { expect((await waitForBlock(blocker))[0].query).toContain("locations"); } finally {release.resolve();}
-  expect(await expiry).toBe(1);expect(await replacement).toMatchObject({ok:true});
+  const expiry=expirePaymentHolds({locationId}); let replacement:ReturnType<typeof createCustomerBooking>|undefined;
+  try {
+    const blocker=await reached(acquired.promise,expiry,"expiry to update the booking");
+    replacement=createCustomerBooking(input,guest,now);
+    expect((await waitForBlock(blocker))[0].query).toContain("locations");
+  } finally {release.resolve(); await Promise.allSettled([expiry,replacement]);}
+  const [expired,replaced]=await settled([expiry,replacement!]);
+  expect(expired).toBe(1);expect(replaced).toMatchObject({ok:true});
   expect(await processOnlinePaymentEvent(successEvent(created))).toBe("expired");
   expect(await database.query("SELECT reconciliation_required FROM public.payment_provider_events WHERE attempt_id=$1",[created.paymentAttemptId]))
     .toEqual([{reconciliation_required:true}]);
   expect(await stored()).toMatchObject([{booking_status:"expired",reservation_status:"released"},{booking_status:"confirmed",reservation_status:"active"}]);
-});
+},15000);
 
 test("initial online pending revision confirms exactly once across duplicate and distinct verified receipts",async()=>{
   const held=await attachedOnline();

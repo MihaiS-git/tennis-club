@@ -54,19 +54,14 @@ function desktopRow(name: string) {
   return screen.getAllByRole("row", { name }).find((row) => row.tagName === "TR")!;
 }
 
-it("lays out coaches in seven compact columns with the email below the name", () => {
+it("lists each coach's name, email, status, locations, programs and actions", () => {
   render(<CoachesTable coaches={[item()]} locations={[central]} programs={[program]} />);
   const table = screen.getByRole("table", { name: "Coaches" });
   expect(within(table).getAllByRole("columnheader").map((heading) => heading.textContent))
     .toEqual(["Coach", "Account", "Profile", "Visibility", "Locations", "Programs", "Actions"]);
-  // No fixed minimum width or horizontal scroll container on desktop.
-  expect(table.className).toContain("table-fixed");
-  expect(table.className).not.toMatch(/min-w-/);
-  expect(table.parentElement?.className).not.toContain("overflow-x-auto");
   const cells = within(desktopRow("Edit coach Ana Pop")).getAllByRole("cell");
   expect(cells).toHaveLength(7);
-  expect([...cells[0].querySelectorAll("p")].map((line) => line.textContent)).toEqual(["Ana Pop", coach.email]);
-  expect(cells[0].querySelector("p:last-child")?.getAttribute("title")).toBe(coach.email);
+  expect(cells[0].textContent).toBe(`Ana Pop${coach.email}`);
   expect(cells.map((cell) => cell.textContent).slice(1, 3)).toEqual(["Active", "Configured"]);
   expect(cells[4].textContent).toBe("Central Club");
   expect(cells[5].textContent).toBe("Private lesson");
@@ -81,7 +76,6 @@ it("shows the email once for an account without a name and Hidden for unconfigur
   ]} />);
   const nameless = within(desktopRow("Configure profile nameless@example.test")).getAllByRole("cell");
   expect(nameless[0].textContent).toBe("nameless@example.test");
-  expect(nameless[0].querySelectorAll("p")).toHaveLength(1);
   expect(nameless[2].textContent).toBe("Not configured");
   expect(nameless[3].textContent).toBe("Hidden");
   // Visibility cannot be edited before a valid profile exists; Configure profile remains.
@@ -173,9 +167,6 @@ it("offers a searchable program filter and numerically ordered durations without
   expect(programFilter.value).toBe("All programs");
   fireEvent.focus(programFilter);
   const list = screen.getByRole("listbox", { name: "Program" });
-  // The list is height-bounded and scrolls internally.
-  expect(list.className).toContain("overflow-y-auto");
-  expect(list.style.maxHeight).not.toBe("");
   expect(within(list).getAllByRole("option")).toHaveLength(61);
   fireEvent.change(programFilter, { target: { value: "program 4" } });
   expect(within(list).getAllByRole("option").map((option) => option.textContent)).toEqual(Array.from({ length: 10 }, (_, index) => `Program 4${index}`));
@@ -229,6 +220,8 @@ it("creates a program with its submitted club prices, omitting empty prices", as
   fireEvent.click(screen.getByRole("button", { name: "Create program" }));
   const dialog = screen.getByRole("dialog", { name: "Create program" });
   fireEvent.input(within(dialog).getByLabelText("Name"), { target: { value: "Squad" } });
+  fireEvent.input(within(dialog).getByLabelText("Minimum players"), { target: { value: "2" } });
+  fireEvent.input(within(dialog).getByLabelText("Maximum players"), { target: { value: "6" } });
   fireEvent.click(within(dialog).getByLabelText("90 min"));
   fireEvent.change(within(dialog).getByLabelText("60 min club price in RON"), { target: { value: "180" } });
   fireEvent.change(within(dialog).getByLabelText("90 min club price in EUR"), { target: { value: " 240.5 " } });

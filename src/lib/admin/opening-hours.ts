@@ -12,12 +12,10 @@ import { lockActiveAdminAccount } from "@/lib/db/repositories/accounts.repositor
 import * as clubs from "@/lib/db/repositories/clubs.repository";
 import * as pricing from "@/lib/db/repositories/pricing.repository";
 import * as coachAvailability from "@/lib/db/repositories/coach-availability.repository";
-import { listLocationLiveOccupancy } from "@/lib/db/repositories/reservations.repository";
 import type { LocationOpeningHoursEntity } from "@/lib/db/entities/location-opening-hours.entity";
 import { planOpeningHoursPricing, reconcileOpeningHoursPricing } from "@/lib/pricing/opening-hours-reconciliation";
-import { localMinute, localToday } from "@/lib/courts/local-time";
-import { fitsOpeningHours } from "@/lib/reservations/domain";
-import { changedOpeningDates, fromDate, openingIntervalsOn, planWorkingHoursReconciliation, type OpeningPeriod } from "@/lib/coaching/working-hours";
+import { localToday } from "@/lib/courts/local-time";
+import { changedOpeningDates, fromDate, planWorkingHoursReconciliation, type OpeningPeriod } from "@/lib/coaching/working-hours";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
 function openingPeriods(schedules: readonly { id: string; startsOn: string; endsOn: string | null }[],
@@ -150,16 +148,9 @@ async function processAdminOpeningHours(input: unknown, supabase?: Client): Prom
           after: { from: adjustment.starts_on, until: adjustment.ends_on }, hoursChanged: false }] : [],
       ]), today);
       const periods = openingPeriods(candidateSchedules, candidateHours);
-      // Live future court and coaching reservations must stay inside the opening hours:
-      // a change that would leave one outside them is rejected, never applied to it.
-      const previous = openingPeriods(schedules, allHours);
-      const minute = localMinute(location.timezone, now);
-      const conflicts = (await listLocationLiveOccupancy(manager, location.id, today)).filter((row) =>
-        (row.booking_date > today || row.ends_at_minute > minute)
-        && affected.some((range) => range.from <= row.booking_date && (range.until === null || row.booking_date <= range.until))
-        && fitsOpeningHours(openingIntervalsOn(previous, row.booking_date), row.booking_date, row.starts_at_minute, row.ends_at_minute)
-        && !fitsOpeningHours(openingIntervalsOn(periods, row.booking_date), row.booking_date, row.starts_at_minute, row.ends_at_minute));
-      if (conflicts.length) return { ok: false, reason: "booking-conflict", dates: [...new Set(conflicts.map((row) => row.booking_date))] };
+      // Existing reservations are grandfathered: they keep their terms and stay on the calendars
+      // even outside the new hours. New bookings use the new hours, and a pending checkout is
+      // revalidated against them when its payment is confirmed.
       // Coach working hours at this location follow the new opening hours on the affected
       // dates: kept, trimmed or removed, never extended. Other locations are untouched.
       const workingHours = planWorkingHoursReconciliation((await coachAvailability.listLocationWeeklyAvailability(manager, location.id)).map((row) => ({

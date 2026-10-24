@@ -17,13 +17,25 @@ const locationId = randomUUID(),
   rules = randomUUID(),
   courts = new Map<string, string>();
 let db: DataSource,
-  previousProvider: string | null = null,
+  // undefined until read, so teardown never "restores" a value it did not observe.
+  previousProvider: string | null | undefined,
   bookingId = "",
   userId = "";
 const q = async <T = Record<string, unknown>>(
   sql: string,
   params: unknown[] = [],
 ) => (await db.query(sql, params)) as T[];
+// Soft checks report a failed cleanup step without hiding test failures or skipping
+// independent steps; steps within one call depend on each other and stop at the first error.
+const cleanup = (step: string, work: () => Promise<unknown>) =>
+  expect
+    .soft(
+      Promise.resolve()
+        .then(work)
+        .then(() => "done"),
+      step,
+    )
+    .resolves.toBe("done");
 const auth = () =>
   createClient(process.env.SUPABASE_URL!, localServiceRoleKey(), {
     auth: { persistSession: false, autoRefreshToken: false },
@@ -83,33 +95,49 @@ test.beforeAll(async () => {
   }
 });
 test.afterAll(async () => {
+  if (!db?.isInitialized) return;
   try {
-    if (bookingId)
-      await db.transaction((m) =>
-        cleanupBookingEvidence(m, { bookingIds: [bookingId] }),
+    // Bookings and reservations reference the user, so they go first.
+    await cleanup("delete booking and club fixtures", async () => {
+      if (bookingId)
+        await db.transaction((m) =>
+          cleanupBookingEvidence(m, { bookingIds: [bookingId] }),
+        );
+      await q(
+        "DELETE FROM public.court_reservations WHERE court_id=ANY($1::uuid[])",
+        [[...courts.values()]],
       );
-    await q(
-      "DELETE FROM public.court_reservations WHERE court_id=ANY($1::uuid[])",
-      [[...courts.values()]],
-    );
-    await q("DELETE FROM public.location_pricing_rules WHERE location_id=$1", [
-      locationId,
-    ]);
-    await q("DELETE FROM public.pricing_rule_sets WHERE location_id=$1", [
-      locationId,
-    ]);
-    await q("DELETE FROM public.location_opening_hours WHERE location_id=$1", [
-      locationId,
-    ]);
-    await q("DELETE FROM public.opening_hours_schedules WHERE location_id=$1", [
-      locationId,
-    ]);
-    await q("DELETE FROM public.courts WHERE location_id=$1", [locationId]);
-    await q("DELETE FROM public.locations WHERE id=$1", [locationId]);
-    await q("UPDATE public.payment_provider_settings SET active_provider=$1", [
-      previousProvider,
-    ]);
-    if (userId) await auth().auth.admin.deleteUser(userId);
+      await q("DELETE FROM public.location_pricing_rules WHERE location_id=$1", [
+        locationId,
+      ]);
+      await q("DELETE FROM public.pricing_rule_sets WHERE location_id=$1", [
+        locationId,
+      ]);
+      await q("DELETE FROM public.location_opening_hours WHERE location_id=$1", [
+        locationId,
+      ]);
+      await q("DELETE FROM public.opening_hours_schedules WHERE location_id=$1", [
+        locationId,
+      ]);
+      await q("DELETE FROM public.courts WHERE location_id=$1", [locationId]);
+      await q("DELETE FROM public.locations WHERE id=$1", [locationId]);
+    });
+    if (previousProvider !== undefined)
+      await cleanup("restore payment provider", () =>
+        q("UPDATE public.payment_provider_settings SET active_provider=$1", [
+          previousProvider,
+        ]),
+      );
+    // Application references (including the granted Admin role) before Auth:
+    // public.users restricts Auth deletion.
+    if (userId)
+      await cleanup(`delete user ${userId}`, async () => {
+        await q("DELETE FROM public.player_profiles WHERE user_id=$1", [userId]);
+        await q("DELETE FROM public.user_roles WHERE user_id=$1", [userId]);
+        await q("DELETE FROM public.users WHERE id=$1", [userId]);
+        const { error } = await auth().auth.admin.deleteUser(userId);
+        if (error) throw error;
+      });
   } finally {
     await db.destroy();
   }
@@ -158,7 +186,8 @@ test("booking timetables show split price bands; Admin detail shows each movemen
     password,
     email_confirm: true,
   });
-  userId = account.data.user!.id;
+  userId = account.data.user?.id ?? "";
+  expect(account.error).toBeNull();
   const reservationId = randomUUID(),
     attemptId = randomUUID(),
     pi = `pi_seed_${attemptId}`;
