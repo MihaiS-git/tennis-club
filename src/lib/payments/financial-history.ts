@@ -92,8 +92,7 @@ export async function readFinancialHistory(manager: EntityManager, query: Parame
       ...describeFinancialContext({ kind: row.transaction_kind, revision, base,
         adjustment: adjustment ? { ...adjustment, currency: z.enum(locationCurrencies).parse(adjustment.currency) } : null,
         adjustmentStatus: adjustment_status, appliedRevisionId: applied_revision_id,
-        confirmationRevisionId: confirmation_revision_id, reason: row.refund?.reason ?? null,
-        amount: row.amount_minor, capturedAmount: row.refund?.captured_amount_minor ?? null }),
+        confirmationRevisionId: confirmation_revision_id, reason: row.refund?.reason ?? null }),
       current_booking: { ...revisionContext(current), status: row.booking_status },
       financials: { ...financial, outstanding: reportedOutstanding(financial.totals, { ...current, status: row.booking_status }) },
     };

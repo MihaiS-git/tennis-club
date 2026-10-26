@@ -5,7 +5,10 @@ import { cleanupBookingFixtures } from "./checkout-fixtures";
 import { insertOpeningHoursFixture } from "./opening-hours-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
-import { assert, expect, test } from "vitest";
+import { assert, expect, test, vi } from "vitest";
+import { getDataSource } from "@/lib/db/data-source";
+import { listBookingEditDayCoverage, listCheckoutCourtCoverage } from "@/lib/db/repositories/clubs.repository";
+import { listBookingEditDayPricing, listCheckoutPricing } from "@/lib/db/repositories/pricing.repository";
 import { listOwnUpcomingCustomerBookings } from "../helpers/current-activity";
 import { cancelOwnCustomerBooking } from "@/lib/bookings/self-cancellation-service";
 import { getReservationDay } from "@/lib/reservations/service";
@@ -17,6 +20,8 @@ test("Owner rescheduling preserves rows, enforces notice/ownership and shares pr
   const service = localFixtureClient();
   const locationId = randomUUID(), courtId = randomUUID(), reservationId = randomUUID(), bookingId = randomUUID();
   const guestReservationId = randomUUID(), guestBookingId = randomUUID();
+  const coveredId = randomUUID(), indoorId = randomUUID(), unpricedId = randomUUID();
+  const futureDate = "2099-10-22";
   const users: string[] = [];
   const date = "2099-10-15", now = new Date("2099-10-14T12:00:00Z");
   const location = { id: locationId, name: "Operations", timezone: "UTC", courts: [{ id: courtId, name: "Court 1" }] };
@@ -45,14 +50,14 @@ test("Owner rescheduling preserves rows, enforces notice/ownership and shares pr
       { id: reservationId, court_id: courtId, booking_date: date, starts_at_minute: 600, ends_at_minute: 660 },
       { id: guestReservationId, court_id: courtId, booking_date: date, starts_at_minute: 660, ends_at_minute: 720 },
     ])).error, null);
-    assert.strictEqual((await insertBookingFixture(service, [
+    await insertBookingFixture([
       { id: bookingId, reservation_id: reservationId, account_user_id: owner.id,
         payment_method: "pay_at_club", customer_name: "Ana Pop", customer_email: "ana@example.test", customer_phone: "+40 123",
         cancellation_notice_minutes: 120, total_amount_minor: 8000, currency: "RON" },
       { id: guestBookingId, reservation_id: guestReservationId, account_user_id: null,
         payment_method: "pay_at_club", customer_name: "Guest", customer_email: "guest@example.test", customer_phone: "+40 999",
         cancellation_notice_minutes: 120, total_amount_minor: 7000, currency: "RON" },
-    ])).error, null);
+    ]);
     const ruleSetId = randomUUID();
     assert.strictEqual((await service.from("pricing_rule_sets").insert({ id: ruleSetId, location_id: locationId })).error, null);
     assert.strictEqual((await service.from("location_pricing_rules").insert({ location_id: locationId,
@@ -61,6 +66,57 @@ test("Owner rescheduling preserves rows, enforces notice/ownership and shares pr
     // Same-price online edits still use the existing schedule/concurrency path.
     await appendBookingContractFixture(bookingId, { payment_method: "online", total_amount_minor: 9001 });
     const samePrice = await getOwnBookingEditDay(bookingId, date, owner.client, now);
+    expect(samePrice.day.courts[0].rates).toEqual(Array(6).fill(9001));
+    // Add distinct states and an unpriced court at the unpublished owner location.
+    assert.strictEqual((await service.from("courts").insert([
+      { id: coveredId, location_id: locationId, name: "Covered", slug: "covered", surface: "clay", environment: "outdoor" },
+      { id: indoorId, location_id: locationId, name: "Indoor", slug: "indoor", surface: "hard", environment: "indoor" },
+      { id: unpricedId, location_id: locationId, name: "Unpriced", slug: "unpriced", surface: "clay", environment: "outdoor" },
+    ])).error, null);
+    assert.strictEqual((await service.from("court_coverage_periods").insert({ court_id: coveredId, starts_on: date, ends_on: date })).error, null);
+    assert.strictEqual((await service.from("location_pricing_rules").insert([
+      { court_id: coveredId, court_state: "covered", price_per_hour_minor: 12001 },
+      { court_id: coveredId, court_state: "outdoor", price_per_hour_minor: 6001 },
+      { court_id: indoorId, court_state: "indoor", price_per_hour_minor: 18001 },
+    ].map(row => ({ ...row, location_id: locationId, rule_set_id: ruleSetId, weekday: mondayWeekday(date),
+      starts_at_minute: 600, ends_at_minute: 780, starts_on: date, ends_on: date })))).error, null);
+    const manager = (await getDataSource()).manager;
+    const courtIds = [courtId, coveredId, indoorId, unpricedId];
+    const [batchCoverage, batchPricing] = await Promise.all([
+      listBookingEditDayCoverage(manager, locationId, courtIds, date),
+      listBookingEditDayPricing(manager, locationId, courtIds, mondayWeekday(date), date),
+    ]);
+    for (const id of courtIds) {
+      expect(batchCoverage.filter(row => row.courtId === id)).toEqual(await listCheckoutCourtCoverage(manager, id, date));
+      const previous = await listCheckoutPricing(manager, id, mondayWeekday(date), date);
+      expect(batchPricing.filter(row => row.courtId === id)).toEqual(previous.sort((a, b) => a.id.localeCompare(b.id)));
+    }
+    expect(await listBookingEditDayCoverage(manager, randomUUID(), courtIds, date)).toEqual([]);
+    expect(await listBookingEditDayPricing(manager, randomUUID(), courtIds, mondayWeekday(date), date)).toEqual([]);
+    expect(await listBookingEditDayCoverage(manager, locationId, [], date)).toEqual([]);
+    expect(await listBookingEditDayPricing(manager, locationId, [], mondayWeekday(date), date)).toEqual([]);
+    const queryLog = vi.spyOn((await getDataSource()).logger, "logQuery");
+    try {
+      const multiple = await getOwnBookingEditDay(bookingId, date, owner.client, now);
+      for (const [id, rate] of [[courtId, 9001], [coveredId, 12001], [indoorId, 18001], [unpricedId, null]] as const) {
+        expect(multiple.day.courts.find(row => row.court.id === id)?.rates).toEqual(Array(6).fill(rate));
+      }
+      expect(queryLog.mock.calls.filter(([sql]) => sql.includes('FROM "public"."court_coverage_periods"'))).toHaveLength(1);
+      expect(queryLog.mock.calls.filter(([sql]) => sql.includes('FROM "public"."location_pricing_rules"'))).toHaveLength(1);
+    } finally { queryLog.mockRestore(); }
+    // Future playing-date hours and date-bounded pricing remain authoritative.
+    assert.strictEqual((await service.from("opening_hours_schedules").update({ ends_on: "2099-10-21" }).eq("location_id", locationId)).error, null);
+    const futureSchedule = await service.from("opening_hours_schedules").insert({ location_id: locationId, starts_on: futureDate }).select("id").single();
+    assert.strictEqual(futureSchedule.error, null); assert.ok(futureSchedule.data);
+    assert.strictEqual((await insertOpeningHoursFixture(service, { location_id: locationId, schedule_id: futureSchedule.data.id,
+      weekday: mondayWeekday(futureDate), opens_at_minute: 840, closes_at_minute: 960 })).error, null);
+    assert.strictEqual((await service.from("location_pricing_rules").insert({ location_id: locationId,
+      court_id: courtId, rule_set_id: ruleSetId, court_state: "outdoor", weekday: mondayWeekday(futureDate),
+      starts_at_minute: 840, ends_at_minute: 960, starts_on: futureDate, ends_on: futureDate, price_per_hour_minor: 15001 })).error, null);
+    const future = await getOwnBookingEditDay(bookingId, futureDate, owner.client, now);
+    expect(future.day.times).toEqual([840, 870, 900, 930]);
+    expect(future.day.courts.find(row => row.court.id === courtId)?.rates).toEqual(Array(4).fill(15001));
+    expect(future.day.courts.find(row => row.court.id === coveredId)?.rates).toEqual(Array(4).fill(null));
     expect(await rescheduleOwnCustomerBooking({ id: bookingId, expectedUpdatedAt: samePrice.booking.updated_at,
       expectedRevisionId: samePrice.booking.current_revision_id, courtId, date, startMinute: 720, endMinute: 780,
       save: true, expectedTotal: 9001, priceAcknowledged: false }, owner.client)).toEqual({ ok: true, totalAmountMinor: 9001 });
@@ -163,7 +219,8 @@ test("Owner rescheduling preserves rows, enforces notice/ownership and shares pr
     expect((await service.from("location_opening_hours").delete().eq("location_id", locationId)).error).toBeNull();
     expect((await service.from("location_pricing_rules").delete().eq("location_id", locationId)).error).toBeNull();
     expect((await service.from("pricing_rule_sets").delete().eq("location_id", locationId)).error).toBeNull();
-    expect((await service.from("courts").delete().eq("id", courtId)).error).toBeNull();
+    expect((await service.from("court_coverage_periods").delete().in("court_id", [courtId, coveredId, indoorId, unpricedId])).error).toBeNull();
+    expect((await service.from("courts").delete().in("id", [courtId, coveredId, indoorId, unpricedId])).error).toBeNull();
     expect((await service.from("locations").delete().eq("id", locationId)).error).toBeNull();
     await cleanupAuthFixtures(service, users);
   }

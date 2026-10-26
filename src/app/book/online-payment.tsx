@@ -1,7 +1,7 @@
 "use client";
 
 
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import { Elements, PaymentElement, useElements, useStripe } from "@stripe/react-stripe-js";
 import { loadStripe } from "@stripe/stripe-js";
@@ -69,6 +69,7 @@ function PaymentForm({ checkout, holdExpiresAt, onConfirmed, onPaymentStatus, di
   const [processing, setProcessing] = useState(false);
   const [authenticating, setAuthenticating] = useState(false);
   const [paymentStatus, setPaymentStatus] = useState<CheckoutPaymentStatus>("pending");
+  const [checkoutEnded, setCheckoutEnded] = useState(false);
   const [message, setMessage] = useState("");
   const [fieldError, setFieldError] = useState("");
   const [ready, setReady] = useState(false);
@@ -82,24 +83,24 @@ function PaymentForm({ checkout, holdExpiresAt, onConfirmed, onPaymentStatus, di
   const messages = endedMessages[purpose];
   useEffect(() => { callbacks.current = { onConfirmed, onPaymentStatus }; }, [onConfirmed, onPaymentStatus]);
 
+  const showStatus = useCallback((status: CheckoutPaymentStatus, text: string) => {
+    setPaymentStatus(status); setMessage(text);
+    if (status !== "pending") setFieldError("");
+    callbacks.current.onPaymentStatus?.(status);
+  }, []);
+  const unknown = useCallback((text: string) => {
+    uncertain.current = true;
+    setProcessing(false);
+    showStatus("unknown", text);
+    notification.current = toast.warning(text, { id: notification.current });
+    processingStarted.current = null;
+  }, [showStatus]);
 
   useEffect(() => {
     finished.current = false;
     generation.current += 1;
     let disposed = false, busy = false, expiredLocally = false;
     let request: AbortController | undefined;
-    function showStatus(status: CheckoutPaymentStatus, text: string) {
-      setPaymentStatus(status); setMessage(text);
-      if (status !== "pending") setFieldError("");
-      callbacks.current.onPaymentStatus?.(status);
-    }
-    function unknown(text: string) {
-      uncertain.current = true;
-      setProcessing(false);
-      showStatus("unknown", text);
-      notification.current = toast.warning(text, { id: notification.current });
-      processingStarted.current = null;
-    }
     // Authentication may legitimately take minutes. Stop the loading indicator,
     // keep Stripe's authentication untouched and keep further submissions blocked.
     function slowAuthentication() {
@@ -133,6 +134,7 @@ function PaymentForm({ checkout, holdExpiresAt, onConfirmed, onPaymentStatus, di
         }
         const state = result.paymentStatus;
         if (result.status !== "pending_payment" || state === "refund_pending" || state === "refund_failed" || state === "refunded") {
+          if (result.status !== "pending_payment") setCheckoutEnded(true);
           uncertain.current = true;
           processingStarted.current = null; setProcessing(false);
           const text = state === "refund_failed" ? messages.refund_failed
@@ -200,11 +202,11 @@ function PaymentForm({ checkout, holdExpiresAt, onConfirmed, onPaymentStatus, di
       generation.current += 1;
     };
     // Refs keep current callbacks; this lifecycle belongs to one checkout only.
-  }, [checkout.attemptId, checkout.token, holdExpiresAt, confirmationMessage, messages]);
+  }, [checkout.attemptId, checkout.token, holdExpiresAt, confirmationMessage, messages, showStatus, unknown]);
 
   async function pay(event: FormEvent) {
     event.preventDefault();
-    if (!stripe || !elements || authenticatingRef.current || finished.current || disabled
+    if (!stripe || !elements || authenticatingRef.current || finished.current || checkoutEnded || disabled
       || processing || paymentStatus !== "pending" || Date.now() >= new Date(holdExpiresAt).getTime()) return;
     const paymentGeneration = generation.current;
     authenticatingRef.current = true; setAuthenticating(true);
@@ -223,10 +225,7 @@ function PaymentForm({ checkout, holdExpiresAt, onConfirmed, onPaymentStatus, di
           notification.current = undefined;
           processingStarted.current = null; setProcessing(false); setMessage("");
         } else {
-          uncertain.current = true; processingStarted.current = null; setProcessing(false); setPaymentStatus("unknown");
-          setMessage("Payment outcome is uncertain. You may close this window; do not pay again yet.");
-          callbacks.current.onPaymentStatus?.("unknown");
-          toast.warning("Payment outcome is uncertain. You may close this window; do not pay again yet.", { id: notification.current });
+          unknown("Payment outcome is uncertain. You may close this window; do not pay again yet.");
         }
       } else {
         // Authorized. Only the server's verified capture confirms; bound that wait anew.
@@ -235,14 +234,11 @@ function PaymentForm({ checkout, holdExpiresAt, onConfirmed, onPaymentStatus, di
       }
     } catch {
       if (!finished.current && !uncertain.current && paymentGeneration === generation.current) {
-        uncertain.current = true; processingStarted.current = null; setProcessing(false); setPaymentStatus("unknown");
-        const text = "Payment outcome is uncertain. You may close this window; do not pay again yet.";
-        setMessage(text); callbacks.current.onPaymentStatus?.("unknown");
-        toast.warning(text, { id: notification.current });
+        unknown("Payment outcome is uncertain. You may close this window; do not pay again yet.");
       }
     } finally { authenticatingRef.current = false; setAuthenticating(false); }
   }
-  const canPay = paymentStatus === "pending" || paymentStatus === "processing";
+  const canPay = !checkoutEnded && (paymentStatus === "pending" || paymentStatus === "processing");
   // Never unmount Payment Element while Stripe authenticates, even after expiry
   // or an uncertain status; it is removed once confirmPayment has returned.
   const showPaymentElement = canPay || authenticating;

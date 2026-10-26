@@ -131,6 +131,7 @@ it.each([
 it.each([
   ["/admin", "Admin"], ["/admin/payments/transactions", "Admin"], ["/admin/payments/settings", "Admin"], ["/admin/locations/location-id", "Admin"],
   ["/admin/reservations", "Admin"], ["/admin/reservations/day", "Admin"],
+  ["/coach", "Admin"], ["/coach/bookings", "Admin"], ["/coach/availability", "Admin"], ["/coach/pricing", "Admin"], ["/coaches", null],
   ["/courts", "Courts"], ["/coaching/session", "Coaching"], ["/club/about", "Club"],
   ["/matches", null], ["/rankings", null],
   ["/administrator", null], ["/admin/reservations-extra", "Admin"], ["/courts-extra", null],

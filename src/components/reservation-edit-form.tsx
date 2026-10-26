@@ -19,7 +19,13 @@ export type ReservationEditSaveResult = { ok: true; pending?: boolean; message?:
 const fieldClass = "min-h-10 w-full rounded-control border border-border-strong bg-background px-3 text-sm text-foreground disabled:bg-surface-muted disabled:text-muted-foreground";
 const scheduleSchema = reservationEditSchema.options[1].shape.schedule;
 
-export function ReservationEditForm<Day extends ReservationTimetableDay = ReservationTimetableDay>({ reservation, inProgress, loadAvailability, onCancel, onSave, onSaved, onStale, onPendingChange, scheduleOnly = false, renderScheduleDetails, renderTimetable, canSave }: {
+function selectionForDay(day: ReservationTimetableDay, desired: Pick<ReservationSelection, "courtId" | "startMinute" | "endMinute"> | null) {
+  const grid = day.courts.find((item) => item.court.id.toLowerCase() === desired?.courtId.toLowerCase());
+  return grid && desired ? reservationSelectionForInterval({ courtId: grid.court.id, times: day.times, cells: grid.cells },
+    desired.startMinute, desired.endMinute) : null;
+}
+
+export function ReservationEditForm<Day extends ReservationTimetableDay = ReservationTimetableDay>({ reservation, inProgress, loadAvailability, initialAvailability, onCancel, onSave, onSaved, onStale, onPendingChange, scheduleOnly = false, renderScheduleDetails, renderTimetable, canSave }: {
   scheduleOnly?: boolean;
   // Replaces the default interval timetable, e.g. lesson starts of a fixed length.
   renderTimetable?: (input: { day: Day; date: string; selection: ReservationSelection | null;
@@ -29,6 +35,7 @@ export function ReservationEditForm<Day extends ReservationTimetableDay = Reserv
   reservation: EditableReservation;
   inProgress: boolean;
   loadAvailability: (reservationId: string, date: string) => Promise<{ day: Day }>;
+  initialAvailability?: { reservationId: string; date: string; day: Day };
   onCancel: () => void;
   onSave?: (draft: ReservationEditDraft) => Promise<ReservationEditSaveResult>;
   onSaved?: () => Promise<void>;
@@ -36,46 +43,52 @@ export function ReservationEditForm<Day extends ReservationTimetableDay = Reserv
   onPendingChange?: (pending: boolean) => void;
 }) {
   const prefix = useId();
+  const initialDay = !inProgress && initialAvailability?.reservationId === reservation.id
+    && initialAvailability.date === reservation.booking_date && z.iso.date().safeParse(reservation.booking_date).success
+    && reservation.booking_date >= localToday(reservation.location_timezone, new Date()) ? initialAvailability.day : null;
   const [date, setDate] = useState(reservation.booking_date);
   const [availability, setAvailability] = useState<{
-    day: Day | null; date: string; loader: typeof loadAvailability; refreshKey: number; error: string;
-  } | null>(null);
-  const [selection, setSelection] = useState<ReservationSelection | null>(null);
+    day: Day | null; reservationId: string; date: string; loader: typeof loadAvailability; refreshKey: number; error: string;
+  } | null>(() => initialDay ? { day: initialDay, reservationId: reservation.id, date: reservation.booking_date,
+    loader: loadAvailability, refreshKey: 0, error: "" } : null);
+  const [selection, setSelection] = useState<ReservationSelection | null>(() => initialDay ? selectionForDay(initialDay,
+    { courtId: reservation.court_id, startMinute: reservation.starts_at_minute, endMinute: reservation.ends_at_minute }) : null);
   const [reason, setReason] = useState(reservation.reason ?? "");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [pending, setPending] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
-  const firstLoad = useRef(true);
+  const firstLoad = useRef(!initialDay);
+  const preloaded = useRef(initialDay ? { reservationId: reservation.id, date: reservation.booking_date, loader: loadAvailability } : null);
   const submitting = useRef(false);
   const today = localToday(reservation.location_timezone, new Date());
   const validDate = z.iso.date().safeParse(date).success && date >= today;
-  const currentAvailability = availability?.date === date && availability.loader === loadAvailability
+  const currentAvailability = availability?.reservationId === reservation.id && availability.date === date && availability.loader === loadAvailability
     && availability.refreshKey === refreshKey ? availability : null;
   const day = currentAvailability?.day ?? null;
   const availabilityError = currentAvailability?.error ?? "";
   const loading = !inProgress && validDate && !currentAvailability;
 
   useEffect(() => {
+    if (preloaded.current) {
+      if (preloaded.current.reservationId === reservation.id && preloaded.current.date === date
+        && preloaded.current.loader === loadAvailability && refreshKey === 0) return;
+      preloaded.current = null;
+    }
     if (inProgress || !z.iso.date().safeParse(date).success || date < localToday(reservation.location_timezone, new Date())) return;
     let disposed = false;
     const notification = toast.loading("Loading court availability…");
     loadAvailability(reservation.id, date).then((value) => {
       if (disposed) return;
       toast.dismiss(notification);
-      setAvailability({ day: value.day, date, loader: loadAvailability, refreshKey, error: "" });
+      setAvailability({ day: value.day, reservationId: reservation.id, date, loader: loadAvailability, refreshKey, error: "" });
       const initialSelection = firstLoad.current && date === reservation.booking_date
         ? { courtId: reservation.court_id, startMinute: reservation.starts_at_minute, endMinute: reservation.ends_at_minute }
         : null;
-      setSelection((current) => {
-        const desired = initialSelection ?? current;
-        const grid = value.day.courts.find((item) => item.court.id.toLowerCase() === desired?.courtId.toLowerCase());
-        return grid && desired ? reservationSelectionForInterval({ courtId: grid.court.id, times: value.day.times, cells: grid.cells },
-          desired.startMinute, desired.endMinute) : null;
-      });
+      setSelection((current) => selectionForDay(value.day, initialSelection ?? current));
       firstLoad.current = false;
     }).catch(() => {
       if (!disposed) {
-        setAvailability({ day: null, date, loader: loadAvailability, refreshKey, error: "Unable to load court availability. Try again." });
+        setAvailability({ day: null, reservationId: reservation.id, date, loader: loadAvailability, refreshKey, error: "Unable to load court availability. Try again." });
         toast.error("Unable to load court availability. Try again.", { id: notification,
           action: { label: "Retry", onClick: () => setRefreshKey((key) => key + 1) } });
       }

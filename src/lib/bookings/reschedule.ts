@@ -5,9 +5,10 @@ import { createClient } from "@/lib/supabase/server";
 import { loadReservationEditDayForLocation, reservationEditLocationSchema } from "@/lib/reservations/edit-availability";
 import { openingIntervalSchema, type OpeningInterval } from "@/lib/admin/opening-hours-validation";
 import { getDataSource } from "@/lib/db/data-source";
-import { listCheckoutCourtCoverage, listCheckoutLocationCourts } from "@/lib/db/repositories/clubs.repository";
-import { listCheckoutPricing } from "@/lib/db/repositories/pricing.repository";
+import { listBookingEditDayCoverage, listCheckoutLocationCourts } from "@/lib/db/repositories/clubs.repository";
+import { listBookingEditDayPricing } from "@/lib/db/repositories/pricing.repository";
 import { courtSlotRates } from "@/lib/courts/calendar";
+import { toCalendarCoveragePeriod, toCalendarPricingRule } from "@/lib/courts/calendar-projections";
 import { mondayWeekday } from "@/lib/pricing/resolution";
 import { readCurrentAccount } from "@/lib/auth/account";
 import { bookingRescheduleInputSchema, readCustomerBookingEditContext, rescheduleCustomerBookingCommand } from "./commands";
@@ -53,34 +54,44 @@ export async function loadBookingEditDay(id: unknown, date: unknown, client: Cli
   const context = await readCustomerBookingEditContext(input.id, input.date, account.userId);
   if (!context) throw new Error("This booking is no longer available to edit.");
   const booking = bookingEditContextSchema.parse(context);
-  const availability = await loadReservationEditDayForLocation({ client, locationId: context.location_id,
+  const availability = await loadReservationEditDayForLocation({ locationId: context.location_id,
     timezone: context.location_timezone, date: input.date, occupancy: context.occupancy, now,
     configuration: { location: booking.location, hours: context.hours } });
   // Every Edit opens a fresh form; earlier modifications are never resumed here.
   return { ...availability, day: await withCourtRates(availability.day, context.location_id, input.date,
-    context.hours, booking.currency), booking };
+    context.hours, booking.currency, context.location.courts), booking };
 }
+
+type RateCourt = Parameters<typeof courtSlotRates>[0]["court"];
 
 // Display rates for the owner's timetable from the same configuration reads as the
 // edit quote. The selected-interval quote remains the authoritative price.
-async function withCourtRates<Day extends { times: number[]; courts: { court: { id: string } }[] }>(
-  day: Day, locationId: string, date: string, hours: OpeningInterval[], currency: string) {
+export async function withCourtRates(
+  day: Awaited<ReturnType<typeof loadReservationEditDayForLocation>>["day"],
+  locationId: string, date: string, hours: OpeningInterval[], currency: string,
+  loadedCourts?: readonly RateCourt[]) {
   const manager = (await getDataSource()).manager;
-  const courts = await listCheckoutLocationCourts(manager, locationId);
+  const courts = loadedCourts ?? await listCheckoutLocationCourts(manager, locationId);
+  const displayedIds = new Set(day.courts.map((row) => row.court.id));
+  const byCourt = new Map<string, {
+    court: (typeof courts)[number]; coverage: ReturnType<typeof toCalendarCoveragePeriod>[];
+    pricing: ReturnType<typeof toCalendarPricingRule>[];
+  }>(courts.filter((court) => displayedIds.has(court.id)).map((court) => [court.id, {
+    court, coverage: [], pricing: [],
+  }]));
   const weekday = mondayWeekday(date);
-  return { ...day, currency, courts: await Promise.all(day.courts.map(async (row) => {
-    const court = courts.find((item) => item.id === row.court.id);
-    if (!court) return { ...row, rates: day.times.map(() => null) };
-    const [coverage, rules] = await Promise.all([listCheckoutCourtCoverage(manager, court.id, date),
-      listCheckoutPricing(manager, court.id, weekday, date)]);
-    return { ...row, rates: courtSlotRates({ court, date, times: day.times, hours,
-      coverage: coverage.map((c) => ({ id: c.id, court_id: c.courtId, starts_on: c.startsOn, ends_on: c.endsOn,
-        created_at: c.createdAt.toISOString(), updated_at: c.updatedAt.toISOString() })),
-      pricing: rules.map((p) => ({ id: p.id, rule_set_id: p.ruleSetId, location_id: p.locationId, court_id: p.courtId,
-        court_state: p.courtState, weekday: p.weekday, starts_at_minute: p.startsAtMinute, ends_at_minute: p.endsAtMinute,
-        starts_on: p.startsOn, ends_on: p.endsOn, price_per_hour_minor: p.pricePerHourMinor,
-        created_at: p.createdAt.toISOString(), updated_at: p.updatedAt.toISOString() })) }).rates };
-  })) };
+  const courtIds = [...byCourt.keys()];
+  const [coverage, pricing] = await Promise.all([
+    listBookingEditDayCoverage(manager, locationId, courtIds, date),
+    listBookingEditDayPricing(manager, locationId, courtIds, weekday, date),
+  ]);
+  for (const row of coverage) byCourt.get(row.courtId)?.coverage.push(toCalendarCoveragePeriod(row));
+  for (const row of pricing) byCourt.get(row.courtId)?.pricing.push(toCalendarPricingRule(row));
+  return { ...day, currency, courts: day.courts.map((row) => {
+    const configuration = byCourt.get(row.court.id);
+    if (!configuration) return { ...row, rates: day.times.map(() => null) };
+    return { ...row, rates: courtSlotRates({ ...configuration, date, times: day.times, hours }).rates };
+  }) };
 }
 export async function runBookingReschedule(input: unknown, actorId: string): Promise<BookingRescheduleResult> {
   const parsed = bookingRescheduleInputSchema.safeParse(input);

@@ -1,16 +1,22 @@
 import "server-only";
 
-import { In, type EntityManager } from "typeorm";
+import { Brackets, In, type EntityManager } from "typeorm";
 import { z } from "zod";
 import type { OpeningHoursPricingPlan } from "@/lib/pricing/opening-hours-reconciliation";
 import { CourtEntity } from "../entities/court.entity";
+import { LocationEntity } from "../entities/location.entity";
 import { LocationPricingRuleEntity } from "../entities/location-pricing-rule.entity";
 import { PricingRuleSetEntity } from "../entities/pricing-rule-set.entity";
+import type { PublicDayRead } from "./clubs.repository";
 
 export async function listLocationPublicationPricing(manager: EntityManager, locationId: string) {
   return manager.getRepository(LocationPricingRuleEntity).find({
     where: { locationId }, select: { courtId: true, courtState: true, endsOn: true, startsOn: true, weekday: true, startsAtMinute: true, endsAtMinute: true },
   });
+}
+
+export async function locationHasPricingRules(manager: EntityManager, locationId: string) {
+  return manager.getRepository(LocationPricingRuleEntity).existsBy({ locationId });
 }
 
 export async function listLocationPricingRules(manager: EntityManager, locationId: string) {
@@ -66,13 +72,28 @@ export async function listCheckoutPricing(manager: EntityManager, courtId: strin
     .getMany();
 }
 
-export async function listPublicDayPricing(manager: EntityManager, locationId: string, courtIds: string[], weekday: number, date: string): Promise<unknown> {
-  const rows: unknown = await manager.query(`SELECT to_jsonb(p) AS row FROM public.location_pricing_rules p
-    JOIN public.courts c ON c.id=p.court_id AND c.is_active
-    JOIN public.locations l ON l.id=c.location_id AND l.is_active AND l.archived_at IS NULL AND l.is_public
-    WHERE l.id=$1 AND p.court_id=ANY($2::uuid[]) AND p.weekday=$3
-      AND (p.starts_on IS NULL OR p.starts_on<=$4::date)
-      AND (p.ends_on IS NULL OR p.ends_on>=$4::date)`, [locationId,courtIds,weekday,date]);
+export async function listBookingEditDayPricing(manager: EntityManager, locationId: string, courtIds: string[], weekday: number, date: string) {
+  if (!courtIds.length) return [];
+  return manager.getRepository(LocationPricingRuleEntity).createQueryBuilder("pricing")
+    .where("pricing.location_id = :locationId AND pricing.court_id IN (:...courtIds) AND pricing.weekday = :weekday", { locationId, courtIds, weekday })
+    .andWhere("(pricing.starts_on IS NULL OR pricing.starts_on <= :date) AND (pricing.ends_on IS NULL OR pricing.ends_on >= :date)", { date })
+    .orderBy("pricing.court_id", "ASC").addOrderBy("pricing.id", "ASC")
+    .getMany();
+}
+
+export async function listPublicDayPricing(manager: EntityManager, days: readonly PublicDayRead[]): Promise<unknown> {
+  const withCourts = days.filter((day) => day.courtIds.length);
+  if (!withCourts.length) return [];
+  const rows: unknown = await manager.getRepository(LocationPricingRuleEntity).createQueryBuilder("p")
+    .select("to_jsonb(p)", "row")
+    .innerJoin(CourtEntity, "c", "c.id = p.court_id AND c.is_active")
+    .innerJoin(LocationEntity, "l", "l.id = c.location_id AND l.is_active AND l.archived_at IS NULL AND l.is_public")
+    .where(new Brackets((query) => withCourts.forEach((day, index) => query.orWhere(
+      `(l.id = :location${index} AND p.court_id IN (:...courts${index}) AND p.weekday = :weekday${index}
+        AND (p.starts_on IS NULL OR p.starts_on <= :date${index}) AND (p.ends_on IS NULL OR p.ends_on >= :date${index}))`,
+      { [`location${index}`]: day.locationId, [`courts${index}`]: [...day.courtIds], [`weekday${index}`]: day.weekday,
+        [`date${index}`]: day.date }))))
+    .getRawMany();
   return z.array(z.object({ row: z.unknown() })).parse(rows).map(({ row }) => row);
 }
 

@@ -107,11 +107,6 @@ export async function dismissAdjustment(adjustmentId: string) {
 }
 
 export async function finishBookingAdjustment(result: BookingRescheduleResult & { supersededAttempts?: DismissedAttempt[] }): Promise<BookingRescheduleResult> {
-  const outcome = await adjustmentOutcome(result);
-  return outcome;
-}
-
-async function adjustmentOutcome(result: BookingRescheduleResult & { supersededAttempts?: DismissedAttempt[] }): Promise<BookingRescheduleResult> {
   const { supersededAttempts = [], ...outcome } = result;
   for (const attempt of supersededAttempts) {
     try { await resolveDismissedPayment(attempt); }

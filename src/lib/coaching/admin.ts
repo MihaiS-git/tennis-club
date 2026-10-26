@@ -6,6 +6,8 @@ import type { EntityManager } from "typeorm";
 
 import { requireActiveAdmin } from "@/lib/admin/authorization";
 import { getDataSource } from "@/lib/db/data-source";
+import type { CoachingProgramEntity } from "@/lib/db/entities/coaching-program.entity";
+import type { LocationEntity } from "@/lib/db/entities/location.entity";
 import { normalizeDatabaseError } from "@/lib/db/errors";
 import { lockActiveAdminAccount, lockReservationActorFacts } from "@/lib/db/repositories/accounts.repository";
 import { listLocationsWithCoachAvailability } from "@/lib/db/repositories/coach-availability.repository";
@@ -16,9 +18,8 @@ import { logger } from "@/lib/logger";
 import type { LocationCurrency } from "@/lib/pricing/money";
 import { createClient } from "@/lib/supabase/server";
 import {
-  coachingFieldErrors, coachingPriceMutationSchema, coachingPriceRemovalSchema, coachingProgramMutationSchema,
-  coachingParticipantRange, coachingProgramStatusSchema, coachProfileMutationSchema, coachVisibilitySchema, hasParticipantRates,
-  isPermittedParticipantCount, participantPriceMutationSchema, type CoachingMutationResult, type CoachingProgramType,
+  clubPriceSetMutationSchema, coachingFieldErrors, coachingProgramMutationSchema, coachingParticipantRange, coachingProgramStatusSchema,
+  coachProfileMutationSchema, coachVisibilitySchema, isOnlineCoachingProgramType, isPermittedParticipantCount, type CoachingMutationResult, type CoachingProgramType,
 } from "./validation";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
@@ -35,14 +36,11 @@ export type AdminCoach = {
 };
 export type AdminCoachAccount = { id: string; email: string; suggested_name: string | null };
 export type AdminCoachingLocation = { id: string; name: string; currency: LocationCurrency; is_active: boolean };
-// Club-wide: a club default (coach null) or a coach's own override, per program duration and currency.
+// Club-wide lesson price/person: a club default (coach null) or a coach's own override, per
+// program duration, participant count and currency.
 export type AdminCoachingPrice = {
-  id: string; program_id: string; duration_minutes: number; coach_user_id: string | null;
+  id: string; program_id: string; duration_minutes: number; participant_count: number; coach_user_id: string | null;
   amount_minor: number; currency: LocationCurrency;
-};
-// A Group/Junior club rate per person per 60 minutes for one participant count and currency.
-export type AdminParticipantPrice = {
-  id: string; program_id: string; participant_count: number; amount_minor: number; currency: LocationCurrency;
 };
 // A pricing currency: one used by a current location, or one that still holds prices.
 export type AdminCoachingCurrency = { currency: LocationCurrency; location_names: string[] };
@@ -51,14 +49,20 @@ export type AdminCoaching = {
   locations: AdminCoachingLocation[]; prices: AdminCoachingPrice[];
 };
 
-export function adminCoachingPrice(price: coaching.CoachingPriceKey & { id: string; amountMinor: number }): AdminCoachingPrice {
-  return { id: price.id, program_id: price.programId, duration_minutes: price.durationMinutes, coach_user_id: price.coachUserId,
-    amount_minor: price.amountMinor, currency: price.currency };
+export function adminCoachingProgram(program: Pick<CoachingProgramEntity, "id" | "name" | "description" | "programType"
+  | "minParticipants" | "maxParticipants" | "courtRentalIncluded" | "isActive"> & { durations: number[] }): AdminCoachingProgram {
+  return { id: program.id, name: program.name, description: program.description, program_type: program.programType,
+    durations: program.durations, min_participants: program.minParticipants, max_participants: program.maxParticipants,
+    court_rental_included: program.courtRentalIncluded, is_active: program.isActive };
 }
 
-export function adminParticipantPrice(price: coaching.ParticipantPriceKey & { id: string; amountMinor: number }): AdminParticipantPrice {
-  return { id: price.id, program_id: price.programId, participant_count: price.participantCount,
-    amount_minor: price.amountMinor, currency: price.currency };
+export function adminCoachingLocation(location: Pick<LocationEntity, "id" | "name" | "currency" | "isActive">): AdminCoachingLocation {
+  return { id: location.id, name: location.name, currency: location.currency, is_active: location.isActive };
+}
+
+export function adminCoachingPrice(price: coaching.CoachingPriceKey & { id: string; amountMinor: number }): AdminCoachingPrice {
+  return { id: price.id, program_id: price.programId, duration_minutes: price.durationMinutes, participant_count: price.participantCount,
+    coach_user_id: price.coachUserId, amount_minor: price.amountMinor, currency: price.currency };
 }
 
 export function adminCoachingCurrencies(locations: readonly Pick<AdminCoachingLocation, "name" | "currency">[],
@@ -87,11 +91,7 @@ export async function readAdminCoaching(manager: EntityManager, includePrices = 
       () => includePrices ? coaching.listCoachingPrices(manager) : Promise.resolve([]),
     ]);
     return {
-      programs: programs.map((program) => ({
-        id: program.id, name: program.name, description: program.description, program_type: program.programType,
-        durations: program.durations, min_participants: program.minParticipants, max_participants: program.maxParticipants,
-        court_rental_included: program.courtRentalIncluded, is_active: program.isActive,
-      })),
+      programs: programs.map(adminCoachingProgram),
       coaches: coaches.map((coach) => ({
         user_id: coach.user_id, display_name: coach.display_name, bio: coach.bio, qualifications: coach.qualifications,
         specialties: coach.specialties, languages: coach.languages, is_public: coach.is_public, email: coach.email,
@@ -99,7 +99,7 @@ export async function readAdminCoaching(manager: EntityManager, includePrices = 
         ineligibility: coachIneligibility({ status: coach.account_status, roles: coach.has_coach_role ? ["coach"] : [] }),
       })),
       coachAccounts,
-      locations: locations.map((location) => ({ id: location.id, name: location.name, currency: location.currency, is_active: location.isActive })),
+      locations: locations.map(adminCoachingLocation),
       prices: prices.map(adminCoachingPrice),
     };
   } catch (error) {
@@ -135,6 +135,16 @@ async function requireAdminFence(manager: EntityManager, actorId: string) {
   if (!await lockActiveAdminAccount(manager, actorId)) throw new Error("Administrator required");
 }
 
+async function persistClubPrices(manager: EntityManager, programId: string,
+  prices: NonNullable<z.output<typeof coachingProgramMutationSchema>["club_prices"]>,
+  removed: NonNullable<z.output<typeof coachingProgramMutationSchema>["removed_club_prices"]>) {
+  const now = new Date();
+  const key = (price: typeof removed[number]) => ({ programId, durationMinutes: price.duration_minutes,
+    participantCount: price.participant_count, currency: price.currency });
+  await coaching.deleteClubCoachingPrices(manager, removed.map(key));
+  await coaching.upsertClubCoachingPrices(manager, prices.map((price) => ({ ...key(price), amountMinor: price.amount })), now);
+}
+
 export async function saveCoachingProgram(input: unknown, supabase?: Client): Promise<CoachingMutationResult> {
   const actor = await requireActiveAdmin(supabase ?? await createClient());
   const parsed = coachingProgramMutationSchema.safeParse(input);
@@ -147,38 +157,33 @@ export async function saveCoachingProgram(input: unknown, supabase?: Client): Pr
   };
   const clubPrices = parsed.data.club_prices ?? [];
   const removedPrices = parsed.data.removed_club_prices ?? [];
+  // Permitted price scopes are program policy, decided here rather than in SQL.
+  const scope: coaching.ProgramPriceScope = { coachOverrides: isOnlineCoachingProgramType(fields.program_type), durations: fields.durations,
+    range: coachingParticipantRange({ minParticipants: fields.min_participants, maxParticipants: fields.max_participants }) };
   return mutate(id ? "admin.coaching_program_updated" : "admin.coaching_program_created", actor.userId, async (manager) => {
     // Configuration fence → Admin fence → program, the club price-save order.
     await clubs.lockConfigurationForWrite(manager);
     await requireAdminFence(manager, actor.userId);
-    // Club defaults reuse the price upsert; Coach overrides are never written here.
-    async function savePrices(programId: string) {
-      const now = new Date();
-      for (const price of removedPrices) {
-        await coaching.deleteCoachingPrice(manager, { programId, durationMinutes: price.duration_minutes, currency: price.currency, coachUserId: null });
-      }
-      for (const price of clubPrices) {
-        await coaching.upsertCoachingPrice(manager, { programId, durationMinutes: price.duration_minutes, currency: price.currency, coachUserId: null },
-          price.amount, now);
-      }
-    }
     if (!id) {
       const created = await coaching.insertCoachingProgram(manager, values, new Date());
       await coaching.addCoachingProgramDurations(manager, created, fields.durations);
-      await savePrices(created);
+      await persistClubPrices(manager, created, clubPrices, removedPrices);
       return { ok: true, id: created };
     }
-    // Price saves hold the program FOR SHARE, so removed durations cannot gain prices.
+    // Price saves hold the program FOR SHARE, so no price outside the saved configuration
+    // can be written between this reconciliation and commit.
     const program = await coaching.lockCoachingProgram(manager, id, "pessimistic_write");
     if (!program) return { ok: false, reason: "not-found" };
     const removed = program.durations.filter((minutes) => !fields.durations.includes(minutes));
     const added = fields.durations.filter((minutes) => !program.durations.includes(minutes));
-    await coaching.deleteProgramPrices(manager, program.id, removed);
+    // Removed durations, counts outside the new range and coach overrides a Group/Junior type
+    // forbids are current configuration only; booking contracts keep their snapshots.
+    await coaching.deleteObsoleteProgramPrices(manager, program.id, scope);
     await coaching.updateCoachingProgram(manager, program.id, values, new Date());
     await coaching.removeCoachingProgramDurations(manager, program.id, removed);
     await coaching.addCoachingProgramDurations(manager, program.id, added);
-    // A removal already applied by a removed duration or another Admin is a no-op.
-    await savePrices(program.id);
+    // A removal already applied by the reconciliation or another Admin is a no-op.
+    await persistClubPrices(manager, program.id, clubPrices, removedPrices);
     return { ok: true, id: program.id };
   });
 }
@@ -266,59 +271,23 @@ export async function setCoachVisibility(input: unknown, supabase?: Client): Pro
   });
 }
 
-// Club default prices only. A coach's own overrides are managed by that coach
-// (coach-pricing.ts); the input cannot name a coach.
-async function mutateClubPrice(input: unknown, remove: boolean, supabase?: Client): Promise<CoachingMutationResult> {
+// Club lesson prices/person of one offered program duration in one currency, by participant count,
+// saved and removed together, for every program type. A coach's own overrides are managed by that coach (coach-pricing.ts);
+// the input cannot name a coach. Saved counts must lie in the program's current range and the
+// currency must be charged by a current location.
+export async function saveClubCoachingPrices(input: unknown, supabase?: Client): Promise<CoachingMutationResult> {
   const actor = await requireActiveAdmin(supabase ?? await createClient());
-  const parsed = remove ? coachingPriceRemovalSchema.safeParse(input) : coachingPriceMutationSchema.safeParse(input);
+  const parsed = clubPriceSetMutationSchema.safeParse(input);
   if (!parsed.success) return { ok: false, reason: "invalid-input", fieldErrors: coachingFieldErrors(parsed.error.issues) };
-  const amount: number | null = "amount" in parsed.data && typeof parsed.data.amount === "number" ? parsed.data.amount : null;
-  const key: coaching.CoachingPriceKey = {
-    programId: parsed.data.program_id.toLowerCase(), durationMinutes: parsed.data.duration_minutes,
-    currency: parsed.data.currency, coachUserId: null,
-  };
-  const event = remove ? "admin.coaching_price_removed" : "admin.coaching_price_saved";
-  return mutate(event, actor.userId, async (manager) => {
-    await clubs.lockConfigurationForRead(manager);
-    await requireAdminFence(manager, actor.userId);
-    const program = await coaching.lockCoachingProgram(manager, key.programId, "pessimistic_read");
-    if (!program || !program.durations.includes(key.durationMinutes)) return { ok: false, reason: "invalid-program" };
-    // Group/Junior rates are per player count (saveClubParticipantPrices); obsolete
-    // duration prices of such a program may still be removed, never written.
-    if (!remove && hasParticipantRates(program.programType)) return { ok: false, reason: "club-priced" };
-    if (remove) {
-      const removed = await coaching.deleteCoachingPrice(manager, key);
-      return removed ? { ok: true, id: removed } : { ok: false, reason: "not-found" };
-    }
-    if (amount === null) throw new Error("Price amount missing");
-    const id = await coaching.upsertCoachingPrice(manager, key, amount, new Date());
-    return { ok: true, id };
-  });
-}
-
-export async function saveClubCoachingPrice(input: unknown, supabase?: Client) {
-  return mutateClubPrice(input, false, supabase);
-}
-
-export async function removeClubCoachingPrice(input: unknown, supabase?: Client) {
-  return mutateClubPrice(input, true, supabase);
-}
-
-// Club rates per person per 60 minutes of one Group/Junior program in one currency, saved
-// and removed together. Saved counts must lie in the program's current participant range and
-// the currency must be charged by a current location; removal accepts any stored count.
-export async function saveClubParticipantPrices(input: unknown, supabase?: Client): Promise<CoachingMutationResult> {
-  const actor = await requireActiveAdmin(supabase ?? await createClient());
-  const parsed = participantPriceMutationSchema.safeParse(input);
-  if (!parsed.success) return { ok: false, reason: "invalid-input", fieldErrors: coachingFieldErrors(parsed.error.issues) };
-  const { currency, prices, removed } = parsed.data;
+  const { currency, prices, removed, duration_minutes: durationMinutes } = parsed.data;
   const programId = parsed.data.program_id.toLowerCase();
-  return mutate("admin.coaching_participant_prices_saved", actor.userId, async (manager) => {
+  return mutate("admin.coaching_club_prices_saved", actor.userId, async (manager) => {
     // The club price-save order: configuration share fence → Admin fence → program FOR SHARE.
     await clubs.lockConfigurationForRead(manager);
     await requireAdminFence(manager, actor.userId);
     const program = await coaching.lockCoachingProgram(manager, programId, "pessimistic_read");
-    if (!program || !hasParticipantRates(program.programType)) return { ok: false, reason: "invalid-program" };
+    if (!program) return { ok: false, reason: "invalid-program" };
+    if (!program.durations.includes(durationMinutes)) return { ok: false, reason: "invalid-program" };
     if (prices.length) {
       const range = coachingParticipantRange(program);
       if (!range) return { ok: false, reason: "participants-required" };
@@ -328,11 +297,9 @@ export async function saveClubParticipantPrices(input: unknown, supabase?: Clien
       const locations = await clubs.listAdminLocations(manager, "current");
       if (!locations.some((location) => location.currency === currency)) return { ok: false, reason: "invalid-currency" };
     }
-    const now = new Date();
-    for (const participantCount of removed) await coaching.deleteParticipantPrice(manager, { programId: program.id, participantCount, currency });
-    for (const price of prices) {
-      await coaching.upsertParticipantPrice(manager, { programId: program.id, participantCount: price.participant_count, currency }, price.amount, now);
-    }
+    await persistClubPrices(manager, program.id,
+      prices.map((price) => ({ ...price, duration_minutes: durationMinutes, currency })),
+      removed.map((participant_count) => ({ participant_count, duration_minutes: durationMinutes, currency })));
     return { ok: true, id: program.id };
   });
 }

@@ -9,11 +9,6 @@ export const courtEnvironmentLabels: Record<typeof courtEnvironments[number], st
   outdoor: "Outdoor", indoor: "Indoor",
 };
 
-export function generateCourtSlug(name: string) {
-  return name.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-}
-
 export const courtFieldsSchema = z.strictObject({
   location_id: z.uuid("Select a location."),
   name: z.string().trim().min(1, "Enter a court name.").max(100, "Use at most 100 characters."),

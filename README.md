@@ -54,8 +54,7 @@ This is **not a multi-tenant SaaS platform**. One tennis club owns and operates 
 
 - Supabase Auth
 - Supabase PostgreSQL
-- Supabase Row Level Security
-- Supabase Storage for uploaded player avatars
+- Supabase Storage for uploaded player avatars, protected by Storage RLS (application tables have no browser grants or RLS policies)
 - Supabase Realtime where useful
 
 ### Payments
@@ -348,27 +347,9 @@ The TypeORM checkout transaction reads and stores the selected location policy a
 unchanged. Personal upcoming/history and Admin operational reads return the booking's
 own snapshot. The configuration read is Admin-only; public location reads retain
 their previous columns. Customer intent cannot supply a policy value.
-Cancellation eligibility uses the location-timezone booking start instant
-minus the booking's elapsed-minute snapshot, allowing `now <= cutoff` and rejecting
-`now > cutoff`, while always requiring `now < booking start`. Active authenticated owners may now self-cancel future confirmed customer bookings
-from their details dialog on `/my-activity/bookings`, after explicit confirmation.
-The server-only cancellation service verifies ownership and uses the shared TypeScript
-cutoff/staff-bypass policy. A TypeORM transaction locks location, booking, reservation,
-selected payment and existing refund, then fences actor roles/account. Post-lock database
-wall time controls eligibility. Without a refund, both lifecycle rows commit atomically. With a refund, a pending cancellation request and its refund obligations
-commit instead: the booking stays confirmed until the refund is verified, is cancelled
-then. Any incomplete refund preserves the original booking and reservation, including
-when other refunds have succeeded. Known transient provider failures permit new executions;
-ambiguous failures, and permanent failures after a partial refund, preserve the outstanding
-obligation, record a financial exception and stay visible to Admin for external resolution.
-When every refund is permanently refused and no money moved, the request is abandoned: the
-obligations are voided, the booking stays confirmed and a new cancellation may be requested. Refund execution runs after commit in the same request; an unconfirmed
-outcome is completed by a signed Stripe refund webhook or the Admin "Check with Stripe" action.
-Repeated requests reuse the existing request and refunds; other duplicate cancellations
-return a safe failure.
-Upcoming refreshes in place; cancelled bookings enter History and free occupancy.
-Guest identity matching grants no ownership. Admin operational cancellation and direct
-reservation cancellation remain distinct and unchanged.
+Eligible owners can cancel future confirmed bookings from `/my-activity/bookings` after
+confirmation; Admins may cancel eligible customer/guest bookings. Guest contact matching never
+grants ownership. See [cancellation and refunds](#cancellation-and-refunds) for the implemented flow.
 
 Each location may define:
 
@@ -442,32 +423,12 @@ Bookings fully covered by membership entitlement may be confirmed without paymen
 
 ## Court + coach booking
 
-```text
-Choose location
-→ choose date/time
-→ select court
-→ find coaches available for the same interval/location
-→ select coach
-→ calculate total price
-→ create temporary hold
-→ pay
-→ confirm booking
-```
-
-The court and coach must both remain available for the entire interval.
-
-Private and Semi-private coaching use an internal server-side checkout entry point using the existing
-Stripe authorization, capture, settlement, expiry and refund lifecycle. Coaching honors
-its historical combined-price contract and protected coach/court hold; court-only
-rescheduling explicitly rejects lessons. `/book?mode=coaching` now reuses the existing
-single-day timetable, customer dialog and Payment Element for both lesson types. One customer
-books and pays for the complete session (one player for Private, two for Semi-private).
-Configured coach overrides take precedence over club defaults; excluded court rental is
-added once to the session price. Group and Junior sessions are not booked online: the
-coach or club organizes them and reserves the court, payment is made at the club, and the
-club publishes informational rates per person per 60 minutes by player count on `/coaching`
-(set under Admin → Coaching → Prices).
-See [coaching booking](docs/coaching.md#step-6-coaching-mode-on-book).
+Private and Semi-private lessons are bookable at `/book?mode=coaching`, using the shared
+court timetable, customer dialog and Stripe checkout. A lesson reserves both court and
+Coach and snapshots its program-specific price, participants, duration and court-rental terms.
+Customer lesson rescheduling preserves the program, Coach, court and duration while changing
+date/start. Group and Junior sessions are organized by staff, with informational public rates;
+coaching packages remain planned. See [coaching configuration, availability and booking](docs/coaching.md).
 
 ---
 
@@ -539,93 +500,33 @@ Rescheduling should be represented by history rather than a permanent `reschedul
 
 ## Rescheduling
 
-Online paid-booking edits now collect only a positive price difference through the
-existing Stripe checkout, or refund an eligible reduction through durable partial
-refund obligations. The original confirmed booking stays intact during surcharge
-payment; GiST-protected hold fragments reserve target time outside the original
-interval. Verified settlement atomically applies the edit, or records compensation
-without changing the original booking. My Activity Edit recovers the registered
-intent after refresh. Only eligible owners, including Admin/Coach owners, may
-reschedule; Admins cannot reschedule other customers' bookings. Same-price edits
-save directly. Pay-at-club edits append a contract revision: current debt changes,
-while the original request amount remains unchanged. Cancellation automatically
-allocates remaining captured funds after existing refund obligations.
-See [implemented workflow and validation](docs/booking-payment-workflow-audit.md).
+Eligible authenticated owners reschedule from `/my-activity/bookings`, including Admin/Coach
+owners. Court bookings keep their location; coaching lessons additionally keep their court,
+program, Coach, duration and agreed coaching terms. Ordinary owners must meet the snapshotted
+notice cutoff; staff owners bypass notice only, and every owner must be before start.
+Admins cannot reschedule other customers' bookings; guest self-management is unimplemented.
 
-Members should be able to choose between rescheduling and cancellation/refund.
-
-```text
-Manage booking
-├── Reschedule
-└── Cancel / Refund
-```
-
-Rescheduling flow:
-
-```text
-select new location/court/date/time
-→ validate availability
-→ optionally change coach
-→ calculate new price
-→ compare with previous amount
-→ charge/refund difference
-→ move reservation atomically
-→ store rescheduling history
-```
-
-Possible outcomes:
-
-```text
-same price
-→ no payment operation
-
-higher price
-→ charge difference
-
-lower price
-→ refund difference according to policy
-```
-
-The booking can retain its existing identity while its scheduled resources change.
-
-Customer self-rescheduling from `/my-activity/bookings` uses the shared Admin booking
-edit timetable, availability loader, price confirmation form, and same-row transactional
-reschedule implementation. The server-only service and scoped persistence command require
-an active account and strictly bind the booking account to the verified actor. Ordinary owners
-must remain within the booking's snapshotted cancellation-notice window (inclusive
-cutoff); current Admin/Coach owners bypass notice only. Every owner must be before
-booking start. The fixed location, both IDs, owner/contact/policy snapshots and creation
-timestamps are preserved. Both stale tokens, server pricing with explicit changed-price
-acknowledgement/reconfirmation, and the active-row GiST constraint remain authoritative.
-Owner-scoped availability excludes its own reservation and returns only active courts,
-opening hours and occupancy for its fixed location, independent of public publication.
-Focused TypeORM edit reads and commands retain separate owner and Admin authorization
-boundaries, checked against locked actor and aggregate facts. Success calls `revalidateCourtActivity("edit")`
-for `/book`, `/admin/reservations`, and `/my-activity/bookings`. Payment lifecycle/holds, Stripe checkout and full Stripe cancellation refunds are implemented;
-guest self-management is not implemented. The application sends no booking lifecycle
-notifications or emails.
+Same-price changes append an immutable revision directly. Online increases collect only the
+positive difference while protecting the target interval; reductions wait for verified refunds
+before changing the booking. Pay-at-club edits revise current debt and preserve the original
+payment request. See [payment adjustments](docs/payments-memberships.md#paid-booking-price-adjustments)
+and [lesson rescheduling](docs/coaching.md#lesson-rescheduling).
 
 ---
 
 ## Cancellation and refunds
 
-Eligible customer self-cancellation of a confirmed Stripe-paid booking cancels both
-booking and reservation and requests a refund of remaining captured funds after
-existing refund obligations.
-Existing cancellation notice and start-time rules remain unchanged. Admin cancellation
-before start automatically requests applicable online refunds. Pay-at-club
-cancellation has no refund operation.
+Owner cancellation enforces ownership, snapshotted notice and before-start rules. Admins may
+cancel eligible customer/guest bookings before start. Refund-backed cancellation keeps the
+booking and occupancy intact until every required refund succeeds; pay-at-club or zero-refundable
+cancellation completes immediately. Pending or uncertain refunds require reconciliation;
+affirmative retryable failures permit a replacement only through an explicit Admin **Check
+with Stripe**. If every refund is definitively refused with no money returned, the change is abandoned;
+a definitive refusal after partial success leaves money owed for external resolution. Original financial evidence is preserved.
 
-The durable `payment_refunds` record retains the original successful attempt, provider,
-amount and currency. Cancellation, occupancy release and refund request commit together. Stripe runs after commit; failures never restore the
-court. Repeated requests reuse the record and its stable idempotency key. See
-[refund lifecycle and retry handling](docs/payments-memberships.md#stripe-cancellation-refunds).
-Partial refunds for eligible booking reductions are implemented. NETOPIA refunds
-and generic manual reconciliation remain outside the implemented scope.
-Admin payment transactions and persisted reconciliation reasons can be reviewed
-at `/admin/payments/transactions`, with focused Stripe refund retry and late-capture refund actions; provider settings are at `/admin/payments/settings`.
-Booking history is implemented; [remaining financial-model work](docs/payments-memberships.md#remaining-financial-model-work-task-4)
-is explicitly deferred to Task 4.
+Admins review payments and refunds at `/admin/payments/transactions`; provider settings are at
+`/admin/payments/settings`. See [refund states and recovery](docs/payments-memberships.md#stripe-cancellation-refunds)
+for precise retry conditions, idempotency, partial success and subsequent actions.
 
 ---
 
@@ -889,7 +790,7 @@ PostgreSQL should enforce structural and concurrency invariants using:
 - `CHECK` constraints;
 - indexes;
 - overlap protection;
-- RLS;
+- denied browser-role table grants;
 - transactions.
 
 The database should make invalid states impossible where practical.
@@ -1092,7 +993,7 @@ The explicit discard flag is mandatory. The rebuild checks database/API endpoint
 against this project's Supabase status, empties/removes the avatar bucket through
 Storage, drops obsolete `public` application schema and `supabase_migrations` history,
 recreates `public` with Supabase's stock usage-only schema grants,
-removes Auth users through Auth Admin APIs, then applies all three TypeORM migrations
+removes Auth users through Auth Admin APIs, then applies all registered TypeORM migrations
 without seeding. Run `npm run db:dev:seed` separately. Native Auth, Storage and extension schemas and their infrastructure
 migration ledgers remain. This is local-only; remote/shared/production databases are
 rejected. Stop the app before rebuilding. Do not use `supabase db reset`
@@ -1125,7 +1026,10 @@ Archiving sets `archived_at` and deactivates the location;
 restoring clears the archive timestamp but leaves it inactive until explicitly activated.
 Current admin selectors omit archived locations. These operations use user-scoped
 Server Actions. Each location stores its IANA timezone and one currency (EUR, USD, GBP, RON, or CHF;
-default EUR). Slugs are generated from names on creation and preserved on edits;
+default EUR), selected at creation. An existing location's currency changes only without unfinished
+bookings, unresolved financial operations or court pricing rules;
+the Details form lists each blocker and the server enforces them under the configuration fence. See
+[location currency changes](docs/architecture.md#location-currency-changes). Slugs are generated from names on creation and preserved on edits;
 collisions require a different name. Location counts are derived from records.
 Next.js authorizes active administrators before TypeORM persistence. The database prevents an archived location from being active. Public discovery
 requires explicit publication and derived configuration readiness. Enabling Public booking is checked server-side and returns a useful missing-configuration error; disabling it retains all Admin configuration.
@@ -1252,8 +1156,9 @@ reads use TypeORM; polling invokes the TypeScript hold-expiry service. Customer 
 Provider success followed by attachment failure has no complete automatic recovery/resume workflow; the hold expires normally.
 Settlement/webhooks use TypeORM transactions (Phase 7); refund execution/reconciliation use TypeORM (Phase 8). Public `/book` loaders use bounded TypeORM projections (Phase 11). Verified webhooks settle the same internal
 rows; duplicate events cannot duplicate confirmation, and late success is recorded
-for reconciliation. Existing attempt providers are immutable. Historical bookings retain
-an unknown (NULL) payment method, with no fabricated payment debt. Pay at club defaults OFF per location and is edited in Booking policy.
+for reconciliation. Existing attempt providers are immutable. Every booking's current revision
+has a required payment method (`online` or `pay_at_club`); original payment attempts remain
+financial evidence. Pay at club defaults OFF per location and is edited in Booking policy.
 Direct reservations have no price or payment flow. Next.js permits only active Admins
 and Coaches to create rows with a reason and their verified user ID as creator. Existing rows can have a null creator. `/admin/reservations` reads active occupancy
 for all staff; active Admins and Coaches receive the same narrow staff-authorized
@@ -1333,7 +1238,7 @@ Administrative resource screens manage:
 - authentication;
 - profiles;
 - RBAC;
-- RLS;
+- denied browser table grants and Storage RLS;
 - locations;
 - courts;
 - coaches;
@@ -1439,7 +1344,7 @@ Test pure TypeScript business logic:
 
 Verify:
 
-- RLS boundaries;
+- denied browser-role table grants and Storage RLS boundaries;
 - foreign key integrity;
 - court overlap protection;
 - coach overlap protection;
@@ -1510,7 +1415,7 @@ Recommended sequence:
 
 ```text
 1. Supabase project and database foundation
-2. Authentication, application users, player profiles, roles and RLS
+2. Authentication, application users, player profiles, roles and access control (denied browser table grants, Storage RLS)
 3. Locations and courts
 4. Court availability
 5. Booking domain model
@@ -1535,7 +1440,7 @@ The goal is to prove the difficult architectural constraints before adding secon
 
 ## Migration history
 
-The three pre-production TypeORM migrations define the intended final schema.
+The three pre-production TypeORM baseline migrations define the intended final schema.
 Changes to these definitions require a later explicitly authorized local rebuild;
 existing local records are not migrated automatically. Application schema changes use
 reviewed TypeORM migrations. Applied remote/shared migrations remain immutable. Validate initial schema changes in a separate disposable Supabase project; populated remote/shared databases require an explicitly authorized cutover.
@@ -1629,40 +1534,15 @@ Before expanding the platform, prove the following cases locally:
 
 ## Notifications
 
-Application notifications use the existing in-app inbox and Brevo delivery queue.
-Admin → Club (`/admin/club`) controls the saved official sender address, display name
-and club-wide transactional email switch. Only active Admins may read or change these
-settings or send a test to their verified Auth email. Sender authorization is managed
-in Brevo; saving an address does not verify it. There is no environment sender fallback.
-Disabling email preserves in-app notifications and permanently suppresses queued mail,
-including manual retries; enabling it again never replays suppressed mail. Requests
-already in flight may complete. Supabase Auth confirmation/recovery mail is independent.
-See [notification delivery and rollout](docs/notifications-delivery.md).
+Booking and coaching confirmations, cancellations and reschedules, plus relevant financial
+events, generate persisted notifications. Eligible authenticated recipients have an owner-scoped
+in-app inbox at `/messages`; Admin and Coach accounts receive application notifications in-app
+only. Brevo delivers eligible customer/guest transactional emails, independently of Supabase
+Auth confirmation/recovery mail.
 
-The `/book` confirmation UI reads only the selected eligible public location’s cancellation-notice value through a narrow TypeORM projection. After atomic creation, a read bound to the returned booking ID retrieves its stored policy snapshot; authenticated success uses the existing TypeScript timezone utility for start instant and cutoff display. Guest success shows the stored notice without inferring a timezone-resolved cutoff. Failed post-commit display reads are logged and never report the committed booking as a failed submission. No browser database access or public database grants are added.
-
-## Refund persistence (Phase 8)
-
-Automatic and Admin processing share immutable refund executions and five-minute
-execution leases. Preparation locks booking → reservation → selected attempt → ordered
-capture receipts → refund obligation → execution; Admin preparation also fences the
-active Admin's roles/account. A READY execution's dispatch timestamp commits in a
-separate transaction before Stripe is contacted. The adapter uses its stored request,
-exact idempotency key, obligation ID and execution ID metadata. Previously dispatched
-executions use retrieval or metadata discovery only; lookup failure, an empty search,
-lease expiry and a crash do not authorize another creation.
-
-Result transactions retain write-once identity, uncertainty and terminal evidence.
-Current lease tokens fence error/check updates and lease clearing; stale workers may
-record valid historical provider facts without clearing a newer lease. Success evidence is
-write-once; if Stripe later fails a succeeded refund, the execution records
-`provider_refund_reversed` and the obligation becomes `failed` without a replacement.
-Eligible receipt resolution commits atomically with completion. The Admin "Check with
-Stripe" action may allocate a distinct execution only after Stripe affirmatively rejected
-the refund as retryable; definitive failures are never re-sent. PaymentRefund stores
-immutable obligation terms plus status/timestamps; provider references/errors come from
-executions. Refund exceptions are recorded as immutable financial evidence; there is no
-scheduled worker, dual write or provider history JSON.
+Admin → Club (`/admin/club`) manages the official sender and transactional email switch.
+Persisted delivery state and bounded retries use Supabase Cron calling the existing delivery
+endpoint. See [notification architecture, recipient policies and delivery setup](docs/notifications-delivery.md).
 
 ## Application migrations and fresh local setup
 
@@ -1694,7 +1574,12 @@ explicit email-change timestamps, private WebP avatar bucket and Storage policie
 A secured active-account boolean helper keeps Storage working without browser
 SELECT on `public.users`. Ordinary accounts receive no RBAC roles.
 
-The three migrations and their DataSource registry remain the schema source. Transactional
+Coaching prices are lesson prices/person per program, duration, participant count, currency and
+Club/Coach scope in one `coaching_prices` table, created directly by the initial baseline; no
+coaching repair migration or runtime legacy conversion is registered. Rebuild the local
+development database from the baseline after baseline edits; see [coaching](docs/coaching.md#baseline-and-legacy-preservation).
+
+The registered TypeORM migrations and their DataSource registry remain the schema source. Transactional
 email starts disabled with empty sender fields. The guarded development rebuild applies them; there are no npm migration
 management commands. Production migration execution will be addressed with deployment.
 Schema synchronization and automatic runtime migrations are off.
@@ -1723,8 +1608,8 @@ Both views open `/admin/bookings/[bookingId]`, whose Back link restores the orig
 Calendar (location/date) or List (filters/sort/page). Booking Details offers the existing
 Admin cancellation (`cancelCustomerBookingAsAdmin`) only for confirmed bookings before start
 with no change in progress; cancellation never deletes booking or financial records.
-Its Edit booking opens the existing owner rescheduling form only for the signed-in Admin's own
-court bookings; other customers', guest and coaching bookings cannot be rescheduled there.
+Its Edit booking opens the owner form only for the signed-in Admin's own court bookings;
+lesson owners reschedule through My Activity. Other customers' and guest bookings cannot be rescheduled there.
 The List also includes direct staff reservations (Type "Staff reservation", status Active or
 Cancelled) from `court_reservations` rows without a customer booking, read alongside bookings in
 one database-sorted, paginated query; they remain separate free records with no price or payment.
@@ -1754,29 +1639,6 @@ Admin management permissions remain unchanged. The desktop/mobile Admin link is 
 link remains. `/admin` redirects Admins
 to Locations and Coaches to Reservations. Legacy `/reservations` and `/admin/payments`
 redirect to their canonical destinations while preserving query parameters.
-
-## Financial recovery corrections
-
-Refund-backed changes require all obligations to succeed before application. Successful
-partial refunds cannot be reversed or repeated; remaining obligations retain their financial
-reservation. Only verified transient failures (`insufficient_funds` refund failure or
-`balance_insufficient` request rejection) authorize a replacement execution, and only
-through the Admin "Check with Stripe" action.
-Other definitive failures after a partial refund leave that money owed and require external
-repayment resolution, preserving the booking. When every obligation is definitively refused
-and no money was returned, the change is abandoned instead: obligations are voided, the
-booking stays confirmed and the customer may request again.
-
-After the 23-hour conservative replay cutoff, a refund check fully paginates Stripe refunds for
-the PaymentIntent and matches obligation/execution metadata plus payment, amount and currency.
-It never resends an uncertain request beyond that cutoff. Missing/conflicting evidence is
-persisted as an explicit unresolved exception, not proof that no money moved; evidence-only
-reconciliation continues. Stripe cannot resolve every crash-before-dispatch ambiguity.
-
-There is no background scheduler: payments and refunds resolve through requests, signed
-Stripe webhooks (subscribe to the payment and `refund.*` events listed in
-[payments](docs/payments-memberships.md#recovery-without-a-scheduler)) and the Admin
-"Check with Stripe" action, so the app runs on serverless hosting.
 
 Coaching management lists support URL-based search, filters, sorting and server-side
 pagination. Shared Admin/Coach availability stores inclusive time-off date ranges as one

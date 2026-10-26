@@ -8,21 +8,19 @@ import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import type { AdminCoachingPrice } from "@/lib/coaching/admin";
 import type { CoachingMutationResult } from "@/lib/coaching/validation";
 import { majorAmountSchema, minorToMajor, type LocationCurrency } from "@/lib/pricing/money";
-import { removeClubCoachingPriceAction, saveClubCoachingPriceAction } from "../actions";
 import { coachingFailureMessages } from "../coaching-form";
 
-type PriceTarget = { program_id: string; duration_minutes: number; currency: LocationCurrency };
+type PriceTarget = { program_id: string; duration_minutes: number; participant_count: number; currency: LocationCurrency };
 type PriceActions = {
   save: (input: PriceTarget & { amount: string }) => Promise<CoachingMutationResult>;
   remove: (input: PriceTarget) => Promise<CoachingMutationResult>;
 };
-const clubActions: PriceActions = { save: saveClubCoachingPriceAction, remove: removeClubCoachingPriceAction };
 
-// Inline scalar edit of one price amount: a club default unless other actions are
-// given (a coach's own override). An empty amount means "not set".
-export function PriceEditor({ label, target, price, emptyHint, actions = clubActions, confirmRemoval = true }: {
+// Inline scalar edit of one lesson price amount for one participant count (a coach's own
+// override, through the given actions). An empty amount means "not set".
+export function PriceEditor({ label, target, price, emptyHint, actions, confirmRemoval = true }: {
   label: string; target: PriceTarget; price?: Pick<AdminCoachingPrice, "amount_minor">; emptyHint: string;
-  actions?: PriceActions; confirmRemoval?: boolean;
+  actions: PriceActions; confirmRemoval?: boolean;
 }) {
   const { currency } = target;
   const router = useRouter();
@@ -56,7 +54,7 @@ export function PriceEditor({ label, target, price, emptyHint, actions = clubAct
         setValue(next); setBaseline(next); setRemoving(false);
         router.refresh();
       } else if (result.reason === "invalid-input") {
-        toast.dismiss(notification); setError(result.fieldErrors.amount ?? "Enter a valid price.");
+        toast.dismiss(notification); setError(result.fieldErrors.amount ?? Object.values(result.fieldErrors)[0] ?? "Enter a valid price.");
       } else {
         toast.dismiss(notification); setError(coachingFailureMessages[result.reason]);
       }

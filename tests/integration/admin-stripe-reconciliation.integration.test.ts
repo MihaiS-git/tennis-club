@@ -31,10 +31,10 @@ test("Late-capture compensation preserves payment identity, idempotency and occu
   const occupancy = async (reservationId:string) => (await db.from("court_reservations").select("status,hold_expires_at,court_id,booking_date,starts_at_minute,ends_at_minute").eq("id",reservationId).single()).data;
   const event = async (eventId:string) => (await db.from("payment_provider_events").select("reconciliation_required,resolved_at,resolved_by_user_id").eq("provider","stripe").eq("event_id",eventId).single()).data!;
   async function book(start:number) {
-    const result = await insertCheckoutFixture(db, { p_court_id:courtId,p_booking_date:"2099-10-15",p_starts_at_minute:start,p_ends_at_minute:start+60,
-      p_account_user_id:null,p_customer_name:"Reconciliation guest",p_customer_email:"refund@example.test",p_customer_phone:"123",
-      p_total_amount_minor:5000,p_currency:"RON",p_payment_method:"online",p_provider:"stripe",p_hold_seconds:600 });
-    expect(result.error).toBeNull(); const row = result.data[0]; cancelledRows.push(row);
+    const row = await insertCheckoutFixture({ courtId,bookingDate:"2099-10-15",startMinute:start,endMinute:start+60,
+      accountUserId:null,customerName:"Reconciliation guest",customerEmail:"refund@example.test",customerPhone:"123",
+      totalAmountMinor:5000,currency:"RON",paymentMethod:"online",provider:"stripe",holdSeconds:600 });
+    cancelledRows.push(row);
     expect((await db.from("payment_attempts").update({ provider_payment_id:`original-${row.payment_attempt_id}` }).eq("id",row.payment_attempt_id)).error).toBeNull();
     return row;
   }

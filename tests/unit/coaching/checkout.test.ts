@@ -1,11 +1,12 @@
 import { beforeEach, expect, it, vi } from "vitest";
 
-const { create, start } = vi.hoisted(() => ({ create: vi.fn(), start: vi.fn() }));
+const { create, start, logError } = vi.hoisted(() => ({ create: vi.fn(), start: vi.fn(), logError: vi.fn() }));
 vi.mock("@/lib/coaching/booking", () => ({ createCoachingBooking: create }));
 vi.mock("@/lib/payments/checkout", () => ({ startOnlineCheckout: start }));
+vi.mock("@/lib/logger", () => ({ logger: { error: logError } }));
 import { commitCoachingCheckout } from "@/lib/coaching/checkout";
 
-beforeEach(() => { create.mockReset(); start.mockReset(); });
+beforeEach(() => { create.mockReset(); start.mockReset(); logError.mockReset(); });
 
 it("starts the existing checkout only after pending lesson creation commits", async () => {
   let commit!: (result: unknown) => void;
@@ -34,8 +35,10 @@ it.each(["invalid-input", "account-inactive", "payment-unavailable", "price_chan
 it("reports initialization uncertainty without confirming or replacing the committed hold", async () => {
   create.mockResolvedValue({ ok: true, paymentAttemptId: "attempt" });
   start.mockRejectedValue(new Error("Private Stripe error"));
-  expect(await commitCoachingCheckout({})).toMatchObject({ ok: false, availabilityChanged: true,
-    message: expect.stringContaining("No booking is confirmed") });
+  expect(await commitCoachingCheckout({})).toEqual({ ok: false, availabilityChanged: true,
+    message: "Unable to start payment. No booking is confirmed. The temporary hold will expire within 10 minutes." });
   expect(create).toHaveBeenCalledTimes(1);
-  expect(start).toHaveBeenCalledTimes(1);
+  expect(start).toHaveBeenCalledExactlyOnceWith("attempt");
+  expect(logError).toHaveBeenCalledExactlyOnceWith({ event: "payments.checkout_start_failed", attemptId: "attempt" },
+    "Unable to start online payment");
 });

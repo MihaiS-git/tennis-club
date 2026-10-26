@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const { loadDay, loadLocations, loadCoaching, loadLessons } = vi.hoisted(() => ({ loadDay: vi.fn(), loadLocations: vi.fn(), loadCoaching: vi.fn(), loadLessons: vi.fn() }));
-vi.mock("@/lib/coaching/public", () => ({ readPublicCoaching: loadCoaching }));
-vi.mock("@/lib/coaching/lesson-availability", () => ({ readPublicCoachingLessonAvailability: loadLessons }));
+// The page reads coaching facts once and hands them, with its locations, to the lesson read.
+const facts = { programs: [], coaches: [], prices: [] };
+const lessonCourtDay = { times: [600], courts: [] };
+const { lessonLoaded } = vi.hoisted(() => ({ lessonLoaded: vi.fn() }));
+vi.mock("@/lib/coaching/public", () => ({ readPublicCoachingWithFacts: async (locations: unknown) => ({ coaching: await loadCoaching(locations), facts }) }));
+vi.mock("@/lib/coaching/lesson-availability", () => ({ readPublicCoachingLessonAvailability: async (input: unknown, loaded: unknown, now: Date) =>
+  (lessonLoaded(loaded), { availability: await loadLessons(input, now), courtDay: lessonCourtDay }) }));
 vi.mock("next/server", () => ({ connection: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("@/lib/courts/public-calendar", () => ({ getPublicCourtDay: loadDay }));
 vi.mock("@/lib/courts/public", () => ({ listPublicLocationsWithCourts: loadLocations }));
@@ -10,7 +15,7 @@ vi.mock("@/lib/db/data-source", () => ({ getDataSource: async () => ({ manager: 
 const { loadSchedules } = vi.hoisted(() => ({ loadSchedules: vi.fn() }));
 vi.mock("@/lib/db/repositories/coach-availability.repository", () => ({ listLocationCoachBookingAvailability: loadSchedules }));
 const eligible = {
-  id: "11111111-1111-4111-8111-111111111111", name: "Club", timezone: "Europe/Bucharest", currency: "RON",
+  id: "11111111-1111-4111-8111-111111111111", name: "Club", timezone: "Europe/Bucharest", currency: "RON", customer_cancellation_notice_minutes: 1440,
   courts: [{ id: "22222222-2222-4222-8222-222222222222", name: "Court 1" }],
 };
 vi.mock("@/app/book/booking-calendar", () => ({ BookingCalendar: () => null }));
@@ -59,16 +64,16 @@ it("preselects the linked location and its local today rather than the first loc
 // programs cannot be booked online, and a coach teaching only at Riverside.
 const central = { ...eligible, id: "c0000000-0000-4000-8000-000000000001", name: "Central Club" };
 const riverside = { ...eligible, id: "c0000000-0000-4000-8000-000000000002", name: "Riverside Club" };
-const ron = (durationMinutes: number, amountMinor: number) => ({ durationMinutes, amountMinor, currency: "RON" });
+const ron = (durationMinutes: number, amountMinor: number, participantCount = 1) => ({ durationMinutes, participantCount, amountMinor, currency: "RON" });
 const programs = [
   { id: "private", name: "Private", type: "private", durations: [45, 60, 90, 120], minParticipants: 1, maxParticipants: 1, courtRentalIncluded: false, prices: [ron(60, 20000), ron(90, 28000)] },
-  { id: "semi", name: "Semi-private", type: "semi_private", durations: [60], minParticipants: 2, maxParticipants: 2, courtRentalIncluded: true, prices: [ron(60, 26000)] },
+  { id: "semi", name: "Semi-private", type: "semi_private", durations: [60], minParticipants: 2, maxParticipants: 2, courtRentalIncluded: true, prices: [ron(60, 26000, 2)] },
   { id: "group", name: "Group", type: "group", durations: [90], minParticipants: 3, maxParticipants: 6, courtRentalIncluded: false, prices: [ron(90, 9000)] },
 ];
 const place = (...items: typeof eligible[]) => items.map(({ id, name }) => ({ id, name }));
 const andrei = { id: "andrei", displayName: "Andrei", locations: place(central, riverside), programs: [{ id: "private" }, { id: "semi" }],
   rates: [{ ...ron(60, 25000), programId: "private" }] };
-const sofia = { id: "sofia", displayName: "Sofia", locations: place(central), programs: [{ id: "semi" }], rates: [{ ...ron(60, 24000), programId: "semi" }] };
+const sofia = { id: "sofia", displayName: "Sofia", locations: place(central), programs: [{ id: "semi" }], rates: [{ ...ron(60, 24000, 2), programId: "semi" }] };
 const maria = { id: "maria", displayName: "Maria", locations: place(central), programs: [{ id: "group" }], rates: [] };
 const elena = { id: "elena", displayName: "Elena", locations: place(central), programs: [], rates: [] };
 const dan = { id: "dan", displayName: "Dan", locations: place(riverside), programs: [{ id: "private" }], rates: [] };
@@ -85,6 +90,7 @@ const coaching = async (params: Record<string, string>, includeDate = true) => {
   const content = typeof day?.type === "function" && day.props.data ? await (day.type as (props: unknown) => Promise<Node>)(day.props) : null;
   const children = content ? nodes(content) : rest;
   return { calendar: calendar.props, controls: content ? children[0].props : null, booking: content ? children.at(-1)!.props.coaching as Record<string, unknown> : null,
+    courtDay: content ? children.at(-1)!.props.courtDay : undefined,
     alerts: children.filter(child => child.props.role === "alert" || (child.type as { name?: string }).name === "Alert").map(text), status: children.filter(child => child.props.role === "status").map(text) };
 };
 
@@ -102,7 +108,9 @@ it("defaults to the first public location, first priced coach/program, 60 minute
   expect(page.calendar).toMatchObject({ locationId: central.id, date: "2026-10-03", today: "2026-10-03" });
   expect(page.controls).toMatchObject({ coachId: "andrei", programId: "private", durationMinutes: 60, date: "2026-10-03" });
   expect(page.booking).toMatchObject({ coachId: "andrei", programId: "private", durationMinutes: 60, starts: [start] });
-  expect(loadLessons).toHaveBeenCalledExactlyOnceWith({ locationId: central.id, programId: "private", coachId: "andrei", date: "2026-10-03" }, expect.any(Date));
+  expect(loadLessons).toHaveBeenCalledExactlyOnceWith({ locationId: central.id, programId: "private", coachId: "andrei", date: "2026-10-03", participantCount: 1 }, expect.any(Date));
+  expect(lessonLoaded).toHaveBeenLastCalledWith({ locations: [central, riverside], coaching: facts });
+  expect(page.courtDay).toBe(lessonCourtDay);
   expect(page.status).toEqual([]);
   expect(page.booking).not.toHaveProperty("selection");
 });
@@ -134,7 +142,7 @@ it("offers the selected coach's own program assignments, with clear empty states
   expect((await coaching({ location: central.id, coach: "andrei" })).controls).toMatchObject({ programId: "private", durationMinutes: 60 });
 });
 
-it("lists the program's lesson-grid durations with the coach override ?? club default in the location currency", async () => {
+it("lists the program's lesson-grid durations with the lesson total of the coach override ?? club default price/person in the location currency", async () => {
   const andreiPrivate = await coaching({ location: central.id, coach: "andrei", program: "private" });
   expect(andreiPrivate.controls?.durations).toEqual([
     { durationMinutes: 60, price: { amountMinor: 25000, currency: "RON", source: "coach" } },
@@ -143,9 +151,9 @@ it("lists the program's lesson-grid durations with the coach override ?? club de
   ]);
   expect(andreiPrivate.controls?.durationMinutes).toBe(60);
   expect((await coaching({ location: central.id, coach: "sofia", program: "semi" })).controls?.durations)
-    .toEqual([{ durationMinutes: 60, price: { amountMinor: 24000, currency: "RON", source: "coach" } }]);
+    .toEqual([{ durationMinutes: 60, price: { amountMinor: 48000, currency: "RON", source: "coach" } }]);
   expect((await coaching({ location: central.id, coach: "andrei", program: "semi" })).controls?.durations)
-    .toEqual([{ durationMinutes: 60, price: { amountMinor: 26000, currency: "RON", source: "club" } }]);
+    .toEqual([{ durationMinutes: 60, price: { amountMinor: 52000, currency: "RON", source: "club" } }]);
   // No conversion and no price from another currency.
   loadLocations.mockResolvedValueOnce([{ ...central, currency: "EUR" }]);
   expect((await coaching({ location: central.id, coach: "andrei", program: "private" })).controls?.durations).toEqual([]);
@@ -154,7 +162,7 @@ it("lists the program's lesson-grid durations with the coach override ?? club de
 
 it("loads lesson starts for the complete selection through the existing availability service", async () => {
   const page = await coaching({ location: central.id, coach: "andrei", program: "private", duration: "60" });
-  expect(loadLessons).toHaveBeenCalledExactlyOnceWith({ locationId: central.id, programId: "private", coachId: "andrei", date: "2099-10-15" }, expect.any(Date));
+  expect(loadLessons).toHaveBeenCalledExactlyOnceWith({ locationId: central.id, programId: "private", coachId: "andrei", date: "2099-10-15", participantCount: 1 }, expect.any(Date));
   expect(page.controls).toMatchObject({ coachId: "andrei", programId: "private", durationMinutes: 60, courtRentalIncluded: false });
   expect(page.booking).toMatchObject({ coachId: "andrei", programId: "private", coachName: "Andrei", programName: "Private", durationMinutes: 60, starts: [start] });
   expect(page.status).toEqual([]);
@@ -169,7 +177,7 @@ it("loads lesson starts for the complete selection through the existing availabi
 it("blocks checkout for an unpriced duration without loading lesson starts", async () => {
   const page = await coaching({ location: central.id, coach: "andrei", program: "private", duration: "120" });
   expect(page.controls?.durationMinutes).toBe(120);
-  expect(page.alerts).toEqual(["Pricing is unavailable for this lesson length at Central Club, so it cannot be booked."]);
+  expect(page.alerts).toEqual(["Pricing is unavailable for this lesson length and number of players at Central Club, so it cannot be booked."]);
   expect(page.booking).toMatchObject({ durationMinutes: 0, starts: [] });
   expect(loadLessons).not.toHaveBeenCalled();
 });
@@ -201,13 +209,22 @@ it("never offers a Group lesson online, even with configured limits and a price"
 });
 
 it("offers a Semi-private lesson for its configured participant counts and rejects any other count", async () => {
-  loadCoaching.mockResolvedValue({ programs: programs.map(item => item.id === "semi" ? { ...item, minParticipants: 2, maxParticipants: 4 } : item), coaches: [sofia] });
+  // 2 players: Sofia's own price/person; 4 players: the club price/person (total 4 × 100); 3 players unconfigured.
+  loadCoaching.mockResolvedValue({ programs: programs.map(item => item.id === "semi" ? { ...item, minParticipants: 2, maxParticipants: 4,
+    prices: [...item.prices, ron(60, 10000, 4)] } : item), coaches: [sofia] });
   const page = await coaching({ location: central.id, coach: "sofia" });
   expect(page.controls).toMatchObject({ coachId: "sofia", programId: "semi", durationMinutes: 60, participants: { min: 2, max: 4 }, participantCount: 2 });
   const chosen = await coaching({ location: central.id, coach: "sofia", program: "semi", duration: "60", participants: "4" });
   expect(chosen.controls).toMatchObject({ participantCount: 4 });
   expect(chosen.booking).toMatchObject({ participantCount: 4, durationMinutes: 60 });
+  expect(chosen.controls?.durations).toEqual([{ durationMinutes: 60, price: { amountMinor: 40000, currency: "RON", source: "club" } }]);
+  expect(loadLessons).toHaveBeenLastCalledWith(expect.objectContaining({ participantCount: 4 }), expect.any(Date));
   expect(loadLessons).toHaveBeenCalledTimes(2);
+  // An unconfigured count is never priced from another count and cannot be booked.
+  const unpriced = await coaching({ location: central.id, coach: "sofia", program: "semi", duration: "60", participants: "3" });
+  expect(unpriced.controls?.durations).toEqual([{ durationMinutes: 60, price: null }]);
+  expect(unpriced.alerts).toEqual(["Pricing is unavailable for this lesson length and number of players at Central Club, so it cannot be booked."]);
+  expect(unpriced.booking).toMatchObject({ participantCount: 3, durationMinutes: 0, starts: [] });
   for (const participants of ["1", "5", "2.5", "x"]) {
     const invalid = await coaching({ location: central.id, coach: "sofia", program: "semi", duration: "60", participants });
     expect(invalid.alerts).toEqual(["The selected number of players is not offered for Semi-private. Choose the number of players."]);
@@ -215,6 +232,15 @@ it("offers a Semi-private lesson for its configured participant counts and rejec
     expect(invalid.booking).toMatchObject({ participantCount: 0, durationMinutes: 0, starts: [] });
   }
   expect(loadLessons).toHaveBeenCalledTimes(2);
+});
+
+it("defaults to the smallest participant count with a configured price", async () => {
+  loadCoaching.mockResolvedValue({ programs: programs.map(item => item.id === "semi" ? { ...item, minParticipants: 2, maxParticipants: 4,
+    prices: [ron(60, 11000, 3)] } : item), coaches: [{ ...sofia, rates: [] }] });
+  const page = await coaching({ location: central.id, coach: "sofia" });
+  expect(page.controls).toMatchObject({ programId: "semi", durationMinutes: 60, participantCount: 3,
+    durations: [{ durationMinutes: 60, price: { amountMinor: 33000, currency: "RON", source: "club" } }] });
+  expect(loadLessons).toHaveBeenLastCalledWith(expect.objectContaining({ participantCount: 3 }), expect.any(Date));
 });
 
 it("keeps a linked coach and selects their first public location when no location was provided", async () => {
@@ -244,7 +270,7 @@ it("honors valid URL selections and defaults only missing dependent choices", as
 it("chooses the first priced online program and prefers 60 minutes, then the shortest priced duration", async () => {
   loadCoaching.mockResolvedValueOnce({ programs: [
     { ...programs[0], prices: [] },
-    { ...programs[1], durations: [90, 120], prices: [ron(120, 30000), ron(90, 22000)] },
+    { ...programs[1], durations: [90, 120], prices: [ron(120, 30000, 2), ron(90, 22000, 2)] },
     programs[2],
   ], coaches: [elena, maria, andrei, sofia] });
   const page = await coaching({ location: central.id });
@@ -252,7 +278,7 @@ it("chooses the first priced online program and prefers 60 minutes, then the sho
   // Andrei's override keeps Private priced despite the missing club price.
   loadCoaching.mockResolvedValueOnce({ programs: [
     { ...programs[0], prices: [], durations: [90, 120] },
-    { ...programs[1], durations: [120, 90], prices: [ron(120, 30000), ron(90, 22000)] },
+    { ...programs[1], durations: [120, 90], prices: [ron(120, 30000, 2), ron(90, 22000, 2)] },
     programs[2],
   ], coaches: [elena, maria, { ...andrei, rates: [] }, sofia] });
   const fallback = await coaching({ location: central.id });
@@ -305,7 +331,7 @@ it("resolves new eligible defaults when the location changes", async () => {
   expect((await coaching({ location: central.id })).controls).toMatchObject({ coachId: "andrei", programId: "private", durationMinutes: 60 });
   const page = await coaching({ location: riverside.id });
   expect(page.controls).toMatchObject({ coachId: "dan", programId: "private", durationMinutes: 60 });
-  expect(loadLessons).toHaveBeenLastCalledWith({ locationId: riverside.id, coachId: "dan", programId: "private", date: "2099-10-15" }, expect.any(Date));
+  expect(loadLessons).toHaveBeenLastCalledWith({ locationId: riverside.id, coachId: "dan", programId: "private", date: "2099-10-15", participantCount: 1 }, expect.any(Date));
 });
 
 it("fails closed when selector working hours cannot be read", async () => {

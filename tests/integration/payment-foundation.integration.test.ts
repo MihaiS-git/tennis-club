@@ -2,7 +2,7 @@ import { readBookingContracts } from "./checkout-fixtures";
 import { insertOpeningHoursFixture } from "./opening-hours-fixtures";
 import { expirePaymentHolds } from "@/lib/payments/hold-expiry";
 import { processOnlinePaymentEvent, settleOnlinePayment } from "@/lib/payments/service";
-import { cleanupBookingFixtures, insertCheckoutFixture } from "./checkout-fixtures";
+import { cleanupBookingFixtures, insertCheckoutFixture, type CheckoutFixtureInput } from "./checkout-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { expect, test, vi } from "vitest";
@@ -28,11 +28,11 @@ test("payment lifecycle keeps one reservation, protects overlap and releases exp
   const date = "2099-10-15";
   const intent = { courtId, date, startMinute: 600, endMinute: 660, customerName: "Payment Guest",
     customerEmail: "payment@example.test", customerPhone: "123", expectedTotalAmountMinor: 5000, expectedCurrency: "RON" };
-  const params = (start: number, method = "online") => ({ p_court_id: courtId, p_booking_date: date,
-    p_starts_at_minute: start, p_ends_at_minute: start + 60, p_account_user_id: null,
-    p_customer_name: "Payment Guest", p_customer_email: "payment@example.test", p_customer_phone: "123",
-    p_total_amount_minor: 5000, p_currency: "RON", p_payment_method: method,
-    p_provider: method === "online" ? "netopia" : null, p_hold_seconds: paymentHoldDurationSeconds });
+  const params = (start: number, method: CheckoutFixtureInput["paymentMethod"] = "online"): CheckoutFixtureInput => ({ courtId, bookingDate: date,
+    startMinute: start, endMinute: start + 60, accountUserId: null,
+    customerName: "Payment Guest", customerEmail: "payment@example.test", customerPhone: "123",
+    totalAmountMinor: 5000, currency: "RON", paymentMethod: method,
+    provider: method === "online" ? "netopia" : null, holdSeconds: paymentHoldDurationSeconds });
   const booking = async (id: string) => (await readBookingContracts(db, { ids: [id] }))[0];
   const reservation = async (id: string) => (await db.from("court_reservations").select("*").eq("id", id).single()).data!;
   const settle = async (row: { payment_attempt_id: string }, outcome: "succeeded" | "failed" | "cancelled") => {
@@ -60,14 +60,16 @@ test("payment lifecycle keeps one reservation, protects overlap and releases exp
       court_state: "outdoor", weekday: 3, starts_at_minute: 600, ends_at_minute: 1080, price_per_hour_minor: 5000 })).error).toBeNull();
     expect(await createCustomerBooking({ ...intent, paymentMethod: "pay_at_club" }, guest)).toMatchObject({ ok: false });
     // Failed atomic insert leaves no orphan occupancy/payment.
-    expect((await insertCheckoutFixture(db, { ...params(600), p_customer_name: " " })).error?.code).toBe("23514");
+    await expect(insertCheckoutFixture({ ...params(600), customerName: " " })).rejects.toMatchObject({ driverError: { code: "23514" } });
     expect((await db.from("court_reservations").select("id").eq("court_id", courtId)).data).toEqual([]);
 
     // Simultaneous writes: exactly one transaction may own the interval.
-    const races = await Promise.all([insertCheckoutFixture(db, params(600)), insertCheckoutFixture(db, params(600))]);
-    expect(races.filter((r) => !r.error)).toHaveLength(1);
-    expect(races.find((r) => r.error)?.error?.code).toBe("23P01");
-    const held = races.find((r) => !r.error)!.data[0];
+    const races = await Promise.allSettled([insertCheckoutFixture(params(600)), insertCheckoutFixture(params(600))]);
+    const won = races.filter((r) => r.status === "fulfilled"), lost = races.filter((r) => r.status === "rejected");
+    expect(won).toHaveLength(1);
+    expect(lost).toHaveLength(1);
+    expect(lost[0].reason).toMatchObject({ driverError: { code: "23P01" } });
+    const held = won[0].value;
     expect(await booking(held.booking_id)).toMatchObject({ status: "pending_payment", payment_method: "online" });
     const heldReservation = await reservation(held.reservation_id);
     expect(heldReservation.status).toBe("held");
@@ -90,22 +92,21 @@ test("payment lifecycle keeps one reservation, protects overlap and releases exp
     expect(await booking(held.booking_id)).toMatchObject({ status: "confirmed", reservation_id: held.reservation_id });
     expect(await reservation(held.reservation_id)).toMatchObject({ status: "active", hold_expires_at: null });
 
-    const failed = (await insertCheckoutFixture(db, params(660))).data[0];
+    const failed = await insertCheckoutFixture(params(660));
     expect((await settle(failed, "failed"))).toBe("failed");
     expect(await reservation(failed.reservation_id)).toMatchObject({ status: "released" });
-    const expired = (await insertCheckoutFixture(db, params(660))).data[0];
+    const expired = await insertCheckoutFixture(params(660));
     // Simulate wall-clock expiry, without a browser timer or long test sleep.
     expect((await db.from("court_reservations").update({ hold_expires_at: "2020-01-01T00:00:00Z" })
       .eq("id", expired.reservation_id)).error).toBeNull();
     expect((await day()).courts[0].cells.slice(2, 4)).toEqual(["available", "available"]);
     // Raw fixture inserts do not run runtime lazy cleanup; expire through TypeScript.
     expect(await expirePaymentHolds({ courtId })).toBe(1);
-    const replacement = await insertCheckoutFixture(db, params(660));
-    expect(replacement.error).toBeNull();
+    await insertCheckoutFixture(params(660));
     expect(await booking(expired.booking_id)).toMatchObject({ status: "expired" });
     expect(await reservation(expired.reservation_id)).toMatchObject({ status: "released", hold_expires_at: null });
     expect((await settle(expired, "succeeded"))).toBe("expired");
-    const late = (await insertCheckoutFixture(db, params(720))).data[0];
+    const late = await insertCheckoutFixture(params(720));
     expect((await db.from("court_reservations").update({ hold_expires_at: "2020-01-01T00:00:00Z" }).eq("id", late.reservation_id)).error).toBeNull();
     expect((await settle(late, "succeeded"))).toBe("expired");
 

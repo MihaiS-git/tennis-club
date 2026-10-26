@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { EntityManager } from "typeorm";
 
 const mocks = vi.hoisted(() => ({ profile: vi.fn(), admin: vi.fn(), fence: vi.fn(), find: vi.fn(),
-  booking: vi.fn(), accounts: vi.fn(), claim: vi.fn(), complete: vi.fn(), alerts: vi.fn() }));
+  booking: vi.fn(), accounts: vi.fn(), claim: vi.fn(), complete: vi.fn(), admins: vi.fn(), messages: vi.fn() }));
 vi.mock("@/lib/profile/profile", () => ({ profileContext: mocks.profile }));
 vi.mock("@/lib/admin/authorization", () => ({ requireActiveAdmin: mocks.admin }));
 vi.mock("@/lib/db/data-source", () => ({ getDataSource: async () => ({ manager: {} }) }));
@@ -14,8 +14,7 @@ vi.mock("@/lib/db/transaction", () => ({ inTransaction: (work: (manager: EntityM
 vi.mock("@/lib/db/repositories/accounts.repository", () => ({ lockActiveAdminAccount: mocks.fence }));
 vi.mock("@/lib/db/repositories/notifications.repository", () => ({ findMessageDelivery: mocks.find,
   findDeliveryBooking: mocks.booking, claimEmailDeliveries: mocks.claim, completeEmailAttempt: mocks.complete,
-  insertEmailFailureAlerts: mocks.alerts }));
-vi.mock("@/lib/notifications/recipient-resolution", () => ({ resolveNotificationAccounts: mocks.accounts }));
+  listActiveUserIdsWithRole: mocks.admins, insertUserMessages: mocks.messages, findNotificationAccounts: mocks.accounts }));
 
 import { adminMessageDelivery, retryMessageDelivery } from "@/lib/notifications/admin-delivery";
 import { retryEligibility, readableDeliveryError } from "@/lib/notifications/delivery-retry";
@@ -28,7 +27,7 @@ const delivery = { id: deliveryId, eventKey: "booking.confirmed:revision", recip
 beforeEach(() => {
   vi.stubEnv("BREVO_API_KEY", "mock-key"); vi.stubEnv("BOOKING_MAIL_FROM", "club@example.test");
   vi.stubEnv("NOTIFICATION_EMAIL_MODE", "sandbox");
-  mocks.admin.mockResolvedValue({ userId: id }); mocks.fence.mockResolvedValue(true);
+  mocks.admin.mockResolvedValue({ userId: id }); mocks.fence.mockResolvedValue(true); mocks.admins.mockResolvedValue([id]);
   mocks.profile.mockResolvedValue({ account: { state: "active", userId: id, roles: ["admin"] } });
   mocks.find.mockResolvedValue(delivery); mocks.booking.mockResolvedValue(id); mocks.accounts.mockResolvedValue([]);
   mocks.claim.mockResolvedValue([{ ...delivery, bodyText: "snapshot", bodyHtml: "<p>snapshot</p>", attempts: 2, lockedUntil: new Date() }]);
@@ -58,7 +57,7 @@ test("manual retry uses the existing HTTP pipeline and claims exactly the associ
   expect(JSON.parse(vi.mocked(fetch).mock.calls[0][1]?.body as string).to).toEqual([{ email: delivery.recipientEmail }]);
   expect(mocks.complete).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: deliveryId,
     status: "sandbox_accepted", attempts: 2, providerMessageId: "<accepted>" }));
-  expect(mocks.alerts).not.toHaveBeenCalled();
+  expect(mocks.messages).not.toHaveBeenCalled();
 });
 
 test("retry rechecks locked actor authorization", async () => {
@@ -90,7 +89,8 @@ test("provider rejection is persisted and displayed without duplicate incident c
   expect(completed.lastError).toBe("Brevo HTTP 401: unauthorized: Key not found");
   mocks.find.mockResolvedValue({ ...delivery, ...completed });
   expect((await adminMessageDelivery(id))?.failureReason).toBe(completed.lastError);
-  expect(mocks.alerts).toHaveBeenCalledExactlyOnceWith(expect.anything(), deliveryId, expect.any(Date));
+  expect(mocks.messages).toHaveBeenCalledExactlyOnceWith(expect.anything(), [expect.objectContaining({
+    userId: id, eventKey: `email.delivery-failed:${deliveryId}` })]);
 });
 
 test("staff recipients, deleted/unassociated messages and a lost claim never send", async () => {

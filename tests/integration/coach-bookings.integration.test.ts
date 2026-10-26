@@ -55,11 +55,11 @@ test("Coaches list and open only their own lessons and staff reservations, enfor
         reason: "B clinic", created_by_user_id: b, status: "active" },
     ])).error).toBeNull();
     const status = { aConfirmed: "confirmed", aCancelled: "cancelled", aPending: "pending_payment", bConfirmed: "confirmed", court: "confirmed" };
-    expect((await insertBookingFixture(db, lessonKeys.map((key) => ({ id: lessons[key], reservation_id: lessonReservations[key],
+    await insertBookingFixture(lessonKeys.map((key) => ({ id: lessons[key], reservation_id: lessonReservations[key],
       account_user_id: null, customer_name: `${marker} ${key}`, customer_email: `${key}@example.test`, customer_phone: "+40 700",
       status: status[key], total_amount_minor: 12000, currency: "RON", cancellation_notice_minutes: 120, payment_method: "online",
       ...(coachFor[key] ? { coaching: { coach_user_id: coachFor[key], coaching_program_id: program,
-        coach_name: key.startsWith("a") ? "Coach A" : "Coach B", coaching_program_name: "Coach list private" } } : {}) })))).error).toBeNull();
+        coach_name: key.startsWith("a") ? "Coach A" : "Coach B", coaching_program_name: "Coach list private" } } : {}) })));
 
     // Coach A: own confirmed and cancelled lessons and own staff reservations only.
     const own = await listCoachBookings(query(), coachA);

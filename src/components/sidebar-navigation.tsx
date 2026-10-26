@@ -6,8 +6,9 @@ import { Menu, X, type LucideIcon } from "lucide-react";
 import { Fragment, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 
 export type SidebarLink = { label: string; href: string; icon?: LucideIcon; exact?: boolean };
-export type SidebarGroup = { label: string; icon?: LucideIcon; section?: string; links: readonly SidebarLink[] };
+export type SidebarGroup = { label: string; icon?: LucideIcon; links: readonly SidebarLink[] };
 export type SidebarEntry = SidebarLink | SidebarGroup;
+type SidebarSection = { label: string; entries: readonly SidebarEntry[] };
 
 // A page with unsaved Profile edits renders [data-profile-unsaved]; mark its link and the drawer trigger.
 const unsavedDot = "[:root:has([data-profile-unsaved])_&]:after:ml-auto [:root:has([data-profile-unsaved])_&]:after:size-2 [:root:has([data-profile-unsaved])_&]:after:shrink-0 [:root:has([data-profile-unsaved])_&]:after:rounded-full [:root:has([data-profile-unsaved])_&]:after:bg-accent [:root:has([data-profile-unsaved])_&]:after:content-['']";
@@ -15,10 +16,13 @@ const sidebarLinkClass = (active: boolean) =>
   `flex min-h-11 items-center gap-3 rounded-control px-3 py-2 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${active ? `bg-primary text-primary-foreground ${unsavedDot}` : "text-muted-foreground hover:bg-surface-muted hover:text-primary"}`;
 
 // `slideIn` reuses the main mobile menu's slide transition for the mobile drawer.
-type SidebarProps = { title: string; entries: readonly SidebarEntry[]; slideIn?: boolean };
+type SidebarProps = { title: string; slideIn?: boolean } & (
+  | { entries: readonly SidebarEntry[]; sections?: never }
+  | { entries?: never; sections: readonly SidebarSection[] }
+);
 
 // Shared by the Admin and user-area sidebars: one drawer, focus and active-link model.
-export function SidebarNavigation({ title, entries, slideIn = false }: SidebarProps) {
+export function SidebarNavigation({ title, entries, sections, slideIn = false }: SidebarProps) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [openedAt, setOpenedAt] = useState(pathname);
@@ -107,8 +111,8 @@ export function SidebarNavigation({ title, entries, slideIn = false }: SidebarPr
     );
   }
 
-  function group({ label, icon: Icon, section, links }: SidebarGroup) {
-    const active = section ? matches(section) : links.some(linkActive);
+  function group({ label, icon: Icon, links }: SidebarGroup) {
+    const active = links.some(linkActive);
     return (
       <Fragment key={label}>
         <div
@@ -122,6 +126,10 @@ export function SidebarNavigation({ title, entries, slideIn = false }: SidebarPr
         </div>
       </Fragment>
     );
+  }
+
+  function entry(entry: SidebarEntry) {
+    return "links" in entry ? group(entry) : destination(entry);
   }
 
   return (
@@ -172,7 +180,14 @@ export function SidebarNavigation({ title, entries, slideIn = false }: SidebarPr
           </button>
         </div>
         <nav ref={navigation} aria-label={`${title} navigation`} className="space-y-1">
-          {entries.map((entry) => "links" in entry ? group(entry) : destination(entry))}
+          {sections ? sections.filter((section) => section.entries.length > 0).map((section, index) => (
+            <section key={section.label} aria-labelledby={`${id}-section-${index}`} className="space-y-1 not-first:mt-5">
+              <h2 id={`${id}-section-${index}`} className="mb-2 px-3 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                {section.label}
+              </h2>
+              {section.entries.map(entry)}
+            </section>
+          )) : entries.map(entry)}
         </nav>
       </aside>
     </>

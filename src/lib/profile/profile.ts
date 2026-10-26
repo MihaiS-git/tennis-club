@@ -32,7 +32,7 @@ export async function profileContext(suppliedClient?: ProfileClient) {
   return { client, account: await readCurrentAccount(client) };
 }
 
-export async function loadProfile(_client: ProfileClient, userId: string) {
+export async function loadProfile(userId: string) {
   let personal;
   let player;
   try {

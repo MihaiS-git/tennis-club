@@ -1,3 +1,4 @@
+import { addDays } from "@/lib/courts/local-time";
 import { mondayWeekday } from "@/lib/pricing/resolution";
 
 // A coach's weekly working hours at a location must lie inside that location's opening
@@ -15,12 +16,6 @@ export type DateRange = { from: string; until: string | null };
 type Window = { start: number; end: number };
 
 const gridMinutes = 30;
-
-function addDays(date: string, days: number) {
-  const value = new Date(`${date}T00:00:00Z`);
-  value.setUTCDate(value.getUTCDate() + days);
-  return value.toISOString().slice(0, 10);
-}
 
 const before = (a: string | null, b: string | null) => a !== null && (b === null || a < b);
 const minDate = (a: string | null, b: string | null) => before(a, b) ? a : b;

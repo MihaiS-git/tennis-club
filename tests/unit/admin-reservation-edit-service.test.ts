@@ -5,8 +5,7 @@ import type { AdminBooking, AdminReservation } from "@/lib/reservations/service"
 import type { BookingEditContext } from "@/lib/bookings/reschedule";
 import type { CurrentAccount } from "@/lib/auth/account";
 
-const { account, query, command, financialFacts } = vi.hoisted(() => ({ account: vi.fn(), query: vi.fn(), command: vi.fn(), financialFacts: vi.fn() }));
-vi.mock("@/lib/db/repositories/payments.repository", () => ({ loadAdminTransactionContext: financialFacts }));
+const { account, query, command } = vi.hoisted(() => ({ account: vi.fn(), query: vi.fn(), command: vi.fn() }));
 vi.mock("@/lib/auth/account", () => ({ readCurrentAccount: account }));
 vi.mock("@/lib/db/data-source", () => ({ getDataSource: async () => ({ manager: { query } }) }));
 vi.mock("@/lib/reservations/commands", () => ({ editDirectReservationCommand: command }));
@@ -31,7 +30,6 @@ const load = (requestedDate = date) => getAdminReservationEditDay({ reservationI
 
 beforeEach(() => {
   vi.clearAllMocks(); query.mockReset(); command.mockReset();
-  financialFacts.mockResolvedValue({ payments: [], refunds: [] });
   account.mockResolvedValue({ state: "active", userId: id(6), roles: ["admin"] });
   query.mockImplementation(async (sql: string) => {
     if (sql.includes("r.id = $1")) return [target];
@@ -119,7 +117,7 @@ test("invalid input is rejected before persistence", async () => {
 test.each(["online", "pay_at_club", null])("staff projection requires a contractual payment method for bookings: %j", async paymentMethod => {
   const direct = { ...target, includes_coaching: false, coach_name: null, coaching_program_name: null, coaching: null, location_name: null, court_name: null, location_timezone: null, kind: "reservation", creator_name: null, creator_email: null, creator_phone: null,
     account_user_id: null, payment_method: null, customer_name: null, customer_email: null, customer_phone: null,
-    cancellation_notice_minutes: null, total_amount_minor: null, currency: null, payment_facts: [] };
+    cancellation_notice_minutes: null, total_amount_minor: null, currency: null, payment_facts: [], refund_facts: [] };
   const booking = { ...direct, id: id(7), kind: "booking", payment_method: paymentMethod,
     customer_name: "Customer", customer_email: "snapshot@example.test", customer_phone: "123",
     cancellation_notice_minutes: 120, total_amount_minor: 5000, currency: "RON" };
@@ -149,7 +147,7 @@ test.each([false, true])("projects complete nullable staff details (captured Str
   const direct = { ...target, includes_coaching: false, coach_name: null, coaching_program_name: null, coaching: null, location_name: null, court_name: null, location_timezone: null, kind: "reservation", creator_name: captured ? "Coach" : null,
     creator_email: captured ? "coach@example.test" : null, creator_phone: captured ? "123" : null,
     account_user_id: null, payment_method: null, customer_name: null, customer_email: null, customer_phone: null,
-    cancellation_notice_minutes: null, total_amount_minor: null, currency: null, payment_facts: [] };
+    cancellation_notice_minutes: null, total_amount_minor: null, currency: null, payment_facts: [], refund_facts: [] };
   const payment = { id: id(8), booking_id: id(7), method: "online", provider: "stripe", provider_payment_id: "pi_test",
     amount_minor: 5000, currency: "RON", status: "succeeded", expires_at: null, created_at: token };
   const booking = { ...direct, id: id(7), kind: "booking", account_user_id: captured ? id(6) : null,
@@ -161,11 +159,8 @@ test.each([false, true])("projects complete nullable staff details (captured Str
     if (sql.includes("court_reservations")) return [row];
     return [hours];
   });
-  financialFacts.mockResolvedValue({ refunds: [], payments: captured ? [
-    { id: payment.id, bookingId: booking.id, provider: "stripe", status: "succeeded", createdAt: new Date(token) },
-    { id: id(9), bookingId: id(10), provider: "stripe", status: "failed", createdAt: new Date(now) }] : [] });
   const result = await getReservationDay(location, date, now, client);
-  expect(financialFacts).toHaveBeenCalledWith(expect.anything(), { bookingIds: [booking.id], revisionIds: [], adjustmentIds: [] });
+  expect(query.mock.calls.find(([sql]) => sql.includes("payment_facts"))?.[1]).toEqual([[id(3), id(2)], date]);
   expect(result.adminOccupancy).toEqual([
     { kind: "reservation", id: target.id, court_id: target.court_id, booking_date: date,
       starts_at_minute: 600, ends_at_minute: 660, reason: target.reason, created_by_user_id: target.created_by_user_id,
@@ -179,8 +174,10 @@ test.each([false, true])("projects complete nullable staff details (captured Str
 });
 
 const at = (minute: number) => new Date(Date.UTC(2026, 9, 1, 12, minute));
-const succeededPayment = (n: number, minute: number) => ({ id: id(n), bookingId: id(7), provider: "stripe", status: "succeeded", createdAt: at(minute) });
-const refund = (n: number, minute: number, status: string) => ({ id: id(n), bookingId: id(7), provider: "stripe", status, createdAt: at(minute) });
+const succeededPayment = (n: number, minute: number) => ({ id: id(n), booking_id: id(7), method: "online",
+  provider: "stripe", provider_payment_id: "pi_test", amount_minor: 5000, currency: "RON", status: "succeeded",
+  expires_at: null, created_at: at(minute).toISOString() });
+const refund = (n: number, minute: number, status: string) => ({ id: id(n), provider: "stripe", status, created_at: at(minute).toISOString() });
 test.each([
   ["one successful payment", [succeededPayment(20, 0)], [], { operation: "payment", status: "succeeded", provider: "stripe" }],
   ["multiple successful payments", [succeededPayment(21, 0), succeededPayment(20, 5)], [], { operation: "payment", status: "succeeded", provider: "stripe" }],
@@ -194,12 +191,13 @@ test.each([
   ["abandoned checkout and voided refund ignored", [succeededPayment(20, 0), { ...succeededPayment(21, 10), status: "expired" }],
     [refund(30, 15, "voided")], { operation: "payment", status: "succeeded", provider: "stripe" }],
   ["same-time tie broken by ID", [succeededPayment(20, 0)], [refund(30, 0, "pending")], { operation: "refund", status: "pending", provider: "stripe" }],
-  ["pay at club due", [{ id: id(20), bookingId: id(7), provider: null, status: "due", createdAt: at(0) }], [],
+  ["pay at club due", [{ ...succeededPayment(20, 0), method: "pay_at_club", provider: null, provider_payment_id: null, status: "due" }], [],
     { operation: "payment", status: "due", provider: null }],
 ] as const)("dialog payment status is the latest financial operation: %s", async (_name, payments, refunds, expected) => {
   const booking = { ...target, includes_coaching: false, coach_name: null, coaching_program_name: null, coaching: null,
     location_name: null, court_name: null, location_timezone: null, creator_name: null, creator_email: null, creator_phone: null,
-    id: id(7), kind: "booking", account_user_id: null, payment_method: "online", payment_facts: [],
+    id: id(7), kind: "booking", account_user_id: null, payment_method: expected.status === "due" ? "pay_at_club" : "online",
+    payment_facts: payments, refund_facts: refunds,
     customer_name: "Customer", customer_email: "snapshot@example.test", customer_phone: "123",
     cancellation_notice_minutes: 120, total_amount_minor: 5000, currency: "RON" };
   query.mockImplementation(async (sql: string) => {
@@ -207,7 +205,6 @@ test.each([
     if (sql.includes("court_reservations")) return [row];
     return [hours];
   });
-  financialFacts.mockResolvedValue({ payments, refunds });
   const [result] = (await getReservationDay(location, date, now, client)).adminOccupancy;
   expect(result).toMatchObject({ kind: "booking", payment_status: expected });
 });

@@ -80,7 +80,7 @@ test("coaching hold fragments protect the coach and never overlap the original l
 test("coaching contracts carry coach, program and agreed amounts that must match their evidence",()=>{
   const coach=randomUUID(), program=randomUUID();
   const coaching={...terms,totalAmountMinor:15001,coachUserId:coach,coachingProgramId:program,coachName:"Coach",coachingProgramName:"Private",
-    pricingEvidence:{...terms.pricingEvidence,coaching:{programId:program,coachUserId:coach,locationId:id,durationMinutes:60,source:"coach" as const,
+    pricingEvidence:{...terms.pricingEvidence,coaching:{participantCount:1,pricePerPersonMinor:10000,programId:program,coachUserId:coach,locationId:id,durationMinutes:60,source:"coach" as const,
       amountMinor:10000,currency:"RON" as const,courtRentalIncluded:false,courtRentalMinor:5001,courtAmountMinor:5001}}};
   const original=buildBookingRevision(coaching,operation,null);
   // Later revisions keep the coaching contract and its evidence, never repricing it.
@@ -107,4 +107,20 @@ test("coaching contracts carry coach, program and agreed amounts that must match
   for(const participantCount of [0,101,2.5]) expect(()=>buildBookingRevision(withCount(participantCount),operation,null)).toThrow();
   // Court bookings remain coachless.
   expect(buildBookingRevision(terms,operation,null)).not.toHaveProperty("pricingEvidence.coaching");
+});
+test("recorded coaching amounts are stored facts, never revalidated against the lesson price/person formula",()=>{
+  const coach=randomUUID(), program=randomUUID();
+  const lesson=(coaching: { participantCount: number; pricePerPersonMinor: number })=>({...terms,totalAmountMinor:15001,coachUserId:coach,coachingProgramId:program,coachName:"Coach",
+    coachingProgramName:"Semi-private",pricingEvidence:{...terms.pricingEvidence,coaching:{programId:program,coachUserId:coach,locationId:id,durationMinutes:60,
+      source:"club" as const,amountMinor:10000,currency:"RON" as const,courtRentalIncluded:false,courtRentalMinor:5001,courtAmountMinor:5001,...coaching}}});
+  // A recorded total that differs from price/person × players (e.g. agreed under an earlier model) is kept as recorded.
+  const differs=buildBookingRevision(lesson({participantCount:2,pricePerPersonMinor:7000}),operation,null);
+  expect(differs).toMatchObject({totalAmountMinor:15001,pricingEvidence:{coaching:{amountMinor:10000,pricePerPersonMinor:7000,participantCount:2}}});
+  // Incomplete participant pricing evidence is rejected; no participant count is invented.
+  for(const missing of [{participantCount:undefined},{pricePerPersonMinor:undefined},{participantCount:undefined,pricePerPersonMinor:undefined}])
+    expect(pricingEvidenceSchema.safeParse({...differs.pricingEvidence,coaching:{...differs.pricingEvidence.coaching,...missing}}).success).toBe(false);
+  // Later revisions copy the recorded amounts unchanged.
+  const confirmed=buildBookingRevision(differs,{...operation,id:randomUUID(),kind:"confirmed",bookingState:"confirmed",operationKey:"confirmation",actorScope:"provider"},differs);
+  expect(confirmed.pricingEvidence).toEqual(differs.pricingEvidence);
+  expect(confirmed.totalAmountMinor).toBe(15001);
 });

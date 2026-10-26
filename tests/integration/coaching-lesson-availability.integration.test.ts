@@ -7,6 +7,7 @@ import type { DataSource } from "typeorm";
 import { projectCoachingLessonAvailability, readCoachingLessonDay, readPublicCoachingLessonAvailability } from "@/lib/coaching/lesson-availability";
 import { getDataSource } from "@/lib/db/data-source";
 import { listCoachDayAvailability } from "@/lib/db/repositories/coach-availability.repository";
+import { readPublicCoachingFacts } from "@/lib/db/repositories/coaching.repository";
 import { listCoachDayOccupancy } from "@/lib/db/repositories/reservations.repository";
 import { mondayWeekday } from "@/lib/pricing/resolution";
 import { cleanupAuthFixtures, localFixtureClient } from "./auth-fixtures";
@@ -43,8 +44,10 @@ async function reserve(court: string, start: number, end: number, options: { coa
   return id;
 }
 
-const read = (overrides: Record<string, unknown> = {}, now = beforeOpening) =>
-  readPublicCoachingLessonAvailability({ locationId: locationA, programId: program, coachId: coach, date, ...overrides }, now);
+// Each read reloads the page's public locations and coaching facts, as one /book render does.
+const read = async (overrides: Record<string, unknown> = {}, now = beforeOpening) =>
+  (await readPublicCoachingLessonAvailability({ locationId: locationA, programId: program, coachId: coach, date, participantCount: 1, ...overrides },
+    { locations: await listPublicLocationsWithCourts(), coaching: await readPublicCoachingFacts(database.manager) }, now))?.availability ?? null;
 
 beforeAll(async () => {
   expect(process.env.TEST_SUPABASE_PROJECT).toBe("tennis-club-tests");
@@ -76,8 +79,8 @@ beforeAll(async () => {
   await database.query("INSERT INTO public.coach_locations(coach_user_id,location_id) VALUES($1,$2),($1,$3)", [coach, locationA, locationB]);
   await database.query("INSERT INTO public.coach_programs(coach_user_id,program_id) VALUES($1,$2),($1,$3)", [coach, program, inactiveProgram]);
   // Club rates for 60 and 90 minutes, the coach's own 90-minute rate, nothing for 120.
-  await database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,coach_user_id,amount_minor,currency) VALUES
-    ($1,60,NULL,10000,'RON'),($1,90,NULL,14000,'RON'),($1,90,$2,16000,'RON'),($3,60,NULL,9000,'RON')`,
+  await database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,participant_count,coach_user_id,amount_minor,currency) VALUES
+    ($1,60,1,NULL,10000,'RON'),($1,90,1,NULL,14000,'RON'),($1,90,1,$2,16000,'RON'),($3,60,1,NULL,9000,'RON')`,
   [program, coach, inactiveProgram]);
   await database.query(`INSERT INTO public.coach_weekly_availability(coach_user_id,location_id,weekday,start_minute,end_minute,valid_from)
     VALUES($1,$2,$3,540,900,'2000-01-01')`, [coach, locationA, mondayWeekday(date)]);
@@ -189,17 +192,29 @@ test("invalid, inactive, unassigned or unpublished program, coach and location r
 });
 
 
-test("semi-private uses the same public availability and complete-session prices", async () => {
-  await database.query("UPDATE public.coaching_programs SET program_type='semi_private',min_participants=2,max_participants=2 WHERE id=$1", [program]);
+test("semi-private uses the same public availability and the lesson price/person of the selected count", async () => {
+  await database.query("UPDATE public.coaching_programs SET program_type='semi_private',min_participants=2,max_participants=3 WHERE id=$1", [program]);
+  // Prices/person. 2 players: lesson totals 10000, 14000 and the coach's 16000; 3 players: only a
+  // 60-minute club price (3 × 4000).
+  await database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,participant_count,coach_user_id,amount_minor,currency) VALUES
+    ($1,60,2,NULL,5000,'RON'),($1,90,2,NULL,7000,'RON'),($1,90,2,$2,8000,'RON'),($1,60,3,NULL,4000,'RON')`, [program, coach]);
   try {
-    const availability = await read();
-    expect(availability?.program).toMatchObject({ id: program, participants: { min: 2, max: 2 }, courtRentalIncluded: false });
+    // The private 1-player prices are outside the range and never used.
+    expect(await read()).toBeNull();
+    const three = await read({ participantCount: 3 });
+    expect(three?.durations.map(d => d.durationMinutes)).toEqual([60]);
+    const threePlayerStarts = starts(three, 60);
+    assert.ok(threePlayerStarts, "Expected 60-minute availability for three players.");
+    expect(threePlayerStarts[0]).toEqual([540, [["A1", 17000], ["A2", 19000]]]);
+    const availability = await read({ participantCount: 2 });
+    expect(availability?.program).toMatchObject({ id: program, participants: { min: 2, max: 3 }, courtRentalIncluded: false });
     expect(availability?.durations.map(d => d.durationMinutes)).toEqual([60, 90]);
     expect(starts(availability, 60)).toEqual([
       [540, [["A1", 15000], ["A2", 17000]]], [570, [["A2", 17000]]], [600, [["A2", 17000]]], [660, [["A1", 15000]]],
     ]);
     expect(starts(availability, 90)).toEqual([[540, [["A2", 26500]]], [570, [["A2", 26500]]]]);
   } finally {
+    await database.query("DELETE FROM public.coaching_prices WHERE program_id=$1 AND participant_count>1", [program]);
     await database.query("UPDATE public.coaching_programs SET program_type='private',min_participants=1,max_participants=1 WHERE id=$1", [program]);
   }
 });
@@ -300,8 +315,8 @@ test("selector requires location working hours and priced online programs, indep
     await database.query("INSERT INTO public.coach_profiles(user_id,display_name,bio,qualifications,specialties,languages,is_public) VALUES($1,'Selector coach','','','{}','{}',true)", [other]);
     await database.query("INSERT INTO public.coach_locations(coach_user_id,location_id) VALUES($1,$2)", [other, locationA]);
     await database.query("INSERT INTO public.coach_programs(coach_user_id,program_id) VALUES($1,$2)", [other, otherProgram]);
-    await database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,coach_user_id,amount_minor,currency) VALUES
-      ($1,60,NULL,12000,'RON'),($1,60,$2,11000,'RON'),($1,60,$2,4000,'EUR')`, [otherProgram, other]);
+    await database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,participant_count,coach_user_id,amount_minor,currency) VALUES
+      ($1,60,2,NULL,6000,'RON'),($1,60,2,$2,5500,'RON'),($1,60,2,$2,2000,'EUR')`, [otherProgram, other]);
     await database.query(`INSERT INTO public.coach_weekly_availability(coach_user_id,location_id,weekday,start_minute,end_minute,valid_from)
       VALUES($1,$2,$3,900,1020,'2000-01-01')`, [other, locationA, mondayWeekday(date)]);
     // The first coach has no working hours at A: assignment alone is insufficient.
@@ -310,14 +325,15 @@ test("selector requires location working hours and priced online programs, indep
     expect(listed.map(option => option.id)).toEqual([other]);
     expect(listed.find(option => option.id === coach)).toBeUndefined();
     expect(listed.find(option => option.id === other)?.programs).toEqual([{ id: otherProgram, name: "Selector semi", type: "semi_private",
-      courtRentalIncluded: true, participants: { min: 2, max: 2 }, durations: [{ durationMinutes: 60, price: { amountMinor: 11000, currency: "RON", source: "coach" } }] }]);
+      courtRentalIncluded: true, participants: { min: 2, max: 2 },
+      durations: [{ durationMinutes: 60, prices: [{ participantCount: 2, price: { amountMinor: 11000, currency: "RON", source: "coach" } }] }] }]);
     // The second coach's lessons come from their own assignment and hours at A; included rental is not charged.
-    const otherDay = await read({ coachId: other, programId: otherProgram });
+    const otherDay = await read({ coachId: other, programId: otherProgram, participantCount: 2 });
     expect(otherDay?.durations[0].starts.find(start => start.startMinute === 900)?.courts.map(court => court.totalAmountMinor)).toEqual([11000, 11000]);
     // Completely booked on the requested day: still a valid selector option.
     const fullDay = await reserve(courtA2, 900, 1020, { coach: other });
     try {
-      expect((await read({ coachId: other, programId: otherProgram }))?.durations[0].starts).toEqual([]);
+      expect((await read({ coachId: other, programId: otherProgram, participantCount: 2 }))?.durations[0].starts).toEqual([]);
       expect((await options()).some(option => option.id === other)).toBe(true);
     } finally { await database.query("DELETE FROM public.court_reservations WHERE id=$1", [fullDay]); }
     // A Group program, even priced, makes the coach no online selector option.
@@ -362,7 +378,7 @@ test("selector requires location working hours and priced online programs, indep
 test("rescheduling excludes only the lesson's own reservation from court and coach occupancy", async () => {
   const location = (await listPublicLocationsWithCourts()).find(row => row.id === locationA)!;
   const day = (excludeReservationId?: string) => readCoachingLessonDay(database.manager, location, coach, date, beforeOpening, excludeReservationId);
-  const project = async (excludeReservationId?: string) => projectCoachingLessonAvailability((await day(excludeReservationId))!, program);
+  const project = async (excludeReservationId?: string) => projectCoachingLessonAvailability((await day(excludeReservationId))!, program, 1);
   // The coach's own A1 12:00–13:00 lesson no longer conflicts with itself: A1 at
   // 11:30 and 12:00 and A2 at 12:00 open. The A1 customer hold, the A2 booking, the
   // coach's live B1 13:00 hold, working hours and the 14:00 absence still apply.

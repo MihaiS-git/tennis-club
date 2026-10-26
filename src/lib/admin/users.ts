@@ -43,7 +43,7 @@ export async function readAdminUserDetails(userId: string, supabase?: Awaited<Re
     updated_at: data.user.updatedAt.toISOString(),
     user_roles: data.roleCodes.map((role_code) => ({ role_code })),
   });
-  const profile = await loadProfile(client, id);
+  const profile = await loadProfile(id);
   if (!profile) throw new Error("Unable to load user details.");
   return { ...account, roles: user_roles.map(({ role_code }) => role_code).sort(), ...profile };
 }

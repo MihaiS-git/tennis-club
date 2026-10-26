@@ -76,6 +76,7 @@ it("reuses the /book timetable with fixed lesson terms and the original lesson p
   quote.mockResolvedValue({ ok: true, totalAmountMinor: 7500 });
   renderLesson();
   await opened();
+  expect(load).toHaveBeenCalledExactlyOnceWith(booking.id, booking.booking_date);
   expect(vi.mocked(BookingTimetable)).toHaveBeenCalled();
   expect(screen.getByRole("table", { name: "Court timetable" })).toBeTruthy();
   for (const [term, value] of [["Location", "Club"], ["Coach", "Daniel Stoica"], ["Program", "Private coaching"],
@@ -120,6 +121,7 @@ it("reloads lesson availability for a new date", async () => {
   fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2099-10-16" } });
   await screen.findByRole("button", { name: /Court A 2099-10-16 12:00–13:00, 60 min lesson, RON\s65.00 total/ });
   expect(load).toHaveBeenLastCalledWith(booking.id, "2099-10-16");
+  expect(load).toHaveBeenCalledTimes(2);
   expect(screen.queryByRole("button", { name: /Court B 2099-10-16/ })).toBeNull();
   expect(screen.queryByRole("button", { name: /Court A 2099-10-16 10:00/ })).toBeNull();
   await choose(/Court A 2099-10-16 12:00–13:00/, 6500);

@@ -6,9 +6,11 @@ import type { EntityManager } from "typeorm";
 import { z } from "zod";
 
 import { logger } from "@/lib/logger";
+import { addDays } from "@/lib/courts/local-time";
 import { getDataSource } from "@/lib/db/data-source";
-import { listPublicLocationFacts } from "@/lib/db/repositories/clubs.repository";
+import { listPublicLocationFacts, listPublicLocationFactsForLocation } from "@/lib/db/repositories/clubs.repository";
 import { locationCurrencies } from "@/lib/admin/locations-validation";
+import { cancellationNoticeMinutesSchema } from "@/lib/bookings/cancellation-policy";
 import { isPubliclyEligible, publicationToday } from "@/lib/locations/publication";
 import { mondayWeekday } from "@/lib/pricing/resolution";
 
@@ -34,7 +36,7 @@ const locationSchema = z.object({
   timezone: z.string(),
   currency: z.enum(locationCurrencies),
   allow_pay_at_club: z.boolean().default(false),
-  customer_cancellation_notice_minutes: z.number().int().min(0).optional(),
+  customer_cancellation_notice_minutes: cancellationNoticeMinutesSchema.optional(),
   is_active: z.boolean(),
   is_public: z.boolean(),
   archived_at: z.iso.datetime({ offset: true }).nullable(),
@@ -45,6 +47,7 @@ const locationSchema = z.object({
 export type PublicCourt = Omit<z.infer<typeof courtSchema>, "location_pricing_rules" | "is_active">;
 type PublicOpeningInterval = { opens_at_minute: number; closes_at_minute: number };
 export type PublicLocation = Omit<z.infer<typeof locationSchema>, "is_active" | "is_public" | "archived_at" | "location_opening_hours" | "courts" | "customer_cancellation_notice_minutes"> & {
+  customer_cancellation_notice_minutes: number | null;
   courts: PublicCourt[];
   // Weekly intervals of the schedule effective on the location's local publication date.
   todayOpeningHours: PublicOpeningInterval[];
@@ -65,16 +68,13 @@ export type PublicVisitorLocation = PublicLocation & {
   weekOpeningHours: { weekday: number; intervals: PublicOpeningInterval[] }[];
 };
 
-function addDays(date: string, days: number) {
-  const next = new Date(`${date}T00:00:00Z`);
-  next.setUTCDate(next.getUTCDate() + days);
-  return next.toISOString().slice(0, 10);
-}
-
 async function readEligibleLocations<T>(project: (location: z.infer<typeof locationSchema>, today: string) => T,
-  manager?: EntityManager, now?: Date): Promise<T[]> {
+  manager?: EntityManager, now = new Date(), locationId?: string): Promise<T[]> {
   try {
-    const data = await listPublicLocationFacts(manager ?? (await getDataSource()).manager);
+    const readManager = manager ?? (await getDataSource()).manager;
+    const data = locationId === undefined
+      ? await listPublicLocationFacts(readManager, now)
+      : await listPublicLocationFactsForLocation(readManager, locationId, now);
     const parsed = z.array(locationSchema).safeParse(data);
     if (!parsed.success) {
       logger.error({ event: "courts.public_read_failed" }, "Failed to load public courts");
@@ -95,6 +95,7 @@ function toPublicLocation(location: z.infer<typeof locationSchema>, today: strin
     address_line1: location.address_line1, address_line2: location.address_line2,
     city: location.city, postal_code: location.postal_code, country_code: location.country_code,
     timezone: location.timezone, currency: location.currency, allow_pay_at_club: location.allow_pay_at_club,
+    customer_cancellation_notice_minutes: location.customer_cancellation_notice_minutes ?? null,
     courts: location.courts.map((court) => ({
       id: court.id, name: court.name, slug: court.slug, surface: court.surface,
       environment: court.environment, has_lighting: court.has_lighting,
@@ -110,7 +111,8 @@ export async function listPublicLocationsWithCourts(): Promise<PublicLocation[]>
 // One publicly eligible location on the caller's manager, e.g. reread inside a
 // booking transaction after its location lock; null when not publicly bookable.
 export async function findPublicLocationWithCourts(manager: EntityManager, locationId: string, now: Date): Promise<PublicLocation | null> {
-  return (await readEligibleLocations(toPublicLocation, manager, now)).find((location) => location.id === locationId.toLowerCase()) ?? null;
+  if (!z.uuid().safeParse(locationId).success) return null;
+  return (await readEligibleLocations(toPublicLocation, manager, now, locationId))[0] ?? null;
 }
 
 export async function listPublicVisitorLocations(): Promise<PublicVisitorLocation[]> {

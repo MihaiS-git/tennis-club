@@ -2064,6 +2064,43 @@ test("request-driven: partial refund success then definitive failure must not st
   expect(vi.mocked(stripeAdapter.refundPayment).mock.calls.filter(([call])=>call.amountMinor===2500)).toHaveLength(1);
 });
 
+test("a reversed refund while another cancellation obligation is pending records one Admin exception across checks", async () => {
+  simulatedStripe();
+  const f = await seed(600, true), additional = randomUUID();
+  await database.query(`INSERT INTO public.payment_attempts(id,booking_id,method,provider,provider_payment_id,amount_minor,currency,status,expires_at,completed_at)
+    VALUES($1,$2,'online','stripe',$3,2500,'RON','succeeded',clock_timestamp()+interval '10 minutes',clock_timestamp())`, [additional, f.id, `pi-${additional}`]);
+  await database.query(`INSERT INTO public.payment_capture_receipts(payment_attempt_id,provider,provider_payment_id,provider_capture_id,amount_minor,currency)
+    VALUES($1,'stripe',$2,$2,2500,'RON')`, [additional, `pi-${additional}`]);
+  await appendBookingContractFixture(f.id, { total_amount_minor: 7500 });
+  const request = await cancel(f);
+  if (request.outcome !== "cancellation_pending") throw new Error("Missing request");
+  expect(request.refundIds).toHaveLength(2);
+  const id = request.refundIds[0];
+  expect(await refundProcessing.processBookingRefund(id)).toBe("succeeded");
+  const [success] = await refundExecutions.listRefundExecutions(database.manager, id);
+  vi.mocked(stripeAdapter.refundPayment).mockImplementation(async p => ({
+    providerRefundId: p.providerRefundId ?? `re_${p.id}`, status: "failed", failureReason: "expired_or_canceled_card",
+  }));
+  for (let delivery = 0; delivery < 2; delivery++)
+    expect(await refundProcessing.processBookingRefund(id, { strict: true, providerChanged: true })).toBe("failed");
+  expect(await refundProcessing.processBookingRefund(id, { actorId, retryRejected: true, strict: true })).toBe("failed");
+  expect(await exceptions(f.id)).toEqual(["refund_reversed"]);
+  expect(await database.query(`SELECT event_key,kind FROM public.user_messages
+    WHERE user_id=$1 AND event_key LIKE $2 ORDER BY event_key`, [actorId, `financial.exception:refund:${id}:%`]))
+    .toEqual([{ event_key: `financial.exception:refund:${id}:reversed`, kind: "financial.refund_reversed" }]);
+  expect(await database.query("SELECT id FROM public.email_deliveries WHERE event_key LIKE $1", [`financial.exception:refund:${id}:%`])).toEqual([]);
+  expect(await refundExecutions.listRefundExecutions(database.manager, id)).toMatchObject([{
+    id: success.id, terminalResult: "succeeded", terminalEvidence: success.terminalEvidence,
+    providerRefundId: success.providerRefundId, lastError: "provider_refund_reversed",
+  }]);
+  expect(await refundExecutions.listRefundExecutions(database.manager, id)).toHaveLength(1);
+  expect(await findAdjustment(database.manager, request.adjustmentId)).toMatchObject({ status: "pending" });
+  expect(await state(f)).toMatchObject({ booking: { status: "confirmed" }, reservation: { status: "active" },
+    refunds: expect.arrayContaining([expect.objectContaining({ id, status: "failed" }),
+      expect.objectContaining({ id: request.refundIds[1], status: "pending" })]) });
+  expect(stripeAdapter.refundPayment).toHaveBeenCalledTimes(2);
+});
+
 test("request-driven: failed surcharge payment preserves original booking and occupancy", async () => {
   simulatedStripe(); const f=await seed(600,true),before=await state(f);
   const result=await save(await edit(f,{endMinute:810,expectedTotal:7500,requestId:randomUUID()}));

@@ -32,8 +32,10 @@ another pricing edit or automatic opening-hours reconciliation cannot be silentl
 overwritten. Stale responses refresh the inventory while retaining the open draft.
 
 All five supported location currencies use two decimal places. The database stores
-positive integer minor units and no currency column; changing a location's currency
-changes how existing amounts are denominated without conversion. Decimal input is
+positive integer minor units and no currency column: amounts are denominated in the
+location's currency. A location's currency therefore cannot change while any court
+pricing rule exists; see [location currency changes](architecture.md#location-currency-changes).
+Amounts are never converted. Decimal input is
 parsed as digits without floating-point rounding. Time applicability is `[start,
 end)`: `07:00–16:00` and `16:00–20:00` are adjacent; 16:00 resolves only to the
 second interval. End time may be `24:00`. Date bounds are inclusive and may be
@@ -83,7 +85,9 @@ The current application has no opening-hours exceptions.
 state, calendar date and local minute, returning one matching row or `null`. Monday
 is 0. The caller supplies the local calendar date after timezone conversion; the
 resolver does not infer coverage state or calculate booking totals. Public `/courts`
-is unchanged and retains its temporary “From €10/hour”. Customer checkout and explicit rescheduling use the existing server-authorized pricing
+shows each public location's lowest configured hourly rate of an open, priced slot today
+(`listPublicLocationsToday`, using the same slot-rate resolution as the booking
+timetable) in the location's currency, or “See rates when booking” when none applies. Customer checkout and explicit rescheduling use the existing server-authorized pricing
 reads and preserve their transactional price acknowledgement rules.
 
 Pricing entities and native overlap integrity are installed by the TypeORM history.

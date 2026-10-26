@@ -12,7 +12,7 @@ import { CourtsDiscovery } from "@/app/courts/courts-discovery";
 afterEach(cleanup);
 const location: PublicLocationToday = {
   id: "11111111-1111-4111-8111-111111111111", name: "Riverside", slug: "riverside", timezone: "Europe/Bucharest",
-  currency: "RON", allow_pay_at_club: false, address_line1: "1 Court Road", address_line2: null, city: "City", postal_code: "12345", country_code: "RO", todayOpeningHours: [],
+  currency: "RON", allow_pay_at_club: false, customer_cancellation_notice_minutes: null, address_line1: "1 Court Road", address_line2: null, city: "City", postal_code: "12345", country_code: "RO", todayOpeningHours: [],
   courts: [{ id: "22222222-2222-4222-8222-222222222222", name: "Clay One", slug: "clay-one", surface: "clay", environment: "outdoor", has_lighting: true },
     { id: "33333333-3333-4333-8333-333333333333", name: "Hard Two", slug: "hard-two", surface: "hard", environment: "indoor", has_lighting: false }],
   openingHours: [{ opens_at_minute: 480, closes_at_minute: 720 }, { opens_at_minute: 780, closes_at_minute: 1440 }], startingRateMinor: 5017,

@@ -9,10 +9,12 @@ type RevisionScope = "guest" | "customer" | "coach_owner" | "admin_owner" | "adm
 const currencySchema = z.enum(["EUR", "USD", "GBP", "RON", "CHF"]);
 // The coaching price agreed for a lesson: the resolved coach override or club
 // default, and the court rental it adds (zero when the program includes it).
-// The slots still explain the court's rental value, charged or not.
+// The slots still explain the court's rental value, charged or not. amountMinor is the
+// agreed coaching total, a stored fact that is never recalculated.
 const coachingEvidenceSchema = z.strictObject({
-  // The count the lesson was booked for, within its program's range then. Older private contracts predate this snapshot.
-  participantCount: participantCountSchema.optional(),
+  // The count the lesson was booked for and the lesson price/person agreed for it.
+  participantCount: participantCountSchema,
+  pricePerPersonMinor: z.number().int().positive().max(2147483647),
   programId: z.uuid(), coachUserId: z.uuid(), locationId: z.uuid(), durationMinutes: z.number().int().min(60).max(1440),
   source: z.enum(["coach", "club"]), amountMinor: z.number().int().positive().max(2147483647), currency: currencySchema,
   courtRentalIncluded: z.boolean(), courtRentalMinor: z.number().int().positive().max(2147483647),

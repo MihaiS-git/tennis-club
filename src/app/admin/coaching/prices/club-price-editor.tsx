@@ -4,31 +4,32 @@ import { useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/button";
-import type { AdminCoachingProgram, AdminParticipantPrice } from "@/lib/coaching/admin";
-import { coachingParticipantRange } from "@/lib/coaching/validation";
+import type { AdminCoachingProgram } from "@/lib/coaching/admin";
+import { coachingParticipantCounts, coachingParticipantRange, formatCoachingDuration, formatPlayers as players } from "@/lib/coaching/validation";
 import { majorAmountSchema, minorToMajor, type LocationCurrency } from "@/lib/pricing/money";
-import { saveClubParticipantPricesAction } from "../actions";
+import { saveClubCoachingPricesAction } from "../actions";
 import { coachingFailureMessages } from "../coaching-form";
 
-const players = (count: number) => `${count} ${count === 1 ? "player" : "players"}`;
-
-// Club rates per person per 60 minutes of one Group/Junior program in one currency, one
-// row per player count in the program's range. An empty amount means not configured, never
-// zero; a saved rate is removed only through its explicit Remove action. Stored rates outside
-// the current range are not published; they stay listed so they can be removed.
-export function ParticipantPriceEditor({ program, currency, prices, chargeable }: {
+// Club lesson prices/person of one program duration in one currency, one independent row per
+// player count in the program's range. An empty amount means not configured, never zero; a
+// saved price is removed only through its explicit Remove action. Prices outside the range do
+// not exist: saving the program removes them.
+export function ClubPriceEditor({ program, currency, durationMinutes, prices, chargeable }: {
   program: Pick<AdminCoachingProgram, "id" | "name" | "min_participants" | "max_participants">;
-  currency: LocationCurrency; prices: readonly AdminParticipantPrice[];
-  // Whether a current location charges in this currency; otherwise rates can only be removed.
+  currency: LocationCurrency; durationMinutes: number;
+  prices: readonly { participant_count: number; amount_minor: number }[];
+  // Whether a current location charges in this currency; otherwise prices can only be removed.
   chargeable: boolean;
 }) {
   const router = useRouter();
   const prefix = useId();
   const pendingRef = useRef(false);
   const range = coachingParticipantRange({ minParticipants: program.min_participants, maxParticipants: program.max_participants });
-  const counts = range && chargeable ? Array.from({ length: range.max - range.min + 1 }, (_, index) => range.min + index) : [];
+  const counts = chargeable ? coachingParticipantCounts(range) : [];
   const stored = new Map(prices.map((price) => [price.participant_count, price.amount_minor]));
+  // Only prices in a currency no current location charges in remain, removable.
   const outside = prices.filter((price) => !counts.includes(price.participant_count));
+  const subject = `club ${formatCoachingDuration(durationMinutes)} lesson price/person`;
   const [values, setValues] = useState<Record<number, string>>(() =>
     Object.fromEntries(prices.map((price) => [price.participant_count, minorToMajor(price.amount_minor)])));
   const [removed, setRemoved] = useState<ReadonlySet<number>>(new Set());
@@ -63,7 +64,7 @@ export function ParticipantPriceEditor({ program, currency, prices, chargeable }
     pendingRef.current = true; setPending(true); setFormError(null);
     const notification = toast.loading("Saving prices…");
     try {
-      const result = await saveClubParticipantPricesAction({ program_id: program.id, currency, prices: saved, removed: removals });
+      const result = await saveClubCoachingPricesAction({ program_id: program.id, currency, duration_minutes: durationMinutes, prices: saved, removed: removals });
       if (result.ok) {
         toast.success("Prices saved.", { id: notification });
         router.refresh();
@@ -75,7 +76,7 @@ export function ParticipantPriceEditor({ program, currency, prices, chargeable }
           return message ? [[price.participant_count, message]] : [];
         }));
         setErrors(entries);
-        if (!Object.keys(entries).length) setFormError(Object.values(result.fieldErrors)[0] ?? "Check the prices.");
+        if (!Object.keys(entries).length) setFormError(Object.values(result.fieldErrors)[0] || "Check the prices.");
       } else {
         toast.dismiss(notification); setFormError(coachingFailureMessages[result.reason]);
       }
@@ -87,7 +88,7 @@ export function ParticipantPriceEditor({ program, currency, prices, chargeable }
   }
 
   const removeButton = (count: number) => <Button type="button" variant="subtle" size="small" fullWidth={false} disabled={pending}
-    onClick={() => toggleRemoved(count)} aria-label={`${removed.has(count) ? "Keep" : "Remove"} ${program.name} ${currency} price for ${players(count)}`}>
+    onClick={() => toggleRemoved(count)} aria-label={`${removed.has(count) ? "Keep" : "Remove"} ${program.name} ${currency} ${subject}, ${players(count)}`}>
     {removed.has(count) ? "Undo" : "Remove"}
   </Button>;
 
@@ -95,10 +96,12 @@ export function ParticipantPriceEditor({ program, currency, prices, chargeable }
     onSubmit={(event) => { event.preventDefault(); void submit(); }}>
     {!range ? <p className="text-sm text-muted-foreground">Set the program’s minimum and maximum players under Programs to configure these prices.</p>
       : !chargeable && <p className="text-sm text-muted-foreground">No current location charges in {currency}.</p>}
+    {range && chargeable && program.min_participants !== program.max_participants && <p className="mb-1 text-xs text-muted-foreground">
+      Lesson price/person for each number of players; each is set separately.</p>}
     {counts.length > 0 && <table className="text-sm">
       <thead className="text-xs text-muted-foreground">
         <tr><th scope="col" className="pb-1 pr-3 text-left font-semibold">Players</th>
-          <th scope="col" className="pb-1 text-left font-semibold">Price/person/60 min</th></tr>
+          <th scope="col" className="pb-1 text-left font-semibold">Lesson price/person</th></tr>
       </thead>
       <tbody>
         {counts.map((count) => {
@@ -106,7 +109,7 @@ export function ParticipantPriceEditor({ program, currency, prices, chargeable }
           const rowError = error(count);
           return <tr key={count} className="align-top">
             <td className="py-1 pr-3"><label htmlFor={id} className="inline-flex min-h-9 items-center">{count}
-              <span className="sr-only"> players, {program.name} club price per person for 60 minutes in {currency}</span></label></td>
+              <span className="sr-only"> {count === 1 ? "player" : "players"}, {program.name} {subject} in {currency}</span></label></td>
             <td className="py-1">
               <div className="flex flex-wrap items-center gap-2">
                 <div className={`flex min-h-9 w-32 items-center rounded-control border bg-surface pr-2 focus-within:border-primary focus-within:ring-2 focus-within:ring-focus/20 ${rowError ? "border-danger" : "border-border"}`}>
@@ -128,7 +131,7 @@ export function ParticipantPriceEditor({ program, currency, prices, chargeable }
       </tbody>
     </table>}
     {outside.length > 0 && <div className="mt-2">
-      <p className="text-xs text-muted-foreground">{range && chargeable ? "Outside the current player range, not published:" : "Saved prices, not published:"}</p>
+      <p className="text-xs text-muted-foreground">Saved prices, not published:</p>
       <ul className="mt-1 space-y-1">
         {outside.map((price) => <li key={price.participant_count} className="flex flex-wrap items-center gap-2 text-sm">
           <span>{players(price.participant_count)}: {minorToMajor(price.amount_minor)} {currency}</span>

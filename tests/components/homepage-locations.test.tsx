@@ -8,7 +8,7 @@ import { HomeLocations } from "@/app/home-locations";
 const court = { id: "22222222-2222-4222-8222-222222222222", name: "Court 1", slug: "court-1", surface: "clay", environment: "outdoor", has_lighting: false } as const;
 const east: PublicLocation = { id: "11111111-1111-4111-8111-111111111111", name: "East Club", slug: "east",
   address_line1: "1 Court Road", address_line2: null, city: "Cluj-Napoca", postal_code: "400000", country_code: "RO",
-  timezone: "Europe/Bucharest", currency: "RON", allow_pay_at_club: false,
+  timezone: "Europe/Bucharest", currency: "RON", allow_pay_at_club: false, customer_cancellation_notice_minutes: null,
   courts: [court, { ...court, id: "33333333-3333-4333-8333-333333333333" }],
   todayOpeningHours: [{ opens_at_minute: 480, closes_at_minute: 720 }, { opens_at_minute: 780, closes_at_minute: 1440 }] };
 const west: PublicLocation = { ...east, id: "44444444-4444-4444-8444-444444444444", name: "West Club",

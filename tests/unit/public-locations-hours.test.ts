@@ -31,6 +31,7 @@ it("resolves today's opening hours from the effective schedule in each location'
   ];
   facts.mockResolvedValue([location("Europe/Bucharest", hours), location("America/Los_Angeles", hours)]);
   const [east, west] = await listPublicLocationsWithCourts();
+  expect(facts).toHaveBeenCalledWith(expect.anything(), new Date("2026-10-14T22:30:00Z"));
   // Bucharest is already Thursday 2026-10-15; Los Angeles is still Wednesday 2026-10-14.
   expect(east.todayOpeningHours).toEqual([{ opens_at_minute: 480, closes_at_minute: 720 }, { opens_at_minute: 780, closes_at_minute: 1200 }]);
   expect(west.todayOpeningHours).toEqual([{ opens_at_minute: 420, closes_at_minute: 1320 }]);

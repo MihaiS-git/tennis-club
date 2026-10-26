@@ -6,12 +6,13 @@ import type { EntityManager } from "typeorm";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  claim: vi.fn(), expired: vi.fn(), complete: vi.fn(), alerts: vi.fn(),
+  claim: vi.fn(), expired: vi.fn(), complete: vi.fn(), admins: vi.fn(), messages: vi.fn(),
 }));
 vi.mock("@/lib/db/transaction", () => ({ inTransaction: (work: (manager: EntityManager) => Promise<unknown>) => work({} as EntityManager) }));
 vi.mock("@/lib/db/repositories/notifications.repository", () => ({
   claimEmailDeliveries: mocks.claim, failExpiredFinalClaims: mocks.expired,
-  completeEmailAttempt: mocks.complete, insertEmailFailureAlerts: mocks.alerts,
+  completeEmailAttempt: mocks.complete,
+  listActiveUserIdsWithRole: mocks.admins, insertUserMessages: mocks.messages,
 }));
 
 import { sendBrevoEmail, brevoConfig as makeBrevoConfig } from "@/lib/notifications/brevo";
@@ -30,7 +31,9 @@ beforeEach(() => {
   vi.stubEnv("NODE_ENV", "test");
   vi.stubEnv("CI", "");
   mocks.claim.mockResolvedValue([claim]); mocks.expired.mockResolvedValue([]); mocks.complete.mockResolvedValue(true);
+  mocks.admins.mockResolvedValue(["admin"]);
 });
+const alertKeys = () => mocks.messages.mock.calls.map(call => call[1].map((row: { eventKey: string }) => row.eventKey));
 // resetAllMocks also drops unconsumed …Once values and returns factory mocks to their defaults.
 afterEach(() => { vi.resetAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 
@@ -109,7 +112,7 @@ test("development sandbox acceptance persists provider message ID", async () => 
   expect(JSON.parse(fetchMock.mock.calls[0][1].body as string).headers).toHaveProperty("X-Sib-Sandbox", "drop");
   expect(mocks.complete).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
     status: "sandbox_accepted", providerMessageId: "<msg@brevo>", lockedUntil: claim.lockedUntil }));
-  expect(mocks.alerts).not.toHaveBeenCalled();
+  expect(mocks.messages).not.toHaveBeenCalled();
 });
 
 test("delivery cutoff is passed to claims and invalid cutoffs claim nothing", async () => {
@@ -141,19 +144,29 @@ test("nonretryable 4xx and fifth retryable attempt fail with one Admin alert", a
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("bad request", { status: 400 })));
   expect(await processPendingEmailDeliveries()).toMatchObject({ failed: 1 });
   expect(mocks.complete.mock.calls[0][1].status).toBe("failed");
-  expect(mocks.alerts).toHaveBeenCalledTimes(1);
+  expect(alertKeys()).toEqual([[`email.delivery-failed:${id}`]]);
   vi.clearAllMocks(); mocks.claim.mockResolvedValue([{ ...claim, attempts: 5 }]); mocks.expired.mockResolvedValue([]);
-  mocks.complete.mockResolvedValue(true);
+  mocks.complete.mockResolvedValue(true); mocks.admins.mockResolvedValue(["admin"]);
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("busy", { status: 503 })));
   expect(await processPendingEmailDeliveries()).toMatchObject({ failed: 1 });
   expect(mocks.complete.mock.calls[0][1].status).toBe("failed");
+  expect(alertKeys()).toEqual([[`email.delivery-failed:${id}`]]);
 });
 
 test("stale completion cannot create an alert", async () => {
   mocks.complete.mockResolvedValue(false);
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("bad", { status: 401 })));
   expect(await processPendingEmailDeliveries()).toMatchObject({ stale: 1, failed: 0 });
-  expect(mocks.alerts).not.toHaveBeenCalled();
+  expect(mocks.admins).not.toHaveBeenCalled(); expect(mocks.messages).not.toHaveBeenCalled();
+});
+
+test("expired claims share one alert batch inside the claiming transaction", async () => {
+  const second = "00000000-0000-4000-8000-000000000002";
+  mocks.expired.mockResolvedValue([id, second]); mocks.claim.mockResolvedValue([]);
+  expect(await processPendingEmailDeliveries()).toMatchObject({ claimed: 0, failed: 2 });
+  expect(mocks.admins).toHaveBeenCalledOnce();
+  expect(alertKeys()).toEqual([[id, second].map(delivery => `email.delivery-failed:${delivery}`)]);
+  expect(mocks.claim).toHaveBeenCalledWith(expect.anything(), 18, null);
 });
 
 test("expired fifth claim fails without a sixth provider request", async () => {
@@ -161,7 +174,7 @@ test("expired fifth claim fails without a sixth provider request", async () => {
   const fetchMock = vi.fn(); vi.stubGlobal("fetch", fetchMock);
   expect(await processPendingEmailDeliveries()).toMatchObject({ claimed: 0, failed: 1 });
   expect(mocks.claim).toHaveBeenCalledWith(expect.anything(), 19, null);
-  expect(mocks.alerts).toHaveBeenCalledTimes(1);
+  expect(alertKeys()).toEqual([[`email.delivery-failed:${id}`]]);
   expect(fetchMock).not.toHaveBeenCalled();
 });
 

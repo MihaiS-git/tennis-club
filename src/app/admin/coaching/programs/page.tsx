@@ -21,7 +21,7 @@ export default async function AdminCoachingProgramsPage({ searchParams }: {
   return <>
     <h2 className="mb-1 font-heading text-xl font-semibold text-primary">Programs</h2>
     <p className="mb-4 max-w-3xl text-sm text-muted-foreground">
-      Coaching offerings shown on the public Coaching page while active. Club prices are set per duration and currency here or under Prices; coaches set their own individual prices.
+      Coaching offerings shown on the public Coaching page while active. Club lesson prices/person are set for each duration, number of players and currency here or under Prices; coaches set their own individual Private and Semi-private prices.
     </p>
     <ManagementTableToolbar searchLabel="Program search" placeholder="Search by program name" action={<ProgramDialog currencies={currencies} />} controls={[
       { name: "type", label: "Program type", options: [{ value: "", label: "All types" }, ...Object.entries(coachingProgramTypeLabels).map(([value, label]) => ({ value, label }))] },

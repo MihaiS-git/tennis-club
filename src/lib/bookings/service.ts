@@ -5,6 +5,7 @@ import { checkoutPersistence, type CheckoutLifecycle } from "@/lib/payments/doma
 import { configuredPaymentProvider, supportsOnlineCheckout } from "@/lib/payments/providers";
 import { readCurrentAccount } from "@/lib/auth/account";
 import { getCalendarSelection } from "@/lib/courts/interval-selection";
+import { toCalendarCoveragePeriod, toCalendarPricingRule } from "@/lib/courts/calendar-projections";
 import { localMinute, localStartInstant } from "@/lib/courts/local-time";
 import { buildCourtDay } from "@/lib/courts/calendar";
 import { isPubliclyEligible, publicationToday } from "@/lib/locations/publication";
@@ -93,17 +94,13 @@ export async function createCustomerBooking(input: unknown, reader?: Reader,
         if (paymentMethod === "pay_at_club" && !location.allowPayAtClub)
           return { ok: false, message: "Pay at club is not available at this location." };
         if (date < today) return { ok: false, message: "Choose a future time at this location." };
-        const pricingRules = pricing.map((row) => ({ id: row.id, rule_set_id: row.ruleSetId, location_id: row.locationId,
-            court_id: row.courtId, court_state: row.courtState, weekday: row.weekday, starts_at_minute: row.startsAtMinute,
-            ends_at_minute: row.endsAtMinute, starts_on: row.startsOn, ends_on: row.endsOn, price_per_hour_minor: row.pricePerHourMinor,
-            created_at: row.createdAt.toISOString(), updated_at: row.updatedAt.toISOString() }));
+        const pricingRules = pricing.map(toCalendarPricingRule);
         const day = buildCourtDay({ date, today, currentMinute: localMinute(location.timezone, now),
           courts: publicCourts.filter((court) => court.id === courtId),
           hours: hours.map((row) => ({ id: row.id, location_id: row.locationId, weekday: row.weekday,
             opens_at_minute: row.opensAtMinute, closes_at_minute: row.closesAtMinute,
             created_at: row.createdAt.toISOString(), updated_at: row.updatedAt.toISOString() })),
-          coverage: coverage.map((row) => ({ id: row.id, court_id: row.courtId, starts_on: row.startsOn, ends_on: row.endsOn,
-            created_at: row.createdAt.toISOString(), updated_at: row.updatedAt.toISOString() })),
+          coverage: coverage.map(toCalendarCoveragePeriod),
           pricing: pricingRules, reservations: occupancy });
         const court = day.courts[0];
         const selection = court && getCalendarSelection({ courtId, times: day.times, cells: court.cells,

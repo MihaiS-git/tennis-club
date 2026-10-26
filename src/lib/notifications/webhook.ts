@@ -2,7 +2,8 @@ import "server-only";
 
 import { z } from "zod";
 import { inTransaction } from "@/lib/db/transaction";
-import { failEmailFromWebhook, insertEmailFailureAlerts } from "@/lib/db/repositories/notifications.repository";
+import { failEmailFromWebhook } from "@/lib/db/repositories/notifications.repository";
+import { recordEmailFailureAlerts } from "./delivery";
 
 const eventSchema = z.object({ event: z.string(), email: z.email(), "message-id": z.string().min(1),
   reason: z.string().optional(), "X-Mailin-custom": z.string().optional() });
@@ -18,7 +19,7 @@ export async function processBrevoFailureWebhook(payload: unknown): Promise<"ign
     const id = await failEmailFromWebhook(manager, { recipientEmail: event.email,
       messageId: event["message-id"], deliveryId: correlation?.[1] ?? null, reason });
     if (!id) return "duplicate";
-    await insertEmailFailureAlerts(manager, id, new Date());
+    await recordEmailFailureAlerts(manager, [id], new Date());
     return "failed";
   });
 }

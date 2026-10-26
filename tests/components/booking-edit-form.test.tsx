@@ -18,13 +18,16 @@ const court = { id: "22222222-2222-4222-8222-222222222222", name: "Court A", is_
 const booking = { id: "33333333-3333-4333-8333-333333333333", booking_date: "2099-10-15", currency: "RON" as const };
 const location = { id: "11111111-1111-4111-8111-111111111111", name: "Club", timezone: "UTC", is_active: true,
   archived_at: null, courts: [court] };
-function renderBooking(scope: "admin" | "owner" = "admin", paymentMethod: "online" | "pay_at_club" = "pay_at_club") {
-  load.mockResolvedValue({ day: { times: [600, 630, 660, 690], courts: [{ court,
+function bookingDay(paymentMethod: "online" | "pay_at_club" = "pay_at_club") {
+  return { day: { times: [600, 630, 660, 690], courts: [{ court,
     cells: ["available", "available", "available", "available"] }] }, booking: {
     ...booking, payment_method: paymentMethod, court_id: court.id, starts_at_minute: 600, ends_at_minute: 660, total_amount_minor: 7500,
     location_id: location.id, location_timezone: "UTC", updated_at: "2026-10-01T12:00:00Z",
     current_revision_id: "2026-10-01T12:00:00Z", location, hours: [], occupancy: [], refunds: [],
-  } });
+  } };
+}
+function renderBooking(scope: "admin" | "owner" = "admin", paymentMethod: "online" | "pay_at_club" = "pay_at_club") {
+  load.mockResolvedValue(bookingDay(paymentMethod));
   const onSaved = vi.fn(async () => {});
   render(<BookingEditForm booking={booking} onCancel={vi.fn()} onPendingChange={vi.fn()} onSaved={onSaved}
     actions={scope === "owner" ? { load, quote, save } : undefined} />);
@@ -32,6 +35,96 @@ function renderBooking(scope: "admin" | "owner" = "admin", paymentMethod: "onlin
 }
 const saveButton = () => screen.getByRole("button", { name: "Save changes" });
 const extendInterval = () => fireEvent.click(screen.getByRole("button", { name: /Court A 2099-10-15 11:00–11:30/ }));
+
+it("loads changed dates and refreshes conflicts without reusing the initial day", async () => {
+  quote.mockResolvedValue({ ok: true, totalAmountMinor: 7500 });
+  save.mockResolvedValue({ ok: false, message: "That court is no longer available for the selected time." });
+  renderBooking();
+  await screen.findByText("Current reservation");
+  expect(load).toHaveBeenCalledExactlyOnceWith(booking.id, booking.booking_date);
+  fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2099-10-16" } });
+  const slot = await screen.findByRole("button", { name: /Court A 2099-10-16 10:00–10:30/ });
+  expect(load).toHaveBeenCalledTimes(2);
+  expect(load).toHaveBeenLastCalledWith(booking.id, "2099-10-16");
+  fireEvent.click(slot);
+  await waitFor(() => expect(saveButton()).toHaveProperty("disabled", false));
+  const blocked = bookingDay();
+  blocked.day.courts[0].cells = ["booked", "booked", "available", "available"];
+  load.mockResolvedValueOnce(blocked);
+  fireEvent.click(saveButton());
+  await waitFor(() => expect(load).toHaveBeenCalledTimes(3));
+  await waitFor(() => expect(screen.queryByRole("button", { name: /Court A 2099-10-16 10:00–10:30/ })).toBeNull());
+  expect(screen.queryByRole("region", { name: "Selected reservation" })).toBeNull();
+  expect(saveButton()).toHaveProperty("disabled", true);
+});
+
+it("discards earlier booking responses when switching bookings and reloads on reopening", async () => {
+  let finish: (value: ReturnType<typeof bookingDay>) => void = () => { throw new Error("Not loading"); };
+  load.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; })).mockResolvedValue(bookingDay());
+  quote.mockResolvedValue({ ok: true, totalAmountMinor: 7500 });
+  const props = { onCancel: vi.fn(), onPendingChange: vi.fn(), onSaved: vi.fn(async () => {}) };
+  const view = render(<BookingEditForm booking={booking} {...props} />);
+  const other = { ...booking, id: "88888888-8888-4888-8888-888888888888" };
+  const otherDay = bookingDay();
+  otherDay.day.courts[0].cells = ["booked", "booked", "available", "available"];
+  load.mockResolvedValue(otherDay);
+  view.rerender(<BookingEditForm booking={other} {...props} />);
+  await screen.findByRole("table", { name: "Court timetable" });
+  expect(load.mock.calls).toEqual([[booking.id, booking.booking_date], [other.id, other.booking_date]]);
+  await act(async () => finish(bookingDay()));
+  expect(screen.queryByRole("button", { name: /Court A 2099-10-15 10:00–10:30/ })).toBeNull();
+  view.unmount();
+  load.mockResolvedValue(bookingDay());
+  render(<BookingEditForm booking={other} {...props} />);
+  await screen.findByText("Current reservation");
+  expect(load).toHaveBeenCalledTimes(3);
+  expect(load).toHaveBeenLastCalledWith(other.id, other.booking_date);
+});
+
+it("retries a failed initial booking load by reopening the editor", async () => {
+  load.mockRejectedValueOnce(new Error("Unavailable")).mockResolvedValue(bookingDay());
+  quote.mockResolvedValue({ ok: true, totalAmountMinor: 7500 });
+  const props = { booking, onCancel: vi.fn(), onPendingChange: vi.fn(), onSaved: vi.fn(async () => {}) };
+  const view = render(<BookingEditForm {...props} />);
+  await screen.findByRole("alert");
+  view.unmount();
+  render(<BookingEditForm {...props} />);
+  await screen.findByText("Current reservation");
+  expect(load).toHaveBeenCalledTimes(2);
+});
+
+it("refreshes the preloaded date after a court conflict", async () => {
+  quote.mockResolvedValue({ ok: true, totalAmountMinor: 7500 });
+  save.mockResolvedValue({ ok: false, message: "That court is no longer available for the selected time." });
+  renderBooking();
+  await screen.findByText("Current reservation");
+  extendInterval();
+  await waitFor(() => expect(saveButton()).toHaveProperty("disabled", false));
+  const blocked = bookingDay();
+  blocked.day.courts[0].cells = ["available", "available", "booked", "booked"];
+  load.mockResolvedValueOnce(blocked);
+  fireEvent.click(saveButton());
+  await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+  expect(load).toHaveBeenLastCalledWith(booking.id, booking.booking_date);
+  await waitFor(() => expect(screen.queryByRole("region", { name: "Selected reservation" })).toBeNull());
+  expect(saveButton()).toHaveProperty("disabled", true);
+});
+
+it("preserves the revision tokens and rejected draft when the server reports a stale booking", async () => {
+  quote.mockResolvedValue({ ok: true, totalAmountMinor: 7500 });
+  save.mockResolvedValue({ ok: false, reason: "stale", message: "This booking has changed. Close and reopen its details." });
+  const onSaved = renderBooking();
+  await screen.findByText("Current reservation");
+  extendInterval();
+  await waitFor(() => expect(saveButton()).toHaveProperty("disabled", false));
+  fireEvent.click(saveButton());
+  await expectToast("This booking has changed.");
+  expect(save).toHaveBeenCalledWith(expect.objectContaining({ expectedUpdatedAt: bookingDay().booking.updated_at,
+    expectedRevisionId: bookingDay().booking.current_revision_id }));
+  expect(screen.getByText("Court A · 10:00–11:30 · 90 min")).toBeDefined();
+  expect(onSaved).not.toHaveBeenCalled();
+  expect(load).toHaveBeenCalledOnce();
+});
 
 it.each(["admin", "owner"] as const)("requires a current quote for %s rescheduling and disables a reverted interval", async (scope) => {
   let finish: (value: { ok: true; totalAmountMinor: number }) => void = () => { throw new Error("Not quoting"); };
@@ -41,6 +134,7 @@ it.each(["admin", "owner"] as const)("requires a current quote for %s rescheduli
   renderBooking(scope);
   await screen.findByText("Current reservation");
   await waitFor(() => expect(quote).toHaveBeenCalledOnce());
+  expect(load).toHaveBeenCalledExactlyOnceWith(booking.id, booking.booking_date);
   expect(saveButton()).toHaveProperty("disabled", true);
   extendInterval();
   await waitFor(() => expect(quote).toHaveBeenCalledTimes(2));
@@ -248,6 +342,7 @@ it("reports the unpaid modification for X and offers no other dismissal or recov
 
   // Reopening is always a fresh form, even when the server still reports the earlier modification.
   cleanup();
+  load.mockClear();
   load.mockResolvedValue({ day: { times: [600, 630, 660, 690], courts: [{ court, cells: ["available", "available", "available", "available"] }] },
     booking: { ...booking, payment_method: "online", court_id: court.id, starts_at_minute: 600, ends_at_minute: 660, total_amount_minor: 7500,
       location_id: location.id, location_timezone: "UTC", updated_at: "2026-10-01T12:00:00Z",
@@ -256,6 +351,7 @@ it("reports the unpaid modification for X and offers no other dismissal or recov
     adjustment: { totalAmountMinor: 10000, holdExpiresAt: "2099-10-15T10:00:00Z" } });
   render(<BookingEditForm booking={booking} onCancel={vi.fn()} onPendingChange={vi.fn()} onSaved={vi.fn()} actions={{ load, quote, save }} />);
   await screen.findByText("Current reservation");
+  expect(load).toHaveBeenCalledExactlyOnceWith(booking.id, booking.booking_date);
   expect(screen.queryByRole("region", { name: "Booking modification" })).toBeNull();
 });
 

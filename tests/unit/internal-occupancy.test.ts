@@ -1,12 +1,13 @@
 import { createClient } from "@supabase/supabase-js";
-import { beforeEach, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { CurrentAccount } from "@/lib/auth/account";
 
 const { account, query } = vi.hoisted(() => ({ account: vi.fn(), query: vi.fn() }));
 vi.mock("@/lib/auth/account", () => ({ readCurrentAccount: account }));
 vi.mock("@/lib/db/data-source", () => ({ getDataSource: async () => ({ manager: { query } }) }));
-vi.mock("@/lib/db/repositories/payments.repository", () => ({ loadAdminTransactionContext: async () => ({ payments: [], refunds: [] }) }));
-import { getReservationDay, readInternalOccupancy } from "@/lib/reservations/service";
+const { transactionContext } = vi.hoisted(() => ({ transactionContext: vi.fn() }));
+vi.mock("@/lib/db/repositories/payments.repository", () => ({ loadAdminTransactionContext: transactionContext }));
+import { getReservationDay, readInternalOccupancy, type AdminOperationalOccupancy } from "@/lib/reservations/service";
 
 const id = (n: number) => `ca000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const now = new Date("2026-10-15T09:00:00Z");
@@ -18,7 +19,7 @@ const hours = { id: id(4), location_id: id(1), weekday: 3, opens_at_minute: 600,
   created_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-01T00:00:00Z" };
 let detailRows: unknown[] = [];
 const common = { includes_coaching: false, coach_user_id: null, coach_name: null, coaching_program_name: null, coaching: null, location_name: null, court_name: null, location_timezone: null, court_id: id(2), booking_date: date, starts_at_minute: 600, ends_at_minute: 660,
-  cancellation_notice_minutes: null, total_amount_minor: null, currency: null, payment_facts: [], creator_email: null, creator_phone: null, account_user_id: null, payment_method: null };
+  cancellation_notice_minutes: null, total_amount_minor: null, currency: null, payment_facts: [], refund_facts: [], creator_email: null, creator_phone: null, account_user_id: null, payment_method: null };
 const direct = { ...common, kind: "reservation", id: id(5), reason: "Practice", created_by_user_id: id(6),
   creator_name: "Own Name", customer_name: null, customer_email: null, customer_phone: null };
 const booking = { ...common, kind: "booking", id: id(7), starts_at_minute: 660, ends_at_minute: 720,
@@ -77,7 +78,7 @@ test("includes live held rows with microseconds, excludes equal/expired/null dea
 
 test("projects historical coaching terms in one staff details query for Admins", async () => {
   account.mockResolvedValue({ state: "active", userId: id(6), roles: ["admin"] });
-  const coaching = { programId: id(10), coachUserId: id(11), locationId: id(1), participantCount: 2,
+  const coaching = { programId: id(10), coachUserId: id(11), locationId: id(1), participantCount: 2, pricePerPersonMinor: 3000,
     durationMinutes: 60, source: "club", amountMinor: 6000, currency: "RON", courtRentalIncluded: false,
     courtRentalMinor: 3000, courtAmountMinor: 3000 };
   detailRows = [direct, { ...booking, includes_coaching: true, coach_name: "Historical coach",
@@ -99,8 +100,8 @@ test("Coaches receive bare intervals for other bookings and only contact details
     includes_coaching: true, coach_user_id: coachUserId, coach_name: `Coach ${n}`, coaching_program_name: `Program ${n}`, account_user_id: id(40 + n),
     customer_name: customer, customer_email: `${customer}@example.test`, customer_phone: `+40 ${n}`, total_amount_minor: 7700, payment_method: "online",
     payment_facts: [{ id: id(50 + n), booking_id: id(20 + n), method: "online", provider: "stripe", provider_payment_id: "pi_secret", amount_minor: 7700,
-      currency: "RON", status: "captured", expires_at: null, created_at: "2026-10-01T00:00:00Z" }],
-    coaching: { programId: id(60), coachUserId, locationId: id(1), participantCount: 1, durationMinutes: 60, source: "club", amountMinor: 5500,
+      currency: "RON", status: "succeeded", expires_at: null, created_at: "2026-10-01T00:00:00Z" }],
+    coaching: { programId: id(60), coachUserId, locationId: id(1), participantCount: 1, pricePerPersonMinor: 5500, durationMinutes: 60, source: "club", amountMinor: 5500,
       currency: "RON", courtRentalIncluded: false, courtRentalMinor: 2200, courtAmountMinor: 2200 } });
   const ownBooking = { ...booking, id: id(9), starts_at_minute: 1200, ends_at_minute: 1260, account_user_id: coachId, customer_name: "Coach as customer" };
   detailRows = [direct, { ...booking, account_user_id: id(30) }, lesson(1, otherCoachId, "OtherLessonCustomer"), lesson(2, coachId, "OwnLessonCustomer"), ownBooking];
@@ -119,7 +120,65 @@ test("Coaches receive bare intervals for other bookings and only contact details
   // Nothing identifying or financial about unrelated customers, other Coaches' lessons or own lessons leaves the server.
   const serialized = JSON.stringify(result.adminOccupancy.slice(1, 4));
   for (const leaked of ["Snapshot", "snapshot@example.test", "OtherLessonCustomer", "Coach 1", "Program 1", id(7), id(21), id(30), id(41), id(42),
-    "pay_at_club", "online", "stripe", "pi_secret", "captured", "7700", "5500", "9000", "RON", "payment", "total_amount_minor", "currency",
+    "pay_at_club", "online", "stripe", "pi_secret", "succeeded", "7700", "5500", "9000", "RON", "payment", "total_amount_minor", "currency",
     "account_user_id", "coaching\":", "cancellation_notice_minutes"])
     expect(serialized).not.toContain(leaked);
+});
+
+describe("Admin booking financial status from the projected payment facts", () => {
+  const payment = (n: number, status: string, created_at: string, extra: object = {}) => ({ id: id(70 + n), booking_id: id(7), method: "online",
+    provider: "stripe", provider_payment_id: `pi_${n}`, amount_minor: 9000, currency: "RON", status, expires_at: "2026-10-01T00:10:00Z", created_at, ...extra });
+  const refund = (n: number, status: string, created_at: string) => ({ id: id(80 + n), provider: "stripe", status, created_at });
+  const load = async (payment_facts: unknown[], refund_facts: unknown[] = []) => {
+    account.mockResolvedValue({ state: "active", userId: id(6), roles: ["admin"] });
+    detailRows = [{ ...booking, payment_method: "online", payment_facts, refund_facts }];
+    const result = await getReservationDay(location, date, now, client);
+    return result.adminOccupancy[0] as Extract<AdminOperationalOccupancy, { kind: "booking" }>;
+  };
+
+  test.each([
+    ["no payment attempts", [], [], null, false],
+    ["a succeeded Stripe payment", [payment(1, "succeeded", "2026-10-01T00:00:00+00:00")], [], { operation: "payment", status: "succeeded", provider: "stripe" }, true],
+    ["a pending Stripe payment", [payment(1, "pending", "2026-10-01T00:00:00+00:00")], [], { operation: "payment", status: "pending", provider: "stripe" }, false],
+    ["a failed Stripe payment", [payment(1, "failed", "2026-10-01T00:00:00+00:00")], [], { operation: "payment", status: "failed", provider: "stripe" }, false],
+    ["a due pay-at-club payment", [payment(1, "due", "2026-10-01T00:00:00+00:00", { method: "pay_at_club", provider: null, provider_payment_id: null, expires_at: null })], [],
+      { operation: "payment", status: "due", provider: null }, false],
+    ["a succeeded Netopia payment", [payment(1, "succeeded", "2026-10-01T00:00:00+00:00", { provider: "netopia" })], [],
+      { operation: "payment", status: "succeeded", provider: "netopia" }, false],
+    ["abandoned retries after a success", [payment(1, "succeeded", "2026-10-01T00:00:00+00:00"), payment(2, "expired", "2026-10-02T00:00:00+00:00")], [],
+      { operation: "payment", status: "succeeded", provider: "stripe" }, true],
+    ["a later successful refund", [payment(1, "succeeded", "2026-10-01T00:00:00+00:00")], [refund(1, "succeeded", "2026-10-02T00:00:00+00:00")],
+      { operation: "refund", status: "succeeded", provider: "stripe" }, true],
+    ["a later pending-retry refund", [payment(1, "succeeded", "2026-10-01T00:00:00+00:00")], [refund(1, "pending_retry", "2026-10-02T00:00:00+00:00")],
+      { operation: "refund", status: "pending", provider: "stripe" }, true],
+    ["a later failed refund", [payment(1, "succeeded", "2026-10-01T00:00:00+00:00")], [refund(1, "failed", "2026-10-02T00:00:00+00:00")],
+      { operation: "refund", status: "failed", provider: "stripe" }, true],
+    ["a voided refund", [payment(1, "succeeded", "2026-10-01T00:00:00+00:00")], [refund(1, "voided", "2026-10-02T00:00:00+00:00")],
+      { operation: "payment", status: "succeeded", provider: "stripe" }, true],
+  ])("%s", async (_name, paymentFacts, refundFacts, status, refundAvailable) => {
+    const result = await load(paymentFacts, refundFacts);
+    expect(result.payment_status).toEqual(status);
+    expect(result.stripe_refund_available).toBe(refundAvailable);
+  });
+
+  test("keeps sub-millisecond ties ordered by operation ID, as the persisted entity read did", async () => {
+    const result = await load([payment(1, "succeeded", "2026-10-01T00:00:00.123100+00:00")],
+      [refund(1, "failed", "2026-10-01T02:00:00.123900+02:00")]);
+    expect(result.payment_status).toEqual({ operation: "refund", status: "failed", provider: "stripe" });
+  });
+
+  test("reads payments and refunds once, inside the operational projection", async () => {
+    await load([payment(1, "succeeded", "2026-10-01T00:00:00+00:00")], [refund(1, "succeeded", "2026-10-02T00:00:00+00:00")]);
+    expect(transactionContext).not.toHaveBeenCalled();
+    // The occupancy read only tests accepted captures for held rows; it returns no payment facts.
+    const financial = query.mock.calls.filter(([sql]) => /from public\.payment_attempts p where|payment_refunds/.test(sql));
+    expect(financial).toHaveLength(1);
+    expect(financial[0][0]).toContain(" AS kind");
+    expect(financial[0][0]).toContain("from public.payment_attempts p where p.booking_id=b.id");
+    expect(financial[0][0]).toContain("from public.payment_refunds f where f.booking_id=b.id");
+  });
+
+  test("rejects payment facts outside the persisted status vocabulary", async () => {
+    await expect(load([payment(1, "captured", "2026-10-01T00:00:00+00:00")])).rejects.toThrow("Unable to load reservation details.");
+  });
 });

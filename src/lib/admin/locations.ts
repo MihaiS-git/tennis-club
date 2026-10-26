@@ -5,7 +5,8 @@ import { z } from "zod";
 import type { EntityManager } from "typeorm";
 import { cancellationNoticeMinutesSchema } from "@/lib/bookings/cancellation-policy";
 import { requireActiveAdmin } from "@/lib/admin/authorization";
-import { generateLocationSlug, locationArchiveSchema, locationCurrencies, locationMutationSchema, type LocationMutationResult } from "@/lib/admin/locations-validation";
+import { generateSlug } from "@/lib/admin/slug";
+import { locationArchiveSchema, locationCurrencies, locationMutationSchema, type CurrencyChangeBlocker, type LocationMutationResult } from "@/lib/admin/locations-validation";
 import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
 import { getDataSource } from "@/lib/db/data-source";
@@ -13,7 +14,10 @@ import { lockActiveAdminAccount } from "@/lib/db/repositories/accounts.repositor
 import { inTransaction } from "@/lib/db/transaction";
 import { normalizeDatabaseError } from "@/lib/db/errors";
 import * as clubs from "@/lib/db/repositories/clubs.repository";
-import { listLocationPublicationPricing } from "@/lib/db/repositories/pricing.repository";
+import { listLocationPublicationPricing, locationHasPricingRules } from "@/lib/db/repositories/pricing.repository";
+import { locationHasUnresolvedFinancialOperations } from "@/lib/db/repositories/payments.repository";
+import { expirePaymentHolds, expirePaymentHoldsAtLocation } from "@/lib/payments/hold-expiry";
+import { localStartInstant, localToday } from "@/lib/courts/local-time";
 import type { LocationEntity } from "@/lib/db/entities/location.entity";
 import { publicationError, publicationReadiness, publicationToday, type PublicationConfiguration } from "@/lib/locations/publication";
 
@@ -65,7 +69,7 @@ export async function saveAdminLocation(input: unknown, supabase?: Awaited<Retur
     return { ok: false, reason: "invalid-input", fieldErrors };
   }
   const { id, fields } = parsed.data;
-  const slug = id ? "" : generateLocationSlug(fields.name);
+  const slug = id ? "" : generateSlug(fields.name);
   if (!id && !slug) return { ok: false, reason: "invalid-input", fieldErrors: { name: "Use a name containing letters A–Z or numbers to generate a location slug." } };
 
   const values: clubs.LocationFields = {
@@ -95,6 +99,13 @@ export async function saveAdminLocation(input: unknown, supabase?: Awaited<Retur
         // including when a sibling publication control changed since form load.
         // Only setAdminLocationPublication validates and changes that intent.
         values.isPublic = location.isPublic;
+        if (values.currency !== location.currency) {
+          // Release expired unpaid holds first, as occupancy writers do; the exclusive
+          // configuration fence then excludes new bookings until this decision commits.
+          await expirePaymentHoldsAtLocation(manager, id, { skipLocked: true });
+          const blockers = await currencyChangeBlockers(manager, location);
+          if (blockers.length) return { ok: false, reason: "currency-locked", blockers };
+        }
         const savedId = await clubs.updateUnarchivedLocation(manager, id, values, new Date());
         return savedId ? { ok: true, id: savedId } : { ok: false, reason: "not-found" };
       });
@@ -108,8 +119,37 @@ export async function saveAdminLocation(input: unknown, supabase?: Awaited<Retur
   }
   if (!result.ok) return result;
   const locationId = result.id;
-  logger.info({ event: id ? "admin.location_updated" : "admin.location_created", actorId: actor.userId, locationId, active: fields.is_active, public: values.isPublic }, "Location saved");
+  logger.info({ event: id ? "admin.location_updated" : "admin.location_created", actorId: actor.userId, locationId, active: fields.is_active, public: values.isPublic, currency: values.currency }, "Location saved");
   return { ok: true, id: locationId };
+}
+
+// One eligibility rule for the Admin form and the authoritative update. Court prices
+// have no currency of their own, so every unfinished booking, unresolved
+// financial operation and court price must be gone before amounts change meaning.
+async function currencyChangeBlockers(manager: EntityManager, location: LocationEntity): Promise<CurrencyChangeBlocker[]> {
+  const now = new Date();
+  const unfinished = (await clubs.listLocationLiveOccupancy(manager, location.id, localToday(location.timezone, now)))
+    .filter((row) => row.status === "held" || Date.parse(localStartInstant(location.timezone, row.date, row.end_minute)) > now.getTime());
+  const blockers: CurrencyChangeBlocker[] = [];
+  if (unfinished.length) blockers.push({ kind: "unfinished-bookings",
+    checkouts: unfinished.filter((row) => row.status === "held").length,
+    courtBookings: unfinished.filter((row) => row.status === "active" && row.booked && !row.coaching).length,
+    coachingBookings: unfinished.filter((row) => row.status === "active" && row.booked && row.coaching).length,
+    reservations: unfinished.filter((row) => row.status === "active" && !row.booked).length });
+  if (await locationHasUnresolvedFinancialOperations(manager, location.id)) blockers.push({ kind: "financial-operations" });
+  if (await locationHasPricingRules(manager, location.id)) blockers.push({ kind: "court-pricing" });
+  return blockers;
+}
+
+export async function readAdminLocationCurrencyChange(locationId: string, supabase?: Awaited<ReturnType<typeof createClient>>) {
+  await requireActiveAdmin(supabase ?? await createClient());
+  const id = z.uuid().parse(locationId);
+  // Request-driven expiry keeps an abandoned checkout from blocking indefinitely.
+  await expirePaymentHolds({ locationId: id });
+  const manager = (await getDataSource()).manager;
+  const location = await clubs.findAdminLocation(manager, id);
+  if (!location) throw new Error("Unable to load location.");
+  return currencyChangeBlockers(manager, location);
 }
 
 export async function setAdminLocationArchived(input: unknown, supabase?: Awaited<ReturnType<typeof createClient>>): Promise<LocationMutationResult> {

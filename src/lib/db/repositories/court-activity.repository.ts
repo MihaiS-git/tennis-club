@@ -9,7 +9,7 @@ import { z } from "zod";
 export async function listOwnerActivityBatch(manager: EntityManager, input: {
   actorId: string; kind: "booking" | "reservation"; cancelled: boolean;
   scope: "upcoming" | "history"; earliestDate: string; latestDate: string;
-  offset: number; limit: number;
+  afterId: string | null; limit: number;
 }): Promise<unknown> {
   const booking = input.kind === "booking";
   const court = booking ? `jsonb_build_object('name',v.court_name,'location_id',v.location_id,
@@ -24,8 +24,6 @@ export async function listOwnerActivityBatch(manager: EntityManager, input: {
     'coach_name',v.coach_name,'coaching_program_name',v.coaching_program_name,
     'customer_phone',v.customer_phone,'includes_coaching',v.coach_user_id IS NOT NULL,'cancellation_notice_minutes',v.cancellation_notice_minutes,
     'total_amount_minor',v.total_amount_minor,'currency',v.currency,'payment_method',v.payment_method,
-    'payments',coalesce((SELECT jsonb_agg(jsonb_build_object('status',p.status))
-      FROM public.payment_attempts p WHERE p.booking_id=b.id AND p.status='succeeded'),'[]'::jsonb),
     'reservation',${interval})` : `${interval} || jsonb_build_object('id',r.id,'updated_at',r.updated_at,
     'reason',r.reason,'created_by_user_id',r.created_by_user_id,'cancelled_at',r.cancelled_at,
     'creator',CASE WHEN creator.id IS NULL THEN NULL ELSE jsonb_build_object('first_name',creator.first_name,'last_name',creator.last_name) END,
@@ -37,8 +35,18 @@ export async function listOwnerActivityBatch(manager: EntityManager, input: {
     WHERE ${booking ? "b.account_user_id" : "r.created_by_user_id"}=$1::uuid
       AND ${booking ? "b.status" : "r.status"}=$2
       ${input.cancelled ? "AND $3::date IS NOT NULL" : `AND r.status='active' AND r.booking_date ${input.scope === "upcoming" ? ">=" : "<="} $3::date`}
-    ORDER BY ${booking ? "b.id" : "r.id"} LIMIT $4 OFFSET $5`,
+      ${input.afterId ? `AND ${booking ? "b.id" : "r.id"} > $5::uuid` : ""}
+    ORDER BY ${booking ? "b.id" : "r.id"} LIMIT $4`,
     [input.actorId,input.cancelled ? "cancelled" : booking ? "confirmed" : "active",
-      input.scope === "upcoming" ? input.earliestDate : input.latestDate,input.limit,input.offset]);
+      input.scope === "upcoming" ? input.earliestDate : input.latestDate,input.limit,
+      ...(input.afterId ? [input.afterId] : [])]);
   return z.array(z.object({ row: z.unknown() })).parse(rows).map(({ row }) => row);
+}
+
+// Payment facts only; the activity service decides whether a booking is eligible.
+export async function listSucceededPaymentBookingIds(manager: EntityManager, bookingIds: readonly string[]) {
+  if (!bookingIds.length) return [];
+  const rows: unknown = await manager.query(`SELECT DISTINCT booking_id FROM public.payment_attempts
+    WHERE booking_id=ANY($1::uuid[]) AND status='succeeded'`, [bookingIds]);
+  return z.array(z.object({ booking_id: z.uuid() })).parse(rows).map(row => row.booking_id);
 }

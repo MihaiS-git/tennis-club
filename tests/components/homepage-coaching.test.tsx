@@ -40,7 +40,7 @@ it("links to coaching, states that lessons can be booked online and invents no l
 });
 
 const program = (id: string, name: string) => ({ id, name, description: "", type: "private" as const, durations: [60],
-  minParticipants: null, maxParticipants: null, courtRentalIncluded: true, prices: [], participantPrices: [] });
+  minParticipants: null, maxParticipants: null, courtRentalIncluded: true, prices: [], fromPrices: [] });
 const show = async (coaching: PublicCoaching | Error) =>
   render(await HomeCoachingPrograms({ coaching: coaching instanceof Error ? Promise.reject(coaching) : Promise.resolve(coaching) }));
 
@@ -50,14 +50,14 @@ it("names only the coaching programs published in the database", async () => {
   expect(document.body.textContent).not.toMatch(/Performance training|Individual coaching|Group sessions/);
 });
 
-it("uses neutral copy when no program is published or coaching cannot be loaded", async () => {
+it("distinguishes no published programs from a failed coaching read", async () => {
   await show({ programs: [], coaches: [] });
   expect(screen.queryByRole("list")).toBeNull();
   expect(document.body.textContent).toContain("as soon as the club publishes them");
   cleanup();
   await show(new Error("Unable to load coaching."));
   expect(screen.queryByRole("list")).toBeNull();
-  expect(document.body.textContent).toContain("listed on the Coaching page");
+  expect(screen.getByRole("alert").textContent).toContain("Coaching information is temporarily unavailable");
 });
 
 it("reads coaching once, on the same public locations, without hardcoded categories", async () => {

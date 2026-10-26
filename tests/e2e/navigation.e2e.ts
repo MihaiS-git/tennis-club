@@ -99,7 +99,13 @@ test("navigation follows the current account and protected routes enforce access
     await navigation.getByRole("link", { name: "Admin" }).click();
     const adminNavigation = page.getByRole("navigation", { name: "Management navigation" });
     await expect(page).toHaveURL(/\/admin\/locations$/);
-    await expect(adminNavigation.getByRole("link")).toHaveText(["Locations", "Bookings & Reservations", "Programs", "Coaches", "Prices", "Availability", "Transactions", "Settings", "Users", "Club"]);
+    await expect(adminNavigation.getByRole("link")).toHaveText(["Bookings & Reservations", "Transactions", "Users", "Coach availability", "Locations", "Programs", "Coaches", "Prices", "Payment settings", "Club"]);
+    await expect(adminNavigation.getByRole("region", { name: "Operations" }).getByRole("link")).toHaveText([
+      "Bookings & Reservations", "Transactions", "Users", "Coach availability",
+    ]);
+    await expect(adminNavigation.getByRole("region", { name: "Configuration" }).getByRole("link")).toHaveText([
+      "Locations", "Programs", "Coaches", "Prices", "Payment settings", "Club",
+    ]);
     await expect(adminNavigation.getByRole("link", { name: "Locations" })).toHaveAttribute("aria-current", "page");
     await adminNavigation.getByRole("link", { name: "Users" }).click();
     await expect(page.getByRole("heading", { name: "Users", exact: true })).toBeVisible();
@@ -141,9 +147,32 @@ test("navigation follows the current account and protected routes enforce access
     await expect(navigation.getByRole("link", { name: "Admin", exact: true })).toHaveAttribute("aria-current", "page");
     await expect(navigation.getByRole("link", { name: "Reservations" })).toHaveCount(0);
     await expect(adminNavigation.getByRole("link", { name: "Transactions" })).toHaveAttribute("aria-current", "page");
-    await adminNavigation.getByRole("link", { name: "Settings", exact: true }).click();
+    await adminNavigation.getByRole("link", { name: "Payment settings", exact: true }).click();
     await expect(page).toHaveURL(/\/admin\/payments\/settings$/);
-    await expect(adminNavigation.getByRole("link", { name: "Settings", exact: true })).toHaveAttribute("aria-current", "page");
+    await expect(adminNavigation.getByRole("link", { name: "Payment settings", exact: true })).toHaveAttribute("aria-current", "page");
+    // The same grouped sidebar remains keyboard accessible in the mobile drawer.
+    await page.setViewportSize({ width: 375, height: 900 });
+    const managementTrigger = page.getByRole("button", { name: "Management menu", exact: true });
+    await managementTrigger.click();
+    const managementDrawer = page.getByRole("dialog", { name: "Management menu", exact: true });
+    const closeManagement = managementDrawer.getByRole("button", { name: "Close management menu", exact: true });
+    await expect(closeManagement).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(managementDrawer.getByRole("link", { name: "Club", exact: true })).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(closeManagement).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(managementTrigger).toBeFocused();
+    await expect(managementDrawer).toHaveCount(0);
+    await managementTrigger.click();
+    await managementDrawer.getByRole("link", { name: "Programs", exact: true }).click();
+    await expect(page).toHaveURL(/\/admin\/coaching\/programs$/);
+    await expect(managementDrawer).toHaveCount(0);
+    await managementTrigger.click();
+    await expect(managementDrawer.getByRole("link", { name: "Programs", exact: true })).toHaveAttribute("aria-current", "page");
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect(managementDrawer).toHaveCount(0);
+    await expect(adminNavigation.getByRole("link", { name: "Programs", exact: true })).toBeFocused();
     await page.getByRole("link", { name: "Profile", exact: true }).click();
     await page.getByRole("button", { name: "Sign out", exact: true }).click();
     await expect(page).toHaveURL(/\/login$/);
@@ -152,6 +181,8 @@ test("navigation follows the current account and protected routes enforce access
     await navigation.getByRole("link", { name: "Admin", exact: true }).click();
     await expect(page).toHaveURL(/\/coach\/bookings$/);
     await expect(adminNavigation.getByRole("link")).toHaveText(["Bookings & Reservations", "My availability", "My prices"]);
+    await expect(adminNavigation.getByRole("region", { name: "Operations" }).getByRole("link")).toHaveText(["Bookings & Reservations", "My availability"]);
+    await expect(adminNavigation.getByRole("region", { name: "Configuration" }).getByRole("link")).toHaveText(["My prices"]);
     await expect(adminNavigation.getByRole("link", { name: "Bookings & Reservations" })).toHaveAttribute("aria-current", "page");
     await page.goto("/admin");
     await expect(page).toHaveURL(/\/coach\/bookings$/);
@@ -165,6 +196,38 @@ test("navigation follows the current account and protected routes enforce access
     await expect(page).toHaveURL(/\/coach\/bookings\?view=calendar&date=2099-10-15$/);
     await expect(page.getByRole("heading", { name: "Bookings & Reservations", exact: true })).toBeVisible();
     await expect(adminNavigation.getByRole("link")).toHaveText(["Bookings & Reservations", "My availability", "My prices"]);
+    await page.setViewportSize({ width: 375, height: 900 });
+    await managementTrigger.click();
+    await managementDrawer.getByRole("link", { name: "My prices", exact: true }).click();
+    await expect(page).toHaveURL(/\/coach\/pricing$/);
+    await expect(managementDrawer).toHaveCount(0);
+    await managementTrigger.click();
+    await expect(managementDrawer.getByRole("link", { name: "My prices", exact: true })).toHaveAttribute("aria-current", "page");
+    await page.keyboard.press("Escape");
+    await expect(managementTrigger).toBeFocused();
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.getByRole("link", { name: "Profile", exact: true }).click();
+    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    await expect(page).toHaveURL(/\/login$/);
+    // Combined roles retain Admin precedence and add only the personal Coach links.
+    expect((await service.from("user_roles").insert({ user_id: accounts[1].id, role_code: "coach" })).error).toBeNull();
+    await signIn(page, accounts[1].email);
+    await navigation.getByRole("link", { name: "Admin", exact: true }).click();
+    await expect(page).toHaveURL(/\/admin\/locations$/);
+    await expect(adminNavigation.getByRole("region", { name: "Operations" }).getByRole("link")).toHaveText([
+      "Bookings & Reservations", "Transactions", "Users", "Coach availability", "My availability",
+    ]);
+    await expect(adminNavigation.getByRole("region", { name: "Configuration" }).getByRole("link")).toHaveText([
+      "Locations", "Programs", "Coaches", "Prices", "Payment settings", "Club", "My prices",
+    ]);
+    await expect(adminNavigation.getByRole("link", { name: "Bookings & Reservations", exact: true })).toHaveCount(1);
+    await expect(adminNavigation.getByRole("link", { name: "Bookings & Reservations", exact: true })).toHaveAttribute("href", "/admin/bookings");
+    await adminNavigation.getByRole("link", { name: "My availability", exact: true }).click();
+    await expect(page).toHaveURL(/\/coach\/availability$/);
+    await expect(adminNavigation.getByRole("link", { name: "My availability", exact: true })).toHaveAttribute("aria-current", "page");
+    await page.goto("/coach/bookings");
+    await expect(page.getByRole("heading", { name: "Bookings & Reservations", exact: true })).toBeVisible();
+    await expect(adminNavigation.getByRole("link", { name: "Bookings & Reservations", exact: true })).toHaveAttribute("href", "/admin/bookings");
     await page.getByRole("link", { name: "Profile", exact: true }).click();
     await page.getByRole("button", { name: "Sign out", exact: true }).click();
     await expect(page).toHaveURL(/\/login$/);

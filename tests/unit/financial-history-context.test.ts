@@ -11,7 +11,7 @@ const initial = buildBookingRevision({ locationId: randomUUID(), courtId: random
   { id: randomUUID(), bookingId: randomUUID(), operationKey: "created", intentHash: "created", kind: "created", bookingState: "pending_payment",
     actorUserId: null, actorScope: "guest", recordedAt: new Date(), adjustmentId: null, cancellationCause: null }, null);
 const input = { kind: "payment" as const, revision: initial, adjustment: null, adjustmentStatus: null, appliedRevisionId: null,
-  base: null, confirmationRevisionId: null, reason: null, amount: 5000, capturedAmount: null };
+  base: null, confirmationRevisionId: null, reason: null };
 
 test("original requests expose stored context without manufacturing confirmation", () => {
   const result = describeFinancialContext(input);
@@ -26,7 +26,7 @@ test("a confirmed operation key supplies confirmation evidence without replacing
 });
 
 test("late compensation is identified by reason despite sharing the cancellation operation key", () => {
-  expect(describeFinancialContext({ ...input, kind: "refund", reason: "late_capture_compensation", capturedAmount: 5000 }))
+  expect(describeFinancialContext({ ...input, kind: "refund", reason: "late_capture_compensation" }))
     .toMatchObject({ operation_label: refundReasonLabels.late_capture_compensation, context: { revisionId: initial.id,
       bookingState: "pending_payment", confirmationRevisionId: null } });
 });

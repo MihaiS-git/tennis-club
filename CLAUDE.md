@@ -32,7 +32,7 @@
 - Keep booking, reservation, payment-attempt, capture, adjustment, and refund states distinct. Price/currency/payment method/provider and cancellation rules are server-validated and snapshotted at the appropriate boundary.
 - Payment confirmation requires verified provider evidence; never trust browser-reported payment success. Verify Stripe webhook signatures and process events idempotently. A duplicate or late payment must not reclaim released court occupancy.
 - Refunds and adjustments are provider-bound, idempotent, and based on verified historical captures—not recalculated current prices. Do not create another provider refund when the result of a previous attempt is unknown. Preserve immutable financial evidence and existing recovery rules.
-- Preserve already defined booking/payment lifecycles, locking, auditability, and financial exception evidence. The application sends no booking notifications; Supabase Auth emails are separate. Before modifying these workflows, read `docs/payments-memberships.md` and the relevant implementation/tests.
+- Preserve already defined booking/payment lifecycles, locking, auditability, and financial exception evidence. Booking/coaching lifecycle and relevant financial events record in-app notifications and eligible Brevo transactional emails in the deciding transaction (`docs/notifications-delivery.md`); preserve their recipient policies. Supabase Auth emails are separate. Before modifying these workflows, read `docs/payments-memberships.md` and the relevant implementation/tests.
 
 ## UI and tests
 

@@ -4,7 +4,7 @@ import { afterAll, afterEach, assert, beforeAll, expect, test, vi } from "vitest
 import { getDataSource } from "../../../src/lib/db/data-source";
 import * as coachingRepository from "../../../src/lib/db/repositories/coaching.repository";
 import {
-  deleteCoachingProgram, deleteCoachProfile, loadAdminCoaching, removeClubCoachingPrice, saveClubCoachingPrice, saveClubParticipantPrices, saveCoachingProgram, saveCoachProfile,
+  deleteCoachingProgram, deleteCoachProfile, loadAdminCoaching, saveClubCoachingPrices, saveCoachingProgram, saveCoachProfile,
   setCoachingProgramStatus, setCoachVisibility,
 } from "../../../src/lib/coaching/admin";
 import { loadOwnCoachPricing, removeOwnCoachingPrice, saveOwnCoachingPrice } from "../../../src/lib/coaching/coach-pricing";
@@ -19,6 +19,10 @@ const password = "coaching-integration-password-123";
 const userIds: string[] = [];
 const locationIds = [randomUUID(), randomUUID()];
 const programIds: string[] = [];
+// One club lesson price (or rate with a null duration) of one player count, through the per-count price set.
+const club = ({ amount, participant_count = 1, ...key }: Record<string, unknown>) =>
+  ({ ...key, prices: [{ participant_count, amount }], removed: [] });
+const clubRemoval = ({ participant_count = 1, ...key }: Record<string, unknown>) => ({ ...key, prices: [], removed: [participant_count] });
 const publicClient = () => createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_PUBLISHABLE_KEY!, {
   auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
 });
@@ -54,7 +58,6 @@ afterAll(async () => {
   const database = await getDataSource();
   try {
     await database.query("DELETE FROM public.coaching_prices WHERE program_id = ANY($1::uuid[])", [programIds]);
-    await database.query("DELETE FROM public.coaching_participant_prices WHERE program_id = ANY($1::uuid[])", [programIds]);
     await database.query("DELETE FROM public.coach_availability_exceptions WHERE coach_user_id = ANY($1::uuid[])", [userIds]);
     await database.query("DELETE FROM public.coach_weekly_availability WHERE coach_user_id = ANY($1::uuid[])", [userIds]);
     await database.query("DELETE FROM public.coach_profiles WHERE user_id = ANY($1::uuid[])", [userIds]);
@@ -84,7 +87,7 @@ test("coaching administration enforces Admin authorization, coach eligibility, c
     await expect(loadCoachesPage({}, session)).rejects.toThrow();
     await expect(saveCoachingProgram({ fields: programFields }, session)).rejects.toThrow();
     await expect(saveCoachProfile({ user_id: coach.id, create: true, fields: coachFields() }, session)).rejects.toThrow();
-    await expect(saveClubCoachingPrice({}, session)).rejects.toThrow();
+    await expect(saveClubCoachingPrices({}, session)).rejects.toThrow();
   }
   expect(await database.query("SELECT 1 FROM public.coaching_programs WHERE name=$1", [programFields.name])).toEqual(programsBeforeAuthorization);
 
@@ -143,22 +146,31 @@ test("coaching administration enforces Admin authorization, coach eligibility, c
     location_ids: [...locationIds].sort(), program_ids: [created.id], is_public: false, ineligibility: null });
   expect(await saveCoachProfile({ user_id: randomUUID(), create: false, fields: coachFields() }, admin.client)).toEqual({ ok: false, reason: "not-found" });
 
-  // Pricing: the Admin sets the club default, the coach their own override, per program duration and currency.
-  const key = { program_id: created.id, duration_minutes: 60, currency: "RON" };
-  expect(await saveClubCoachingPrice({ ...key, amount: "120" }, admin.client)).toMatchObject({ ok: true });
-  expect(await saveClubCoachingPrice({ ...key, amount: "125.50" }, admin.client)).toMatchObject({ ok: true });
+  // Pricing: the Admin sets the club default, the coach their own override, per program duration, player count and currency.
+  const key = { program_id: created.id, duration_minutes: 60, participant_count: 1, currency: "RON" };
+  const clubKey = { program_id: created.id, duration_minutes: 60, currency: "RON" };
+  expect(await saveClubCoachingPrices(club({ ...clubKey, amount: "120" }), admin.client)).toMatchObject({ ok: true });
+  expect(await saveClubCoachingPrices(club({ ...clubKey, amount: "125.50" }), admin.client)).toMatchObject({ ok: true });
   expect(await saveOwnCoachingPrice({ ...key, amount: "150" }, coach.client)).toMatchObject({ ok: true });
-  expect(await saveClubCoachingPrice({ ...key, duration_minutes: 45, amount: "10" }, admin.client)).toMatchObject({ ok: false, reason: "invalid-input" });
-  expect(await saveClubCoachingPrice({ ...key, currency: "XYZ", amount: "10" }, admin.client)).toMatchObject({ ok: false, reason: "invalid-input" });
-  expect(await saveClubCoachingPrice({ ...key, location_id: locationIds[0], amount: "10" }, admin.client)).toMatchObject({ ok: false, reason: "invalid-input" });
+  expect(await saveClubCoachingPrices(club({ ...clubKey, duration_minutes: 45, amount: "10" }), admin.client)).toMatchObject({ ok: false, reason: "invalid-input" });
+  expect(await saveClubCoachingPrices(club({ ...clubKey, currency: "XYZ", amount: "10" }), admin.client)).toMatchObject({ ok: false, reason: "invalid-input" });
+  expect(await saveClubCoachingPrices(club({ ...clubKey, location_id: locationIds[0], amount: "10" }), admin.client)).toMatchObject({ ok: false, reason: "invalid-input" });
+  // The 1–1 program has no 2-player price; no other count is accepted or derived.
+  expect(await saveClubCoachingPrices(club({ ...clubKey, participant_count: 2, amount: "10" }), admin.client))
+    .toMatchObject({ ok: false, reason: "invalid-input", fieldErrors: { "prices.0": "Use a player count from 1 to 1." } });
+  expect(await saveOwnCoachingPrice({ ...key, participant_count: 2, amount: "10" }, coach.client))
+    .toMatchObject({ ok: false, reason: "invalid-input", fieldErrors: { participant_count: "Use a player count from 1 to 1." } });
   // adminCoach does not offer the program, so an override is rejected in TypeScript and by the composite FK.
   expect(await saveOwnCoachingPrice({ ...key, amount: "99" }, adminCoach.client)).toEqual({ ok: false, reason: "not-offered" });
-  await expect(database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,coach_user_id,amount_minor,currency)
-    VALUES ($1,60,$2,9900,'RON')`, [created.id, adminCoach.id])).rejects.toMatchObject({ driverError: { code: "23503" } });
-  await expect(database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,amount_minor,currency)
-    VALUES ($1,60,1,'RON')`, [created.id])).rejects.toMatchObject({ driverError: { code: "23505" } });
-  await expect(database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,coach_user_id,amount_minor,currency)
-    VALUES ($1,60,$2,1,'RON')`, [created.id, coach.id])).rejects.toMatchObject({ driverError: { code: "23505" } });
+  await expect(database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,participant_count,coach_user_id,amount_minor,currency)
+    VALUES ($1,60,1,$2,9900,'RON')`, [created.id, adminCoach.id])).rejects.toMatchObject({ driverError: { code: "23503" } });
+  await expect(database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,participant_count,amount_minor,currency)
+    VALUES ($1,60,1,1,'RON')`, [created.id])).rejects.toMatchObject({ driverError: { code: "23505" } });
+  await expect(database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,participant_count,coach_user_id,amount_minor,currency)
+    VALUES ($1,60,1,$2,1,'RON')`, [created.id, coach.id])).rejects.toMatchObject({ driverError: { code: "23505" } });
+  // Every price names a player count from 1 to 100.
+  for (const count of ["NULL", "0", "101"]) await expect(database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,participant_count,amount_minor,currency)
+    VALUES ($1,90,${count},1,'RON')`, [created.id])).rejects.toMatchObject({ driverError: { code: count === "NULL" ? "23502" : "23514" } });
   const stored = await database.query(`SELECT coach_user_id,amount_minor,currency FROM public.coaching_prices WHERE program_id=$1 ORDER BY coach_user_id NULLS FIRST`, [created.id]);
   expect(stored).toEqual([{ coach_user_id: null, amount_minor: 12550, currency: "RON" }, { coach_user_id: coach.id, amount_minor: 15000, currency: "RON" }]);
 
@@ -176,7 +188,7 @@ test("coaching administration enforces Admin authorization, coach eligibility, c
     return { programs: result.programs.filter((program) => programIds.includes(program.id)), coaches: result.coaches.filter((item) => userIds.includes(item.id)) };
   };
   let published = await ours();
-  expect(published.programs[0].prices).toEqual([{ durationMinutes: 60, amountMinor: 12550, currency: "RON" }]);
+  expect(published.programs[0].prices).toEqual([{ durationMinutes: 60, participantCount: 1, amountMinor: 12550, currency: "RON" }]);
   expect(published.coaches.map((item) => item.displayName)).toEqual(["Second Coach"]);
   expect(await setCoachVisibility({ user_id: coach.id, is_public: true }, admin.client)).toEqual({ ok: true, id: coach.id });
   expect(await setCoachVisibility({ user_id: suspendedCoach.id, is_public: true }, admin.client)).toEqual({ ok: false, reason: "not-eligible" });
@@ -191,7 +203,10 @@ test("coaching administration enforces Admin authorization, coach eligibility, c
   published = await ours();
   const ana = published.coaches.find((item) => item.id === coach.id);
   expect(ana).toMatchObject({ displayName: "Ana Integration", locations: [{ id: locationIds[0], name: "Coaching East" }],
-    rates: [{ programId: created.id, durationMinutes: 60, amountMinor: 15000, currency: "RON" }] });
+    rates: [{ programId: created.id, durationMinutes: 60, participantCount: 1, amountMinor: 15000, currency: "RON" }] });
+  // From is what a public coach actually charges: Ana is the only one teaching the program, so her
+  // override (150), not the club default (125.50) nobody publicly charges, is the lowest applicable price.
+  expect(published.programs[0].fromPrices).toEqual([{ amountMinor: 15000, currency: "RON" }]);
   expect(JSON.stringify(published)).not.toContain(coach.email);
 
   // Losing the coach role hides the coach publicly and blocks re-publication.
@@ -209,15 +224,15 @@ test("coaching administration enforces Admin authorization, coach eligibility, c
   expect(state.prices.filter((price) => price.program_id === created.id).map((price) => price.currency)).toEqual(["RON", "RON"]);
   const afterChange = (await readPublicCoaching([{ ...visible[0], currency: "EUR" }])).programs.find((program) => program.id === created.id);
   expect(afterChange?.prices).toEqual([]);
-  expect(await saveClubCoachingPrice({ ...key, currency: "EUR", amount: "30" }, admin.client)).toMatchObject({ ok: true });
+  expect(await saveClubCoachingPrices(club({ ...clubKey, currency: "EUR", amount: "30" }), admin.client)).toMatchObject({ ok: true });
   expect((await database.query("SELECT currency,amount_minor FROM public.coaching_prices WHERE program_id=$1 AND coach_user_id IS NULL ORDER BY currency", [created.id])))
     .toEqual([{ currency: "EUR", amount_minor: 3000 }, { currency: "RON", amount_minor: 12550 }]);
 
   // Removal and deactivation: the coach removes their own override; the club operation cannot address it.
-  expect(await removeClubCoachingPrice({ ...key, coach_user_id: coach.id }, admin.client)).toMatchObject({ ok: false, reason: "invalid-input" });
+  expect(await saveClubCoachingPrices({ ...clubRemoval(clubKey), coach_user_id: coach.id }, admin.client)).toMatchObject({ ok: false, reason: "invalid-input" });
   expect(await removeOwnCoachingPrice(key, coach.client)).toMatchObject({ ok: true });
   expect(await removeOwnCoachingPrice(key, coach.client)).toEqual({ ok: false, reason: "not-found" });
-  expect(await removeClubCoachingPrice({ ...key, currency: "EUR" }, admin.client)).toMatchObject({ ok: true });
+  expect(await saveClubCoachingPrices(clubRemoval({ ...clubKey, currency: "EUR" }), admin.client)).toMatchObject({ ok: true });
   expect(await setCoachingProgramStatus({ id: created.id, is_active: false }, admin.client)).toEqual({ ok: true, id: created.id });
   expect((await ours()).programs).toEqual([]);
   // A stored incomplete configuration is kept as is and cannot be activated until an Admin completes it.
@@ -234,7 +249,7 @@ test("coaching administration enforces Admin authorization, coach eligibility, c
     for (const table of ["coaching_programs", "coaching_prices", "coach_profiles", "coach_locations", "coach_programs", "coaching_program_durations"]) {
       expect((await session.from(table).select("*").limit(1)).error?.code).toBe("42501");
     }
-    expect((await session.from("coaching_prices").insert({ program_id: created.id, duration_minutes: 60, amount_minor: 1, currency: "EUR" })).error?.code).toBe("42501");
+    expect((await session.from("coaching_prices").insert({ program_id: created.id, duration_minutes: 60, participant_count: 1, amount_minor: 1, currency: "EUR" })).error?.code).toBe("42501");
   }
 }, 60000);
 
@@ -252,9 +267,9 @@ test("coach pricing view resolves per active-location currency; assignment remov
     expect(await saveCoachProfile({ user_id: coach.id, create: true, fields: coachFields({ location_ids: [...locationIds, inactiveId],
       program_ids: [kept.id, removed.id] }) }, admin.client)).toMatchObject({ ok: true });
     expect(await saveCoachProfile({ user_id: other.id, create: true, fields: coachFields({ program_ids: [removed.id] }) }, admin.client)).toMatchObject({ ok: true });
-    const key = (programId: string, currency = "RON") => ({ program_id: programId, duration_minutes: 60, currency });
-    expect(await saveClubCoachingPrice({ ...key(removed.id), amount: "100" }, admin.client)).toMatchObject({ ok: true });
-    expect(await saveClubCoachingPrice({ ...key(kept.id), amount: "100" }, admin.client)).toMatchObject({ ok: true });
+    const key = (programId: string, currency = "RON") => ({ program_id: programId, duration_minutes: 60, participant_count: 1, currency });
+    expect(await saveClubCoachingPrices(club({ ...key(removed.id), amount: "100" }), admin.client)).toMatchObject({ ok: true });
+    expect(await saveClubCoachingPrices(club({ ...key(kept.id), amount: "100" }), admin.client)).toMatchObject({ ok: true });
     for (const amount of ["140", "150"]) expect(await saveOwnCoachingPrice({ ...key(kept.id), amount }, coach.client)).toMatchObject({ ok: true });
     expect(await saveOwnCoachingPrice({ ...key(removed.id), amount: "130" }, coach.client)).toMatchObject({ ok: true });
     expect(await saveOwnCoachingPrice({ ...key(removed.id, "EUR"), amount: "30" }, coach.client)).toMatchObject({ ok: true });
@@ -279,8 +294,8 @@ test("coach pricing view resolves per active-location currency; assignment remov
       .toMatchObject({ coach_amount_minor: null, effective: { amountMinor: 10000, source: "club" } });
     expect(await saveOwnCoachingPrice({ ...key(kept.id), amount: "150" }, coach.client)).toMatchObject({ ok: true });
 
-    const prices = () => db.query(`SELECT program_id,duration_minutes,currency,coach_user_id,amount_minor FROM public.coaching_prices
-      WHERE program_id = ANY($1::uuid[]) ORDER BY program_id,duration_minutes,currency,coach_user_id NULLS FIRST`, [[kept.id, removed.id]]);
+    const prices = () => db.query(`SELECT program_id,duration_minutes,participant_count,currency,coach_user_id,amount_minor FROM public.coaching_prices
+      WHERE program_id = ANY($1::uuid[]) ORDER BY program_id,duration_minutes,participant_count,currency,coach_user_id NULLS FIRST`, [[kept.id, removed.id]]);
     const before = await prices();
     // Location assignment changes keep every price.
     expect(await saveCoachProfile({ user_id: coach.id, create: false, fields: coachFields({ location_ids: [locationIds[1]],
@@ -299,7 +314,7 @@ test("coach pricing view resolves per active-location currency; assignment remov
     expect(await db.query("SELECT program_id FROM public.coach_programs WHERE coach_user_id=$1", [coach.id])).toEqual([{ program_id: kept.id }]);
     expect(await db.query("SELECT program_id FROM public.coach_programs WHERE coach_user_id=$1", [other.id])).toEqual([{ program_id: removed.id }]);
     // The Admin still cannot address the coach's remaining override.
-    expect(await removeClubCoachingPrice({ ...key(kept.id), coach_user_id: coach.id }, admin.client)).toMatchObject({ ok: false, reason: "invalid-input" });
+    expect(await saveClubCoachingPrices({ ...clubRemoval(key(kept.id)), coach_user_id: coach.id }, admin.client)).toMatchObject({ ok: false, reason: "invalid-input" });
   } finally {
     await db.query("DELETE FROM public.coach_locations WHERE location_id=$1", [inactiveId]);
     await db.query("DELETE FROM public.locations WHERE id=$1", [inactiveId]);
@@ -317,8 +332,8 @@ test("duration edits clean all currencies, overrides and stale currencies atomic
   expect(await saveCoachProfile({ user_id: coach.id, create: true, fields: coachFields({ location_ids: locationIds, program_ids: [created.id] }) }, admin.client)).toMatchObject({ ok: true });
   const db = await getDataSource();
   for (const currency of ["RON", "EUR"]) for (const duration of [60, 90, 120]) {
-    const price = { program_id: created.id, duration_minutes: duration, currency, amount: "125" };
-    expect(await saveClubCoachingPrice(price, admin.client)).toMatchObject({ ok: true });
+    const price = { program_id: created.id, duration_minutes: duration, participant_count: 1, currency, amount: "125" };
+    expect(await saveClubCoachingPrices(club(price), admin.client)).toMatchObject({ ok: true });
     expect(await saveOwnCoachingPrice(price, coach.client)).toMatchObject({ ok: true });
   }
   // A hidden old-currency price must also be removed.
@@ -382,14 +397,14 @@ test("duration edits clean all currencies, overrides and stale currencies atomic
   expect(await db.query("SELECT 1 FROM public.coach_profiles WHERE user_id=$1", [otherCoach.id])).toHaveLength(1);
   expect((await coachingRepository.listCoachingPrograms(db.manager)).some(p => p.id === created.id)).toBe(false);
 
-  // Deleting an unused Junior program also removes its club rates per player count.
+  // Deleting an unused Junior program also removes its club lesson prices/person.
   const junior = await saveCoachingProgram({ fields: { ...programFields, name: "Junior cleanup", program_type: "junior", min_participants: 4, max_participants: 8 } }, admin.client);
   assert.ok(junior.ok); programIds.push(junior.id);
-  expect(await saveClubParticipantPrices({ program_id: junior.id, currency: "RON", prices: [{ participant_count: 4, amount: "50" }], removed: [] }, admin.client))
+  expect(await saveClubCoachingPrices({ program_id: junior.id, currency: "RON", duration_minutes: 60, prices: [{ participant_count: 4, amount: "50" }], removed: [] }, admin.client))
     .toEqual({ ok: true, id: junior.id });
-  expect(await coachingRepository.listParticipantPrices(db.manager, { programIds: [junior.id] })).toHaveLength(1);
+  expect(await coachingRepository.listCoachingPrices(db.manager, { programId: junior.id })).toHaveLength(1);
   expect(await deleteCoachingProgram({ id: junior.id }, admin.client)).toEqual({ ok: true, id: junior.id });
-  expect(await coachingRepository.listParticipantPrices(db.manager, { programIds: [junior.id] })).toEqual([]);
+  expect(await coachingRepository.listCoachingPrices(db.manager, { programId: junior.id })).toEqual([]);
 });
 
 test("booking history blocks program deletion and archives coaches without changing historical contracts or accounts", async () => {
@@ -415,7 +430,7 @@ test("booking history blocks program deletion and archives coaches without chang
     expect(await deleteCoachProfile({ user_id: coach.id }, admin.client)).toEqual({ ok: false, reason: "active-lessons" });
     await db.query("DELETE FROM public.court_reservations WHERE id=$1", [holdId]);
     const evidence = { version: 1 as const, rounding: "half-hour-sum-round" as const, courtState: "outdoor" as const,
-      coaching: { participantCount: 1 as const, programId: created.id, coachUserId: coach.id, locationId: locationIds[0], durationMinutes: 60,
+      coaching: { participantCount: 1 as const, pricePerPersonMinor: 10000, programId: created.id, coachUserId: coach.id, locationId: locationIds[0], durationMinutes: 60,
         source: "club" as const, amountMinor: 10000, currency: "RON" as const, courtRentalIncluded: true, courtRentalMinor: 10000, courtAmountMinor: 0 },
       slots: [600, 630].map(minute => ({ minute, ruleId: randomUUID(), ruleSetId: randomUUID(), hourlyMinor: 10000, startsOn: null, endsOn: null })) };
     await db.transaction(async manager => {
@@ -432,7 +447,7 @@ test("booking history blocks program deletion and archives coaches without chang
       VALUES($1,$2,'2099-01-02',600,660,$3,'Personal court booking')`, [personalId, courtId, coach.id]);
     const contract = await db.query("SELECT * FROM public.booking_revisions WHERE booking_id=$1", [bookingId]);
     // Removing the assignment deletes the coach's override but not the booked price snapshot.
-    expect(await saveOwnCoachingPrice({ program_id: created.id, duration_minutes: 60, currency: "RON", amount: "200" }, coach.client)).toMatchObject({ ok: true });
+    expect(await saveOwnCoachingPrice({ program_id: created.id, duration_minutes: 60, participant_count: 1, currency: "RON", amount: "200" }, coach.client)).toMatchObject({ ok: true });
     expect(await saveCoachProfile({ user_id: coach.id, create: false, fields: coachFields({ program_ids: [], is_public: true }) }, admin.client)).toEqual({ ok: true, id: coach.id });
     expect(await db.query("SELECT 1 FROM public.coaching_prices WHERE coach_user_id=$1", [coach.id])).toEqual([]);
     expect(await db.query("SELECT * FROM public.booking_revisions WHERE booking_id=$1", [bookingId])).toEqual(contract);

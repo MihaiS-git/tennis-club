@@ -9,7 +9,7 @@ import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { useEditableFormBaseline } from "@/components/use-editable-form-baseline";
 import type { AdminLocation } from "@/lib/admin/locations";
 import { defaultCustomerCancellationNoticeMinutes } from "@/lib/bookings/cancellation-policy";
-import { locationFieldsSchema } from "@/lib/admin/locations-validation";
+import { currencyChangeBlockerMessage, locationFieldsSchema, type CurrencyChangeBlocker } from "@/lib/admin/locations-validation";
 import {
   CountryCombobox,
   CurrencySelect,
@@ -43,7 +43,7 @@ function validLocationCreate(form: HTMLFormElement) {
   }).success;
 }
 
-export function LocationForm({ location }: { location?: AdminLocation }) {
+export function LocationForm({ location, currencyBlockers = [] }: { location?: AdminLocation; currencyBlockers?: CurrencyChangeBlocker[] }) {
   const panelActive = useLocationPanelActive();
   const router = useRouter();
   const prefix = useId();
@@ -55,6 +55,10 @@ export function LocationForm({ location }: { location?: AdminLocation }) {
   const archived = location?.archived_at != null;
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [deactivating, setDeactivating] = useState(false);
+  // Server eligibility locks the control; a rejected stale change explains itself in place.
+  const [rejectedBlockers, setRejectedBlockers] = useState<CurrencyChangeBlocker[]>([]);
+  const currencyLocked = location !== undefined && currencyBlockers.length > 0;
+  const shownBlockers = rejectedBlockers.length ? rejectedBlockers : currencyLocked ? currencyBlockers : [];
   const { attach, dirty, valid, sync, submitted, commit, reset } = useEditableFormBaseline(
     editableFields, (field, value) => field === "country_code" ? value.trim().toUpperCase() : value.trim(), validLocationCreate,
   );
@@ -90,6 +94,7 @@ export function LocationForm({ location }: { location?: AdminLocation }) {
     pendingRef.current = true;
     setPending(true);
     setFieldErrors({});
+    setRejectedBlockers([]);
     const data = new FormData(form);
     const saved = submitted(form);
     const text = (field: string) => {
@@ -108,7 +113,7 @@ export function LocationForm({ location }: { location?: AdminLocation }) {
           postal_code: text("postal_code"),
           country_code: text("country_code"),
           timezone: text("timezone"),
-          currency: text("currency"),
+          currency: currencyLocked ? location.currency : text("currency"),
           is_active: text("is_active") === "true",
           is_public: location?.is_public ?? false,
           allow_pay_at_club: text("allow_pay_at_club") === "true",
@@ -127,6 +132,9 @@ export function LocationForm({ location }: { location?: AdminLocation }) {
       } else if (result.reason === "duplicate-slug") {
         toast.dismiss(notification);
         setFieldErrors({ name: "A location with this generated slug already exists. Use a different name." });
+      } else if (result.reason === "currency-locked") {
+        toast.error("The currency was not changed. Review the requirements below the currency.", { id: notification });
+        setRejectedBlockers(result.blockers);
       } else if (result.reason === "not-ready") {
         toast.error(result.message, { id: notification });
       } else {
@@ -238,7 +246,11 @@ export function LocationForm({ location }: { location?: AdminLocation }) {
                 id={`${prefix}-currency`}
                 name="currency"
                 defaultValue={location?.currency ?? "EUR"}
+                disabled={currencyLocked}
+                onChange={() => setRejectedBlockers([])}
                 {...errorProps("currency")}
+                aria-describedby={[errorProps("currency")["aria-describedby"],
+                  shownBlockers.length ? `${prefix}-currency-blockers` : undefined].filter(Boolean).join(" ") || undefined}
               />
               {fieldError("currency")}
             </div>
@@ -257,6 +269,16 @@ export function LocationForm({ location }: { location?: AdminLocation }) {
               />
               {fieldError("is_active")}
             </div>
+            {shownBlockers.length > 0 && (
+              <div id={`${prefix}-currency-blockers`} className="text-sm sm:col-span-2">
+                <p className={rejectedBlockers.length ? "font-medium text-danger" : "font-medium"}>
+                  {rejectedBlockers.length ? "The currency was not changed. To change it:" : `To change the currency from ${location?.currency}:`}
+                </p>
+                <ul className="mt-1 list-disc space-y-1 pl-5 text-muted-foreground">
+                  {shownBlockers.map((blocker) => <li key={blocker.kind}>{currencyChangeBlockerMessage(blocker)}</li>)}
+                </ul>
+              </div>
+            )}
             <input type="hidden" name="is_public" value={String(location?.is_public ?? false)} />
             {!location && <p className="text-sm text-muted-foreground sm:col-span-2">Public booking starts disabled. Configure opening hours, active courts and pricing after creation to enable it.</p>}
           </div>

@@ -41,7 +41,7 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-it.each([{ roles: ["coach"] }] satisfies { roles: ("coach")[] }[])("rejects an active %s account", async ({ roles }) => {
+it.each([{ roles: [] }, { roles: ["coach"] }] satisfies { roles: ("coach")[] }[])("rejects an active %s account", async ({ roles }) => {
   readCurrentAccount.mockResolvedValue({
     state: "active", userId: "user-1", email: "user@example.com", roles: [...roles],
   } satisfies CurrentAccount);
@@ -61,12 +61,39 @@ it("rejects a suspended admin account", async () => {
   expect(redirect).not.toHaveBeenCalled();
 });
 
-it("redirects an unauthenticated account to login", async () => {
-  readCurrentAccount.mockResolvedValue({ state: "unauthenticated" } satisfies CurrentAccount);
+it.each(["unauthenticated", "missing-profile"] as const)("redirects a %s account to login", async (state) => {
+  readCurrentAccount.mockResolvedValue({ state } satisfies CurrentAccount);
 
   await expect(requireActiveAdmin(client)).rejects.toThrow("redirect:/login");
   expect(redirect).toHaveBeenCalledExactlyOnceWith("/login");
   expect(notFound).not.toHaveBeenCalled();
+});
+
+it.each([{ roles: ["admin"] }, { roles: ["coach", "admin"] }] satisfies { roles: ("admin" | "coach")[] }[])("allows active Admin roles %j", async ({ roles }) => {
+  const account = { state: "active", userId: "admin-1", email: "admin@example.com", roles } satisfies CurrentAccount;
+  readCurrentAccount.mockResolvedValue(account);
+
+  await expect(requireActiveAdmin(client)).resolves.toBe(account);
+  expect(readCurrentAccount).toHaveBeenCalledExactlyOnceWith(client);
+  expect(redirect).not.toHaveBeenCalled();
+  expect(notFound).not.toHaveBeenCalled();
+});
+
+it("rejects an account load-error without redirecting", async () => {
+  readCurrentAccount.mockResolvedValue({ state: "load-error" } satisfies CurrentAccount);
+
+  await expect(requireActiveAdmin(client)).rejects.toThrow("notFound");
+  expect(notFound).toHaveBeenCalledOnce();
+  expect(redirect).not.toHaveBeenCalled();
+});
+
+it("propagates account-loading exceptions", async () => {
+  const error = new Error("Account unavailable");
+  readCurrentAccount.mockRejectedValueOnce(error);
+
+  await expect(requireActiveAdmin(client)).rejects.toBe(error);
+  expect(notFound).not.toHaveBeenCalled();
+  expect(redirect).not.toHaveBeenCalled();
 });
 
 it.each(["admin", "coach"] as const)("allows active %s into the management shell with role-aware navigation", async (role) => {
@@ -76,6 +103,13 @@ it.each(["admin", "coach"] as const)("allows active %s into the management shell
     isAdmin: role === "admin", isCoach: role === "coach", children: "Reservations",
   });
   await expect(AdminPage()).rejects.toThrow(`redirect:${role === "admin" ? "/admin/locations" : "/coach/bookings"}`);
+});
+
+it("preserves both role flags and Admin entry precedence for a Coach who is also an Admin", async () => {
+  readCurrentAccount.mockResolvedValue({ state: "active", userId: "staff", roles: ["coach", "admin"] });
+  await renderAdminLayout("Bookings");
+  expect(managementShell.mock.calls[0][0]).toEqual({ isAdmin: true, isCoach: true, children: "Bookings" });
+  await expect(AdminPage()).rejects.toThrow("redirect:/admin/locations");
 });
 
 it.each([

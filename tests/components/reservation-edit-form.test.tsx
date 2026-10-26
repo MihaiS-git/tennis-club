@@ -3,6 +3,9 @@ import { expectToast, lastToast } from "../helpers/notifications";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ReservationEditForm } from "@/app/my-activity/bookings/reservation-edit-form";
+import { ReservationEditForm as SharedReservationEditForm } from "@/components/reservation-edit-form";
+import type { ReservationTimetableDay } from "@/components/reservation-timetable";
+import type { ReservationCell } from "@/lib/reservations/domain";
 import type { PersonalReservation } from "@/lib/reservations/personal";
 
 const { availability, edit } = vi.hoisted(() => ({ availability: vi.fn(), edit: vi.fn() }));
@@ -20,17 +23,57 @@ const reservation: PersonalReservation = {
 };
 const courtB = "55555555-5555-4555-8555-555555555555";
 const times = [600, 630, 660, 690, 720];
-function day(date: string, courtBCells: string[] = ["available", "available", "available", "available", "closed"]) {
+function day(date: string, courtBCells: ReservationCell[] = ["available", "available", "available", "available", "closed"]) {
   return { date, location: { id: reservation.location_id, name: "RIVUS", timezone: reservation.location_timezone },
     day: { times, courts: [
       { court: { id: reservation.court_id, name: "Court A" }, cells: ["available", "available", "available", "booked", "closed"] },
       { court: { id: courtB, name: "Court B" }, cells: courtBCells },
-    ] } };
+    ] } satisfies ReservationTimetableDay };
 }
 const callbacks = { onCancel: vi.fn(), onSaved: vi.fn(async () => {}), onStale: vi.fn(async () => {}), onPendingChange: vi.fn() };
 
 const saveButton = () => screen.getByRole("button", { name: "Save changes" });
 const changeReason = (value: string) => fireEvent.change(screen.getByLabelText("Reason"), { target: { value } });
+
+it("uses matching preloaded availability and still loads subsequent dates and retries", async () => {
+  availability.mockRejectedValueOnce(new Error("Network failure")).mockResolvedValue(day("2099-10-16"));
+  render(<SharedReservationEditForm reservation={reservation} inProgress={false} loadAvailability={availability} onCancel={callbacks.onCancel}
+    initialAvailability={{ reservationId: reservation.id, date: reservation.booking_date, day: day(reservation.booking_date).day }} />);
+  expect(screen.getByText("Current reservation")).toBeDefined();
+  expect(availability).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2099-10-16" } });
+  await screen.findByRole("button", { name: "Retry loading availability" });
+  expect(availability).toHaveBeenCalledExactlyOnceWith(reservation.id, "2099-10-16");
+  fireEvent.click(screen.getByRole("button", { name: "Retry loading availability" }));
+  await screen.findByRole("rowheader", { name: "Court A" });
+  expect(availability).toHaveBeenCalledTimes(2);
+  expect(screen.queryByText("Current reservation")).toBeNull();
+});
+
+it.each(["booking", "date"])("ignores preloaded availability for another %s", async (mismatch) => {
+  availability.mockResolvedValue(day(reservation.booking_date));
+  render(<SharedReservationEditForm reservation={reservation} inProgress={false} loadAvailability={availability} onCancel={callbacks.onCancel}
+    initialAvailability={{ reservationId: mismatch === "booking" ? courtB : reservation.id,
+      date: mismatch === "date" ? "2099-10-16" : reservation.booking_date,
+      day: { times: [], courts: [] } }} />);
+  await screen.findByText("Current reservation");
+  expect(availability).toHaveBeenCalledExactlyOnceWith(reservation.id, reservation.booking_date);
+});
+
+it("ignores an older date response after a newer date has loaded", async () => {
+  let finish: (value: ReturnType<typeof day>) => void = () => { throw new Error("Not loading"); };
+  availability.mockResolvedValueOnce(day(reservation.booking_date))
+    .mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+    .mockResolvedValueOnce(day("2099-10-17"));
+  render(<ReservationEditForm reservation={reservation} inProgress={false} {...callbacks} />);
+  await screen.findByText("Current reservation");
+  fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2099-10-16" } });
+  fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2099-10-17" } });
+  await screen.findByRole("button", { name: /Court B 2099-10-17 10:00–10:30/ });
+  await act(async () => finish(day("2099-10-16", ["booked", "booked", "booked", "booked", "closed"])));
+  expect(screen.getByRole("button", { name: /Court B 2099-10-17 10:00–10:30/ })).toBeDefined();
+  expect(availability).toHaveBeenCalledTimes(3);
+});
 
 it("keeps unchanged and normalized reason edits pristine, and requires a valid changed reason", async () => {
   availability.mockResolvedValue(day(reservation.booking_date));

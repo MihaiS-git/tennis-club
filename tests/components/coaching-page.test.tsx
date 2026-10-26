@@ -15,7 +15,7 @@ vi.mock("@/app/coaching/coaching-sections", async (original) => ({
 }));
 
 import CoachingPage, { metadata } from "@/app/coaching/page";
-import { pricesByCurrency, startingPrices } from "@/app/coaching/coaching-sections";
+import { pricesByCurrency, startingPriceLabel, startingPrices } from "@/app/coaching/coaching-sections";
 
 const { CoachingCoaches, CoachingGroupPrices, CoachingPrices, CoachingPrograms } =
   await vi.importActual<typeof import("@/app/coaching/coaching-sections")>("@/app/coaching/coaching-sections");
@@ -23,24 +23,27 @@ const { CoachingCoaches, CoachingGroupPrices, CoachingPrices, CoachingPrograms }
 const program = { id: "a1000000-0000-4000-8000-000000000001", name: "Private lesson", description: "One player, one coach.",
   type: "private" as const, durations: [60, 90], minParticipants: 1, maxParticipants: 1, courtRentalIncluded: true,
   prices: [
-    { durationMinutes: 60, amountMinor: 12000, currency: "RON" as const },
-    { durationMinutes: 60, amountMinor: 3000, currency: "EUR" as const },
-    { durationMinutes: 90, amountMinor: 17000, currency: "RON" as const },
-  ], participantPrices: [] };
+    { durationMinutes: 60, participantCount: 1, amountMinor: 12000, currency: "RON" as const },
+    { durationMinutes: 60, participantCount: 1, amountMinor: 3000, currency: "EUR" as const },
+    { durationMinutes: 90, participantCount: 1, amountMinor: 17000, currency: "RON" as const },
+  ],
+  // Resolved by the public projection: the only eligible coach charges RON 150 for 60 minutes.
+  fromPrices: [{ currency: "EUR" as const, amountMinor: 3000 }, { currency: "RON" as const, amountMinor: 15000 }] };
 const group = { ...program, id: "a1000000-0000-4000-8000-000000000002", name: "Group drills", type: "group" as const, description: "",
-  durations: [90], minParticipants: 3, maxParticipants: 6, courtRentalIncluded: false, prices: [],
-  participantPrices: [
-    { participantCount: 3, amountMinor: 6000, currency: "RON" as const },
-    { participantCount: 4, amountMinor: 5000, currency: "RON" as const },
-    { participantCount: 3, amountMinor: 1500, currency: "EUR" as const },
+  durations: [90], minParticipants: 3, maxParticipants: 6, courtRentalIncluded: false,
+  fromPrices: [{ currency: "EUR" as const, amountMinor: 1500 }, { currency: "RON" as const, amountMinor: 5000 }],
+  prices: [
+    { durationMinutes: 90, participantCount: 3, amountMinor: 6000, currency: "RON" as const },
+    { durationMinutes: 90, participantCount: 4, amountMinor: 5000, currency: "RON" as const },
+    { durationMinutes: 90, participantCount: 3, amountMinor: 1500, currency: "EUR" as const },
   ] };
 const junior = { ...group, id: "a1000000-0000-4000-8000-000000000003", name: "Junior squad", type: "junior" as const,
-  description: "Ages 8–12.", durations: [60, 90], minParticipants: 4, maxParticipants: 8, participantPrices: [] };
+  description: "Ages 8–12.", durations: [60, 90], minParticipants: 4, maxParticipants: 8, prices: [], fromPrices: [] };
 const coach = { id: "c1", displayName: "Ana Pop", bio: "Former junior champion.", qualifications: "Level 2 coach",
   specialties: ["Serve", "Footwork"], languages: ["Romanian", "English"],
   locations: [{ id: "b1", name: "East Club" }], programs: [{ id: program.id, name: "Private lesson" }],
   rates: [{ programId: program.id, programName: "Private lesson", courtRentalIncluded: true,
-    durationMinutes: 60, amountMinor: 15000, currency: "RON" as const }] };
+    durationMinutes: 60, participantCount: 1, amountMinor: 15000, currency: "RON" as const }] };
 const data: PublicCoaching = { programs: [program, group], coaches: [coach] };
 const empty: PublicCoaching = { programs: [], coaches: [] };
 
@@ -81,7 +84,7 @@ it("explains how group and junior sessions are organized and paid, without booki
   render(<CoachingPage />);
   const section = document.getElementById("group-prices")!;
   for (const text of ["organized by the coach or the club", "reserve the court", "cannot be booked online",
-    "indicative", "per person for 60 minutes", "confirmed by the club", "contact the club or your coach", "payment is made at the club"]) {
+    "indicative", "per person per lesson", "confirmed by the club", "contact the club or your coach", "payment is made at the club"]) {
     expect(section.textContent).toContain(text);
   }
   const links = within(section).getAllByRole("link");
@@ -95,13 +98,17 @@ it("shows active programs with durations, group size, court rental and starting 
   expect(first.textContent).toContain("60 min · 90 min");
   expect(first.textContent).toContain("1 player");
   expect(first.textContent).toContain("Court rental included");
-  expect(first.textContent).toContain(`From ${startingPrices(program).join(" · ")}`);
-  expect(startingPrices(program)).toEqual([formatMoney(3000, "EUR"), formatMoney(12000, "RON")]);
+  // The page shows the projection's From prices; it never recomputes them from the listed prices.
+  expect(first.textContent).toContain(`From ${formatMoney(3000, "EUR")} · ${formatMoney(15000, "RON")} per person per lesson`);
+  expect(startingPrices(program)).toEqual([formatMoney(3000, "EUR"), formatMoney(15000, "RON")]);
+  expect(startingPriceLabel({ fromPrices: [{ currency: "RON", amountMinor: 9000 }] }))
+    .toBe(`From ${formatMoney(9000, "RON")} per person per lesson`);
+  expect(startingPriceLabel({ fromPrices: [] })).toBeNull();
   expect(second.textContent).toContain("Court rental not included");
   expect(second.textContent).toContain("3–6 players");
   expect(first.textContent).not.toContain("Paid at the club");
-  // Group/Junior programs start from their club rate per person per 60 minutes and are arranged offline.
-  expect(second.textContent).toContain(`From ${formatMoney(1500, "EUR")} · ${formatMoney(5000, "RON")} per person / 60 min`);
+  // Group/Junior programs start from their lowest club lesson price/person and are arranged offline.
+  expect(second.textContent).toContain(`From ${formatMoney(1500, "EUR")} · ${formatMoney(5000, "RON")} per person per lesson`);
   expect(second.textContent).toContain("Arranged with the coach or club · Paid at the club");
   expect(third.textContent).toContain("4–8 players");
   expect(third.textContent).toContain("Not yet published");
@@ -112,7 +119,7 @@ it("shows public coach profiles with individual prices and no account details", 
   const card = within(screen.getByRole("list", { name: "Coaches" })).getAllByRole("listitem")[0];
   expect(within(card).getByRole("heading", { level: 3 }).textContent).toBe("Ana Pop");
   expect(within(card).getByRole("list", { name: "Ana Pop’s specialties" }).textContent).toBe("ServeFootwork");
-  for (const text of ["Former junior champion.", "Level 2 coach", "Romanian, English", "East Club", `Private lesson, 60 min: ${formatMoney(15000, "RON")}`]) {
+  for (const text of ["Former junior champion.", "Level 2 coach", "Romanian, English", "East Club", `Private lesson, 60 min, 1 player: ${formatMoney(15000, "RON")}`]) {
     expect(card.textContent).toContain(text);
   }
   expect(card.textContent).not.toMatch(/@|phone|c1/);
@@ -124,7 +131,7 @@ it("shows public coach profiles with individual prices and no account details", 
 it("lists club-wide prices per currency with coach prices beneath", async () => {
   await show(CoachingPrices, data);
   const ron = screen.getByRole("region", { name: "Coaching prices in RON" });
-  expect(ron.textContent).toContain(`Private lesson · 60 minCourt rental includedAna Pop: ${formatMoney(15000, "RON")}${formatMoney(12000, "RON")}Club price`);
+  expect(ron.textContent).toContain(`Private lesson · 60 min · 1 playerCourt rental includedAna Pop: ${formatMoney(15000, "RON")}${formatMoney(12000, "RON")}Club lesson price/person`);
   expect(screen.getByRole("region", { name: "Coaching prices in EUR" }).textContent).toContain(formatMoney(3000, "EUR"));
   expect(document.body.textContent).not.toContain("East Club");
   // A coach-only price is listed without inventing a club price.
@@ -133,7 +140,7 @@ it("lists club-wide prices per currency with coach prices beneath", async () => 
   expect(coachOnly).toMatchObject([{ currency: "RON", rows: [{ amount: null, coaches: [{ name: "Ana Pop", amount: formatMoney(15000, "RON") }] }] }]);
 });
 
-it("lists group and junior club rates by player count, per currency, with no coach prices or booking", async () => {
+it("lists group and junior club lesson prices/person by duration and player count, per currency, with no coach prices or booking", async () => {
   const withCoachRate = { ...coach, rates: [...coach.rates] };
   await show(CoachingGroupPrices, { programs: [program, group, junior], coaches: [withCoachRate] });
   const list = screen.getByRole("list", { name: "Group and junior coaching prices" });
@@ -145,8 +152,8 @@ it("lists group and junior club rates by player count, per currency, with no coa
   expect(groupItem.textContent).toContain("90 min");
   const rows = (name: string) => within(screen.getByRole("table", { name })).getAllByRole("row").slice(1)
     .map((row) => within(row).getAllByRole("cell").map((cell) => cell.textContent));
-  expect(rows("Group drills club prices in RON")).toEqual([["3", formatMoney(6000, "RON")], ["4", formatMoney(5000, "RON")]]);
-  expect(rows("Group drills club prices in EUR")).toEqual([["3", formatMoney(1500, "EUR")]]);
+  expect(rows("Group drills club prices in RON")).toEqual([["90 min", "3", formatMoney(6000, "RON")], ["90 min", "4", formatMoney(5000, "RON")]]);
+  expect(rows("Group drills club prices in EUR")).toEqual([["90 min", "3", formatMoney(1500, "EUR")]]);
   expect(juniorItem.textContent).toContain("Junior squad");
   expect(juniorItem.textContent).toContain("Ages 8–12.");
   expect(juniorItem.textContent).toContain("4–8 players");
@@ -154,6 +161,21 @@ it("lists group and junior club rates by player count, per currency, with no coa
   expect(within(juniorItem).queryByRole("table")).toBeNull();
   expect(list.textContent).not.toContain("Ana Pop");
   expect(within(list).queryAllByRole("link")).toHaveLength(0);
+});
+
+it("lists each participant count of a lesson as its own price row", async () => {
+  const semi = { ...program, id: "a1000000-0000-4000-8000-000000000005", name: "Semi-private", type: "semi_private" as const,
+    durations: [60], minParticipants: 2, maxParticipants: 4,
+    prices: [{ durationMinutes: 60, participantCount: 3, amountMinor: 21000, currency: "RON" as const },
+      { durationMinutes: 60, participantCount: 2, amountMinor: 15000, currency: "RON" as const }],
+    fromPrices: [{ currency: "RON" as const, amountMinor: 15000 }] };
+  const rates = [{ programId: semi.id, programName: semi.name, courtRentalIncluded: true, durationMinutes: 60, participantCount: 3, amountMinor: 19000, currency: "RON" as const }];
+  const [ron] = pricesByCurrency({ programs: [semi], coaches: [{ ...coach, programs: [{ id: semi.id, name: semi.name }], rates }] });
+  expect(ron.rows.map((row) => [row.participantCount, row.amount, row.coaches.map((item) => item.amount)])).toEqual([
+    [2, formatMoney(15000, "RON"), []], [3, formatMoney(21000, "RON"), [formatMoney(19000, "RON")]],
+  ]);
+  await show(CoachingPrices, { programs: [semi], coaches: [] });
+  expect(screen.getByRole("region", { name: "Coaching prices in RON" }).textContent).toMatch(/Semi-private · 60 min · 2 players.*Semi-private · 60 min · 3 players/);
 });
 
 it("renders empty and unavailable states without invented data", async () => {

@@ -352,3 +352,45 @@ and delivery fixtures, tests persistent suppression and denied browser grants, a
 no provider requests. Notification integration fixtures explicitly enable email while
 testing channel policies and restore the original settings afterward. The migration cutover
 test verifies the disabled singleton, suppression column and canonical coaching durations.
+
+## Test registration and optional performance runs
+
+Normal unit, component, integration and E2E suites register no skipped tests. The
+activity-service CPU benchmark registers only when `ACTIVITY_SERVICE_BENCHMARK` is
+set to its output filename. The PostgreSQL activity benchmark registers only with
+`ACTIVITY_BENCHMARK=1`; its UUID continuation regression always runs. For example:
+
+```bash
+ACTIVITY_SERVICE_BENCHMARK=/tmp/activity-service.json npx vitest run tests/unit/activity-service.test.ts
+ACTIVITY_BENCHMARK=1 npm run test:integration -- tests/integration/activity-pagination.integration.test.ts
+```
+
+Optional live Stripe lifecycle cases register by server mode: ordinary lifecycle
+cases with `LIVE_LATE` unset, late authorization/capture only with `LIVE_LATE=1`
+and the documented shortened hold. Run both commands above in the live Stripe
+section for complete live coverage. Neither mode reports the other mode as skipped.
+
+
+### Coaching baseline validation
+
+The initial baseline directly creates `coaching_prices` as the only coaching price table
+(lesson price/person per program × duration × `participant_count` × currency × Club/Coach
+scope) with its two scope indexes; there is no `pricing_unit` column and no
+`coaching_participant_prices` table. The
+three registered migrations are 924–926; no coaching repair migration or automatic
+legacy data interpretation runs. Recreate only the disposable test stack using the
+explicit `tests/local` stop/start procedure above to validate an edited baseline.
+
+Focused database tests execute actual Programs/Prices list repositories, program and
+price saves, both pricing scopes, public projection, per-person lesson quotes, payment
+amounts and immutable snapshots:
+
+```bash
+npm run test:integration -- tests/integration/db/migration-cutover.integration.test.ts tests/integration/admin/coaching-lists.integration.test.ts tests/integration/admin/coaching-program-prices.integration.test.ts tests/integration/coaching-booking.integration.test.ts
+```
+
+Development is separate and disposable. After baseline edits, rebuild the local
+development database from the corrected baseline (`npm run db:dev:rebuild`, which refuses
+non-local targets) and reseed it (`npm run db:dev:seed`, `npm run db:dev:seed:coaching`)
+instead of patching it in place. The rebuilt schema must have zero TypeORM metadata diff
+and exactly baseline entries 924–926.

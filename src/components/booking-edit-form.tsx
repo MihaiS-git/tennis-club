@@ -130,14 +130,21 @@ function BookingPrice({ id, context, draft, currency, quote, acknowledged, onQuo
   </section>;
 }
 
-export function BookingEditForm({ booking, location, onCancel, onSaved, onPendingChange, onAdjustment, actions = ownerActions }: {
+type BookingEditFormProps = {
   booking: Pick<AdminBooking, "id" | "booking_date" | "currency">; location?: Pick<InternalLocation, "name" | "courts">; actions?: BookingEditActions; onCancel: () => void;
   onSaved: () => Promise<void>; onPendingChange: (value: boolean) => void;
   // The unpaid modification created in this dialog, which X must dismiss.
   onAdjustment?: (id: string | null) => void;
-}) {
+};
+
+export function BookingEditForm(props: BookingEditFormProps) {
+  return <BookingEditSession key={`${props.booking.id}/${props.booking.booking_date}`} {...props} />;
+}
+
+function BookingEditSession({ booking, location, onCancel, onSaved, onPendingChange, onAdjustment, actions = ownerActions }: BookingEditFormProps) {
   const active = useRef(true);
-  const [context, setContext] = useState<BookingEditContext | null>(null);
+  const [initial, setInitial] = useState<Awaited<ReturnType<BookingEditActions["load"]>> | null>(null);
+  const context = initial?.booking;
   const [error, setError] = useState("");
   const [quote, setQuote] = useState<Quote | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
@@ -145,6 +152,10 @@ export function BookingEditForm({ booking, location, onCancel, onSaved, onPendin
   const request = useRef<{ key: string; id: string } | null>(null);
   // Stable setter identity avoids restarting a quote on every render.
   const receiveQuote = useCallback((value: Quote | null) => { setQuote(value); setAcknowledged(false); }, []);
+  const initialAvailability = useMemo(() => initial ? { reservationId: booking.id, date: booking.booking_date,
+    day: { ...initial.day, courts: initial.booking.coaching
+      ? initial.day.courts.filter(row => row.court.id === initial.booking.court_id) : initial.day.courts,
+      lesson: initial.booking.coaching } } : undefined, [initial, booking.id, booking.booking_date]);
   // A lesson's starts depend on the date, so each day read carries them to its timetable.
   const loadLessonDay = useMemo(() => async (id: string, date: string) => {
     const result = await actions.load(id, date);
@@ -161,7 +172,7 @@ export function BookingEditForm({ booking, location, onCancel, onSaved, onPendin
     let notification: string | number | undefined;
     actions.load(booking.id, booking.booking_date).then((result) => {
       // Every Edit opens a fresh form; earlier modifications are never resumed.
-      if (!disposed) setContext(result.booking);
+      if (!disposed) setInitial(result);
     }).catch(() => { if (!disposed) {
       setError("This booking is no longer available to edit. Close and reopen its details.");
       notification = toast.error("This booking is no longer available to edit. Close and reopen its details.");
@@ -240,6 +251,7 @@ export function BookingEditForm({ booking, location, onCancel, onSaved, onPendin
     return result;
   };
   if (lesson) return <ReservationEditForm reservation={reservation} inProgress={false} scheduleOnly loadAvailability={loadLessonDay}
+    initialAvailability={initialAvailability}
     onCancel={onCancel} onPendingChange={onPendingChange} canSave={canSave}
     renderTimetable={(input) => <LessonTimetable {...input} timezone={context.location_timezone} currency={booking.currency} />}
     renderScheduleDetails={(draft, pending) => <>
@@ -247,7 +259,8 @@ export function BookingEditForm({ booking, location, onCancel, onSaved, onPendin
       {price(draft, pending)}
     </>}
     onSave={save} onSaved={onSaved} />;
-  return <ReservationEditForm reservation={reservation} inProgress={false} scheduleOnly loadAvailability={actions.load}
+  return <ReservationEditForm<ReservationTimetableDay> reservation={reservation} inProgress={false} scheduleOnly loadAvailability={actions.load}
+    initialAvailability={initialAvailability}
     onCancel={onCancel} onPendingChange={onPendingChange} canSave={canSave}
     renderScheduleDetails={price} onSave={save} onSaved={onSaved} />;
 }

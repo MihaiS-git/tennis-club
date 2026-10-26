@@ -3,9 +3,7 @@ import { customerBookingInputSchema } from "./domain";
 import { createCustomerBooking } from "./service";
 import { activeOnlinePaymentProvider } from "@/lib/payments/settings";
 import { supportsOnlineCheckout } from "@/lib/payments/providers";
-import { startOnlineCheckout } from "@/lib/payments/checkout";
-import { paymentHoldDurationSeconds } from "@/lib/payments/domain";
-import { logger } from "@/lib/logger";
+import { startCommittedCheckout } from "@/lib/payments/committed-checkout";
 
 // Provider initialization starts only after the TypeORM creation transaction commits.
 export async function commitCustomerCheckout(input: unknown) {
@@ -15,12 +13,5 @@ export async function commitCustomerCheckout(input: unknown) {
   const result = await createCustomerBooking(intent);
   if (!result.ok) return result;
   if (result.status === "confirmed") return result;
-  try {
-    const checkout = await startOnlineCheckout(result.paymentAttemptId);
-    return { ...result, checkout };
-  } catch {
-    logger.error({ event: "payments.checkout_start_failed", attemptId: result.paymentAttemptId }, "Unable to start online payment");
-    return { ok: false as const, availabilityChanged: true,
-      message: `Unable to start payment. No booking is confirmed. The temporary hold will expire within ${paymentHoldDurationSeconds / 60} minutes.` };
-  }
+  return startCommittedCheckout(result);
 }

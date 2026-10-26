@@ -7,12 +7,12 @@ import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
 import { cancellationNoticeMinutesSchema } from "@/lib/bookings/cancellation-policy";
 import { locationCurrencies } from "@/lib/admin/locations-validation";
-import { localStartInstant } from "@/lib/courts/local-time";
+import { createLocalStartInstantResolver, localStartInstant } from "@/lib/courts/local-time";
 import { getDataSource } from "@/lib/db/data-source";
-import { listOwnerActivityBatch } from "@/lib/db/repositories/court-activity.repository";
+import { listOwnerActivityBatch, listSucceededPaymentBookingIds } from "@/lib/db/repositories/court-activity.repository";
 import { findOwnedBookingRevision } from "@/lib/db/repositories/bookings.repository";
 import { listBookingsWithLivePayment, listBookingsWithPendingChange } from "@/lib/db/repositories/booking-adjustments.repository";
-import { courtActivityType, type CourtHistoryItem } from "./history";
+import { courtActivityType, type CustomerBookingHistoryItem } from "./history";
 import { minorAmountSchema } from "@/lib/pricing/money";
 import { ACTIVITY_PAGE_SIZE, parseActivityQuery, type ActivityQuery, type ActivityScope, type ActivitySearchParams } from "./activity-query";
 import type { PersonalCustomerBooking } from "./personal";
@@ -24,7 +24,10 @@ export type ActivityOptions = {
   locations: { id: string; name: string }[];
   courts: { id: string; name: string; location_id: string }[];
 };
-type ActivityRow = CourtHistoryItem & { starts_at_instant: string; court_id: string; location_id: string };
+// Completed end instants are materialized only for the returned page. Ordering
+// still needs an exact start instant for every candidate, including tie-breaks.
+type ActivityRow = (Omit<CustomerBookingHistoryItem, "history_at"> | (PersonalReservation & { kind: "reservation" }))
+  & { history_at?: string; starts_at_instant: string; court_id: string; location_id: string };
 const intervalSchema = z.object({
   court_id: z.uuid(), booking_date: z.iso.date(), starts_at_minute: z.number().int(), ends_at_minute: z.number().int(),
   status: z.enum(["active", "cancelled", "held", "released"]),
@@ -40,7 +43,7 @@ const bookingSelectSchema = z.object({
   cancellation_notice_minutes: cancellationNoticeMinutesSchema,
   total_amount_minor: minorAmountSchema, currency: z.enum(locationCurrencies),
   payment_method: z.enum(["online", "pay_at_club"]),
-  payments: z.array(z.object({ status: z.literal("succeeded") })), reservation: intervalSchema,
+  reservation: intervalSchema,
 });
 const nameSchema = z.object({ first_name: z.string().nullable(), last_name: z.string().nullable() }).nullable();
 const reservationSelectSchema = intervalSchema.extend({
@@ -86,11 +89,15 @@ export async function listOwnCourtActivity(scope: ActivityScope, query: Activity
   const needed = query.page * ACTIVITY_PAGE_SIZE + 1;
   const batchSize = 1000;
   let candidates: ActivityRow[] = [];
+  let courtCandidates: ActivityRow[] = [];
+  let candidatesNeedSort = false;
+  let courtCandidatesNeedSort = false;
   const locations = new Map<string, ActivityOptions["locations"][number]>();
   const courts = new Map<string, ActivityOptions["courts"][number]>();
   const nowInstant = now.getTime();
+  const resolveStartInstant = createLocalStartInstantResolver();
   // Conservative date bounds cover every IANA offset, including end minute 1440.
-  // The exact end instant below decides eligibility using the shared location clock.
+  // Only dates inside these bounds need exact timezone resolution for eligibility.
   const earliestDate = new Date(nowInstant - 2 * 86_400_000).toISOString().slice(0, 10);
   const latestDate = new Date(nowInstant + 86_400_000).toISOString().slice(0, 10);
   const fail = (code?: string): never => {
@@ -98,32 +105,66 @@ export async function listOwnCourtActivity(scope: ActivityScope, query: Activity
     throw new Error("Unable to load your court activity. Try again.");
   };
   // Options intentionally span all eligible activity, before URL filters. Read
-  // bounded batches and retain only distinct options and the requested top rows.
+  // bounded batches and retain only distinct options and the requested top rows,
+  // both with and without the court filter until its compatibility is known.
   for (const kind of staff ? ["booking", "reservation"] as const : ["booking"] as const) {
     for (const cancelled of scope === "history" ? [false, true] : [false]) {
-      for (let offset = 0; ; offset += batchSize) {
+      // The cursor belongs to this source/lifecycle stream, before TypeScript
+      // eligibility and URL filtering. Public numbered pages are sliced below.
+      let afterId: string | null = null;
+      for (;;) {
         let data: unknown;
         try {
           data = await listOwnerActivityBatch(manager, { actorId: account.userId, kind, cancelled,
-            scope, earliestDate, latestDate, offset, limit: batchSize });
+            scope, earliestDate, latestDate, afterId, limit: batchSize });
         } catch (error: unknown) { return fail(normalizeDatabaseError(error).sqlState); }
         const parsed = kind === "booking" ? z.array(bookingSelectSchema).safeParse(data)
           : z.array(reservationSelectSchema).safeParse(data);
         if (!parsed.success) return fail();
+        let succeededBookingIds: Set<string>;
+        try {
+          const onlineBookingIds = parsed.data.flatMap((source) =>
+            "reservation" in source && source.payment_method === "online" ? [source.id] : []);
+          succeededBookingIds = new Set(await listSucceededPaymentBookingIds(manager, onlineBookingIds));
+        } catch (error: unknown) { return fail(normalizeDatabaseError(error).sqlState); }
+        let addedCandidates = false;
+        let addedCourtCandidates = false;
         for (const source of parsed.data) {
           const interval = "reservation" in source ? source.reservation : source;
           const { court } = interval;
-          const end = localStartInstant(court.location.timezone, interval.booking_date, interval.ends_at_minute);
-          if (!cancelled && (interval.status !== "active"
-            || (scope === "upcoming" ? Date.parse(end) <= nowInstant : Date.parse(end) > nowInstant))) continue;
+          if (!cancelled && interval.status !== "active") continue;
+          if ("reservation" in source) {
+            if (source.account_user_id !== account.userId) fail();
+            if (source.payment_method === "online" && !succeededBookingIds.has(source.id)) continue;
+          } else if (source.created_by_user_id !== account.userId) fail();
+          let end: string | undefined;
+          if (!cancelled) {
+            // Reuse the repository's conservative UTC date bounds. This avoids
+            // local-clock comparisons across folds, gaps and skipped dates;
+            // the boundary window retains the exact existing DST resolver.
+            let ended: boolean;
+            if (interval.booking_date <= earliestDate) ended = true;
+            else if (interval.booking_date > latestDate) ended = false;
+            else {
+              end = resolveStartInstant(court.location.timezone, interval.booking_date, interval.ends_at_minute);
+              ended = Date.parse(end) <= nowInstant;
+            }
+            if (scope === "upcoming" ? ended : !ended) continue;
+          }
+          locations.set(court.location_id, { id: court.location_id, name: court.location.name });
+          courts.set(interval.court_id, { id: interval.court_id, name: court.name, location_id: court.location_id });
+          const sourceType = courtActivityType("reservation" in source
+            ? { kind: "booking", includes_coaching: source.includes_coaching } : { kind: "reservation" });
+          if ((type !== "all" && (type === "booking" ? !("reservation" in source) : sourceType !== type))
+            || (query.status !== "all" && (source.status === "cancelled" ? "cancelled" : "completed") !== query.status)
+            || (query.location && court.location_id !== query.location)
+            || (query.from && interval.booking_date < query.from) || (query.to && interval.booking_date > query.to)) continue;
           const common = { id: source.id, court_id: interval.court_id, location_id: court.location_id,
             booking_date: interval.booking_date, starts_at_minute: interval.starts_at_minute, ends_at_minute: interval.ends_at_minute,
-            starts_at_instant: localStartInstant(court.location.timezone, interval.booking_date, interval.starts_at_minute),
+            starts_at_instant: resolveStartInstant(court.location.timezone, interval.booking_date, interval.starts_at_minute),
             location_name: court.location.name, location_timezone: court.location.timezone, court_name: court.name };
           let row: ActivityRow;
           if ("reservation" in source) {
-            if (source.account_user_id !== account.userId) fail();
-            if (source.payment_method === "online" && source.payments.length === 0) continue;
             row = { ...common, kind: "booking", status: source.status,
               history_at: source.status === "cancelled" ? source.updated_at : end,
               customer_name: source.customer_name, customer_email: source.customer_email, customer_phone: source.customer_phone,
@@ -132,35 +173,50 @@ export async function listOwnCourtActivity(scope: ActivityScope, query: Activity
               cancellation_notice_minutes: source.cancellation_notice_minutes,
               total_amount_minor: source.total_amount_minor, currency: source.currency };
           } else {
-            if (source.created_by_user_id !== account.userId) fail();
             row = { ...common, kind: "reservation", status: source.status,
               history_at: source.status === "cancelled" ? source.cancelled_at ?? source.updated_at : end,
               updated_at: source.updated_at, reason: source.reason, created_by_user_id: source.created_by_user_id,
               creator_name: displayName(source.creator), cancelled_at: source.cancelled_at, cancelled_by_name: displayName(source.canceller) };
           }
-          locations.set(row.location_id, { id: row.location_id, name: row.location_name });
-          courts.set(row.court_id, { id: row.court_id, name: row.court_name, location_id: row.location_id });
-          if ((type !== "all" && (type === "booking" ? row.kind !== "booking" : courtActivityType(row) !== type))
-            || (query.status !== "all" && (row.status === "cancelled" ? "cancelled" : "completed") !== query.status)
-            || (query.location && row.location_id !== query.location) || (query.court && row.court_id !== query.court)
-            || (query.from && row.booking_date < query.from) || (query.to && row.booking_date > query.to)) continue;
           candidates.push(row);
+          addedCandidates = true;
+          if (query.court && row.court_id === query.court) {
+            courtCandidates.push(row);
+            addedCourtCandidates = true;
+          }
         }
-        candidates.sort((a, b) => compareActivity(a, b, scope, query));
-        candidates = candidates.slice(0, needed);
+        candidatesNeedSort ||= addedCandidates;
+        courtCandidatesNeedSort ||= addedCourtCandidates;
+        // Ordering is only needed to discard overflow or return the final page.
+        // Deep pages can accumulate several batches before reaching their bound.
+        if (addedCandidates && candidates.length > needed) {
+          candidates.sort((a, b) => compareActivity(a, b, scope, query));
+          candidates = candidates.slice(0, needed);
+          candidatesNeedSort = false;
+        }
+        if (addedCourtCandidates && courtCandidates.length > needed) {
+          courtCandidates.sort((a, b) => compareActivity(a, b, scope, query));
+          courtCandidates = courtCandidates.slice(0, needed);
+          courtCandidatesNeedSort = false;
+        }
         if (parsed.data.length < batchSize) break;
+        afterId = parsed.data[parsed.data.length - 1].id;
       }
     }
   }
   // A direct URL may pair a court with another location (or name an unknown court);
   // ignore that court rather than silently returning an empty list.
-  if (query.court && courts.get(query.court)?.location_id !== query.location) {
-    return listOwnCourtActivity(scope, { ...query, court: undefined }, supabase, now);
+  if (query.court && courts.get(query.court)?.location_id === query.location) {
+    candidates = courtCandidates;
+    candidatesNeedSort = courtCandidatesNeedSort;
   }
+  if (candidatesNeedSort) candidates.sort((a, b) => compareActivity(a, b, scope, query));
   const compareOption = (a: { name: string; id: string }, b: { name: string; id: string }) =>
     compareValue(a.name, b.name) || compareValue(a.id, b.id);
   const offset = (query.page - 1) * ACTIVITY_PAGE_SIZE;
-  return { rows: candidates.slice(offset, offset + ACTIVITY_PAGE_SIZE), hasNext: candidates.length > query.page * ACTIVITY_PAGE_SIZE,
+  const rows = candidates.slice(offset, offset + ACTIVITY_PAGE_SIZE).map((row) => ({ ...row,
+    history_at: row.history_at ?? resolveStartInstant(row.location_timezone, row.booking_date, row.ends_at_minute) }));
+  return { rows, hasNext: candidates.length > query.page * ACTIVITY_PAGE_SIZE,
     locations: [...locations.values()].sort(compareOption), courts: [...courts.values()].sort(compareOption) };
 }
 
@@ -195,11 +251,11 @@ export async function findOwnBookingActivityTarget(rawId: unknown, ownerId: stri
     includes_coaching: v.coachUserId != null, coach_name: v.coachName ?? null,
     coaching_program_name: v.coachingProgramName ?? null, cancellation_notice_minutes: v.cancellationNoticeMinutes,
     total_amount_minor: v.totalAmountMinor, currency: v.currency };
-  const ended = Date.parse(localStartInstant(v.timezone, v.bookingDate, v.endMinute)) <= now.getTime();
-  if (owned.status === "cancelled" || ended) {
+  const historyAt = owned.status === "cancelled" ? v.recordedAt.toISOString()
+    : localStartInstant(v.timezone, v.bookingDate, v.endMinute);
+  if (owned.status === "cancelled" || Date.parse(historyAt) <= now.getTime()) {
     return { scope: "history" as const, booking: { ...common, kind: "booking" as const,
-      status: owned.status, history_at: owned.status === "cancelled" ? v.recordedAt.toISOString()
-        : localStartInstant(v.timezone, v.bookingDate, v.endMinute) } };
+      status: owned.status, history_at: historyAt } };
   }
   const [live, changes] = await Promise.all([
     listBookingsWithLivePayment(manager, [id.data]), listBookingsWithPendingChange(manager, [id.data]),

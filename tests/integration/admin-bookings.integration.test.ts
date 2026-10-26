@@ -35,12 +35,12 @@ test("Admin bookings list guest, account, cancelled and historical bookings with
     expect((await db.from("court_reservations").insert(reservationIds.map((id, index) => ({ id, court_id: courtFor(index),
       booking_date: dateFor(index), starts_at_minute: 600, ends_at_minute: 660, status: index === 20 ? "cancelled" : "active",
       cancelled_at: index === 20 ? "2026-10-06T10:00:00Z" : null, cancelled_by_user_id: index === 20 ? users[0] : null })))).error).toBeNull();
-    expect((await insertBookingFixture(db, bookingIds.map((id, index) => ({ id, reservation_id: reservationIds[index],
+    await insertBookingFixture(bookingIds.map((id, index) => ({ id, reservation_id: reservationIds[index],
       account_user_id: index === 20 ? users[0] : null,
       customer_name: index === 21 ? `${marker} Historic Guest` : `${marker} Customer ${index}`,
       customer_email: `${marker}-${index}@example.test`, customer_phone: "123",
       status: index === 20 ? "cancelled" : index === 22 ? "pending_payment" : "confirmed", total_amount_minor: 1000 + index, currency: "RON",
-      cancellation_notice_minutes: 1440, payment_method: "online", created_at: `2026-09-${String(index + 1).padStart(2, "0")}T10:00:00Z` })))).error).toBeNull();
+      cancellation_notice_minutes: 1440, payment_method: "online", created_at: `2026-09-${String(index + 1).padStart(2, "0")}T10:00:00Z` })));
 
     const first = await listAdminBookings(query(), admin), second = await listAdminBookings(query({ page: "2" }), admin);
     expect(first).toMatchObject({ total: 23, totalPages: 2, page: 1 }); expect(first.rows).toHaveLength(20); expect(second.rows).toHaveLength(3);
@@ -132,10 +132,10 @@ test("the unified List includes direct staff reservations as separate records, w
       { id: linked, court_id: court, booking_date: "2099-03-03", starts_at_minute: 600, ends_at_minute: 660, reason: null,
         created_by_user_id: null, status: "active", created_at: "2026-09-05T10:00:00Z", ...open },
     ])).error).toBeNull();
-    expect((await insertBookingFixture(db, [{ id: bookingId, reservation_id: linked, account_user_id: null,
+    await insertBookingFixture([{ id: bookingId, reservation_id: linked, account_user_id: null,
       customer_name: `${marker} Customer`, customer_email: `${marker}-c@example.test`, customer_phone: "123", status: "confirmed",
       total_amount_minor: 5000, currency: "RON", cancellation_notice_minutes: 1440, payment_method: "online",
-      created_at: "2026-09-05T10:00:00Z" }])).error).toBeNull();
+      created_at: "2026-09-05T10:00:00Z" }]);
 
     // All types: the booking once (not its reservation row), plus the three staff reservations, newest-created first.
     const all = await listAdminBookings(query(), admin);

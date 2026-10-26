@@ -13,7 +13,7 @@ import { HomeLocationSelect } from "@/app/home-location-select";
 
 const location: PublicLocation = { id: "11111111-1111-4111-8111-111111111111", name: "East Club", slug: "east",
   address_line1: null, address_line2: null, city: null, postal_code: null, country_code: null,
-  timezone: "Europe/Bucharest", currency: "RON", allow_pay_at_club: false, todayOpeningHours: [],
+  timezone: "Europe/Bucharest", currency: "RON", allow_pay_at_club: false, customer_cancellation_notice_minutes: null, todayOpeningHours: [],
   courts: [{ id: "22222222-2222-4222-8222-222222222222", name: "Court 1", slug: "court-1",
     surface: "clay", environment: "outdoor", has_lighting: false }] };
 const west: PublicLocation = { ...location, id: "33333333-3333-4333-8333-333333333333", name: "West Club", timezone: "America/Los_Angeles" };

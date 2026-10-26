@@ -7,7 +7,7 @@
 - authentication;
 - application user/profile foundation;
 - RBAC;
-- RLS;
+- denied browser table grants and Storage RLS;
 - locations;
 - courts;
 - coaches;
@@ -81,7 +81,7 @@ Recommended sequence:
 
 ```text
 1. Supabase project and database foundation
-2. Authentication, application users, roles and RLS
+2. Authentication, application users, roles and access control (denied browser table grants, Storage RLS)
 3. Locations and courts
 4. Court availability
 5. Booking domain model
@@ -129,10 +129,10 @@ Do not introduce prematurely:
 - Stripe is the payment provider;
 - Supabase Auth is the authentication provider;
 - PostgreSQL is the primary application database;
-- `supabase-js` is the primary database access mechanism;
+- TypeORM is the application persistence and migration mechanism; `supabase-js` handles Auth and private Storage only;
 - Supabase access is server-first;
 - no browser Supabase client is used by default;
-- no ORM is required;
+- TypeORM is the approved ORM; do not introduce another;
 - no separate backend framework is required;
 - Next.js is the complete primary application authorization boundary; application table grants deny direct browser access and Storage RLS protects private objects;
 - domain algorithms remain in TypeScript;

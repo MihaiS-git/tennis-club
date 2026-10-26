@@ -1,0 +1,588 @@
+{
+  "method": {
+    "node": "v24.18.0",
+    "platform": "linux",
+    "arch": "x64",
+    "rows": 30000,
+    "bookings": 15000,
+    "directReservations": 15000,
+    "locations": 6,
+    "dates": 12,
+    "now": "2026-10-03T12:00:00Z",
+    "warmupsPerCase": 1,
+    "samplesPerCase": 3,
+    "instrumented": true,
+    "sqlTransport": "mocked; real repositories execute",
+    "fsModuleCache": false,
+    "classificationTimer": "Inclusive CPU-bound wall time, overlapping timezone/business stages; not process CPU",
+    "memory": "Process observations without forced GC; peak heap sampled at batch boundaries"
+  },
+  "sourceSha256": {
+    "before": "386e7c277be88645c21b48d2e1cb4fd02a4b5fb2e8fadc18ec9a2e71cba2757d",
+    "after": "9f379da76633deff9a2aa00bc1db10936e63f87234949b97bde6fe546705d7ad"
+  },
+  "summary": [
+    {
+      "params": {
+        "page": "1"
+      },
+      "digestsMatch": true,
+      "serviceMs": {
+        "before": 1764.1354810000003,
+        "after": 1026.951923
+      },
+      "processCpuMs": {
+        "before": 1789.541,
+        "after": 1065.476
+      },
+      "classificationMs": {
+        "before": 780.8145850000237,
+        "after": 64.52794100001984
+      },
+      "timezoneMs": {
+        "before": 1516.953496000001,
+        "after": 796.7421419999505
+      },
+      "conversions": {
+        "before": 60000,
+        "after": 32496
+      },
+      "formatters": {
+        "before": 6,
+        "after": 6
+      },
+      "rssMiB": {
+        "before": 262.12109375,
+        "after": 265.43359375
+      },
+      "peakSampledHeapMiB": {
+        "before": 119.1920394897461,
+        "after": 119.72382354736328
+      }
+    },
+    {
+      "params": {
+        "page": "1500"
+      },
+      "digestsMatch": true,
+      "serviceMs": {
+        "before": 1794.9813680000007,
+        "after": 1051.750078
+      },
+      "processCpuMs": {
+        "before": 1856.688,
+        "after": 1093.658
+      },
+      "classificationMs": {
+        "before": 786.1580580001664,
+        "after": 64.04154999994353
+      },
+      "timezoneMs": {
+        "before": 1525.1513209999903,
+        "after": 801.9939489999115
+      },
+      "conversions": {
+        "before": 60000,
+        "after": 32516
+      },
+      "formatters": {
+        "before": 6,
+        "after": 6
+      },
+      "rssMiB": {
+        "before": 300.51171875,
+        "after": 303.046875
+      },
+      "peakSampledHeapMiB": {
+        "before": 143.9418716430664,
+        "after": 141.2133560180664
+      }
+    },
+    {
+      "params": {
+        "page": "250",
+        "location": "ca000000-0000-4000-8000-000000000003",
+        "court": "ca000000-0000-4000-8000-000000000002"
+      },
+      "digestsMatch": true,
+      "serviceMs": {
+        "before": 1642.0859990000026,
+        "after": 299.2944489999991
+      },
+      "processCpuMs": {
+        "before": 1666.116,
+        "after": 310.121
+      },
+      "classificationMs": {
+        "before": 776.6247460001905,
+        "after": 66.19474199977594
+      },
+      "timezoneMs": {
+        "before": 1506.6751000001932,
+        "after": 193.73301799995897
+      },
+      "conversions": {
+        "before": 60000,
+        "after": 7516
+      },
+      "formatters": {
+        "before": 6,
+        "after": 6
+      },
+      "rssMiB": {
+        "before": 310.453125,
+        "after": 315.484375
+      },
+      "peakSampledHeapMiB": {
+        "before": 116.51376342773438,
+        "after": 112.1695327758789
+      }
+    }
+  ],
+  "before": [
+    {
+      "params": {
+        "page": "1"
+      },
+      "medianMs": 1764.1354810000003,
+      "samples": [
+        1758.3363289999998,
+        1764.1354810000003,
+        1770.4225700000002
+      ],
+      "details": [
+        {
+          "ms": 1770.4225700000002,
+          "cpuMs": 1789.541,
+          "heapBefore": 100790984,
+          "heapAfter": 74498944,
+          "rss": 268943360,
+          "stages": {
+            "retrieval": 18.881530999999086,
+            "validation": 48.559844999999314,
+            "timezone": 1514.1427730000396,
+            "business": 51.093545999940034,
+            "selection": 130.45750700003737,
+            "page": 0.01755799999955343,
+            "classification": 780.8145850000237,
+            "conversions": 60000,
+            "formatters": 6,
+            "peakHeap": 124124512
+          },
+          "digest": "dcf6137bc20d94abd81ee3b21dc1c23cc295dc6ede32f573752211117e318d3f"
+        },
+        {
+          "ms": 1758.3363289999998,
+          "cpuMs": 1796.702,
+          "heapBefore": 74560584,
+          "heapAfter": 103802360,
+          "rss": 274853888,
+          "stages": {
+            "retrieval": 18.912186999998085,
+            "validation": 46.89335499999652,
+            "timezone": 1516.953496000001,
+            "business": 40.95234499993694,
+            "selection": 129.55843200002255,
+            "page": 0.01390099999935046,
+            "classification": 779.2306449999733,
+            "conversions": 60000,
+            "formatters": 6,
+            "peakHeap": 124981912
+          },
+          "digest": "dcf6137bc20d94abd81ee3b21dc1c23cc295dc6ede32f573752211117e318d3f"
+        },
+        {
+          "ms": 1764.1354810000003,
+          "cpuMs": 1768.708,
+          "heapBefore": 103840792,
+          "heapAfter": 66059936,
+          "rss": 276426752,
+          "stages": {
+            "retrieval": 19.195393999996668,
+            "validation": 46.617183000002115,
+            "timezone": 1523.903268999995,
+            "business": 39.414418000126716,
+            "selection": 130.13234899989402,
+            "page": 0.01745500000015454,
+            "classification": 783.3216130001174,
+            "conversions": 60000,
+            "formatters": 6,
+            "peakHeap": 126610288
+          },
+          "digest": "dcf6137bc20d94abd81ee3b21dc1c23cc295dc6ede32f573752211117e318d3f"
+        }
+      ]
+    },
+    {
+      "params": {
+        "page": "1500"
+      },
+      "medianMs": 1794.9813680000007,
+      "samples": [
+        1758.4199929999995,
+        1794.9813680000007,
+        1810.2514699999992
+      ],
+      "details": [
+        {
+          "ms": 1810.2514699999992,
+          "cpuMs": 1868.379,
+          "heapBefore": 117176160,
+          "heapAfter": 108078640,
+          "rss": 298987520,
+          "stages": {
+            "retrieval": 18.655202999998437,
+            "validation": 49.063310999999885,
+            "timezone": 1536.7724300000373,
+            "business": 50.505734999796914,
+            "selection": 148.34432900006686,
+            "page": 0.02102299999933166,
+            "classification": 791.479966000059,
+            "conversions": 60000,
+            "formatters": 6,
+            "peakHeap": 144706696
+          },
+          "digest": "2aa38da37f5bea26cf75ce73540c03f3d86510e258700ae298ee441b0e599e2c"
+        },
+        {
+          "ms": 1794.9813680000007,
+          "cpuMs": 1856.688,
+          "heapBefore": 108117680,
+          "heapAfter": 100655352,
+          "rss": 315109376,
+          "stages": {
+            "retrieval": 19.25641699999869,
+            "validation": 46.714342000002944,
+            "timezone": 1525.1513209999903,
+            "business": 48.84301700017204,
+            "selection": 148.10736999988512,
+            "page": 0.02006500000061351,
+            "classification": 786.1580580001664,
+            "conversions": 60000,
+            "formatters": 6,
+            "peakHeap": 150933992
+          },
+          "digest": "2aa38da37f5bea26cf75ce73540c03f3d86510e258700ae298ee441b0e599e2c"
+        },
+        {
+          "ms": 1758.4199929999995,
+          "cpuMs": 1782.455,
+          "heapBefore": 100692088,
+          "heapAfter": 151356736,
+          "rss": 326119424,
+          "stages": {
+            "retrieval": 18.582796000009694,
+            "validation": 47.16015399999196,
+            "timezone": 1502.2207060001037,
+            "business": 40.11397099991336,
+            "selection": 145.86714000002212,
+            "page": 0.020732999999381718,
+            "classification": 773.4895529999158,
+            "conversions": 60000,
+            "formatters": 6,
+            "peakHeap": 162880000
+          },
+          "digest": "2aa38da37f5bea26cf75ce73540c03f3d86510e258700ae298ee441b0e599e2c"
+        }
+      ]
+    },
+    {
+      "params": {
+        "page": "250",
+        "location": "ca000000-0000-4000-8000-000000000003",
+        "court": "ca000000-0000-4000-8000-000000000002"
+      },
+      "medianMs": 1642.0859990000026,
+      "samples": [
+        1633.0583680000018,
+        1642.0859990000026,
+        1642.4081970000007
+      ],
+      "details": [
+        {
+          "ms": 1642.0859990000026,
+          "cpuMs": 1672.219,
+          "heapBefore": 59555224,
+          "heapAfter": 63801288,
+          "rss": 328765440,
+          "stages": {
+            "retrieval": 17.52576600001339,
+            "validation": 47.17237999999634,
+            "timezone": 1503.993717999907,
+            "business": 47.09823799995138,
+            "selection": 19.330346999966423,
+            "page": 0.037839999997231644,
+            "classification": 776.6247460001905,
+            "conversions": 60000,
+            "formatters": 6,
+            "peakHeap": 116738016
+          },
+          "digest": "669242d05713b3fac592ef4d143ec10a9ce49103522ee4c5bc4117798d0dedd6"
+        },
+        {
+          "ms": 1642.4081970000007,
+          "cpuMs": 1666.116,
+          "heapBefore": 63839496,
+          "heapAfter": 60621920,
+          "rss": 325533696,
+          "stages": {
+            "retrieval": 17.759430000005523,
+            "validation": 46.95158299999821,
+            "timezone": 1513.3690870000974,
+            "business": 39.48986800045532,
+            "selection": 20.121251999978995,
+            "page": 0.01652299999841489,
+            "classification": 777.7146750001411,
+            "conversions": 60000,
+            "formatters": 6,
+            "peakHeap": 122173536
+          },
+          "digest": "669242d05713b3fac592ef4d143ec10a9ce49103522ee4c5bc4117798d0dedd6"
+        },
+        {
+          "ms": 1633.0583680000018,
+          "cpuMs": 1640.723,
+          "heapBefore": 60658704,
+          "heapAfter": 123523336,
+          "rss": 325533696,
+          "stages": {
+            "retrieval": 17.40469399998983,
+            "validation": 47.12872399999833,
+            "timezone": 1506.6751000001932,
+            "business": 38.83451100012826,
+            "selection": 18.566041000063706,
+            "page": 0.006213000000570901,
+            "classification": 775.7496559997489,
+            "conversions": 60000,
+            "formatters": 6,
+            "peakHeap": 125927480
+          },
+          "digest": "669242d05713b3fac592ef4d143ec10a9ce49103522ee4c5bc4117798d0dedd6"
+        }
+      ]
+    }
+  ],
+  "after": [
+    {
+      "params": {
+        "page": "1"
+      },
+      "medianMs": 1026.951923,
+      "samples": [
+        1023.1271409999995,
+        1026.951923,
+        1079.8867
+      ],
+      "details": [
+        {
+          "ms": 1079.8867,
+          "cpuMs": 1102.846,
+          "heapBefore": 90437080,
+          "heapAfter": 97651176,
+          "rss": 269438976,
+          "stages": {
+            "retrieval": 19.079264999999168,
+            "validation": 52.46599700000024,
+            "timezone": 824.9060749999608,
+            "business": 42.86474900005351,
+            "selection": 132.3220469999626,
+            "page": 0.023964999999861902,
+            "classification": 67.00144800001408,
+            "conversions": 32496,
+            "formatters": 6,
+            "peakHeap": 124768424
+          },
+          "digest": "dcf6137bc20d94abd81ee3b21dc1c23cc295dc6ede32f573752211117e318d3f"
+        },
+        {
+          "ms": 1026.951923,
+          "cpuMs": 1065.476,
+          "heapBefore": 97712816,
+          "heapAfter": 93960872,
+          "rss": 278327296,
+          "stages": {
+            "retrieval": 18.62697399999979,
+            "validation": 47.12258900000006,
+            "timezone": 794.8242630000218,
+            "business": 30.95874599991612,
+            "selection": 130.47391100003915,
+            "page": 0.020649999999932334,
+            "classification": 63.18228700004647,
+            "conversions": 32496,
+            "formatters": 6,
+            "peakHeap": 125539528
+          },
+          "digest": "dcf6137bc20d94abd81ee3b21dc1c23cc295dc6ede32f573752211117e318d3f"
+        },
+        {
+          "ms": 1023.1271409999995,
+          "cpuMs": 1026.788,
+          "heapBefore": 93999304,
+          "heapAfter": 90081200,
+          "rss": 279900160,
+          "stages": {
+            "retrieval": 17.68115799999623,
+            "validation": 46.08892300000434,
+            "timezone": 796.7421419999505,
+            "business": 29.739940000051774,
+            "selection": 128.23861000006036,
+            "page": 0.018412999999782187,
+            "classification": 64.52794100001984,
+            "conversions": 32496,
+            "formatters": 6,
+            "peakHeap": 127484464
+          },
+          "digest": "dcf6137bc20d94abd81ee3b21dc1c23cc295dc6ede32f573752211117e318d3f"
+        }
+      ]
+    },
+    {
+      "params": {
+        "page": "1500"
+      },
+      "medianMs": 1051.750078,
+      "samples": [
+        1041.0271760000005,
+        1051.750078,
+        1055.5673109999989
+      ],
+      "details": [
+        {
+          "ms": 1041.0271760000005,
+          "cpuMs": 1093.658,
+          "heapBefore": 105639376,
+          "heapAfter": 122186912,
+          "rss": 302096384,
+          "stages": {
+            "retrieval": 18.130379999995967,
+            "validation": 45.76409899999908,
+            "timezone": 794.0054179998806,
+            "business": 30.608937000061815,
+            "selection": 147.60748600002262,
+            "page": 0.5371789999999237,
+            "classification": 64.04154999994353,
+            "conversions": 32516,
+            "formatters": 6,
+            "peakHeap": 144809808
+          },
+          "digest": "2aa38da37f5bea26cf75ce73540c03f3d86510e258700ae298ee441b0e599e2c"
+        },
+        {
+          "ms": 1051.750078,
+          "cpuMs": 1107.199,
+          "heapBefore": 122430160,
+          "heapAfter": 140037768,
+          "rss": 317767680,
+          "stages": {
+            "retrieval": 18.16968899999847,
+            "validation": 46.89112800000203,
+            "timezone": 801.9939489999115,
+            "business": 32.00644699999157,
+            "selection": 147.82400000010057,
+            "page": 0.5359389999994164,
+            "classification": 63.7978050000238,
+            "conversions": 32516,
+            "formatters": 6,
+            "peakHeap": 148072936
+          },
+          "digest": "2aa38da37f5bea26cf75ce73540c03f3d86510e258700ae298ee441b0e599e2c"
+        },
+        {
+          "ms": 1055.5673109999989,
+          "cpuMs": 1073.387,
+          "heapBefore": 140077688,
+          "heapAfter": 155702008,
+          "rss": 321372160,
+          "stages": {
+            "retrieval": 18.271459999993567,
+            "validation": 47.11469200000465,
+            "timezone": 805.0373779999718,
+            "business": 30.239362000230358,
+            "selection": 150.50599999996575,
+            "page": 0.5440560000006371,
+            "classification": 64.97946599983788,
+            "conversions": 32516,
+            "formatters": 6,
+            "peakHeap": 163676544
+          },
+          "digest": "2aa38da37f5bea26cf75ce73540c03f3d86510e258700ae298ee441b0e599e2c"
+        }
+      ]
+    },
+    {
+      "params": {
+        "page": "250",
+        "location": "ca000000-0000-4000-8000-000000000003",
+        "court": "ca000000-0000-4000-8000-000000000002"
+      },
+      "medianMs": 299.2944489999991,
+      "samples": [
+        295.21111700000074,
+        299.2944489999991,
+        312.1917599999997
+      ],
+      "details": [
+        {
+          "ms": 295.21111700000074,
+          "cpuMs": 307.19,
+          "heapBefore": 108435680,
+          "heapAfter": 117477920,
+          "rss": 330809344,
+          "stages": {
+            "retrieval": 16.422623999995267,
+            "validation": 47.70467700000336,
+            "timezone": 189.68043999997462,
+            "business": 18.692993999989994,
+            "selection": 18.382457999981852,
+            "page": 0.5477589999991324,
+            "classification": 64.503194999872,
+            "conversions": 7516,
+            "formatters": 6,
+            "peakHeap": 172061192
+          },
+          "digest": "669242d05713b3fac592ef4d143ec10a9ce49103522ee4c5bc4117798d0dedd6"
+        },
+        {
+          "ms": 312.1917599999997,
+          "cpuMs": 415.084,
+          "heapBefore": 117515792,
+          "heapAfter": 58569456,
+          "rss": 335253504,
+          "stages": {
+            "retrieval": 17.300678000008702,
+            "validation": 48.32318199999827,
+            "timezone": 194.97651100009352,
+            "business": 24.48672299995451,
+            "selection": 20.84959600001639,
+            "page": 0.5880399999987276,
+            "classification": 68.99906400011241,
+            "conversions": 7516,
+            "formatters": 6,
+            "peakHeap": 117618280
+          },
+          "digest": "669242d05713b3fac592ef4d143ec10a9ce49103522ee4c5bc4117798d0dedd6"
+        },
+        {
+          "ms": 299.2944489999991,
+          "cpuMs": 310.121,
+          "heapBefore": 58613200,
+          "heapAfter": 68604328,
+          "rss": 327921664,
+          "stages": {
+            "retrieval": 16.493377000007968,
+            "validation": 47.22688599999674,
+            "timezone": 193.73301799995897,
+            "business": 18.19649400007802,
+            "selection": 19.259508000042842,
+            "page": 0.5451970000012807,
+            "classification": 66.19474199977594,
+            "conversions": 7516,
+            "formatters": 6,
+            "peakHeap": 116976848
+          },
+          "digest": "669242d05713b3fac592ef4d143ec10a9ce49103522ee4c5bc4117798d0dedd6"
+        }
+      ]
+    }
+  ]
+}

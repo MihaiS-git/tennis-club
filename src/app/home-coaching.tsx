@@ -13,7 +13,7 @@ export async function HomeCoachingPrograms({ coaching }: { coaching: Promise<Pub
   try {
     ({ programs } = await coaching);
   } catch {
-    return <p className={noteClassName}>Programs, coaches and lesson prices are listed on the Coaching page.</p>;
+    return <p role="alert" className={noteClassName}>Coaching information is temporarily unavailable. Please try again later.</p>;
   }
   if (!programs.length) {
     return <p className={noteClassName}>Coaching programs will be listed here as soon as the club publishes them.</p>;

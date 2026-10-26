@@ -50,7 +50,7 @@ it.each(["personal"] as const)("sanitizes %s persistence failures", async (bound
   const failure = new QueryFailedError("private SQL", ["private parameter"],
     Object.assign(new Error("private connection information"), { code: "40001" }));
   ({ source, personal: personalRead, player: playerRead }[boundary]).mockRejectedValue(failure);
-  expect(await loadProfile(client, userId)).toBeNull();
+  expect(await loadProfile(userId)).toBeNull();
   expect(logError).toHaveBeenCalledExactlyOnceWith(
     { event: "profile.load_failed", kind: "serialization_failure", code: "40001" }, "Failed to load profile",
   );
@@ -119,7 +119,16 @@ it("prefills booking contact from the verified owner's personal profile and acco
     customerName: "Ana Player", customerEmail: "owner@example.test", customerPhone: "+40 123",
   });
   expect(personalRead).toHaveBeenCalledExactlyOnceWith(manager, userId);
+  expect(playerRead).not.toHaveBeenCalled();
   expect(personalWrite).not.toHaveBeenCalled();
+});
+
+it("prefills booking contact for an active account without a tennis profile", async () => {
+  playerRead.mockResolvedValue(null);
+  expect(await bookingContactPrefill(client)).toEqual({
+    customerName: "Ana Player", customerEmail: "owner@example.test", customerPhone: "+40 123",
+  });
+  expect(playerRead).not.toHaveBeenCalled();
 });
 
 it("leaves missing booking profile values empty without substituting a tennis display name", async () => {
@@ -131,10 +140,15 @@ it("leaves missing booking profile values empty without substituting a tennis di
   expect(await bookingContactPrefill(client)).toEqual({
     customerName: "Ana", customerEmail: "owner@example.test", customerPhone: "",
   });
+  personalRead.mockResolvedValue(null);
+  expect(await bookingContactPrefill(client)).toEqual({
+    customerName: "", customerEmail: "owner@example.test", customerPhone: "",
+  });
   personalRead.mockRejectedValue(new Error("Profile unavailable"));
   expect(await bookingContactPrefill(client)).toEqual({
     customerName: "", customerEmail: "owner@example.test", customerPhone: "",
   });
+  expect(playerRead).not.toHaveBeenCalled();
 });
 
 it("does not load private booking profile information for guests or inactive accounts", async () => {

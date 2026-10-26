@@ -2,11 +2,13 @@ import { insertBookingFixture } from "./checkout-fixtures";
 import { cleanupBookingFixtures } from "./checkout-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
-import { assert, expect, test } from "vitest";
-import { listOwnUpcomingActivity } from "@/lib/bookings/activity-service";
+import { assert, expect, test, vi } from "vitest";
+import { listOwnCourtActivity, listOwnUpcomingActivity } from "@/lib/bookings/activity-service";
 async function listOwnUpcomingCustomerBookings(client: Parameters<typeof listOwnUpcomingActivity>[1]) {
   return (await listOwnUpcomingActivity({}, client)).bookings;
 }
+import { parseActivityQuery } from "@/lib/bookings/activity-query";
+import { getDataSource } from "@/lib/db/data-source";
 import { localMinute, localToday } from "@/lib/courts/local-time";
 import { cleanupAuthFixtures, localFixtureClient } from "./auth-fixtures";
 
@@ -39,7 +41,8 @@ test("upcoming customer booking reads are owner scoped for members and staff", a
     return { id, email, client: signedIn };
   }
   async function booking(accountUserId: string | null, date: string, start: number, end: number,
-    options: { bookingStatus?: "confirmed" | "cancelled"; reservationStatus?: "active" | "cancelled"; email?: string } = {}) {
+    options: { bookingStatus?: "confirmed" | "cancelled"; reservationStatus?: "active" | "cancelled"; email?: string;
+      paymentMethod?: "online" | "pay_at_club"; payments?: ("succeeded" | "failed" | "pending")[] } = {}) {
     const courtId = randomUUID(), reservationId = randomUUID();
     courtIds.push(courtId); reservationIds.push(reservationId);
     assert.strictEqual((await service.from("courts").insert({ id: courtId, location_id: locationId,
@@ -50,10 +53,16 @@ test("upcoming customer booking reads are owner scoped for members and staff", a
       cancelled_at: options.reservationStatus === "cancelled" ? now.toISOString() : null,
       cancelled_by_user_id: options.reservationStatus === "cancelled" ? accountUserId : null })).error, null);
     const id = randomUUID();
-    assert.strictEqual((await insertBookingFixture(service, { id, reservation_id: reservationId,
-      account_user_id: accountUserId, payment_method: "pay_at_club", customer_name: "Snapshot Name", customer_email: options.email ?? "snapshot@example.test",
+    await insertBookingFixture({ id, reservation_id: reservationId,
+      account_user_id: accountUserId, payment_method: options.paymentMethod ?? "pay_at_club", customer_name: "Snapshot Name", customer_email: options.email ?? "snapshot@example.test",
       customer_phone: "+40 123", cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON",
-      status: options.bookingStatus ?? "confirmed" })).error, null);
+      status: options.bookingStatus ?? "confirmed" });
+    for (const status of options.payments ?? []) {
+      assert.strictEqual((await service.from("payment_attempts").insert({ id: randomUUID(), booking_id: id,
+        method: "online", provider: "stripe", amount_minor: 9000, currency: "RON", status,
+        expires_at: "2099-11-01T00:00:00Z", completed_at: status === "pending" ? null : now.toISOString(),
+      })).error, null);
+    }
     return id;
   }
   try {
@@ -104,6 +113,32 @@ test("upcoming customer booking reads are owner scoped for members and staff", a
       expect(direct.map((row) => row.id)).toEqual([...ownReservations].reverse());
       expect(direct.every((row) => row.created_by_user_id === staff.id)).toBe(true);
     }
+    const unpaid = await booking(member.id, "2099-11-01", 600, 660, { paymentMethod: "online" });
+    const paid = await booking(member.id, "2099-11-02", 600, 660, { paymentMethod: "online", payments: ["succeeded"] });
+    const paidTwice = await booking(member.id, "2099-11-03", 600, 660, { paymentMethod: "online", payments: ["succeeded", "succeeded"] });
+    const failed = await booking(member.id, "2099-11-04", 600, 660, { paymentMethod: "online", payments: ["failed", "pending"] });
+    const club = await booking(member.id, "2099-11-05", 600, 660);
+    const cancelledPaid = await booking(member.id, "2099-11-06", 600, 660, { paymentMethod: "online",
+      bookingStatus: "cancelled", reservationStatus: "cancelled", payments: ["succeeded"] });
+    const cancelledUnpaid = await booking(member.id, "2099-11-07", 600, 660, { paymentMethod: "online",
+      bookingStatus: "cancelled", reservationStatus: "cancelled", payments: ["failed"] });
+    const manager = (await getDataSource()).manager;
+    const reads = vi.spyOn(manager, "query");
+    try {
+      const onlineRows = await listOwnCourtActivity("upcoming", parseActivityQuery({ from: "2099-11-01" }, "upcoming"), member.client);
+      expect(onlineRows.rows.map(row => row.id)).toEqual([paid, paidTwice, club]);
+      expect(onlineRows.rows.map(row => row.id)).not.toContain(unpaid);
+      expect(onlineRows.rows.map(row => row.id)).not.toContain(failed);
+      const paymentReads = reads.mock.calls.filter(([sql]) => typeof sql === "string" && sql.includes("FROM public.payment_attempts"));
+      expect(paymentReads).toHaveLength(1);
+      expect(paymentReads[0][1]).toEqual([expect.arrayContaining([unpaid, paid, paidTwice, failed])]);
+      expect(paymentReads[0][1]).toEqual([expect.not.arrayContaining([club])]);
+      reads.mockClear();
+      const cancelledRows = await listOwnCourtActivity("history", parseActivityQuery({ from: "2099-11-01" }, "history"), member.client);
+      expect(cancelledRows.rows.map(row => row.id)).toEqual([cancelledPaid]);
+      expect(cancelledRows.rows.map(row => row.id)).not.toContain(cancelledUnpaid);
+      expect(reads.mock.calls.filter(([sql]) => typeof sql === "string" && sql.includes("FROM public.payment_attempts"))).toHaveLength(1);
+    } finally { reads.mockRestore(); }
     expect((await listOwnUpcomingActivity({}, member.client)).upcoming).toEqual([]);
     expect((await member.client.from("bookings").select("id")).error?.code).toBe("42501");
   } finally {

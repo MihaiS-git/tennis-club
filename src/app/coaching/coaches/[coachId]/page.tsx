@@ -5,7 +5,7 @@ import { connection } from "next/server";
 import { cache } from "react";
 
 import { readPublicCoach, type PublicCoachLesson, type PublicCoachProfile } from "@/lib/coaching/public";
-import { coachingProgramTypeLabels, formatCoachingDuration, formatParticipants } from "@/lib/coaching/validation";
+import { coachingProgramTypeLabels, formatCoachingDuration, formatPlayers, formatParticipants } from "@/lib/coaching/validation";
 import { listPublicLocationsWithCourts } from "@/lib/courts/public";
 import { formatMoney } from "@/lib/pricing/money";
 import styles from "../../../page.module.css";
@@ -223,7 +223,7 @@ export default async function CoachPage({ params }: CoachPageProps) {
             <p className={`${eyebrowClassName} text-accent-on-dark`}>Lesson prices</p>
             <h2 id="coach-prices-title" className={`${headingClassName} mt-4 max-w-[12ch]`}>Lessons with {firstName}.</h2>
             <p className={`${bodyClassName} mt-6 max-w-xl text-ivory`}>
-              Prices are per lesson and charged in the location’s currency. Where {firstName} has an individual price, it replaces the club price.
+              Prices are lesson prices per person, for each lesson length and number of players, and charged in the location’s currency. Where {firstName} has an individual price, it replaces the club price.
             </p>
             <p className="mt-4 max-w-xl font-sans text-sm leading-6 text-ivory">
               <Link href={`/book?mode=coaching&coach=${coach.id}`} className="inline-flex min-h-11 items-center font-semibold underline underline-offset-4">Book a lesson with {firstName}</Link>
@@ -236,15 +236,15 @@ export default async function CoachPage({ params }: CoachPageProps) {
                   {priceGroups.length > 1 && <h3 className="font-heading text-2xl font-semibold tracking-[-0.025em] text-chalk">Prices in {group.currency}</h3>}
                   <ul className="mt-4">
                     {group.lessons.map((lesson) => (
-                      <li key={`${lesson.programId}-${lesson.durationMinutes}`} className="grid gap-x-6 gap-y-1 border-t border-ivory/25 py-4 font-sans sm:grid-cols-[minmax(0,1fr)_auto]">
+                      <li key={`${lesson.programId}-${lesson.durationMinutes}-${lesson.participantCount}`} className="grid gap-x-6 gap-y-1 border-t border-ivory/25 py-4 font-sans sm:grid-cols-[minmax(0,1fr)_auto]">
                         <div>
-                          <p className="text-base font-semibold text-chalk">{lesson.programName} · {formatCoachingDuration(lesson.durationMinutes)}</p>
+                          <p className="text-base font-semibold text-chalk">{lesson.programName} · {formatCoachingDuration(lesson.durationMinutes)} · {formatPlayers(lesson.participantCount)}</p>
                           <p className="text-sm text-ivory">{rentalLabel(programTypes.get(lesson.programId)?.courtRentalIncluded ?? false)}</p>
                         </div>
                         {lesson.price ? (
                           <p className="text-lg font-semibold tabular-nums text-chalk sm:text-right">
                             {formatMoney(lesson.price.amountMinor, lesson.price.currency)}
-                            <span className="block text-xs font-normal text-ivory">{lesson.price.source === "coach" ? `${firstName}’s price` : "Club price"}</span>
+                            <span className="block text-xs font-normal text-ivory">Lesson price/person · {lesson.price.source === "coach" ? `${firstName}’s price` : "Club price"}</span>
                           </p>
                         ) : <p className="text-sm text-ivory sm:text-right">Price not published</p>}
                       </li>

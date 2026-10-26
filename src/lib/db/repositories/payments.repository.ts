@@ -228,8 +228,60 @@ export async function listAdminTransactionProjection(manager: EntityManager, que
     from public.bookings b
     join public.booking_revisions initial on initial.booking_id=b.id and initial.revision_number=1
     where not exists(select 1 from public.payment_attempts p where p.booking_id=b.id)
+  ), candidates as (
+    -- Filter before materializing, and keep financial payload construction after pagination.
+    select op.*, ${paymentCheckRequired} as payment_check_required,
+      (${paymentCheckRequired} or coalesce(f.status = any($10::text[]), false)
+        or coalesce(f.status in ('pending','pending_retry') and coalesce(execution.dispatch_initiated_at,execution.first_uncertain_at,execution.created_at,f.created_at)
+          < clock_timestamp() - make_interval(mins => $14::integer), false)
+        or ($11::boolean and exists(select 1 from public.payment_provider_events ev
+          where ev.attempt_id=op.attempt_id and ev.reconciliation_required))) as matches_attention
+    from operations op
+    join public.bookings b on b.id=op.booking_id
+    join public.booking_revisions context on context.id=op.context_revision_id and context.booking_id=b.id
+    join public.court_reservations r on r.id=b.reservation_id
+    left join public.payment_attempts p on p.id=op.attempt_id
+    left join public.payment_refunds f on f.id=op.refund_id
+    left join lateral (select re.provider_refund_id,re.dispatch_initiated_at,re.first_uncertain_at,re.created_at
+      from public.refund_executions re where re.refund_id=f.id order by re.execution_number desc limit 1) execution on true
+    where ($9::uuid is null or op.booking_id = $9::uuid) and ($2::text = 'all' or op.status = $2::text)
+      and ($12::text is null or (op.kind=$12 and op.id=$13::uuid))
+      and ($3::text = 'all' or op.provider = $3::text)
+      and ($4::text = 'all' or op.method = $4::text)
+      -- Literal substring matching: %, _ and other input are not SQL patterns.
+      and ($6::text = '' or strpos(lower(context.customer_name),lower($6::text)) > 0
+        or strpos(lower(context.customer_email),lower($6::text)) > 0
+        or strpos(op.booking_id::text,lower($6::text)) > 0
+        or strpos(op.id::text,lower($6::text)) > 0
+        or strpos(lower(coalesce(execution.provider_refund_id,'')),lower($6::text)) > 0
+        or strpos(lower(coalesce(op.provider_payment_id,'')),lower($6::text)) > 0)
+  ), filtered as materialized (
+    select * from candidates t
+    -- The default list omits abandoned payment requests that never moved money.
+    -- They remain stored, reachable by explicit status filter and exact detail reads.
+    where ($12::text is not null or $2::text <> 'all' or t.matches_attention
+      or not (t.kind = 'payment' and t.status in ('cancelled','expired'))
+      or exists(select 1 from public.payment_capture_receipts c where c.payment_attempt_id=t.attempt_id))
+      and (not $5::boolean or t.matches_attention)
+  ), stats as (
+    select count(*)::integer as total, greatest(1,ceil(count(*) / 20.0)::integer) as total_pages from filtered
+  ), ordered as (
+    select t.*, row_number() over (order by
+      case when $7::text = 'date' and $8::text = 'asc' then t.created_at end asc,
+      case when $7::text = 'date' and $8::text = 'desc' then t.created_at end desc,
+      case when $7::text = 'amount' and $8::text = 'asc'
+        then case when t.kind = 'refund' then -t.amount_minor else t.amount_minor end end asc,
+      case when $7::text = 'amount' and $8::text = 'desc'
+        then case when t.kind = 'refund' then -t.amount_minor else t.amount_minor end end desc,
+      case when $7::text = 'payment' and $8::text = 'asc' then t.status end asc nulls last,
+      case when $7::text = 'payment' and $8::text = 'desc' then t.status end desc nulls last,
+      t.kind asc, t.id asc) as position from filtered t
+  ), page_operations as materialized (
+    select o.* from ordered o cross join stats s
+    where o.position > (least($1::integer,s.total_pages)-1)*20
+      and o.position <= least($1::integer,s.total_pages)*20
   ), transactions as (
-    select op.kind as transaction_kind, op.id as transaction_id, op.attempt_id as payment_attempt_id,
+    select op.position, op.kind as transaction_kind, op.id as transaction_id, op.attempt_id as payment_attempt_id,
       op.adjustment_id, op.status as transaction_status, op.context_revision_id, op.base_revision_id,
       op.applied_revision_id, op.adjustment_status, confirmation.id as confirmation_revision_id,
       b.current_revision_id,
@@ -248,12 +300,8 @@ export async function listAdminTransactionProjection(manager: EntityManager, que
         'provider_refund_id',execution.provider_refund_id,'last_error',execution.last_error,
         'outstanding_since',coalesce(execution.dispatch_initiated_at,execution.first_uncertain_at,execution.created_at,f.created_at)) as refund,
       coalesce(e.reconciliation, '[]'::jsonb) as reconciliation,
-      ${paymentCheckRequired} as payment_check_required,
-      (${paymentCheckRequired} or coalesce(f.status = any($10::text[]), false)
-        or coalesce(f.status in ('pending','pending_retry') and coalesce(execution.dispatch_initiated_at,execution.first_uncertain_at,execution.created_at,f.created_at)
-          < clock_timestamp() - make_interval(mins => $14::integer), false)
-        or ($11::boolean and coalesce(e.required,false))) as matches_attention
-    from operations op
+      op.payment_check_required
+    from page_operations op
     join public.bookings b on b.id=op.booking_id
     join public.booking_revisions context on context.id=op.context_revision_id and context.booking_id=b.id
     join public.court_reservations r on r.id=b.reservation_id
@@ -268,7 +316,7 @@ export async function listAdminTransactionProjection(manager: EntityManager, que
     left join lateral (select re.provider_refund_id,re.last_error,re.dispatch_initiated_at,re.first_uncertain_at,re.created_at from public.refund_executions re
       where re.refund_id=f.id order by re.execution_number desc limit 1) execution on true
     left join lateral (
-      select bool_or(ev.reconciliation_required) as required, jsonb_agg(jsonb_build_object(
+      select jsonb_agg(jsonb_build_object(
         'event_id',ev.event_id,'attempt_id',ev.attempt_id,'provider',ev.provider,'reconciliation_required',ev.reconciliation_required,
         'resolved_at',ev.resolved_at,'resolved_by_user_id',ev.resolved_by_user_id,
         'attempt',to_jsonb(a),'amount_minor',ev.amount_minor,'currency',ev.currency,'provider_payment_id',ev.provider_payment_id,
@@ -278,46 +326,32 @@ export async function listAdminTransactionProjection(manager: EntityManager, que
       where a.id = op.attempt_id and (ev.reconciliation_required or ev.resolved_at is not null)
       having count(*) > 0
     ) e on true
-  ), filtered as materialized (
-    select * from transactions t where ($9::uuid is null or t.booking_id = $9::uuid) and ($2::text = 'all' or t.transaction_status = $2::text)
-      and ($12::text is null or (t.transaction_kind=$12 and t.transaction_id=$13::uuid))
-      -- The default list omits abandoned payment requests that never moved money.
-      -- They remain stored, reachable by explicit status filter and by exact detail reads.
-      and ($12::text is not null or $2::text <> 'all' or t.matches_attention
-        or not (t.transaction_kind = 'payment' and t.transaction_status in ('cancelled','expired'))
-        or exists(select 1 from public.payment_capture_receipts c where c.payment_attempt_id = t.payment_attempt_id))
-      and ($3::text = 'all' or t.provider = $3::text)
-      and ($4::text = 'all' or t.method = $4::text)
-      and (not $5::boolean or t.matches_attention)
-      -- Literal substring matching: %, _ and other input are not SQL patterns.
-      and ($6::text = '' or strpos(lower(t.customer_name),lower($6::text)) > 0
-        or strpos(lower(t.customer_email),lower($6::text)) > 0
-        or strpos(t.booking_id::text,lower($6::text)) > 0
-        or strpos(t.transaction_id::text,lower($6::text)) > 0
-        or strpos(lower(coalesce(t.refund->>'provider_refund_id','')),lower($6::text)) > 0
-        or strpos(lower(coalesce(t.provider_payment_id,'')),lower($6::text)) > 0)
-  ), stats as (
-    select count(*)::integer as total, greatest(1,ceil(count(*) / 20.0)::integer) as total_pages from filtered
-  ), ordered as (
-    select t.*, row_number() over (order by
-      case when $7::text = 'date' and $8::text = 'asc' then t.created_at end asc,
-      case when $7::text = 'date' and $8::text = 'desc' then t.created_at end desc,
-      case when $7::text = 'amount' and $8::text = 'asc'
-        then case when t.transaction_kind = 'refund' then -t.amount_minor else t.amount_minor end end asc,
-      case when $7::text = 'amount' and $8::text = 'desc'
-        then case when t.transaction_kind = 'refund' then -t.amount_minor else t.amount_minor end end desc,
-      case when $7::text = 'payment' and $8::text = 'asc' then t.transaction_status end asc nulls last,
-      case when $7::text = 'payment' and $8::text = 'desc' then t.transaction_status end desc nulls last,
-      t.transaction_kind asc, t.transaction_id asc) as position from filtered t
   )
   select jsonb_build_object('total',s.total,'totalPages',s.total_pages,'page',least($1::integer,s.total_pages),
-    'rows',coalesce((select jsonb_agg(to_jsonb(o) - 'position' - 'matches_attention' order by o.position)
-      from ordered o where o.position > (least($1::integer,s.total_pages)-1)*20
-        and o.position <= least($1::integer,s.total_pages)*20),'[]'::jsonb)) AS result from stats s;`,
+    'rows',coalesce((select jsonb_agg(to_jsonb(t) - 'position' order by t.position)
+      from transactions t),'[]'::jsonb)) AS result from stats s;`,
     [query.page,query.status,query.provider,query.method,query.attention,query.search,query.sort,
       query.direction,query.bookingId,query.attentionRefundStatuses,true,query.transaction?.kind ?? null,query.transaction?.id ?? null,
       query.unconfirmedRefundMinutes ?? unconfirmedRefundMinutes]);
   return z.array(z.object({ result: z.unknown() })).length(1).parse(rows)[0].result;
+}
+
+// In-flight financial work at the booking's contractual location: a payment that may
+// still settle, a pending modification, an unfinished refund or an unresolved reconciliation.
+// Local expiry/failure does not prove a registered Stripe intent was cancelled.
+// Definitive outcomes, failed refunds and pay-at-club amounts due are history.
+// Use only the current revision: rescheduling keeps the location, but Admins can move courts.
+export async function locationHasUnresolvedFinancialOperations(manager: EntityManager, locationId: string) {
+  const rows: unknown = await manager.query(`WITH located AS (
+      SELECT b.id AS booking_id FROM public.bookings b
+      JOIN public.booking_revisions v ON v.id=b.current_revision_id WHERE v.location_id=$1)
+    SELECT EXISTS(SELECT 1 FROM public.payment_attempts p JOIN located l ON l.booking_id=p.booking_id
+        WHERE p.status='pending' OR (p.provider='stripe' AND p.provider_payment_id IS NOT NULL AND p.status IN ('expired','failed')))
+      OR EXISTS(SELECT 1 FROM public.booking_adjustments a JOIN located l ON l.booking_id=a.booking_id WHERE a.status='pending')
+      OR EXISTS(SELECT 1 FROM public.payment_refunds f JOIN located l ON l.booking_id=f.booking_id WHERE f.status IN ('pending','pending_retry'))
+      OR EXISTS(SELECT 1 FROM public.payment_provider_events ev JOIN public.payment_attempts p ON p.id=ev.attempt_id
+        JOIN located l ON l.booking_id=p.booking_id WHERE ev.reconciliation_required) AS unresolved`, [locationId]);
+  return z.array(z.object({ unresolved: z.boolean() })).length(1).parse(rows)[0].unresolved;
 }
 
 export async function lockProviderSelection(manager: EntityManager) {
@@ -336,6 +370,18 @@ export async function writeProviderSelection(manager: EntityManager, previous: P
 
 
 export type HoldExpiryScope = { courtId?: string; locationId?: string };
+
+// Include previously expired/failed attempts and overdue accepted captures:
+// local expiry is not terminal provider evidence. Random sampling prevents an
+// unavailable or long-processing intent from starving the rest on every run.
+export async function listOverdueStripeCheckouts(manager: EntityManager, limit: number) {
+  const rows: unknown = await manager.query(`SELECT id FROM public.payment_attempts
+    WHERE method='online' AND provider='stripe' AND provider_payment_id IS NOT NULL
+      AND status IN ('pending','expired','failed') AND expires_at<=clock_timestamp()
+    ORDER BY random() LIMIT $1`, [limit]);
+  return z.array(z.object({ id: z.uuid() })).parse(rows);
+}
+
 export async function discoverExpiredHoldLocations(manager: EntityManager, scope: HoldExpiryScope, limit: number) {
   const rows: unknown = await manager.query(`SELECT DISTINCT c.location_id
     FROM public.bookings b LEFT JOIN public.booking_revisions v ON v.id=b.current_revision_id JOIN public.court_reservations r ON r.id=b.reservation_id

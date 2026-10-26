@@ -1,7 +1,9 @@
 import "server-only";
 
-import { In, IsNull, Not, type EntityManager } from "typeorm";
+import { Brackets, In, IsNull, Not, type EntityManager } from "typeorm";
 import { z } from "zod";
+
+import { addDays } from "@/lib/courts/local-time";
 
 import { OpeningHoursScheduleEntity } from "../entities/opening-hours-schedule.entity";
 import { LocationEntity } from "../entities/location.entity";
@@ -64,6 +66,18 @@ export async function updateUnarchivedLocation(manager: EntityManager, id: strin
   return returnedIds.parse(result.raw)[0]?.id ?? null;
 }
 
+// Live occupancy facts from the location-local date onward, plus every hold. Earlier
+// dates have ended; the location service decides which remaining rows are unfinished.
+export async function listLocationLiveOccupancy(manager: EntityManager, locationId: string, fromDate: string) {
+  const rows: unknown = await manager.query(`SELECT r.status::text AS status, r.booking_date::text AS date,
+      r.ends_at_minute AS end_minute, b.id IS NOT NULL AS booked, r.coach_user_id IS NOT NULL AS coaching
+    FROM public.court_reservations r JOIN public.courts c ON c.id=r.court_id
+    LEFT JOIN public.bookings b ON b.reservation_id=r.id
+    WHERE c.location_id=$1 AND (r.status='held' OR (r.status='active' AND r.booking_date>=$2::date))`, [locationId, fromDate]);
+  return z.array(z.object({ status: z.enum(["active", "held"]), date: z.iso.date(), end_minute: z.number().int(),
+    booked: z.boolean(), coaching: z.boolean() })).parse(rows);
+}
+
 export async function setLocationArchived(manager: EntityManager, id: string, archived: boolean, updatedAt: Date) {
   const result = await manager.createQueryBuilder().update(LocationEntity)
     .set({ archivedAt: archived ? updatedAt : null, isActive: false, updatedAt })
@@ -72,8 +86,11 @@ export async function setLocationArchived(manager: EntityManager, id: string, ar
   return returnedIds.parse(result.raw)[0]?.id ?? null;
 }
 
-export async function listAdminCourts(manager: EntityManager) {
-  return manager.getRepository(CourtEntity).find({ order: { name: "ASC", id: "ASC" } });
+export async function listAdminCourts(manager: EntityManager, locationId?: string) {
+  return manager.getRepository(CourtEntity).find({
+    where: locationId ? { locationId } : {},
+    order: { name: "ASC", id: "ASC" },
+  });
 }
 
 export async function findCourtConfiguration(manager: EntityManager, id: string) {
@@ -107,9 +124,9 @@ export async function updateCourt(manager: EntityManager, id: string, fields: Co
   return returnedIds.parse(result.raw)[0]?.id ?? null;
 }
 
-export async function listCourtCoverage(manager: EntityManager, courtId?: string) {
+export async function listCourtCoverage(manager: EntityManager, courtId?: string, locationId?: string) {
   return manager.getRepository(CourtCoveragePeriodEntity).find({
-    where: courtId ? { courtId } : {},
+    where: { ...(courtId ? { courtId } : {}), ...(locationId ? { court: { locationId } } : {}) },
     select: { id: true, courtId: true, startsOn: true, endsOn: true, createdAt: true, updatedAt: true },
     order: { startsOn: "ASC", id: "ASC" },
   });
@@ -203,44 +220,80 @@ export async function listCheckoutCourtCoverage(manager: EntityManager, courtId:
     .getMany();
 }
 
-export async function findLocationCancellationNotice(manager: EntityManager, id: string) {
-  return manager.getRepository(LocationEntity).findOne({
-    where: { id }, select: { customerCancellationNoticeMinutes: true },
-  });
+export async function listBookingEditDayCoverage(manager: EntityManager, locationId: string, courtIds: string[], date: string) {
+  if (!courtIds.length) return [];
+  return manager.getRepository(CourtCoveragePeriodEntity).createQueryBuilder("coverage")
+    .innerJoin(CourtEntity, "court", "court.id = coverage.court_id AND court.location_id = :locationId", { locationId })
+    .where("coverage.court_id IN (:...courtIds)", { courtIds })
+    .andWhere("coverage.starts_on <= :date AND coverage.ends_on >= :date", { date })
+    .orderBy("coverage.court_id", "ASC").addOrderBy("coverage.id", "ASC")
+    .getMany();
 }
 
 // Public projections explicitly enforce the visibility previously supplied by JWT RLS.
-export async function listPublicLocationFacts(manager: EntityManager): Promise<unknown> {
+export async function listPublicLocationFacts(manager: EntityManager, now = new Date()): Promise<unknown> {
+  return readPublicLocationFacts(manager, now);
+}
+
+export async function listPublicLocationFactsForLocation(manager: EntityManager, locationId: string, now = new Date()): Promise<unknown> {
+  return readPublicLocationFacts(manager, now, locationId);
+}
+
+async function readPublicLocationFacts(manager: EntityManager, now: Date, locationId?: string): Promise<unknown> {
+  // UTC yesterday is no later than any location's local today. This removes old
+  // history without duplicating TypeScript timezone validation/publication rules.
+  // Keep the adjacent-date guard and every future period, including open-ended ones.
+  const earliestDate = addDays(now.toISOString().slice(0, 10), -1);
+  const dateParameter = locationId === undefined ? "$1" : "$2";
   return manager.query(`SELECT l.id,l.name,l.slug,l.address_line1,l.address_line2,l.city,l.postal_code,
     l.country_code,l.timezone,l.currency,l.allow_pay_at_club,l.customer_cancellation_notice_minutes,l.is_active,l.is_public,
     l.archived_at::text AS archived_at,
     coalesce((SELECT jsonb_agg(jsonb_build_object('id',h.id,'weekday',h.weekday,'opens_at_minute',h.opens_at_minute,'closes_at_minute',h.closes_at_minute,'starts_on',s.starts_on,'ends_on',s.ends_on,'schedule_id',s.id)) FROM public.location_opening_hours h JOIN public.opening_hours_schedules s ON s.id=h.schedule_id
-      WHERE h.location_id=l.id),'[]'::jsonb) AS location_opening_hours,
+      WHERE h.location_id=l.id AND s.location_id=l.id
+        AND daterange(s.starts_on,s.ends_on,'[]') && daterange(${dateParameter}::date,NULL,'[]')),'[]'::jsonb) AS location_opening_hours,
     coalesce((SELECT jsonb_agg(jsonb_build_object('id',c.id,'name',c.name,'slug',c.slug,
       'surface',c.surface,'environment',c.environment,'has_lighting',c.has_lighting,'is_active',c.is_active,
       'location_pricing_rules',coalesce((SELECT jsonb_agg(jsonb_build_object('court_state',p.court_state,
-        'ends_on',p.ends_on,'starts_on',p.starts_on,'weekday',p.weekday,'starts_at_minute',p.starts_at_minute,'ends_at_minute',p.ends_at_minute)) FROM public.location_pricing_rules p WHERE p.court_id=c.id),'[]'::jsonb))
+        'ends_on',p.ends_on,'starts_on',p.starts_on,'weekday',p.weekday,'starts_at_minute',p.starts_at_minute,'ends_at_minute',p.ends_at_minute)) FROM public.location_pricing_rules p WHERE p.court_id=c.id
+          AND daterange(p.starts_on,p.ends_on,'[]') && daterange(${dateParameter}::date,NULL,'[]')),'[]'::jsonb))
       ORDER BY c.name,c.id) FROM public.courts c WHERE c.location_id=l.id AND c.is_active),'[]'::jsonb) AS courts
     FROM public.locations l WHERE l.is_active AND l.archived_at IS NULL AND l.is_public
-    ORDER BY l.display_order,l.name,l.id`);
+    ${locationId === undefined ? "" : "AND l.id=$1"}
+    ORDER BY l.display_order,l.name,l.id`, locationId === undefined ? [earliestDate] : [locationId, earliestDate]);
 }
 
-export async function listPublicDayOpeningHours(manager: EntityManager, locationId: string, weekday: number, date: string): Promise<unknown> {
-  const rows: unknown = await manager.query(`SELECT to_jsonb(h) AS row FROM public.location_opening_hours h
-    JOIN public.opening_hours_schedules s ON s.id=h.schedule_id
-    JOIN public.locations l ON l.id=h.location_id AND l.is_active AND l.archived_at IS NULL AND l.is_public
-    WHERE h.location_id=$1 AND h.weekday=$2 AND s.starts_on <= $3::date
-      AND (s.ends_on IS NULL OR s.ends_on >= $3::date)`, [locationId,weekday,date]);
-  return z.array(z.object({ row: z.unknown() })).parse(rows).map(({ row }) => row);
+// One entry per public location, each with its own local date and weekday.
+export type PublicDayRead = { locationId: string; courtIds: readonly string[]; weekday: number; date: string };
+
+const publicDayRows = z.array(z.object({ row: z.unknown() }));
+
+export async function listPublicDayOpeningHours(manager: EntityManager, days: readonly PublicDayRead[]): Promise<unknown> {
+  if (!days.length) return [];
+  const rows: unknown = await manager.getRepository(LocationOpeningHoursEntity).createQueryBuilder("h")
+    .select("to_jsonb(h)", "row")
+    .innerJoin(OpeningHoursScheduleEntity, "s", "s.id = h.schedule_id")
+    .innerJoin(LocationEntity, "l", "l.id = h.location_id AND l.is_active AND l.archived_at IS NULL AND l.is_public")
+    .where(new Brackets((query) => days.forEach((day, index) => query.orWhere(
+      `(h.location_id = :location${index} AND h.weekday = :weekday${index} AND s.starts_on <= :date${index}
+        AND (s.ends_on IS NULL OR s.ends_on >= :date${index}))`,
+      { [`location${index}`]: day.locationId, [`weekday${index}`]: day.weekday, [`date${index}`]: day.date }))))
+    .getRawMany();
+  return publicDayRows.parse(rows).map(({ row }) => row);
 }
 
-export async function listPublicDayCoverage(manager: EntityManager, locationId: string, courtIds: string[], date: string): Promise<unknown> {
-  const rows: unknown = await manager.query(`SELECT to_jsonb(p) AS row FROM public.court_coverage_periods p
-    JOIN public.courts c ON c.id=p.court_id AND c.is_active
-    JOIN public.locations l ON l.id=c.location_id AND l.is_active AND l.archived_at IS NULL AND l.is_public
-    WHERE l.id=$1 AND p.court_id=ANY($2::uuid[]) AND p.starts_on<=$3::date
-      AND (p.ends_on IS NULL OR p.ends_on>=$3::date)`, [locationId,courtIds,date]);
-  return z.array(z.object({ row: z.unknown() })).parse(rows).map(({ row }) => row);
+export async function listPublicDayCoverage(manager: EntityManager, days: readonly PublicDayRead[]): Promise<unknown> {
+  const withCourts = days.filter((day) => day.courtIds.length);
+  if (!withCourts.length) return [];
+  const rows: unknown = await manager.getRepository(CourtCoveragePeriodEntity).createQueryBuilder("p")
+    .select("to_jsonb(p)", "row")
+    .innerJoin(CourtEntity, "c", "c.id = p.court_id AND c.is_active")
+    .innerJoin(LocationEntity, "l", "l.id = c.location_id AND l.is_active AND l.archived_at IS NULL AND l.is_public")
+    .where(new Brackets((query) => withCourts.forEach((day, index) => query.orWhere(
+      `(l.id = :location${index} AND p.court_id IN (:...courts${index}) AND p.starts_on <= :date${index}
+        AND (p.ends_on IS NULL OR p.ends_on >= :date${index}))`,
+      { [`location${index}`]: day.locationId, [`courts${index}`]: [...day.courtIds], [`date${index}`]: day.date }))))
+    .getRawMany();
+  return publicDayRows.parse(rows).map(({ row }) => row);
 }
 
 // Admin-only caller supplies authorized location IDs; includes unpublished/archived resources.

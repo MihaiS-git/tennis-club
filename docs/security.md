@@ -2,7 +2,7 @@
 
 ## Security model
 
-Next.js is the complete primary application authorization boundary. Supabase Row Level Security remains active as defense-in-depth and secondary security.
+Next.js is the complete primary application authorization boundary. Application tables are reached only through server-side TypeORM; browser roles have no application-table grants and no application RLS policies exist. Supabase Auth and private Storage retain their native security, including Storage RLS.
 
 Authorization must not rely only on:
 

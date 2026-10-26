@@ -152,7 +152,7 @@ export function MobileNavbarControls({ isAuthenticated, hasMessageAccess = false
             Club
           </PrimaryNavigationLink>
           {isAuthenticated && canReserve && (
-            <PrimaryNavigationLink onClick={closeMenu} section="/admin" href="/admin" className="flex min-h-12 items-center text-sm font-medium">
+            <PrimaryNavigationLink onClick={closeMenu} section={["/admin", "/coach"]} href="/admin" className="flex min-h-12 items-center text-sm font-medium">
               Admin
             </PrimaryNavigationLink>
           )}

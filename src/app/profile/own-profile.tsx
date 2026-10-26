@@ -5,9 +5,9 @@ import { loadProfile, profileContext } from "@/lib/profile/profile";
 
 // Every Profile route reads only the current active account's own profile.
 export async function readOwnProfile() {
-  const { client, account } = await profileContext();
+  const { account } = await profileContext();
   if (account.state === "unauthenticated") redirect("/login");
-  const profile = account.state === "active" ? await loadProfile(client, account.userId) : null;
+  const profile = account.state === "active" ? await loadProfile(account.userId) : null;
   if (!profile || account.state !== "active") {
     const description = account.state === "suspended" ? "This account is restricted. Contact club support."
       : account.state === "missing-profile" ? "Your account is missing its required application record. Contact club support."

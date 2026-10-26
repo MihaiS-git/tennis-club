@@ -41,17 +41,13 @@ export class RefundInProgressError extends RefundProcessingError {
   constructor() { super("Refund is already being processed."); }
 }
 
-export async function processBookingRefund(id: string, options: RefundProcessingOptions = {}): Promise<RefundStatus> {
-  return processRefund(id, options);
-}
-
 function deferred(options: RefundProcessingOptions, id: string, message: string): RefundStatus {
   logger.error({ event: "payments.refund_persistence_failed", refundId: id }, message);
   if (options.strict) throw new RefundProcessingError();
   return "pending_retry";
 }
 
-async function processRefund(id: string, options: RefundProcessingOptions): Promise<RefundStatus> {
+export async function processBookingRefund(id: string, options: RefundProcessingOptions = {}): Promise<RefundStatus> {
   let prepared: Awaited<ReturnType<typeof prepareRefund>>;
   try { prepared = await prepareRefund(id, options); }
   catch { return deferred(options, id, "Refund preparation failed"); }
@@ -152,12 +148,6 @@ async function afterRefundOutcome(id: string, status: RefundStatus, requiresReso
 
 export async function finishBookingCancellation(result: BookingCancellationCommandResult,
   unavailableMessage = "This booking is no longer available for cancellation."): Promise<BookingCancellationResult> {
-  const outcome = await cancellationOutcome(result, unavailableMessage);
-  return outcome;
-}
-
-async function cancellationOutcome(result: BookingCancellationCommandResult,
-  unavailableMessage: string): Promise<BookingCancellationResult> {
   switch (result.outcome) {
     case "started":
       return { ok: false, message: "This booking has started and can no longer be cancelled here." };

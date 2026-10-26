@@ -16,7 +16,7 @@ const id = "11111111-1111-4111-8111-111111111111";
 const courtId = "22222222-2222-4222-8222-222222222222";
 const stamp = "2026-10-01T00:00:00Z";
 const location: PublicLocation = { id, name: "Club", slug: "club", address_line1: null, address_line2: null,
-  city: null, postal_code: null, country_code: null, timezone: "Europe/Bucharest", currency: "RON", allow_pay_at_club: false, todayOpeningHours: [],
+  city: null, postal_code: null, country_code: null, timezone: "Europe/Bucharest", currency: "RON", allow_pay_at_club: false, customer_cancellation_notice_minutes: null, todayOpeningHours: [],
   courts: [{ id: courtId, name: "Court", slug: "court", surface: "clay", environment: "outdoor", has_lighting: true }] };
 const hours = (start: number, end: number): OpeningInterval => ({ id: crypto.randomUUID(), location_id: id,
   weekday: 3, opens_at_minute: start, closes_at_minute: end, created_at: stamp, updated_at: stamp });
@@ -40,11 +40,33 @@ it("preserves discovered location/court order and attributes, using each locatio
   expect(result.map(({ openingHours, startingRateMinor, ...rest }) => {
     expect(openingHours).toEqual([]); expect(startingRateMinor).toBeNull(); return rest;
   })).toEqual([west, location]);
-  expect(reads.hours).toHaveBeenCalledWith(expect.anything(), west.id, 2, "2026-10-14");
-  expect(reads.hours).toHaveBeenCalledWith(expect.anything(), location.id, 3, "2026-10-15");
-  expect(reads.pricing).toHaveBeenCalledWith(expect.anything(), location.id, [courtId], 3, "2026-10-15");
-  expect(reads.coverage).toHaveBeenCalledWith(expect.anything(), west.id, [courtId], "2026-10-14");
+  const days = [{ locationId: west.id, courtIds: [courtId], weekday: 2, date: "2026-10-14" },
+    { locationId: location.id, courtIds: [courtId], weekday: 3, date: "2026-10-15" }];
+  for (const read of [reads.hours, reads.coverage, reads.pricing]) expect(read).toHaveBeenCalledExactlyOnceWith(expect.anything(), days);
   expect(reads.occupancy).not.toHaveBeenCalled();
+});
+
+it.each([1, 3, 8])("reads %i locations with one location query and three batched day-configuration queries", async (count) => {
+  reads.locations.mockResolvedValue(Array.from({ length: count }, (_, index) => ({ ...location,
+    id: `${index}${id.slice(1)}`, courts: [{ ...location.courts[0], id: `${index}${courtId.slice(1)}` }] })));
+  expect(await listPublicLocationsToday(now)).toHaveLength(count);
+  for (const read of [reads.locations, reads.hours, reads.coverage, reads.pricing]) expect(read).toHaveBeenCalledTimes(1);
+  expect(reads.hours.mock.calls[0][1]).toHaveLength(count);
+});
+
+it("groups batched rows back to their own location by location and court", async () => {
+  const otherId = "44444444-4444-4444-8444-444444444444", otherCourtId = "55555555-5555-4555-8555-555555555555";
+  const other: PublicLocation = { ...location, id: otherId, courts: [{ ...location.courts[0], id: otherCourtId, environment: "outdoor" }] };
+  reads.locations.mockResolvedValue([location, other]);
+  reads.hours.mockResolvedValue([hours(480, 600), { ...hours(900, 1020), location_id: otherId }]);
+  reads.coverage.mockResolvedValue([{ id: crypto.randomUUID(), court_id: otherCourtId,
+    starts_on: "2026-10-15", ends_on: "2026-10-15", created_at: stamp, updated_at: stamp }]);
+  reads.pricing.mockResolvedValue([price(480, 600, 5000), price(900, 1020, 7000, { court_state: "covered", location_id: otherId, court_id: otherCourtId }),
+    price(900, 1020, 1000, { location_id: otherId, court_id: otherCourtId })]);
+  expect((await listPublicLocationsToday(now)).map(({ id, openingHours, startingRateMinor }) => ({ id, openingHours, startingRateMinor }))).toEqual([
+    { id, openingHours: [{ opens_at_minute: 480, closes_at_minute: 600 }], startingRateMinor: 5000 },
+    { id: otherId, openingHours: [{ opens_at_minute: 900, closes_at_minute: 1020 }], startingRateMinor: 7000 },
+  ]);
 });
 
 it("sorts daily intervals and excludes closed gaps, outside-hours, wrong-day and out-of-date prices", async () => {

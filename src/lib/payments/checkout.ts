@@ -174,9 +174,9 @@ async function resolveAuthorization(attempt: PaymentReference, authorized: { amo
   return cancelCheckoutPayment(attempt);
 }
 
-async function cancelCheckoutPayment(attempt: PaymentReference) {
+async function cancelCheckoutPayment(attempt: PaymentReference, preserveProcessing = false) {
   const adapter = await onlinePaymentAdapter(attempt.provider);
-  const outcome = await adapter.cancelPayment(attempt);
+  const outcome = preserveProcessing ? await adapter.dismissPayment(attempt) : await adapter.cancelPayment(attempt);
   if (outcome === "cancelled") {
     await settleOnlinePayment({ attemptId: attempt.id, provider: attempt.provider,
       providerPaymentId: attempt.providerPaymentId, outcome: "cancelled" });
@@ -185,7 +185,7 @@ async function cancelCheckoutPayment(attempt: PaymentReference) {
     const evidence = await adapter.readPayment(attempt);
     if (evidence.status === "succeeded") await recordObservation(attempt, { ...evidence, status: "succeeded" });
   }
-  return outcome;
+  return outcome === "live" ? "processing" as const : outcome;
 }
 
 export async function resolveAuthorizedCheckoutPayment(input: { attemptId: string; providerPaymentId: string }) {
@@ -200,7 +200,8 @@ export async function resolveAuthorizedCheckoutPayment(input: { attemptId: strin
 }
 
 // Provider retrieval is authoritative evidence, not a browser confirmation.
-async function observeCheckoutPayment(attempt: z.infer<typeof attemptSchema> & { providerPaymentId: string }, accept = true) {
+async function observeCheckoutPayment(attempt: z.infer<typeof attemptSchema> & { providerPaymentId: string }, accept = true,
+  preserveProcessing = false) {
   const result = await (await onlinePaymentAdapter(attempt.provider)).readPayment({
     id: attempt.id, providerPaymentId: attempt.providerPaymentId,
   });
@@ -216,15 +217,15 @@ async function observeCheckoutPayment(attempt: z.infer<typeof attemptSchema> & {
   // Expired payment entry and interrupted acceptance both need provider cleanup,
   // including intents still waiting for a card or authentication. The decision
   // uses database wall time and the same aggregate locks as acceptance.
-  if (await decideAuthorization(attempt, null) === "release") return cancelCheckoutPayment(attempt);
+  if (await decideAuthorization(attempt, null) === "release") return cancelCheckoutPayment(attempt, preserveProcessing);
   return result.status === "authorized" ? "processing" as const : result.status;
 }
 
 // Trusted request/Admin recovery: exact registered intent only, never capture.
-export async function checkOnlinePayment(attemptId: string) {
+export async function checkOnlinePayment(attemptId: string, preserveProcessing = false) {
   const attempt = attemptSchema.extend({ providerPaymentId: z.string().min(1) })
     .parse(await findCheckoutAttempt((await getDataSource()).manager, z.uuid().parse(attemptId)));
-  return observeCheckoutPayment(attempt, false);
+  return observeCheckoutPayment(attempt, false, preserveProcessing);
 }
 
 // Validate the capability before contacting the provider, including retries.

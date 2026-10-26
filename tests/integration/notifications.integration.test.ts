@@ -6,10 +6,10 @@ import { inTransaction } from "@/lib/db/transaction";
 import { createCustomerBooking } from "@/lib/bookings/service";
 import { recordBookingTransition, recordBookingFinancialException } from "@/lib/notifications/events";
 import { recordNotification } from "@/lib/notifications/record";
-import { claimEmailDeliveries, completeEmailAttempt, insertEmailDelivery, insertEmailFailureAlerts, insertUserMessage, findMessageDelivery, findDeliveryBooking, failExpiredFinalClaims } from "@/lib/db/repositories/notifications.repository";
+import { claimEmailDeliveries, completeEmailAttempt, insertEmailDelivery, insertUserMessage, findMessageDelivery, findDeliveryBooking, failExpiredFinalClaims } from "@/lib/db/repositories/notifications.repository";
 import { deleteOwnMessage, listOwnMessages, openOwnMessage, readOwnMessage, unreadOwnMessage, unreadOwnMessageCount,
   updateOwnMessages } from "@/lib/notifications/inbox";
-import { processClaim } from "@/lib/notifications/delivery";
+import { processClaim, recordEmailFailureAlerts } from "@/lib/notifications/delivery";
 import { parseInboxQuery } from "@/lib/notifications/inbox-query";
 import { findRevision } from "@/lib/db/repositories/booking-revisions.repository";
 import { configureCheckoutPolicyFixture } from "./opening-hours-fixtures";
@@ -70,15 +70,14 @@ async function bookingFixture(email: string, method: "online" | "pay_at_club") {
       "SELECT id,current_revision_id FROM public.bookings WHERE reservation_id IN (SELECT id FROM public.court_reservations WHERE court_id=$1)", [courtId]);
     return { bookingId: rows[0].id, revisionId: rows[0].current_revision_id, attemptId: null, cleanup };
   }
-  const held = await insertCheckoutFixture(service, { p_court_id: courtId, p_booking_date: "2099-10-15",
-    p_starts_at_minute: 600, p_ends_at_minute: 660, p_account_user_id: null,
-    p_customer_name: "Notification customer", p_customer_email: email, p_customer_phone: "123",
-    p_total_amount_minor: 5000, p_currency: "RON", p_payment_method: "online", p_provider: "stripe", p_hold_seconds: 600 });
-  expect(held.error).toBeNull();
-  const bookingId = held.data[0].booking_id;
+  const held = await insertCheckoutFixture({ courtId, bookingDate: "2099-10-15",
+    startMinute: 600, endMinute: 660, accountUserId: null,
+    customerName: "Notification customer", customerEmail: email, customerPhone: "123",
+    totalAmountMinor: 5000, currency: "RON", paymentMethod: "online", provider: "stripe", holdSeconds: 600 });
+  const bookingId = held.booking_id;
   const rows: { current_revision_id: string }[] = await (await getDataSource()).query(
     "SELECT current_revision_id FROM public.bookings WHERE id=$1", [bookingId]);
-  return { bookingId, revisionId: rows[0].current_revision_id, attemptId: held.data[0].payment_attempt_id, cleanup };
+  return { bookingId, revisionId: rows[0].current_revision_id, attemptId: held.payment_attempt_id, cleanup };
 }
 
 test("confirmed booking notification shares the revision transaction and deduplicates replays", async () => {
@@ -143,6 +142,117 @@ test("financial exception sends one in-app alert per fixture Admin and no Admin 
     await source.query("DELETE FROM public.email_deliveries WHERE event_key=$1", [`financial.customer:${key}`]);
     await fixture.cleanup([fixture.bookingId]);
     await cleanupAuthFixtures(localFixtureClient(), [admin.id]);
+  }
+});
+
+// Counts statements sent on the transaction's own connection.
+async function countUserMessageInserts<T>(work: (manager: Parameters<Parameters<typeof inTransaction>[0]>[0]) => Promise<T>) {
+  let inserts = 0;
+  const result = await inTransaction(async manager => {
+    const runner = manager.queryRunner!;
+    const query = runner.query.bind(runner);
+    vi.spyOn(runner, "query").mockImplementation(((sql: string, ...rest: unknown[]) => {
+      if (/^\s*INSERT INTO "?public"?\."?user_messages"?/i.test(sql)) inserts++;
+      return (query as (...args: unknown[]) => unknown)(sql, ...rest);
+    }) as typeof runner.query);
+    try { return await work(manager); } finally { vi.mocked(runner.query).mockRestore(); }
+  });
+  return { result, inserts };
+}
+
+test("financial exception batches Admin alerts, keeps multi-role staff in-app only and replays concurrently", async () => {
+  const admin = await account("admin");
+  const staff = await account("admin");
+  expect((await localFixtureClient().from("user_roles").insert({ user_id: staff.id, role_code: "coach" })).error).toBeNull();
+  const fixture = await bookingFixture(staff.email, "online");
+  const source = await getDataSource();
+  const key = `notification-batch:${randomUUID()}`;
+  const input = { key, bookingId: fixture.bookingId, revisionId: fixture.revisionId,
+    kind: "surcharge_unapplied" as const, paymentAttemptId: fixture.attemptId };
+  try {
+    const admins: { id: string }[] = await source.query(`SELECT DISTINCT u.id FROM public.users u
+      JOIN public.user_roles r ON r.user_id=u.id WHERE u.status='active' AND r.role_code='admin' ORDER BY u.id`);
+    expect(admins.length).toBeGreaterThanOrEqual(2);
+    // One batched Admin insert plus the single customer-channel insert, independent of Admin count.
+    expect((await countUserMessageInserts(manager => recordBookingFinancialException(manager, input))).inserts).toBe(2);
+    await Promise.all([
+      inTransaction(manager => recordBookingFinancialException(manager, input)),
+      inTransaction(manager => recordBookingFinancialException(manager, input)),
+    ]);
+    expect(await source.query("SELECT user_id FROM public.user_messages WHERE event_key=$1 ORDER BY user_id",
+      [`financial.exception:${key}`])).toEqual(admins.map(row => ({ user_id: row.id })));
+    expect(await source.query("SELECT user_id FROM public.user_messages WHERE event_key=$1",
+      [`financial.customer:${key}`])).toEqual([{ user_id: staff.id }]);
+    expect(await source.query("SELECT id FROM public.email_deliveries WHERE event_key = ANY($1)",
+      [[`financial.exception:${key}`, `financial.customer:${key}`]])).toEqual([]);
+    await expect(inTransaction(async manager => {
+      await recordBookingFinancialException(manager, { ...input, key: `${key}:rollback` });
+      throw new Error("business rollback");
+    })).rejects.toThrow("business rollback");
+    expect(await source.query("SELECT id FROM public.user_messages WHERE event_key=$1",
+      [`financial.exception:${key}:rollback`])).toEqual([]);
+  } finally {
+    await source.query("DELETE FROM public.user_messages WHERE event_key = ANY($1)",
+      [[`financial.exception:${key}`, `financial.customer:${key}`]]);
+    await fixture.cleanup([fixture.bookingId]);
+    await cleanupAuthFixtures(localFixtureClient(), [admin.id, staff.id]);
+  }
+});
+
+test("email failure alerts batch every eligible Admin per delivery and stay idempotent", async () => {
+  const admin = await account("admin");
+  const multiRole = await account("admin");
+  const suspended = await account("admin");
+  const coach = await account("coach");
+  const member = await account();
+  const service = localFixtureClient();
+  expect((await service.from("user_roles").insert({ user_id: multiRole.id, role_code: "coach" })).error).toBeNull();
+  expect((await service.from("users").update({ status: "suspended" }).eq("id", suspended.id)).error).toBeNull();
+  const fixtureIds = [admin.id, multiRole.id, suspended.id, coach.id, member.id];
+  const source = await getDataSource();
+  const now = new Date();
+  const ids = [randomUUID(), randomUUID()];
+  const alertKeys = ids.map(id => `email.delivery-failed:${id}`);
+  const rollbackId = randomUUID();
+  try {
+    await inTransaction(async manager => {
+      for (const id of [...ids, rollbackId]) await insertEmailDelivery(manager, { id, eventKey: `delivery:${id}`,
+        recipientEmail: `delivery-${id}@example.test`, subject: "Delivery test", bodyText: "Body", bodyHtml: "<p>Body</p>",
+        status: "failed", attempts: 5, nextAttemptAt: now, lockedUntil: null, providerMessageId: null,
+        lastError: "Brevo HTTP 400", createdAt: now, updatedAt: now });
+    });
+    // Duplicate IDs collapse; every delivery and Admin share one bounded insert.
+    expect((await countUserMessageInserts(manager => recordEmailFailureAlerts(manager, [ids[0], ids[1], ids[0]], now))).inserts).toBe(1);
+    expect((await countUserMessageInserts(manager => recordEmailFailureAlerts(manager, [], now))).inserts).toBe(0);
+    await Promise.all([
+      inTransaction(manager => recordEmailFailureAlerts(manager, ids, now)),
+      inTransaction(manager => recordEmailFailureAlerts(manager, [ids[1], ids[0]], now)),
+    ]);
+    const admins: { id: string }[] = await source.query(`SELECT DISTINCT u.id FROM public.users u
+      JOIN public.user_roles r ON r.user_id=u.id WHERE u.status='active' AND r.role_code='admin'`);
+    const rows: { user_id: string; event_key: string; kind: string; subject: string; body_text: string;
+      href: string | null; created_at: Date }[] = await source.query(
+      "SELECT user_id, event_key, kind, subject, body_text, href, created_at FROM public.user_messages WHERE event_key = ANY($1)", [alertKeys]);
+    expect(rows).toHaveLength(admins.length * ids.length);
+    for (const user of [admin, multiRole]) {
+      expect(rows.filter(row => row.user_id === user.id).map(row => row.event_key).sort()).toEqual([...alertKeys].sort());
+    }
+    expect(rows.filter(row => [suspended.id, coach.id, member.id].includes(row.user_id))).toEqual([]);
+    expect(new Set(rows.map(row => JSON.stringify([row.kind, row.subject, row.body_text, row.href, row.created_at.getTime()]))))
+      .toEqual(new Set([JSON.stringify(["email.delivery_failed", "Booking email delivery failed",
+        "An outbound booking email could not be delivered. Open Delivery details to review the failure and retry eligibility.",
+        null, now.getTime()])]));
+    expect(await source.query("SELECT id FROM public.email_deliveries WHERE event_key = ANY($1)", [alertKeys])).toEqual([]);
+    await expect(inTransaction(async manager => {
+      await recordEmailFailureAlerts(manager, [rollbackId], now);
+      throw new Error("business rollback");
+    })).rejects.toThrow("business rollback");
+    expect(await source.query("SELECT id FROM public.user_messages WHERE event_key=$1",
+      [`email.delivery-failed:${rollbackId}`])).toEqual([]);
+  } finally {
+    await source.query("DELETE FROM public.user_messages WHERE event_key = ANY($1)", [alertKeys]);
+    await source.query("DELETE FROM public.email_deliveries WHERE id = ANY($1)", [[...ids, rollbackId]]);
+    await cleanupAuthFixtures(localFixtureClient(), fixtureIds);
   }
 });
 
@@ -225,10 +335,10 @@ test("PostgreSQL claims, retry state, terminal alert and stale completion", asyn
       const completed = await completeEmailAttempt(manager, { id, attempts: terminalClaim.attempts,
         lockedUntil: terminalClaim.lockedUntil, status: "failed", nextAttemptAt: now,
         providerMessageId: null, lastError: "Brevo HTTP 503" });
-      if (completed) await insertEmailFailureAlerts(manager, id, now);
+      if (completed) await recordEmailFailureAlerts(manager, [id], now);
       return completed;
     })).toBe(true);
-    await inTransaction(manager => insertEmailFailureAlerts(manager, id, now));
+    await inTransaction(manager => recordEmailFailureAlerts(manager, [id], now));
     expect(await source.query("SELECT status,attempts FROM public.email_deliveries WHERE id=$1", [id]))
       .toEqual([{ status: "failed", attempts: 5 }]);
     expect(await source.query("SELECT user_id FROM public.user_messages WHERE event_key=$1 AND user_id=$2",
@@ -342,7 +452,7 @@ test("manual and Cron share one claim, preserve booking/payment state and dedupl
     FROM public.bookings b JOIN public.court_reservations r ON r.id=b.reservation_id WHERE b.id=$1`, [fixture.bookingId]);
   try {
     await source.query("UPDATE public.email_deliveries SET status='failed',attempts=1,last_error='Brevo HTTP 401',next_attempt_at=$2,created_at=$3 WHERE id=$1", [delivery.id, firstDue, cutoff]);
-    await inTransaction(manager => insertEmailFailureAlerts(manager, delivery.id, new Date()));
+    await inTransaction(manager => recordEmailFailureAlerts(manager, [delivery.id], new Date()));
     const [{ id: messageId }]: { id: string }[] = await source.query("SELECT id FROM public.user_messages WHERE event_key=$1 AND user_id=$2", [`email.delivery-failed:${delivery.id}`, admin.id]);
     expect((await findMessageDelivery(source.manager, admin.id, messageId))?.recipientEmail).toContain("retry-");
     expect(await findMessageDelivery(source.manager, randomUUID(), messageId)).toBeNull();

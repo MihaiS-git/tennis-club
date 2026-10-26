@@ -5,10 +5,10 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AdminLocation } from "../../src/lib/admin/locations";
 
-const { listAdminLocations, listAdminCourts, listAdminCourtCoverage, listAdminPricingRules, listAdminLocationsWithReadiness, listAdminLocationOpeningHours, mutateOpeningHoursAction, saveLocationAction, archiveLocationAction, setLocationPublicationAction, refresh, push } = vi.hoisted(() => ({
-  listAdminLocations: vi.fn(), listAdminCourts: vi.fn(), listAdminCourtCoverage: vi.fn(), listAdminPricingRules: vi.fn(), listAdminLocationsWithReadiness: vi.fn(), listAdminLocationOpeningHours: vi.fn(), mutateOpeningHoursAction: vi.fn(), saveLocationAction: vi.fn(), archiveLocationAction: vi.fn(), setLocationPublicationAction: vi.fn(), refresh: vi.fn(), push: vi.fn(),
+const { listAdminLocations, readAdminLocationCurrencyChange, listAdminCourts, listAdminCourtCoverage, listAdminPricingRules, listAdminLocationsWithReadiness, listAdminLocationOpeningHours, mutateOpeningHoursAction, saveLocationAction, archiveLocationAction, setLocationPublicationAction, refresh, push } = vi.hoisted(() => ({
+  listAdminLocations: vi.fn(), readAdminLocationCurrencyChange: vi.fn(), listAdminCourts: vi.fn(), listAdminCourtCoverage: vi.fn(), listAdminPricingRules: vi.fn(), listAdminLocationsWithReadiness: vi.fn(), listAdminLocationOpeningHours: vi.fn(), mutateOpeningHoursAction: vi.fn(), saveLocationAction: vi.fn(), archiveLocationAction: vi.fn(), setLocationPublicationAction: vi.fn(), refresh: vi.fn(), push: vi.fn(),
 }));
-vi.mock("../../src/lib/admin/locations", () => ({ listAdminLocations, listAdminLocationsWithReadiness }));
+vi.mock("../../src/lib/admin/locations", () => ({ listAdminLocations, listAdminLocationsWithReadiness, readAdminLocationCurrencyChange }));
 vi.mock("../../src/lib/admin/courts", () => ({ listAdminCourts }));
 vi.mock("../../src/lib/admin/court-coverage", () => ({ listAdminCourtCoverage }));
 vi.mock("../../src/lib/admin/pricing", () => ({ listAdminPricingRules }));
@@ -42,6 +42,7 @@ beforeEach(() => {
   listAdminCourts.mockResolvedValue([]);
   listAdminCourtCoverage.mockResolvedValue([]);
   listAdminPricingRules.mockResolvedValue([]);
+  readAdminLocationCurrencyChange.mockResolvedValue([]);
   window.history.replaceState(null, "", `/admin/locations/${location.id}`);
   installDialogMock();
 });
@@ -72,6 +73,9 @@ it("opens the workspace with persisted values and refreshes it after editing", a
   listAdminLocationsWithReadiness.mockResolvedValue([{ ...location, missing: [] }]);
   saveLocationAction.mockResolvedValue({ ok: true, id: location.id });
   const { rerender } = render(await LocationManagementPage({ params: Promise.resolve({ locationId: location.id }) }));
+  expect(listAdminCourts).toHaveBeenCalledExactlyOnceWith(undefined, location.id);
+  expect(listAdminCourtCoverage).toHaveBeenCalledExactlyOnceWith(undefined, location.id);
+  expect(listAdminPricingRules).toHaveBeenCalledExactlyOnceWith(location.id);
   const form = screen.getByRole("form", { name: "Edit location" });
   for (const [label, value] of [["Name", location.name], ["Address line 1", "Street 1"], ["City", "Cluj"],
     ["Postal code", "400000"], ["Currency", "RON"], ["Status", "false"], ["Customer cancellation notice", "1440"]]) {
@@ -91,6 +95,53 @@ it("opens the workspace with persisted values and refreshes it after editing", a
   await waitFor(() => expect(screen.getByRole("button", { name: "Save location" })).toHaveProperty("disabled", true));
   expect(screen.getByRole("form", { name: "Edit location" })).toBeTruthy();
   expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+it("locks the currency with every applicable blocker while other edits still save", async () => {
+  listAdminLocationsWithReadiness.mockResolvedValue([{ ...location, missing: [] }]);
+  readAdminLocationCurrencyChange.mockResolvedValue([
+    { kind: "unfinished-bookings", courtBookings: 3, coachingBookings: 1, reservations: 1, checkouts: 0 },
+    { kind: "financial-operations" }, { kind: "court-pricing" }]);
+  saveLocationAction.mockResolvedValue({ ok: true, id: location.id });
+  render(await LocationManagementPage({ params: Promise.resolve({ locationId: location.id }) }));
+  expect(readAdminLocationCurrencyChange).toHaveBeenCalledExactlyOnceWith(location.id);
+  const form = screen.getByRole("form", { name: "Edit location" });
+  const currency = within(form).getByLabelText("Currency");
+  expect(currency).toHaveProperty("disabled", true);
+  expect(currency).toHaveProperty("value", "RON");
+  const description = document.getElementById(currency.getAttribute("aria-describedby")!)!;
+  expect(description.textContent).toContain("To change the currency from RON:");
+  for (const text of [
+    "unfinished bookings (3 court bookings, 1 coaching booking, 1 staff reservation). Cancel the remaining bookings or wait until they are completed.",
+    "Resolve pending payment, refund, or reconciliation operations",
+    "Remove the existing court pricing rules in this location's Pricing tab before changing the currency. Configure new prices afterward.",
+  ]) expect(description.textContent).toContain(text);
+  expect(within(description).getAllByRole("listitem")).toHaveLength(3);
+  expect(within(form).getByRole("button", { name: "Save location" })).toHaveProperty("disabled", true);
+  fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Renamed Club" } });
+  fireEvent.click(within(form).getByRole("button", { name: "Save location" }));
+  await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+  expect(saveLocationAction.mock.calls[0][0]).toMatchObject({ id: location.id, fields: { name: "Renamed Club", currency: "RON" } });
+});
+
+it("explains a server-rejected currency change in place and keeps the draft", async () => {
+  saveLocationAction.mockResolvedValue({ ok: false, reason: "currency-locked", blockers: [{ kind: "court-pricing" }] });
+  openEditLocation();
+  const currency = screen.getByLabelText("Currency");
+  expect(currency).toHaveProperty("disabled", false);
+  expect(screen.queryByText(/To change the currency/)).toBeNull();
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Renamed Club" } });
+  fireEvent.change(currency, { target: { value: "EUR" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save location" }));
+  await waitFor(() => expect(lastToast("error")).toContain("The currency was not changed."));
+  const description = document.getElementById(currency.getAttribute("aria-describedby")!)!;
+  expect(description.textContent).toContain("The currency was not changed. To change it:");
+  expect(description.textContent).toContain("Remove the existing court pricing rules");
+  expect(currency).toHaveProperty("value", "EUR");
+  expect(screen.getByLabelText("Name")).toHaveProperty("value", "Renamed Club");
+  expect(refresh).not.toHaveBeenCalled();
+  fireEvent.change(currency, { target: { value: "RON" } });
+  expect(screen.queryByText(/The currency was not changed/)).toBeNull();
 });
 
 it.each(["Enter", " "])("navigates from the focused location row with %s", (key) => {

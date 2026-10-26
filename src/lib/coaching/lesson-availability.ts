@@ -4,23 +4,26 @@ import type { EntityManager } from "typeorm";
 import { z } from "zod";
 
 import { localMinute, localToday } from "@/lib/courts/local-time";
-import { listPublicLocationsWithCourts, type PublicLocation } from "@/lib/courts/public";
+import { buildCourtDay } from "@/lib/courts/calendar";
+import type { PublicLocation } from "@/lib/courts/public";
 import { readPublicDayConfiguration, readPublicDayReservations } from "@/lib/courts/public-calendar";
 import { getDataSource } from "@/lib/db/data-source";
 import { normalizeDatabaseError } from "@/lib/db/errors";
 import { readIndependently } from "@/lib/db/transaction";
 import { listCoachDayAvailability } from "@/lib/db/repositories/coach-availability.repository";
-import { readPublicCoachingFacts } from "@/lib/db/repositories/coaching.repository";
+import { readPublicCoachingFacts, type PublicCoachingFacts } from "@/lib/db/repositories/coaching.repository";
 import { listCoachDayOccupancy } from "@/lib/db/repositories/reservations.repository";
 import { logger } from "@/lib/logger";
 import type { LocationCurrency } from "@/lib/pricing/money";
 import type { CoachingEvidence } from "@/lib/bookings/revision";
 import { listCoachingLessonOffers, listCoachingRescheduleOffers, type CoachingLessonDay, type CoachingLessonQuote } from "./lesson-quote";
 import { projectPublicCoachProfile } from "./public";
-import { coachingParticipantRange, isCoachingDuration, isOnlineCoachingProgramType } from "./validation";
+import {
+  coachingParticipantRange, isCoachingDuration, isOnlineCoachingProgramType, isPermittedParticipantCount, participantCountSchema,
+} from "./validation";
 
 const coachingLessonAvailabilitySchema = z.object({
-  locationId: z.uuid(), programId: z.uuid(), coachId: z.uuid(), date: z.iso.date(),
+  locationId: z.uuid(), programId: z.uuid(), coachId: z.uuid(), date: z.iso.date(), participantCount: participantCountSchema,
 });
 
 type PublicLessonCourt = {
@@ -32,6 +35,8 @@ export type PublicCoachingLessonAvailability = {
   location: { id: string; name: string; timezone: string };
   coach: { id: string; displayName: string };
   program: { id: string; name: string; participants: { min: number; max: number }; courtRentalIncluded: boolean };
+  // The requested count; every amount below is that count's configured lesson price.
+  participantCount: number;
   date: string;
   currency: LocationCurrency;
   // Priced lesson durations on the court grid; empty starts means nothing is free that day.
@@ -48,8 +53,13 @@ export type PublicCoachingLessonAvailability = {
 // locks; public reads never accept it.
 export async function readCoachingLessonDay(manager: EntityManager, location: PublicLocation, coachUserId: string,
   date: string, now: Date, excludeReservationId?: string): Promise<CoachingLessonDay | null> {
+  return readLessonDay(manager, location, coachUserId, date, now, () => readPublicCoachingFacts(manager), excludeReservationId);
+}
+
+async function readLessonDay(manager: EntityManager, location: PublicLocation, coachUserId: string, date: string, now: Date,
+  readCoaching: () => Promise<PublicCoachingFacts>, excludeReservationId?: string): Promise<CoachingLessonDay | null> {
   const [coaching, configuration, courtOccupancy, schedule, coachOccupancy] = await readIndependently(manager, [
-    () => readPublicCoachingFacts(manager),
+    readCoaching,
     () => readPublicDayConfiguration(manager, location, date),
     () => readPublicDayReservations(manager, location, date, excludeReservationId),
     () => listCoachDayAvailability(manager, coachUserId, date),
@@ -85,10 +95,10 @@ export function projectCoachingRescheduleStarts(day: CoachingLessonDay, coaching
     totalAmountMinor: offer.totalAmountMinor }));
 }
 
-// Public projection of one coach's online lessons on the day. Null unless the
-// coach publicly offers the program at this location. Pricing evidence
-// stays server-side; only names, times and quoted amounts are exposed.
-export function projectCoachingLessonAvailability(day: CoachingLessonDay, programId: string): PublicCoachingLessonAvailability | null {
+// Public projection of one coach's online lessons on the day for one participant count. Null
+// unless the coach publicly offers the program at this location for that count. Pricing
+// evidence stays server-side; only names, times and quoted amounts are exposed.
+export function projectCoachingLessonAvailability(day: CoachingLessonDay, programId: string, participantCount: number): PublicCoachingLessonAvailability | null {
   const locationId = day.location.id.toLowerCase();
   const profile = projectPublicCoachProfile(day.coaching,
     [{ id: locationId, name: day.location.name, currency: day.location.currency }], day.coach.userId);
@@ -96,33 +106,48 @@ export function projectCoachingLessonAvailability(day: CoachingLessonDay, progra
   const participants = program && coachingParticipantRange(program);
   // Group/Junior programs are never offered online, so they have no public lesson availability.
   if (!profile || !program || !isOnlineCoachingProgramType(program.type) || !participants
-    || !profile.locations.some((location) => location.id === locationId)) return null;
+    || !isPermittedParticipantCount(participants, participantCount) || !profile.locations.some((location) => location.id === locationId)) return null;
   const durations = program.durations.filter((durationMinutes) => isCoachingDuration(durationMinutes)
     && profile.lessons.some((lesson) => lesson.currency === day.location.currency && lesson.programId === program.id
-      && lesson.durationMinutes === durationMinutes && lesson.price !== null));
+      && lesson.durationMinutes === durationMinutes && lesson.participantCount === participantCount && lesson.price !== null));
   return {
     location: { id: locationId, name: day.location.name, timezone: day.location.timezone },
     coach: { id: profile.id, displayName: profile.displayName },
     program: { id: program.id, name: program.name, participants,
       courtRentalIncluded: program.courtRentalIncluded },
-    date: day.date, currency: day.location.currency,
+    participantCount, date: day.date, currency: day.location.currency,
     durations: durations.map((durationMinutes) => ({ durationMinutes,
-      starts: groupByStart(listCoachingLessonOffers(day, { programId: program.id, durationMinutes }), quotedCourt) })),
+      starts: groupByStart(listCoachingLessonOffers(day, { programId: program.id, durationMinutes, participantCount }), quotedCourt) })),
   };
 }
 
+export type PublicCoachingLessonRead = {
+  availability: PublicCoachingLessonAvailability | null;
+  // The public court grid of the same date, built from the facts the lesson read already loaded.
+  courtDay: ReturnType<typeof buildCourtDay>;
+};
+
 // Advisory public availability, the same for visitors and members. Unknown,
-// malformed and ineligible locations, programs and coaches all resolve to null.
-export async function readPublicCoachingLessonAvailability(input: unknown, now = new Date()): Promise<PublicCoachingLessonAvailability | null> {
+// malformed and ineligible locations, programs and coaches all resolve to null
+// availability. `loaded` is what the same page render already read: its public
+// locations and coaching facts. Only advisory page reads reuse them; booking,
+// rescheduling and lesson edits reload everything with readCoachingLessonDay
+// inside their transactions.
+export async function readPublicCoachingLessonAvailability(input: unknown,
+  loaded: { locations: readonly PublicLocation[]; coaching: PublicCoachingFacts }, now = new Date()): Promise<PublicCoachingLessonRead | null> {
   const parsed = coachingLessonAvailabilitySchema.safeParse(input);
   if (!parsed.success) return null;
-  const { locationId, programId, coachId, date } = parsed.data;
-  const location = (await listPublicLocationsWithCourts()).find((candidate) => candidate.id === locationId.toLowerCase());
+  const { locationId, programId, coachId, date, participantCount } = parsed.data;
+  const location = loaded.locations.find((candidate) => candidate.id === locationId.toLowerCase());
   if (!location) return null;
   try {
-    const day = await readCoachingLessonDay((await getDataSource()).manager, location, coachId, date, now);
+    const day = await readLessonDay((await getDataSource()).manager, location, coachId, date, now, async () => loaded.coaching);
     if (!day) throw new Error("Malformed public court day.");
-    return projectCoachingLessonAvailability(day, programId);
+    return {
+      availability: projectCoachingLessonAvailability(day, programId, participantCount),
+      courtDay: buildCourtDay({ date, today: day.today, currentMinute: day.currentMinute, courts: location.courts,
+        hours: day.hours, coverage: day.coverage, pricing: day.pricing, reservations: day.courtOccupancy }),
+    };
   } catch (error: unknown) {
     logger.error({ event: "coaching.lesson_availability_read_failed", code: normalizeDatabaseError(error).sqlState },
       "Failed to load lesson availability");

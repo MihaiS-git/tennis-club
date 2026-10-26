@@ -9,12 +9,11 @@ import { normalizeDatabaseError, reservationOverlap } from "@/lib/db/errors";
 import { allocateBookingRefund } from "./financials";
 import { recordBookingFinancialException } from "@/lib/notifications/events";
 import { findBookingCancellationNotice } from "@/lib/db/repositories/bookings.repository";
-import type { OnlinePaymentEvent } from "./providers/types";
 
 // The existing settlement service owns all aggregate locks and receipt handling.
 export async function settleAdjustment(manager: EntityManager, input: {
   attempt: NonNullable<Awaited<ReturnType<typeof payments.lockSettlementAttempt>>>;
-  event: OnlinePaymentEvent | null; outcome: "succeeded" | "failed" | "retryable_failed" | "cancelled";
+  outcome: "succeeded" | "failed" | "retryable_failed" | "cancelled";
   providerPaymentId: string; mismatch: boolean | null;
 }): Promise<{ result: payments.ProviderReceipt["settlement_result"]; refundIds: string[];
   abandonProviderPayment: boolean }> {

@@ -4,7 +4,7 @@ import { parseActivityQuery, type ActivityScope } from "@/lib/bookings/activity-
 import { listOwnCourtHistory } from "../helpers/current-activity";
 import { listOwnUpcomingCustomerBookings } from "../helpers/current-activity";
 import { cancelOwnCustomerBooking } from "@/lib/bookings/self-cancellation-service";
-import { cleanupBookingFixtures, insertCheckoutFixture } from "./checkout-fixtures";
+import { cleanupBookingFixtures, insertCheckoutFixture, type CheckoutFixtureInput } from "./checkout-fixtures";
 import { setPaymentAttemptExpiryFixture } from "../local/booking-fixtures";
 import { randomUUID } from "node:crypto";
 import Stripe from "stripe";
@@ -44,14 +44,12 @@ test("verified webhook settles original hold once, keeps retryable failure, rele
     expect((await listOwnUpcomingCustomerBookings(member)).map((r) => r.id)).not.toContain(id);
     expect((await listOwnCourtHistory(1, member)).rows.map((r) => r.id)).not.toContain(id);
   };
-  const params = (start: number) => ({ p_court_id: courtId, p_booking_date: "2099-10-15", p_starts_at_minute: start,
-    p_ends_at_minute: start + 60, p_account_user_id: userIds[0], p_customer_name: "Stripe guest",
-    p_customer_email: "stripe@example.test", p_customer_phone: "123", p_total_amount_minor: 5000,
-    p_currency: "RON", p_payment_method: "online", p_provider: "stripe", p_hold_seconds: paymentHoldDurationSeconds });
+  const params = (start: number): CheckoutFixtureInput => ({ courtId, bookingDate: "2099-10-15", startMinute: start,
+    endMinute: start + 60, accountUserId: userIds[0], customerName: "Stripe guest",
+    customerEmail: "stripe@example.test", customerPhone: "123", totalAmountMinor: 5000,
+    currency: "RON", paymentMethod: "online", provider: "stripe", holdSeconds: paymentHoldDurationSeconds });
   async function hold(start: number, owner: string | null = userIds[0]) {
-    const held = await insertCheckoutFixture(db, { ...params(start), p_account_user_id: owner });
-    expect(held.error).toBeNull();
-    return held.data[0];
+    return insertCheckoutFixture({ ...params(start), accountUserId: owner });
   }
   async function begin(attemptId: string) {
     create.mockResolvedValueOnce({ id: `pi_${attemptId}`, client_secret: `pi_${attemptId}_secret` });
@@ -112,7 +110,7 @@ test("verified webhook settles original hold once, keeps retryable failure, rele
     const held = await hold(600), checkout = await begin(held.payment_attempt_id);
     expect(create).toHaveBeenCalledWith({ amount: 5000, currency: "ron", allowed_payment_method_types: ["card"],
       capture_method: "manual", metadata: { payment_attempt_id: held.payment_attempt_id } }, { idempotencyKey: `court-payment-${held.payment_attempt_id}` });
-    expect((await insertCheckoutFixture(db, params(600))).error?.code).toBe("23P01");
+    await expect(insertCheckoutFixture(params(600))).rejects.toMatchObject({ driverError: { code: "23P01" } });
     expect(await exceptions(held.booking_id)).toEqual([]);
     expect(await readOnlineCheckout({ attemptId: checkout.attemptId, token: checkout.token })).toMatchObject({ status: "pending_payment" });
     await invisible(held.booking_id);
@@ -145,7 +143,7 @@ test("verified webhook settles original hold once, keeps retryable failure, rele
     expect((await db.from("payment_attempts").select("status,provider_payment_id").eq("id", failed.payment_attempt_id).single()).data)
       .toEqual({ status: "pending", provider_payment_id: `pi_${failed.payment_attempt_id}` });
     await invisible(failed.booking_id);
-    expect((await insertCheckoutFixture(db, params(660))).error?.code).toBe("23P01");
+    await expect(insertCheckoutFixture(params(660))).rejects.toMatchObject({ driverError: { code: "23P01" } });
     // A different card succeeds on the original pending attempt and reservation.
     expect((await POST(webhook(failureCheckout.attemptId, "payment_intent.succeeded"))).status).toBe(200);
     expect(await readOnlineCheckout({ attemptId: failureCheckout.attemptId, token: failureCheckout.token })).toMatchObject({ status: "confirmed" });

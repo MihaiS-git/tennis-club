@@ -3,32 +3,36 @@
 import { Building2, CalendarClock, ClipboardList, CreditCard, GraduationCap, MapPin, Tag, Users } from "lucide-react";
 import { SidebarNavigation, type SidebarEntry } from "./sidebar-navigation";
 
-const adminEntries: readonly SidebarEntry[] = [
-  { label: "Locations", href: "/admin/locations", icon: MapPin },
+const adminOperations: readonly SidebarEntry[] = [
   // One Admin entry for the Calendar and List views; /admin/reservations redirects here.
   { label: "Bookings & Reservations", href: "/admin/bookings", icon: ClipboardList },
-  { label: "Coaching", icon: GraduationCap, section: "/admin/coaching", links: [
+  { label: "Transactions", href: "/admin/payments/transactions", icon: CreditCard },
+  { label: "Users", href: "/admin/users", icon: Users },
+  { label: "Coach availability", href: "/admin/coaching/availability", icon: CalendarClock },
+];
+const adminConfiguration: readonly SidebarEntry[] = [
+  { label: "Locations", href: "/admin/locations", icon: MapPin },
+  { label: "Coaching", icon: GraduationCap, links: [
     { label: "Programs", href: "/admin/coaching/programs" },
     { label: "Coaches", href: "/admin/coaching/coaches" },
     { label: "Prices", href: "/admin/coaching/prices" },
-    { label: "Availability", href: "/admin/coaching/availability" },
   ] },
-  { label: "Payments", icon: CreditCard, section: "/admin/payments", links: [
-    { label: "Transactions", href: "/admin/payments/transactions" },
-    { label: "Settings", href: "/admin/payments/settings" },
-  ] },
-  { label: "Users", href: "/admin/users", icon: Users },
+  { label: "Payment settings", href: "/admin/payments/settings", icon: CreditCard },
   { label: "Club", href: "/admin/club", icon: Building2 },
 ];
 // Coaches get their own Calendar and List of their lessons and staff reservations.
 const coachEntries: readonly SidebarEntry[] = [{ label: "Bookings & Reservations", href: "/coach/bookings", icon: ClipboardList }];
 // The Coach area is shown to every current coach, including Admins who also coach.
-const ownEntries: readonly SidebarEntry[] = [
+const ownOperations: readonly SidebarEntry[] = [
   { label: "My availability", href: "/coach/availability", icon: CalendarClock },
+];
+const ownConfiguration: readonly SidebarEntry[] = [
   { label: "My prices", href: "/coach/pricing", icon: Tag },
 ];
 
 export function AdminNavigation({ isAdmin, isCoach = false }: { isAdmin: boolean; isCoach?: boolean }) {
-  const entries = isAdmin ? adminEntries : coachEntries;
-  return <SidebarNavigation title="Management" entries={isCoach ? [...entries, ...ownEntries] : entries} />;
+  return <SidebarNavigation title="Management" sections={[
+    { label: "Operations", entries: [...(isAdmin ? adminOperations : coachEntries), ...(isCoach ? ownOperations : [])] },
+    { label: "Configuration", entries: [...(isAdmin ? adminConfiguration : []), ...(isCoach ? ownConfiguration : [])] },
+  ]} />;
 }

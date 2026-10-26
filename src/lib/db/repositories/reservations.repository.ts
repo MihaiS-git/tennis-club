@@ -369,7 +369,9 @@ export async function listAdminOperationalProjection(manager: EntityManager, cou
       v.total_amount_minor, v.currency, v.cancellation_notice_minutes,
       (v.coach_user_id IS NOT NULL) AS includes_coaching, v.coach_user_id, v.coach_name, v.coaching_program_name,
       v.pricing_evidence->'coaching' AS coaching,
-      coalesce((select jsonb_agg(to_jsonb(p) order by p.created_at,p.id) from public.payment_attempts p where p.booking_id=b.id),'[]'::jsonb) AS payment_facts
+      coalesce((select jsonb_agg(to_jsonb(p) order by p.created_at,p.id) from public.payment_attempts p where p.booking_id=b.id),'[]'::jsonb) AS payment_facts,
+      coalesce((select jsonb_agg(jsonb_build_object('id',f.id,'provider',f.provider,'status',f.status,'created_at',f.created_at) order by f.created_at,f.id)
+        from public.payment_refunds f where f.booking_id=b.id),'[]'::jsonb) AS refund_facts
     from public.court_reservations r
     join public.courts c on c.id = r.court_id and c.is_active
     join public.locations l on l.id = c.location_id and l.is_active and l.archived_at is null

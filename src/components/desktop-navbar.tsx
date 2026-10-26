@@ -17,7 +17,7 @@ async function AdminNavigationLink() {
   if (!visible) return null;
 
   return (
-    <PrimaryNavigationLink className="inline-flex min-h-10 items-center text-sm font-medium" section="/admin" href="/admin">
+    <PrimaryNavigationLink className="inline-flex min-h-10 items-center text-sm font-medium" section={["/admin", "/coach"]} href="/admin">
       Admin
     </PrimaryNavigationLink>
   );

@@ -385,11 +385,7 @@ const refunds = (bookingId: string) =>
     [bookingId],
   );
 
-test.describe("live lifecycle", () => {
-  test.skip(
-    process.env.LIVE_LATE === "1",
-    "Late scenario run uses the shortened-hold server only.",
-  );
+if (process.env.LIVE_LATE !== "1") test.describe("live lifecycle", () => {
 
   test("abandon: X before paying discards the modification, releases the hold, and Edit reopens fresh", async ({
     page,
@@ -646,13 +642,9 @@ const receipts = async (paymentId: string) =>
     )
   )[0].n;
 
-test("late authorization: an authorization after the shortened hold is cancelled at Stripe and collects no money", async ({
+if (process.env.LIVE_LATE === "1") test("late authorization: an authorization after the shortened hold is cancelled at Stripe and collects no money", async ({
   page,
 }) => {
-  test.skip(
-    process.env.LIVE_LATE !== "1",
-    "Requires the server started with the hold override.",
-  );
   const { bookingId, pending, paymentId } = await confirmAfterCutoff(page, "C5");
   await startListener();
   const authorized = await awaitEvent(
@@ -679,13 +671,9 @@ test("late authorization: an authorization after the shortened hold is cancelled
   expect((await adjustments(bookingId))[0].status).not.toBe("applied");
 });
 
-test("late capture: funds captured after the shortened hold are refunded once, never applied, and the hold is released", async ({
+if (process.env.LIVE_LATE === "1") test("late capture: funds captured after the shortened hold are refunded once, never applied, and the hold is released", async ({
   page,
 }) => {
-  test.skip(
-    process.env.LIVE_LATE !== "1",
-    "Requires the server started with the hold override.",
-  );
   const { bookingId, pending, paymentId } = await confirmAfterCutoff(page, "C6");
   // Arrange authoritative captured funds at Stripe before the application observes anything.
   stripe(["payment_intents", "capture", paymentId]);

@@ -4,7 +4,9 @@
 // existing records are reused and never updated, so Admin edits survive reruns.
 import { pathToFileURL } from "node:url";
 import type { EntityManager } from "typeorm";
-import { coachingProgramFieldsSchema, coachProfileFieldsSchema, type CoachingProgramType } from "../src/lib/coaching/validation.ts";
+import {
+  coachingParticipantRange, coachingProgramFieldsSchema, coachProfileFieldsSchema, isPermittedParticipantCount, type CoachingProgramType,
+} from "../src/lib/coaching/validation.ts";
 import { getDataSource } from "../src/lib/db/data-source.ts";
 import { CoachingPriceEntity } from "../src/lib/db/entities/coaching-price.entity.ts";
 import { CoachingProgramEntity } from "../src/lib/db/entities/coaching-program.entity.ts";
@@ -24,24 +26,34 @@ const SEED_CURRENCY = "RON";
 type ProgramFixture = {
   id: string; name: string; description: string; type: CoachingProgramType; durations: number[];
   min: number | null; max: number | null; courtIncluded: boolean;
-  // Club price per duration (Private/Semi-private only). Group/Junior rates per player
-  // count are entered by an Admin under Prices; the seed never invents them.
-  clubPrices: Record<number, number>;
+  // Club lesson prices/person, each listed explicitly for its duration and participant count.
+  // Nothing is calculated from another entry; an unlisted lesson stays unpriced.
+  clubPrices: { durationMinutes: number; participantCount: number; amountMinor: number }[];
 };
 
 export const demoPrograms: ProgramFixture[] = [
   { id: "c0ac0000-0000-4000-8000-000000000001", name: "Private coaching", type: "private", durations: [60, 90], min: 1, max: 1, courtIncluded: true,
     description: "One-to-one lessons built around your game: technique, tactics and match play at your own pace. The court is included in the lesson price.",
-    clubPrices: { 60: 20000, 90: 28000 } },
+    clubPrices: [{ durationMinutes: 60, participantCount: 1, amountMinor: 20000 }, { durationMinutes: 90, participantCount: 1, amountMinor: 28000 }] },
   { id: "c0ac0000-0000-4000-8000-000000000002", name: "Semi-private coaching", type: "semi_private", durations: [60, 90], min: 2, max: 2, courtIncluded: false,
-    description: "Two players of a similar level share the coach and the drills. The price is per lesson for the pair; the court is rented separately.",
-    clubPrices: { 60: 26000, 90: 36000 } },
+    description: "Two players of a similar level share the coach and the drills. Each player pays the lesson price per person; the court is rented separately.",
+    clubPrices: [{ durationMinutes: 60, participantCount: 2, amountMinor: 13000 }, { durationMinutes: 90, participantCount: 2, amountMinor: 18000 }] },
   { id: "c0ac0000-0000-4000-8000-000000000003", name: "Group coaching", type: "group", durations: [90], min: 3, max: 6, courtIncluded: true,
     description: "Small adult groups grouped by level, with structured drills and supervised points.",
-    clubPrices: {} },
+    clubPrices: [
+      { durationMinutes: 90, participantCount: 3, amountMinor: 11000 }, { durationMinutes: 90, participantCount: 4, amountMinor: 10000 },
+      { durationMinutes: 90, participantCount: 5, amountMinor: 9000 }, { durationMinutes: 90, participantCount: 6, amountMinor: 8500 },
+    ] },
   { id: "c0ac0000-0000-4000-8000-000000000004", name: "Junior coaching", type: "junior", durations: [60, 90], min: 4, max: 8, courtIncluded: true,
     description: "Sessions for players aged 6 to 16, focused on coordination, footwork and enjoying the game.",
-    clubPrices: {} },
+    clubPrices: [
+      { durationMinutes: 60, participantCount: 4, amountMinor: 7000 }, { durationMinutes: 60, participantCount: 5, amountMinor: 6500 },
+      { durationMinutes: 60, participantCount: 6, amountMinor: 6000 }, { durationMinutes: 60, participantCount: 7, amountMinor: 5500 },
+      { durationMinutes: 60, participantCount: 8, amountMinor: 5000 },
+      { durationMinutes: 90, participantCount: 4, amountMinor: 9500 }, { durationMinutes: 90, participantCount: 5, amountMinor: 9000 },
+      { durationMinutes: 90, participantCount: 6, amountMinor: 8500 }, { durationMinutes: 90, participantCount: 7, amountMinor: 8000 },
+      { durationMinutes: 90, participantCount: 8, amountMinor: 7500 },
+    ] },
 ];
 
 type CoachFixture = {
@@ -49,7 +61,7 @@ type CoachFixture = {
   programIds: string[];
   // Indexes into the current club locations, wrapped to the number that exist.
   locations: number[];
-  overrides: { programId: string; durationMinutes: number; amountMinor: number }[];
+  overrides: { programId: string; durationMinutes: number; participantCount: number; amountMinor: number }[];
 };
 
 const [privateId, semiPrivateId, groupId, juniorId] = demoPrograms.map((program) => program.id);
@@ -61,8 +73,8 @@ export const demoCoaches: CoachFixture[] = [
     specialties: ["Match tactics", "Serve", "Competition preparation"], languages: ["Romanian", "English"],
     programIds: [privateId, semiPrivateId], locations: [0, 1],
     overrides: [
-      { programId: privateId, durationMinutes: 60, amountMinor: 25000 },
-      { programId: privateId, durationMinutes: 90, amountMinor: 35000 },
+      { programId: privateId, durationMinutes: 60, participantCount: 1, amountMinor: 25000 },
+      { programId: privateId, durationMinutes: 90, participantCount: 1, amountMinor: 35000 },
     ] },
   { email: "demo-coach-maria@example.test", displayName: "Maria Ionescu",
     bio: "Maria has run the club’s junior groups for nine seasons. She believes children learn tennis best through games, so her sessions mix coordination work and footwork with plenty of chances to rally and keep score.\n\nShe also leads adult beginner groups for parents who want to join their children on court.",
@@ -79,11 +91,11 @@ export const demoCoaches: CoachFixture[] = [
     qualifications: "Romanian Tennis Federation Level 3 coach\nPTR Professional",
     specialties: ["Doubles", "Volleys", "Junior competition"], languages: ["Romanian", "English", "Italian"],
     programIds: [privateId, semiPrivateId, juniorId], locations: [0, 1],
-    overrides: [{ programId: semiPrivateId, durationMinutes: 60, amountMinor: 24000 }] },
+    overrides: [{ programId: semiPrivateId, durationMinutes: 60, participantCount: 2, amountMinor: 12000 }] },
 ];
 
 const priceKey = (key: coaching.CoachingPriceKey) =>
-  [key.programId, key.durationMinutes, key.currency, key.coachUserId ?? "club"].join("/").toLowerCase();
+  [key.programId, key.durationMinutes, key.participantCount, key.currency, key.coachUserId ?? "club"].join("/").toLowerCase();
 
 export type CoachingSeedSummary = {
   locations: { name: string; currency: string; priced: boolean }[];
@@ -105,6 +117,7 @@ export async function seedCoachingData(manager: EntityManager, options: { locati
 
   const programs = { created: 0, kept: 0 };
   const durations = new Map<string, number[]>();
+  const ranges = new Map<string, ReturnType<typeof coachingParticipantRange>>();
   for (const fixture of demoPrograms) {
     const fields = coachingProgramFieldsSchema.parse({
       name: fixture.name, description: fixture.description, program_type: fixture.type, durations: fixture.durations,
@@ -123,6 +136,7 @@ export async function seedCoachingData(manager: EntityManager, options: { locati
     const program = await coaching.lockCoachingProgram(manager, fixture.id, "pessimistic_read");
     if (!program) throw new Error(`Seed program ${fixture.name} is missing.`);
     durations.set(fixture.id, program.durations);
+    ranges.set(fixture.id, coachingParticipantRange(program));
   }
 
   const coaches = { created: 0, kept: 0 };
@@ -169,12 +183,15 @@ export async function seedCoachingData(manager: EntityManager, options: { locati
     return (result.raw as unknown[]).length > 0;
   };
   const priced = locations.some((location) => location.currency === SEED_CURRENCY);
+  // Prices follow the stored program: its current durations and participant range.
+  const applicable = (programId: string, durationMinutes: number, participantCount: number) => {
+    const range = ranges.get(programId);
+    return priced && Boolean(durations.get(programId)?.includes(durationMinutes)) && Boolean(range && isPermittedParticipantCount(range, participantCount));
+  };
   for (const program of demoPrograms) {
-    for (const durationMinutes of program.durations) {
-      const amount = program.clubPrices[durationMinutes];
-      if (amount === undefined) continue;
-      if (!priced || !durations.get(program.id)?.includes(durationMinutes)) { prices.skipped += 1; continue; }
-      if (await insertPrice({ programId: program.id, durationMinutes, currency: SEED_CURRENCY, coachUserId: null }, amount)) prices.clubCreated += 1;
+    for (const { durationMinutes, participantCount, amountMinor } of program.clubPrices) {
+      if (!applicable(program.id, durationMinutes, participantCount)) { prices.skipped += 1; continue; }
+      if (await insertPrice({ programId: program.id, durationMinutes, participantCount, currency: SEED_CURRENCY, coachUserId: null }, amountMinor)) prices.clubCreated += 1;
       else prices.kept += 1;
     }
   }
@@ -182,9 +199,10 @@ export async function seedCoachingData(manager: EntityManager, options: { locati
     const assigned = assignments.get(fixture.email);
     if (!assigned) continue;
     for (const override of fixture.overrides) {
-      const key = { programId: override.programId, durationMinutes: override.durationMinutes, currency: SEED_CURRENCY, coachUserId: assigned.userId } as const;
+      const key = { programId: override.programId, durationMinutes: override.durationMinutes, participantCount: override.participantCount,
+        currency: SEED_CURRENCY, coachUserId: assigned.userId } as const;
       // Overrides need the coach to still offer the program (composite FK).
-      if (!priced || !durations.get(override.programId)?.includes(override.durationMinutes)
+      if (!applicable(override.programId, override.durationMinutes, override.participantCount)
         || !assigned.programIds.includes(override.programId)) { prices.skipped += 1; continue; }
       if (await insertPrice(key, override.amountMinor)) prices.overridesCreated += 1;
       else prices.kept += 1;

@@ -63,12 +63,10 @@ afterAll(async () => {
 async function hold(owner: string | null = users[0]) {
   const start = nextMinute;
   nextMinute += 60;
-  const held = await insertCheckoutFixture(localFixtureClient(), { p_court_id: courtId, p_booking_date: "2099-10-15",
-    p_starts_at_minute: start, p_ends_at_minute: start + 60, p_account_user_id: owner,
-    p_customer_name: "Checkout customer", p_customer_email: "checkout@example.test", p_customer_phone: "123",
-    p_total_amount_minor: 5000, p_currency: "RON", p_payment_method: "online", p_provider: "stripe", p_hold_seconds: 600 });
-  expect(held.error).toBeNull();
-  const booking = held.data[0];
+  const booking = await insertCheckoutFixture({ courtId, bookingDate: "2099-10-15",
+    startMinute: start, endMinute: start + 60, accountUserId: owner,
+    customerName: "Checkout customer", customerEmail: "checkout@example.test", customerPhone: "123",
+    totalAmountMinor: 5000, currency: "RON", paymentMethod: "online", provider: "stripe", holdSeconds: 600 });
   bookingIds.push(booking.booking_id);
   const checkout = await startOnlineCheckout(booking.payment_attempt_id);
   return { ...booking, access: { attemptId: checkout.attemptId, token: checkout.token } };

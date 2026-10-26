@@ -8,6 +8,7 @@ import { getDataSource } from "@/lib/db/data-source";
 import * as clubs from "@/lib/db/repositories/clubs.repository";
 import { listCheckoutPricing } from "@/lib/db/repositories/pricing.repository";
 import { buildCourtDay } from "@/lib/courts/calendar";
+import { toCalendarCoveragePeriod, toCalendarPricingRule } from "@/lib/courts/calendar-projections";
 import { getCalendarSelection } from "@/lib/courts/interval-selection";
 import { localToday, localMinute } from "@/lib/courts/local-time";
 import { mondayWeekday } from "@/lib/pricing/resolution";
@@ -84,7 +85,7 @@ async function commitSettlement(value: Settlement, event: OnlinePaymentEvent | n
       }
       const mismatch = event && (event.amountMinor !== attempt.amount_minor || event.currency.toUpperCase() !== attempt.currency.toUpperCase());
       if (attempt.adjustment_id) {
-        const adjusted = await settleAdjustment(manager, { attempt, event, outcome: value.outcome,
+        const adjusted = await settleAdjustment(manager, { attempt, outcome: value.outcome,
           providerPaymentId: value.providerPaymentId, mismatch: Boolean(mismatch) });
         adjustmentRefundIds = adjusted.refundIds;
         if (adjusted.abandonProviderPayment && attempt.provider)
@@ -137,12 +138,8 @@ async function commitSettlement(value: Settlement, event: OnlinePaymentEvent | n
           const day = buildCourtDay({ date: r.booking_date, today: localToday(location.timezone, now), currentMinute: localMinute(location.timezone, now),
             courts: court ? [{ id: court.id, name: court.name, slug: court.slug, surface: court.surface,
               environment: court.environment, has_lighting: court.hasLighting }] : [], hours,
-            coverage: coverage.map((c) => ({ id: c.id, court_id: c.courtId, starts_on: c.startsOn, ends_on: c.endsOn,
-              created_at: c.createdAt.toISOString(), updated_at: c.updatedAt.toISOString() })),
-            pricing: prices.map((p) => ({ id: p.id, rule_set_id: p.ruleSetId, location_id: p.locationId, court_id: p.courtId,
-              court_state: p.courtState, weekday: p.weekday, starts_at_minute: p.startsAtMinute, ends_at_minute: p.endsAtMinute,
-              starts_on: p.startsOn, ends_on: p.endsOn, price_per_hour_minor: p.pricePerHourMinor,
-              created_at: p.createdAt.toISOString(), updated_at: p.updatedAt.toISOString() })), reservations: [] });
+            coverage: coverage.map(toCalendarCoveragePeriod),
+            pricing: prices.map(toCalendarPricingRule), reservations: [] });
           const target = day.courts[0];
           const quote = target && getCalendarSelection({ courtId: r.court_id, times: day.times, cells: target.cells,
             hourlyPrices: target.hourlyPrices }, day.times.indexOf(r.starts_at_minute), day.times.indexOf(r.ends_at_minute - 30) + 1);

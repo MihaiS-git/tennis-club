@@ -29,7 +29,8 @@ import { removeOwnCoachingPrice, saveOwnCoachingPrice } from "@/lib/coaching/coa
 const coach = "c1000000-0000-4000-8000-00000000000a";
 const otherCoach = "c1000000-0000-4000-8000-00000000000b";
 const program = "a1000000-0000-4000-8000-000000000001";
-const input = { program_id: program, duration_minutes: 60, currency: "RON", amount: "150" };
+const input = { program_id: program, duration_minutes: 60, participant_count: 1, currency: "RON", amount: "150" };
+const key = { program_id: program, duration_minutes: 60, participant_count: 1, currency: "RON" };
 const manager = {};
 
 beforeEach(() => {
@@ -38,7 +39,7 @@ beforeEach(() => {
   mocks.inTransaction.mockImplementation(async (work: (value: unknown) => unknown) => work(manager));
   mocks.lockReservationActorFacts.mockResolvedValue({ status: "active", roles: ["coach"] });
   mocks.lockCoachProfile.mockResolvedValue({ userId: coach, locationIds: [], programIds: [program] });
-  mocks.lockCoachingProgram.mockResolvedValue({ id: program, programType: "private", durations: [60, 90] });
+  mocks.lockCoachingProgram.mockResolvedValue({ id: program, programType: "private", durations: [60, 90], minParticipants: 1, maxParticipants: 1 });
   mocks.upsertCoachingPrice.mockResolvedValue("price-1");
   mocks.deleteCoachingPrice.mockResolvedValue("price-1");
 });
@@ -47,15 +48,15 @@ it("saves an override only for the signed-in coach, keyed by program, duration a
   expect(await saveOwnCoachingPrice(input)).toEqual({ ok: true, id: "price-1" });
   expect(mocks.lockCoachProfile).toHaveBeenCalledWith(manager, coach, "pessimistic_read");
   expect(mocks.upsertCoachingPrice).toHaveBeenCalledWith(manager,
-    { programId: program, durationMinutes: 60, currency: "RON", coachUserId: coach }, 15000, expect.any(Date));
-  expect(await removeOwnCoachingPrice({ program_id: program, duration_minutes: 60, currency: "RON" })).toEqual({ ok: true, id: "price-1" });
-  expect(mocks.deleteCoachingPrice).toHaveBeenCalledWith(manager, { programId: program, durationMinutes: 60, currency: "RON", coachUserId: coach });
+    { programId: program, durationMinutes: 60, participantCount: 1, currency: "RON", coachUserId: coach }, 15000, expect.any(Date));
+  expect(await removeOwnCoachingPrice(key)).toEqual({ ok: true, id: "price-1" });
+  expect(mocks.deleteCoachingPrice).toHaveBeenCalledWith(manager, { programId: program, durationMinutes: 60, participantCount: 1, currency: "RON", coachUserId: coach });
 });
 
 it("cannot address another coach, a club default or a location", async () => {
   for (const extra of [{ coach_user_id: otherCoach }, { coach_user_id: null }, { location_id: "b1000000-0000-4000-8000-000000000001" }]) {
     expect(await saveOwnCoachingPrice({ ...input, ...extra })).toMatchObject({ ok: false, reason: "invalid-input" });
-    expect(await removeOwnCoachingPrice({ program_id: program, duration_minutes: 60, currency: "RON", ...extra }))
+    expect(await removeOwnCoachingPrice({ ...key, ...extra }))
       .toMatchObject({ ok: false, reason: "invalid-input" });
   }
   expect(mocks.inTransaction).not.toHaveBeenCalled();
@@ -77,11 +78,25 @@ it("requires an active coach account offering the program and duration", async (
 
 it("rejects own prices for Group and Junior programs, which are club-priced, but still removes obsolete ones", async () => {
   for (const programType of ["group", "junior"]) {
-    mocks.lockCoachingProgram.mockResolvedValueOnce({ id: program, programType, durations: [60, 90] });
+    mocks.lockCoachingProgram.mockResolvedValueOnce({ id: program, programType, durations: [60, 90], minParticipants: 3, maxParticipants: 6 });
     expect(await saveOwnCoachingPrice(input)).toEqual({ ok: false, reason: "club-priced" });
   }
   expect(mocks.upsertCoachingPrice).not.toHaveBeenCalled();
-  mocks.lockCoachingProgram.mockResolvedValueOnce({ id: program, programType: "semi_private", durations: [60, 90] });
+  mocks.lockCoachingProgram.mockResolvedValueOnce({ id: program, programType: "semi_private", durations: [60, 90], minParticipants: 1, maxParticipants: 2 });
   expect(await saveOwnCoachingPrice(input)).toEqual({ ok: true, id: "price-1" });
-  expect(await removeOwnCoachingPrice({ program_id: program, duration_minutes: 60, currency: "RON" })).toEqual({ ok: true, id: "price-1" });
+  expect(await removeOwnCoachingPrice(key)).toEqual({ ok: true, id: "price-1" });
+});
+
+it("saves an override only for a participant count inside the program's current range", async () => {
+  mocks.lockCoachingProgram.mockResolvedValue({ id: program, programType: "semi_private", durations: [60, 90], minParticipants: 2, maxParticipants: 4 });
+  expect(await saveOwnCoachingPrice({ ...input, participant_count: 3 })).toEqual({ ok: true, id: "price-1" });
+  expect(mocks.upsertCoachingPrice).toHaveBeenLastCalledWith(manager,
+    { programId: program, durationMinutes: 60, participantCount: 3, currency: "RON", coachUserId: coach }, 15000, expect.any(Date));
+  expect(await saveOwnCoachingPrice({ ...input, participant_count: 5 }))
+    .toEqual({ ok: false, reason: "invalid-input", fieldErrors: { participant_count: "Use a player count from 2 to 4." } });
+  expect(await saveOwnCoachingPrice({ ...input, participant_count: 1 })).toMatchObject({ ok: false, reason: "invalid-input" });
+  mocks.lockCoachingProgram.mockResolvedValue({ id: program, programType: "semi_private", durations: [60, 90], minParticipants: null, maxParticipants: 4 });
+  expect(await saveOwnCoachingPrice({ ...input, participant_count: 3 })).toEqual({ ok: false, reason: "participants-required" });
+  expect(mocks.upsertCoachingPrice).toHaveBeenCalledTimes(1);
+  expect(await saveOwnCoachingPrice({ ...input, participant_count: undefined })).toMatchObject({ ok: false, reason: "invalid-input" });
 });

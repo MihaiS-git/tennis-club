@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   saveLocation: vi.fn(), publication: vi.fn(), archive: vi.fn(), saveCourt: vi.fn(), saveCoverage: vi.fn(), removeCoverage: vi.fn(),
   savePricing: vi.fn(), removePricing: vi.fn(), saveHours: vi.fn(), push: vi.fn(), refresh: vi.fn(),
 }));
-vi.mock("../../src/lib/admin/locations", () => ({ listAdminLocations: mocks.locations, listAdminLocationsWithReadiness: mocks.readiness }));
+vi.mock("../../src/lib/admin/locations", () => ({ listAdminLocations: mocks.locations, listAdminLocationsWithReadiness: mocks.readiness, readAdminLocationCurrencyChange: async () => [] }));
 vi.mock("../../src/lib/admin/courts", () => ({ listAdminCourts: mocks.courts }));
 vi.mock("../../src/lib/admin/court-coverage", () => ({ listAdminCourtCoverage: mocks.coverage }));
 vi.mock("../../src/lib/admin/opening-hours", () => ({ listAdminLocationOpeningHours: mocks.hours, listAdminOpeningHoursSchedules: async () => [schedule] }));

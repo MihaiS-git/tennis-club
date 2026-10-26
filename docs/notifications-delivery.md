@@ -1,6 +1,34 @@
-# Notification email delivery setup (Phase 4)
+# Notification architecture and delivery
 
 The application sends persisted `email_deliveries` through the Brevo transactional HTTP API. A successful API response records `accepted` or `sandbox_accepted`; it does not establish that a recipient received the email. Supabase Auth email configuration is separate.
+
+## Events, recipients and persistence
+
+`src/lib/notifications/events.ts` records booking confirmations, cancellations and
+reschedules (court bookings and lessons), successful compensation refunds and relevant
+financial exceptions. Recording requires the caller-owned TypeORM domain transaction;
+financial exception evidence and notification snapshots commit with the deciding state.
+`record.ts` and `notifications.repository.ts` persist `user_messages` and `email_deliveries`;
+stable event keys and per-recipient unique constraints deduplicate replay. No browser-role
+application table grants are introduced. Reading/deleting a message never alters a booking,
+payment, refund or delivery outcome.
+
+Customer recipient resolution uses the contract's contact email and authoritative application
+and Supabase Auth account facts. In-app customer messages require an active, email-confirmed
+account with matching application and Auth emails; contact matching never grants booking
+ownership. Eligible ordinary customers receive in-app plus email, guests receive email only.
+An Admin/Coach match on either application or Auth email suppresses customer application
+email, including when that staff account is inactive or unverified. Admin and Coach accounts
+receive application notifications in-app only. Assigned active Coaches receive lesson
+transition messages; active Admins receive financial exception and delivery-failure alerts.
+`refund_unresolved` alerts are Admin-only; other relevant financial outcomes also notify
+eligible customers. Supabase Auth confirmation/recovery mail follows its separate Auth setup.
+
+The `/messages` inbox and `/messages/[messageId]` detail routes resolve the verified account
+(including suspended accounts reading their existing messages) and filter every read,
+read-state change and soft deletion by recipient ID. Stable
+event keys preserve deduplication after deletion. Notifications are event snapshots, not
+permission to view another account's booking; linked pages enforce their own authorization.
 
 ## Application configuration
 

@@ -44,11 +44,11 @@ test("Admin transaction projection lists every payment and refund, filters befor
     booking_date: `2099-11-${String(index+1).padStart(2,'0')}`, starts_at_minute: 600, ends_at_minute: 660,
     status: index < 4 ? "cancelled" : index === 22 ? "released" : "active",
     cancelled_at: index < 4 ? "2026-10-06T10:00:00Z" : null, cancelled_by_user_id: index < 4 ? users[0] : null })))).error).toBeNull();
-  expect((await insertBookingFixture(db, bookingIds.map((id,index) => ({ id, reservation_id: reservationIds[index],
+  await insertBookingFixture(bookingIds.map((id,index) => ({ id, reservation_id: reservationIds[index],
     account_user_id: index === 4 ? users[0] : null,
     customer_name: `${marker} Customer ${index}`, customer_email: `${marker}-${index}@example.test`, customer_phone: "123",
     status: index < 4 ? "cancelled" : index === 22 ? "failed" : "confirmed", total_amount_minor: 9999, currency: "RON", cancellation_notice_minutes: 1440,
-    payment_method: index === 23 ? "pay_at_club" : "online" })))).error).toBeNull();
+    payment_method: index === 23 ? "pay_at_club" : "online" })));
   expect((await db.from("payment_attempts").insert(attemptIds.map((id,index) => ({ id, booking_id: bookingIds[index],
     method: index === 23 ? "pay_at_club" : "online", provider: index === 23 ? null : "stripe",
     provider_payment_id: index === 23 ? null : `original-${id}`, amount_minor: 1000+index, currency: "RON",
@@ -59,10 +59,6 @@ test("Admin transaction projection lists every payment and refund, filters befor
     id: captureReceiptIds[index], payment_attempt_id: id, provider: "stripe", provider_payment_id: `original-${id}`,
     provider_capture_id: `capture-${id}`, amount_minor: 1000+index, currency: "RON",
   })))).error).toBeNull();
-  // A failed retry remains individually traceable without replacing the original capture.
-  expect((await db.from("payment_attempts").insert({ booking_id: bookingIds[0], method: "online", provider: "stripe",
-    provider_payment_id: laterFailedPaymentId, amount_minor: 8000, currency: "RON", status: "failed",
-    expires_at: "2099-10-15T10:00:00Z", completed_at: "2026-10-25T10:00:00Z", created_at: "2026-10-25T10:00:00Z" })).error).toBeNull();
   const contexts = await db.from("bookings").select("id,current_revision_id").in("id", bookingIds);
   expect(contexts.error).toBeNull();
   const contextIds = new Map(contexts.data?.map(row => [row.id, row.current_revision_id]));
@@ -70,13 +66,23 @@ test("Admin transaction projection lists every payment and refund, filters befor
     reason: "booking_cancellation", context_revision_id: contextIds.get(bookingIds[index]),
     provider: "stripe", provider_payment_id: `original-${attemptIds[index]}`, amount_minor: 1000+index, captured_amount_minor: 1000+index, currency: "RON",
     status: index === 0 ? "pending_retry" : index === 1 ? "failed" : "pending", requested_by_user_id: users[0] })))).error).toBeNull();
+  // Refunds keep their database creation time, which unconfirmed-refund attention measures
+  // against the clock. The failed retry is therefore dated after them, so it is the newest
+  // transaction on any day instead of only before a fixed calendar date.
+  const refundTimes = await db.from("payment_refunds").select("created_at").in("booking_id", bookingIds);
+  expect(refundTimes.error).toBeNull();
+  const laterFailedAt = new Date(Math.max(...(refundTimes.data ?? []).map(row => Date.parse(row.created_at))) + 60_000).toISOString();
+  // A failed retry remains individually traceable without replacing the original capture.
+  expect((await db.from("payment_attempts").insert({ booking_id: bookingIds[0], method: "online", provider: "stripe",
+    provider_payment_id: laterFailedPaymentId, amount_minor: 8000, currency: "RON", status: "failed",
+    expires_at: "2099-10-15T10:00:00Z", completed_at: laterFailedAt, created_at: laterFailedAt })).error).toBeNull();
   expect((await db.from("payment_provider_events").insert({ provider: "stripe", event_id: `event-${marker}`, attempt_id: attemptIds[2],
     capture_receipt_id: captureReceiptIds[2], provider_payment_id: `original-${attemptIds[2]}`,
     outcome: "succeeded", settlement_result: "amount_mismatch",
     reconciliation_required: true, amount_minor: 1, currency: "RON" })).error).toBeNull();
   const first = await listAdminPaymentTransactions(query(),admin), second = await listAdminPaymentTransactions(query({ page: "2" }),admin);
   expect(first.total).toBe(28); expect(first.totalPages).toBe(2); expect(first.rows).toHaveLength(20); expect(second.rows).toHaveLength(8);
-  expect(first.rows[0].booking_id).toBe(bookingIds[0]);
+  expect(first.rows[0]).toMatchObject({ booking_id: bookingIds[0], transaction_kind: "payment", provider_payment_id: laterFailedPaymentId });
   const all = [...first.rows,...second.rows]; expect(new Set(all.map(r => r.transaction_id)).size).toBe(28);
   expect(all.find(r => r.transaction_id === attemptIds[0])).toMatchObject({ amount_minor: 1000, provider_payment_id: `original-${attemptIds[0]}`,
     payment_status: "succeeded", needsAttention: false, refund: null });
@@ -220,5 +226,49 @@ test.each([
     const serialized = JSON.stringify(detail);
     for (const secret of ["private-key", "raw exception", "sensitive provider", "sensitive uncertainty", "leaseToken", "idempotencyKey"])
       expect(serialized).not.toContain(secret);
+  } finally { await runner.rollbackTransaction(); await runner.release(); }
+});
+
+test("page hydration preserves tied ordering, booking-only rows and filtered totals", async () => {
+  const { insertBookingRecords } = await import("../local/booking-fixtures");
+  const source = await getDataSource(), runner = source.createQueryRunner();
+  await runner.startTransaction();
+  try {
+    const manager = runner.manager;
+    const locationId = randomUUID(), courtId = randomUUID(), bookingIds = [randomUUID(), randomUUID()];
+    await manager.query("INSERT INTO public.locations(id,name,slug,timezone) VALUES($1,'Tied history',$2,'UTC')", [locationId, locationId]);
+    await manager.query("INSERT INTO public.courts(id,location_id,name,slug,surface,environment) VALUES($1,$2,'Court','court','clay','outdoor')", [courtId, locationId]);
+    for (const [index, id] of bookingIds.entries()) {
+      const reservationId = randomUUID();
+      await manager.query(`INSERT INTO public.court_reservations(id,court_id,booking_date,starts_at_minute,ends_at_minute)
+        VALUES($1,$2,'2099-11-01'::date+$3::integer,600,660)`, [reservationId, courtId, index]);
+      await insertBookingRecords(manager, { id, reservation_id: reservationId, customer_name: locationId,
+        customer_email: "tied@example.test", customer_phone: "123", total_amount_minor: 5000, currency: "RON",
+        cancellation_notice_minutes: 1440, payment_method: "online" });
+    }
+    const attemptIds = Array.from({ length: 25 }, () => randomUUID()).sort();
+    await manager.query(`INSERT INTO public.payment_attempts(id,booking_id,method,provider,provider_payment_id,
+      amount_minor,currency,status,expires_at,completed_at)
+      SELECT id,$2,'online','stripe','pi_'||id,5000,'RON','succeeded',now(),now() FROM unnest($1::uuid[]) id`, [attemptIds, bookingIds[0]]);
+    const refundId = randomUUID();
+    await manager.query(`INSERT INTO public.payment_refunds(id,booking_id,payment_attempt_id,provider,provider_payment_id,
+      amount_minor,captured_amount_minor,currency,reason,context_revision_id,status)
+      SELECT $1,id,$3,'stripe',$4,1000,5000,'RON','late_capture_compensation',current_revision_id,'pending_retry'
+      FROM public.bookings WHERE id=$2`, [refundId, bookingIds[0], attemptIds[0], `pi_${attemptIds[0]}`]);
+    const filters = { page: 1, status: "all", provider: "all", method: "all", attention: false, search: locationId,
+      sort: "date", direction: "desc", bookingId: null, attentionRefundStatuses: ["failed", "pending_retry"] } as const;
+    // All records share transaction now(): kind and ID must break ties across pages.
+    const first = await readFinancialHistory(manager, filters);
+    const second = await readFinancialHistory(manager, { ...filters, page: 2 });
+    expect(first).toMatchObject({ total: 27, totalPages: 2, page: 1 });
+    expect(second).toMatchObject({ total: 27, totalPages: 2, page: 2 });
+    expect([...first.rows, ...second.rows].map(row => [row.transaction_kind, row.transaction_id])).toEqual([
+      ["booking", bookingIds[1]], ...attemptIds.map(id => ["payment", id]), ["refund", refundId],
+    ]);
+    const filtered = await readFinancialHistory(manager, { ...filters, status: "pending_retry", page: 1000 });
+    expect(filtered).toMatchObject({ total: 1, totalPages: 1, page: 1 });
+    expect(filtered.rows.map(row => row.transaction_id)).toEqual([refundId]);
+    const projection = await readFinancialHistory(manager, { ...filters, bookingId: bookingIds[1] });
+    expect(projection).toMatchObject({ total: 1, rows: [expect.objectContaining({ transaction_kind: "booking" })] });
   } finally { await runner.rollbackTransaction(); await runner.release(); }
 });

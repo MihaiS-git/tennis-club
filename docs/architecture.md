@@ -79,6 +79,44 @@ TypeORM is the sole application migration authority. Native Auth/Storage integra
 installed by that history after Supabase infrastructure starts. See [fresh setup](../README.md#application-migrations-and-fresh-local-setup).
 Existing populated databases require a separately authorized, data-preserving cutover.
 
+## Location currency changes
+
+The Admin selects a location's currency at creation. Court pricing rules store minor units
+without a currency, so `saveAdminLocation` (`src/lib/admin/locations.ts`) accepts a different
+currency for an existing location only when none of these blockers applies:
+
+- **Unfinished bookings**: any `held` reservation (a pending checkout or modification hold),
+  or an `active` court booking, coaching booking or staff reservation whose end, resolved in
+  the location timezone with `localStartInstant`, is still in the future. Cancelled, released
+  and ended (completed) occupancy is history and never blocks.
+- **Unresolved financial operations** at the booking's contractual location: a `pending`
+  payment attempt, a registered Stripe intent whose attempt is locally `expired` or `failed`,
+  a `pending` booking adjustment, a `pending`/`pending_retry` refund, or a provider event
+  requiring reconciliation. Local expiry/failure does not prove provider cancellation;
+  Admin → Payments → Transactions → Check with Stripe resolves the registered intent.
+  Verified cancellation/settlement, failed refunds and pay-at-club amounts due do not block.
+  The query follows each booking's current revision, preserving the contractual location
+  even if its court moves, without scanning all historical revisions or deduplicating them.
+- **Court pricing**: any `location_pricing_rules` row for the location. The Admin removes the
+  rules and configures new prices after the change; nothing is converted or deleted automatically.
+
+The rules apply only when the requested currency differs from the persisted one; every other
+location edit is unaffected. Inside the existing update transaction (exclusive configuration
+fence → location `FOR UPDATE` → Admin fence), the service first runs the standard expiry of
+unpaid holds at the location (`expirePaymentHoldsAtLocation`, skip-locked), then evaluates the
+blockers. Every booking, reservation, coaching and settlement writer takes the shared
+configuration fence, so no booking can appear between the check and the commit. Online
+provider selection and Pay at club do not restrict currency changes and are left configured.
+A rejection returns `{ reason: "currency-locked", blockers }`.
+
+The location Details form receives the same evaluation (`readAdminLocationCurrencyChange`,
+after request-driven hold expiry) and disables the currency control, listing every blocker
+with its instruction; a server rejection of a stale form is shown in place without losing the
+draft. Only `locations.currency` changes: booking revisions, payment attempts, captures,
+refunds and adjustments keep their own snapshotted currencies and amounts, and coaching
+prices stay keyed by their explicit currency. Any broader currency migration is a separate,
+manual, backed-up operation outside the application.
+
 ## Next.js responsibilities
 
 Next.js Cache Components prerenders public/shared content and streams request-specific auth/account UI behind Suspense boundaries. Protected page reads use route-specific loading boundaries. Supabase Auth/Storage access remains server-first: clients, sessions, accounts, roles, status, and profile/avatar metadata are never persistently cached. The navigation helper's React `cache()` only deduplicates reads within a server request.
@@ -195,7 +233,7 @@ PostgreSQL protects structural and concurrency invariants using:
 - `CHECK`;
 - indexes;
 - overlap protection;
-- RLS;
+- denied browser-role table grants;
 - transactions.
 
 Application-side checks are not enough for concurrency-sensitive invariants.
@@ -354,15 +392,16 @@ Webhook signature verification, event normalization/Zod validation and Stripe ca
 outside persistence. The TypeORM READ COMMITTED transaction takes the shared configuration
 advisory fence, discovers attempt → booking → location, then locks location → booking →
 linked reservation → selected attempt FOR UPDATE and rechecks the parent. It reads the
-global provider-event receipt and PostgreSQL wall time. Confirmation revalidates current
-hours, pricing and publication under that fence; adjustment application also fences
+global provider-event receipt and PostgreSQL wall time. Court-only confirmation revalidates current
+hours, pricing and publication under that fence; coaching validates its held contract
+(see Coaching programs and prices below). Adjustment application also fences
 its actor. Exact late captures lock or allocate their compensation obligation before
 commit. Changed parents retry in a fresh transaction at most three times. Locked attempt snapshots
 are financial authority, independent of rescheduled booking totals.
 TypeScript chooses lifecycle/result/reconciliation against lossless effective deadlines and
 rechecks wall time before writes. The attempt UPDATE fences deadline-sensitive transitions;
 a crossed deadline is re-evaluated as expiry. Booking/reservation/attempt writes, provider
-receipt and first confirmed email snapshot commit atomically. Receipt insertion uses the global
+receipt and eligible confirmation notification snapshots commit atomically. Receipt insertion uses the global
 (provider,event_id) PK with ON CONFLICT DO NOTHING; a separate statement reads the winner.
 Changed evidence throws and rolls back provisional lifecycle writes; identical evidence replays
 stored result, preserving later Admin resolution. Late success/mismatch never reclaim occupancy.
@@ -374,59 +413,68 @@ described in [Task 4 limitations](payments-memberships.md#remaining-financial-mo
 
 ## Refund execution and reconciliation (Phase 8)
 
-Automatic and Admin processing share immutable refund executions and five-minute
-execution leases. Preparation locks booking → reservation → selected attempt → ordered
-capture receipts → refund obligation → execution; Admin preparation also fences the
-active Admin's roles/account. A READY execution's dispatch timestamp commits in a
-separate transaction before Stripe is contacted. The adapter uses its stored request,
-exact idempotency key, obligation ID and execution ID metadata. Previously dispatched
-executions use retrieval or metadata discovery only; lookup failure, an empty search,
-lease expiry and a crash do not authorize another creation.
+Refund obligations preserve their captured-funds allocation and historical contract context;
+individual provider requests use immutable `refund_executions` and five-minute leases.
+Preparation locks booking → reservation → selected attempt → ordered capture receipts →
+refund obligation → execution; Admin preparation also fences authoritative active-Admin
+roles/account. Dispatch initiation commits before the provider request; completion records
+provider identity and evidence under the execution lease. Provider calls never run inside
+transactions.
 
-Result transactions retain write-once identity, uncertainty and terminal evidence.
-Current lease tokens fence error/check updates and lease clearing; stale workers may
-record valid historical provider facts without clearing a newer lease. Verified success
-cannot regress. Full verified compensation of an ended request's capture resolves its
-review events atomically with completion. Processing retains terminal short-circuits:
-no execution is replaced after verified failure or definitive rejection. Within 23 hours
-of dispatch an unfound execution is re-sent with its exact idempotency key (Stripe keeps
-keys 24 hours), closing the dispatch-to-HTTP crash gap without duplicates. PaymentRefund
-stores immutable obligation terms plus status/timestamps (`voided` releases a failed
-obligation of an abandoned change); provider references/errors come from executions.
+Refund-backed cancellations and reductions retain the current booking and occupancy until
+all obligations succeed. Requests, signed Stripe webhooks and the Admin **Check with Stripe**
+action drive recovery; there is no payment/refund scheduler. Unknown outcomes retain the
+same execution and exact key, with replay limited to 23 hours after dispatch and evidence-only
+lookup thereafter. A replacement execution requires affirmative retryable provider failure
+and an explicit Admin check; definitive non-retryable failures require subsequent resolution.
+Success evidence is retained even if Stripe later reverses the refund; that reversal becomes
+an explicit financial exception and never authorizes replacement.
 
-Refund-backed booking changes (cancellation with refund, price reduction) are pending
-`booking_adjustments` rows; the booking is unchanged until a single transaction under the
-existing configuration fence → location → booking → reservation → attempts → refunds order
-applies or abandons them after every obligation is terminal. There is no background
-worker: requests, signed Stripe webhooks (payment and refund events) and the Admin
-"Check with Stripe" action drive these decisions; see
-[payments](payments-memberships.md#recovery-without-a-scheduler). Admin payment/refund
-checks retrieve the registered provider operation; payment checks
-can cancel overdue unused authorizations but never initiate capture. There are no dual
-writes or provider history JSON.
+See [payments and refunds](payments-memberships.md#stripe-cancellation-refunds) for status
+semantics, retry conditions, abandoned changes, partial-success recovery and idempotency.
 
 ## Notifications and financial exceptions
 
-The application has no notification subsystem: no booking emails, inbox, delivery queue,
-scheduled delivery or Brevo integration. Booking and payment workflows have no
-notification side effects. Exceptional financial outcomes (rejected refund-backed changes,
-unapplied surcharges, late captures, failed/unresolved/reversed refunds) are recorded as
-immutable `booking_financial_exceptions` rows inside the deciding financial transaction;
-a failed insert rolls that transaction back. The rows reference the historical revision
-and the payment, refund or adjustment involved, and replay reuses a stable event key.
-Admin visibility comes from the existing refund/payment states in Payments → Transactions.
-Supabase Auth confirmation/recovery emails remain independent.
+Booking confirmations, cancellations and reschedules (including coaching lessons), successful
+compensation refunds and relevant financial exceptions generate persisted notifications.
+`src/lib/notifications/events.ts` records event-keyed inbox messages and eligible email delivery
+snapshots through TypeORM in the caller-owned domain transaction. Replay deduplicates by event
+and recipient. Immutable `booking_financial_exceptions` preserve historical revision and
+payment/refund/adjustment evidence atomically with financial state; their Admin visibility
+includes Payments → Transactions and in-app alerts.
+
+Authenticated recipients use the owner-scoped `/messages` inbox; new customer messages
+require active, email-confirmed matching accounts. Admin and
+Coach accounts receive application notifications in-app only; eligible customer/guest
+transactional email uses Brevo. Supabase Auth confirmation/recovery mail remains separate.
+Persisted delivery state supports bounded retries through Supabase Cron calling
+`POST /api/notifications/deliver`; the Brevo webhook records terminal delivery failures.
+Notification delivery scheduling is independent of payment/refund recovery.
+A separate Supabase Cron job calls `POST /api/payments/holds/expire` to settle expired
+checkout holds through the existing hold-expiry service; see
+[checkout hold expiry sweep](payments-memberships.md#checkout-hold-expiry-sweep).
+See [notification architecture and delivery](notifications-delivery.md) for recipient policy,
+settings, authorization, delivery evidence and retry rules.
 
 ## Coaching programs and prices
 
-Coaching Phase 1 adds programs, program durations, coach profiles, coach
-location/program assignments and coaching prices; see [coaching](coaching.md).
-Admin services validate, authorize and decide in TypeScript; deterministic price
-resolution (coach override, then club default, never re-denominated after a location
-currency change) is pure TypeScript. PostgreSQL enforces uniqueness and composite FKs
-that require an override's coach to offer the program at that location. Coach saves
-lock their profile, then locations under the shared configuration fence; price saves
-lock location → program → profile, all shared. Coach availability (weekly intervals and
-date exceptions) uses the coach-save lock order, composite assignment FKs and GiST overlap
-exclusions; resolution is pure TypeScript. No booking or payment workflow touches coaching
-tables yet, and availability alone never makes a lesson bookable.
+Coaching modules under `src/lib/coaching` own program configuration, coach assignments,
+availability resolution and program-specific pricing. `coach_profiles` remains a sibling
+of player profiles, separate from RBAC roles. TypeScript authorizes configuration and
+resolves coach overrides before club defaults in the booking currency; PostgreSQL enforces
+structural relationships and availability overlap constraints.
+
+Court and coaching bookings share booking identities, immutable revisions, payment attempts,
+Stripe checkout/settlement, cancellation, refund and adjustment infrastructure. Coaching
+additionally reserves the assigned Coach on the court reservation; court and Coach GiST
+exclusions arbitrate conflicting active reservations and live holds, including across locations.
+Creation validates resolved Coach availability and the complete lesson interval. Revision
+terms retain the program, Coach, participants, duration, agreed coaching fee and court-rental
+inclusion; settlement honors that held contract rather than repricing the lesson.
+
+Customer lesson rescheduling uses the owner-authorized booking adjustment flow. It changes
+date/start only, preserving the location, court, program, Coach, participants, duration and
+agreed coaching terms; eligible court-rental differences use shared surcharge/refund handling.
+Private and Semi-private lessons are bookable at `/book?mode=coaching`; Group and Junior
+sessions are organized by staff with informational public rates. Packages remain planned.
+See [coaching](coaching.md) for configuration, availability, contractual terms and rescheduling.

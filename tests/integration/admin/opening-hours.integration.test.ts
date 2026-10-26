@@ -648,10 +648,9 @@ test.each(["hours","price","cancellation","publication"] as const)("pending capt
   try {
     expect((await service.from("locations").update({ is_public: true,currency: "RON" }).eq("id",location_id)).error).toBeNull();
     assert.ok((await saveAdminPricingRule({ ...fixture.price,weekdays: [0,1,2,3,4,5,6],starts_at: "07:00",ends_at: "24:00",price_per_hour: "50.17" },admin)).ok);
-    const inserted = await insertCheckoutFixture(service,{ p_court_id: courtId,p_booking_date: date,p_starts_at_minute: 420,p_ends_at_minute: 480,
-      p_account_user_id: null,p_customer_name: "Pending",p_customer_email: "pending@example.test",p_customer_phone: "123",
-      p_total_amount_minor: 5017,p_currency: "RON",p_payment_method: "online",p_provider: "stripe",p_hold_seconds: 600 });
-    assert.strictEqual(inserted.error,null); const held = inserted.data[0];
+    const held = await insertCheckoutFixture({ courtId,bookingDate: date,startMinute: 420,endMinute: 480,
+      accountUserId: null,customerName: "Pending",customerEmail: "pending@example.test",customerPhone: "123",
+      totalAmountMinor: 5017,currency: "RON",paymentMethod: "online",provider: "stripe",holdSeconds: 600 });
     expect((await service.from("payment_attempts").update({ provider_payment_id: "pi_policy_test" }).eq("id",held.payment_attempt_id)).error).toBeNull();
     if (policy === "hours") {
       // The live hold does not block the Admin change; payment confirmation revalidates it against the new hours.
@@ -730,10 +729,9 @@ test("pending holds use their playing-date policy after future schedule creation
     assert.ok((await saveAdminPricingRule({ ...fixture.price, weekdays:[0,1,2,3,4,5,6],starts_at:"07:00",ends_at:"24:00",price_per_hour:"50.17" },admin)).ok);
     const held = [];
     for (const date of ["2030-10-20","2030-11-20"]) {
-      const created = await insertCheckoutFixture(service,{ p_court_id:courtId,p_booking_date:date,p_starts_at_minute:420,p_ends_at_minute:480,
-        p_account_user_id:null,p_customer_name:"Pending policy",p_customer_email:"pending@example.test",p_customer_phone:"123",
-        p_total_amount_minor:5017,p_currency:"RON",p_payment_method:"online",p_provider:"stripe",p_hold_seconds:600 });
-      assert.strictEqual(created.error,null); held.push(created.data[0]);
+      held.push(await insertCheckoutFixture({ courtId,bookingDate:date,startMinute:420,endMinute:480,
+        accountUserId:null,customerName:"Pending policy",customerEmail:"pending@example.test",customerPhone:"123",
+        totalAmountMinor:5017,currency:"RON",paymentMethod:"online",provider:"stripe",holdSeconds:600 }));
     }
     const future = { operation:"create",location_id,starts_on:"2030-11-01",ends_on:null,
       replace_ids:[],rows: [{ weekdays: [0,1,2,3,4,5,6], opens_at:"08:00", closes_at:"20:00" }] } as const;

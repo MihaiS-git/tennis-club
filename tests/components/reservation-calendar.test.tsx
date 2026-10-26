@@ -513,7 +513,7 @@ it.each([
     location_name: "Historical Club", court_name: "Historical Court", location_timezone: "UTC",
     total_amount_minor: included ? 12000 : 15000, currency: "EUR" as const,
     coaching: { programId: coachReservation.id, coachUserId: coachId, locationId: coachLocation.id,
-      participantCount: 2 as const, durationMinutes: 60, source: "coach" as const, amountMinor: 12000,
+      participantCount: 2 as const, pricePerPersonMinor: 6000, durationMinutes: 60, source: "coach" as const, amountMinor: 12000,
       currency: "EUR" as const, courtRentalIncluded: included, courtRentalMinor: 3000, courtAmountMinor: included ? 0 : 3000 } };
   const props = { actorUserId: coachId, date: booking.booking_date, location: coachLocation,
     adminOccupancy: [booking] };

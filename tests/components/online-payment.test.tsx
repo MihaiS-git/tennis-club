@@ -23,6 +23,27 @@ const props = { checkout: { attemptId: "c9000000-0000-4000-8000-000000000011", t
   holdExpiresAt: "2099-10-15T10:00:00Z", onConfirmed: vi.fn() };
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.clearAllMocks(); });
 
+test.each(["non-card error", "rejected confirmation"])("a %s leaves payment uncertain and blocks another submission", async outcome => {
+  const onPaymentStatus = vi.fn();
+  status.mockResolvedValue({ ok: true, status: "pending_payment", paymentStatus: "pending" });
+  if (outcome === "non-card error") pay.mockResolvedValueOnce({ error: { type: "api_error", message: "Stripe is unavailable." } });
+  else pay.mockRejectedValueOnce(new Error("Stripe is unavailable."));
+  render(<OnlinePayment {...props} onPaymentStatus={onPaymentStatus} />);
+  const form = screen.getByRole("form", { name: "Online payment" });
+  expect(screen.getByLabelText("Card")).toBeTruthy();
+  fireEvent.submit(form);
+  await waitFor(() => expect(screen.getByRole("status").textContent)
+    .toBe("Payment outcome is uncertain. You may close this window; do not pay again yet."));
+  expect(lastToast("warning")).toBe("Payment outcome is uncertain. You may close this window; do not pay again yet.");
+  expect(onPaymentStatus).toHaveBeenLastCalledWith("unknown");
+  expect(onPaymentStatus.mock.calls.filter(([value]) => value === "unknown")).toHaveLength(1);
+  expect(toast.getToasts().some(item => "type" in item && item.type === "loading")).toBe(false);
+  expect(screen.queryByLabelText("Card")).toBeNull();
+  fireEvent.submit(form);
+  expect(pay).toHaveBeenCalledOnce();
+  expect(props.onConfirmed).not.toHaveBeenCalled();
+});
+
 test("a declined card leaves the same payment element available for another attempt", async () => {
   status.mockResolvedValue({ ok: true, status: "pending_payment", paymentStatus: "pending" });
   pay.mockResolvedValueOnce({ error: { type: "card_error", message: "Your card was declined." } }).mockResolvedValueOnce({});
@@ -46,6 +67,19 @@ test.each(["expired"])("a terminal %s checkout stops accepting cards without con
   render(<OnlinePayment {...props} />);
   await waitFor(() => expect(screen.queryByLabelText("Card")).toBeNull());
   expect(screen.getByRole("status").textContent).toContain("Payment cannot be started here");
+  expect(props.onConfirmed).not.toHaveBeenCalled();
+});
+
+test.each(["pending", "processing"] as const)("a terminal checkout with %s payment status hides payment controls", async paymentStatus => {
+  status.mockResolvedValue({ ok: true, status: "cancelled", paymentStatus, paymentUncertain: true,
+    totalAmountMinor: 1200, currency: "EUR", cancellationPolicy: null });
+  render(<OnlinePayment {...props} />);
+  const form = screen.getByRole("form", { name: "Online payment" });
+  await waitFor(() => expect(screen.getByRole("status").textContent).toContain("checkout has ended"));
+  expect(screen.queryByLabelText("Card")).toBeNull();
+  expect(screen.queryByRole("button", { name: /Pay and confirm booking/ })).toBeNull();
+  fireEvent.submit(form);
+  expect(pay).not.toHaveBeenCalled();
   expect(props.onConfirmed).not.toHaveBeenCalled();
 });
 
@@ -167,4 +201,85 @@ test("a failed modification payment says the original booking is unchanged, neve
   render(<OnlinePayment {...props} purpose="modification" />);
   await waitFor(() => expect(screen.getByRole("status").textContent).toContain("Your original booking is unchanged"));
   expect(screen.getByRole("status").textContent).not.toMatch(/cancelled|not confirmed/i);
+});
+
+test("a Stripe validation error shows the field error, ends loading and accepts a retry on the same element", async () => {
+  status.mockResolvedValue({ ok: true, status: "pending_payment", paymentStatus: "pending" });
+  pay.mockResolvedValueOnce({ error: { type: "validation_error", message: "Your card number is incomplete." } }).mockReturnValueOnce(new Promise(() => {}));
+  const onPaymentStatus = vi.fn();
+  render(<OnlinePayment {...props} onPaymentStatus={onPaymentStatus} />);
+  const card = screen.getByLabelText("Card");
+  await waitFor(() => expect((screen.getByRole("button", { name: "Pay and confirm booking" }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.submit(screen.getByRole("form", { name: "Online payment" }));
+  await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("Your card number is incomplete."));
+  const notificationId = vi.mocked(toast.loading).mock.results[0]?.value;
+  expect(toast.dismiss).toHaveBeenCalledWith(notificationId);
+  expect(toast.getToasts().some(item => "type" in item && item.type === "loading")).toBe(false);
+  // A field error is not a payment outcome: no warning, error toast or status change.
+  expect(toast.error).not.toHaveBeenCalled();
+  expect(toast.warning).not.toHaveBeenCalled();
+  expect(screen.queryByRole("status")).toBeNull();
+  expect(onPaymentStatus.mock.calls.every(([value]) => value === "pending")).toBe(true);
+  expect(screen.getByLabelText("Card")).toBe(card);
+  expect(card.closest("[aria-describedby]")?.getAttribute("aria-describedby")).toBe("payment-field-error");
+  expect((screen.getByRole("button", { name: "Pay and confirm booking" }) as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.submit(screen.getByRole("form", { name: "Online payment" }));
+  expect(pay).toHaveBeenCalledTimes(2);
+  expect(pay.mock.calls[1][0].elements).toBe(elements);
+  // Retrying clears the stale field error while Stripe confirms again.
+  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  expect(screen.getByLabelText("Card")).toBe(card);
+  expect(props.onConfirmed).not.toHaveBeenCalled();
+});
+
+test.each([
+  ["authorization", () => ({})],
+  ["validation error", () => ({ error: { type: "validation_error", message: "Late field error." } })],
+  ["card error", () => ({ error: { type: "card_error", message: "Late decline." } })],
+  ["provider error", () => ({ error: { type: "api_error", message: "Late provider error." } })],
+  ["rejection", () => { throw new Error("Late Stripe failure"); }],
+] as const)("a late Stripe %s after unmount changes nothing, including a newly mounted checkout", async (_outcome, late) => {
+  status.mockResolvedValue({ ok: true, status: "pending_payment", paymentStatus: "pending" });
+  let settle!: () => void;
+  pay.mockReturnValueOnce(new Promise((resolve, reject) => {
+    settle = () => { try { resolve(late()); } catch (error) { reject(error); } };
+  }));
+  const first = { onConfirmed: vi.fn(), onPaymentStatus: vi.fn() };
+  const view = render(<OnlinePayment {...props} {...first} />);
+  await waitFor(() => expect(first.onPaymentStatus).toHaveBeenCalledWith("pending"));
+  await waitFor(() => expect((screen.getByRole("button", { name: "Pay and confirm booking" }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.submit(screen.getByRole("form", { name: "Online payment" }));
+  expect(pay).toHaveBeenCalledOnce();
+  const notificationId = vi.mocked(toast.loading).mock.results[0]?.value;
+  view.unmount();
+  expect(toast.dismiss).toHaveBeenCalledWith(notificationId);
+  const statusCalls = first.onPaymentStatus.mock.calls.length;
+
+  // A different checkout mounts before the abandoned Stripe call settles.
+  const second = { onConfirmed: vi.fn(), onPaymentStatus: vi.fn() };
+  const next = { ...props.checkout, attemptId: "c9000000-0000-4000-8000-000000000012", token: "b".repeat(64) };
+  render(<OnlinePayment {...props} checkout={next} {...second} />);
+  await waitFor(() => expect(second.onPaymentStatus).toHaveBeenCalledWith("pending"));
+  const card = screen.getByLabelText("Card");
+  const notifications = (["loading", "success", "error", "info", "warning"] as const)
+    .map(type => vi.mocked(toast[type]).mock.calls.length);
+  await act(async () => { settle(); await Promise.resolve(); });
+
+  expect(first.onConfirmed).not.toHaveBeenCalled();
+  expect(first.onPaymentStatus).toHaveBeenCalledTimes(statusCalls);
+  expect(second.onConfirmed).not.toHaveBeenCalled();
+  expect(second.onPaymentStatus.mock.calls.every(([value]) => value === "pending")).toBe(true);
+  expect((["loading", "success", "error", "info", "warning"] as const)
+    .map(type => vi.mocked(toast[type]).mock.calls.length)).toEqual(notifications);
+  expect(toast.getToasts().some(item => "type" in item && item.type === "loading")).toBe(false);
+  // The new checkout keeps its own clean, payable state.
+  expect(screen.getByLabelText("Card")).toBe(card);
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.queryByRole("status")).toBeNull();
+  const button = screen.getByRole("button", { name: "Pay and confirm booking" }) as HTMLButtonElement;
+  expect(button.disabled).toBe(false);
+  pay.mockReturnValueOnce(new Promise(() => {}));
+  fireEvent.submit(screen.getByRole("form", { name: "Online payment" }));
+  expect(pay).toHaveBeenCalledTimes(2);
+  expect(status.mock.calls.some(call => call[0].attemptId === next.attemptId)).toBe(true);
 });

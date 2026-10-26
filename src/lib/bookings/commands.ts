@@ -33,6 +33,7 @@ import { localStartInstant } from "@/lib/courts/local-time";
 import { getCourtStateForDate } from "@/lib/courts/state";
 import { mondayWeekday, resolvePricingRule } from "@/lib/pricing/resolution";
 import { getCalendarSelection } from "@/lib/courts/interval-selection";
+import { toCalendarPricingRule } from "@/lib/courts/calendar-projections";
 import { fitsOpeningHours } from "@/lib/reservations/domain";
 import { recordBookingFinancialException, recordBookingTransition } from "@/lib/notifications/events";
 import { customerBookingNoticeBypass, customerMutationDeadline } from "./self-cancellation";
@@ -195,11 +196,8 @@ export async function resolveRefundBackedAdjustment(adjustmentId: string): Promi
     const own = refunds.filter(refund => refund.adjustmentId === adjustment.id);
     const outcome = refundBackedOutcome(own.map(refund => refund.status));
     if (outcome === "waiting") {
-      for (const refund of own.filter(refund => refund.status === "failed")) {
-        await recordBookingFinancialException(manager, {
-          key: `refund:${refund.id}:exception`, bookingId: a.booking.id, revisionId: a.booking.current_revision_id,
-          kind: "refund_failed", refundId: refund.id });
-      }
+      // Refund commands commit each failure with its exception evidence. Do not
+      // reinterpret a failed summary here: it may be an already-recorded reversal.
       if (own.some(refund => refund.status === "failed")) {
         logger.error({ event: "bookings.refund_obligation_unresolved", adjustmentId }, "Booking preserved pending external refund resolution");
       }
@@ -426,10 +424,7 @@ async function executeReschedule(manager: EntityManager, a: Aggregate, edit: Edi
       const coverage = await clubs.listCheckoutCourtCoverage(manager, target.id, edit.date);
       const state = getCourtStateForDate(target.environment, coverage.map(c => ({ starts_on: c.startsOn, ends_on: c.endsOn })), edit.date);
       const rules = await listCheckoutPricing(manager, target.id, mondayWeekday(edit.date), edit.date);
-      const pricing = rules.map(p => ({ id: p.id, rule_set_id: p.ruleSetId, location_id: p.locationId,
-        court_id: p.courtId, court_state: p.courtState, weekday: p.weekday, starts_at_minute: p.startsAtMinute,
-        ends_at_minute: p.endsAtMinute, starts_on: p.startsOn, ends_on: p.endsOn, price_per_hour_minor: p.pricePerHourMinor,
-        created_at: p.createdAt.toISOString(), updated_at: p.updatedAt.toISOString() }));
+      const pricing = rules.map(toCalendarPricingRule);
       const times = Array.from({ length: (edit.endMinute - edit.startMinute) / 30 }, (_, i) => edit.startMinute + i * 30);
       const hourlyPrices = times.map(minute => {
         const rule = resolvePricingRule(pricing, { court_id: target.id, court_state: state, date: edit.date, minute });
@@ -556,7 +551,7 @@ async function readLessonEditContext(manager: EntityManager, a: Aggregate, date:
   if (!day) throw new Error("Malformed lesson day.");
   const v = a.booking.revision;
   return { coach: { id: lesson.coachUserId, name: v.coachName ?? "" },
-    program: { id: lesson.programId, name: v.coachingProgramName ?? "", participantCount: lesson.coaching.participantCount ?? 1,
+    program: { id: lesson.programId, name: v.coachingProgramName ?? "", participantCount: lesson.coaching.participantCount,
       courtRentalIncluded: lesson.coaching.courtRentalIncluded },
     durationMinutes: lesson.coaching.durationMinutes, coachingAmountMinor: lesson.coaching.amountMinor,
     starts: projectCoachingRescheduleStarts({ ...day, location: { ...day.location,
@@ -581,7 +576,8 @@ export async function readCustomerBookingEditContext(id: string, date: string, a
       ends_at_minute: a.reservation.ends_at_minute, updated_at: a.reservation.updated_at,
       current_revision_id: a.booking.current_revision_id, total_amount_minor: a.booking.total_amount_minor, currency: a.booking.currency,
       location: { id: a.location.id, name: a.location.name, timezone: a.location.timezone, is_active: a.location.isActive,
-        archived_at: a.location.archivedAt?.toISOString() ?? null, courts: courts.map(c => ({ id: c.id, name: c.name, is_active: true })) },
+        archived_at: a.location.archivedAt?.toISOString() ?? null,
+        courts: courts.map(c => ({ id: c.id, name: c.name, is_active: true, environment: c.environment })) },
       hours, occupancy, coaching };
   }, undefined, false);
 }

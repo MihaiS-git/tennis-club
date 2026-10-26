@@ -81,13 +81,12 @@ test("customer booking persists both rows, snapshots contact and price, and roll
     const publicLocation = (await listPublicLocationsWithCourts()).find((item) => item.id === locationId)!;
     const publicDay = await getPublicCourtDay(publicLocation, date, "2099-10-14", now);
     expect(publicDay.courts.find((item) => item.court.id === courtId)?.cells.slice(0, 2)).toEqual(["booked", "booked"]);
-    const overlap = await insertCheckoutFixture(service, {
-      p_payment_method: "pay_at_club", p_provider: null, p_hold_seconds: 600,
-      p_court_id: courtId, p_booking_date: date, p_starts_at_minute: 600, p_ends_at_minute: 660,
-      p_account_user_id: null, p_customer_name: "Race", p_customer_email: "race@example.test",
-      p_customer_phone: "123", p_total_amount_minor: 6000, p_currency: "EUR",
-    });
-    expect(overlap.error?.code).toBe("23P01");
+    await expect(insertCheckoutFixture({
+      paymentMethod: "pay_at_club", provider: null, holdSeconds: 600,
+      courtId, bookingDate: date, startMinute: 600, endMinute: 660,
+      accountUserId: null, customerName: "Race", customerEmail: "race@example.test",
+      customerPhone: "123", totalAmountMinor: 6000, currency: "EUR",
+    })).rejects.toMatchObject({ driverError: { code: "23P01" } });
     expect((await rows()).bookings).toHaveLength(1);
 
     assert.strictEqual((await service.from("locations").update({ customer_cancellation_notice_minutes: 1440 })
@@ -144,13 +143,12 @@ test("customer booking persists both rows, snapshots contact and price, and roll
     expect(await count()).toEqual(before);
     assert.strictEqual((await service.from("locations").update({ is_public: true }).eq("id", locationId)).error, null);
     const orphanBefore = await count();
-    const invalidWrite = await insertCheckoutFixture(service, {
-      p_payment_method: "pay_at_club", p_provider: null, p_hold_seconds: 600,
-      p_court_id: courtId, p_booking_date: date, p_starts_at_minute: 720, p_ends_at_minute: 780,
-      p_account_user_id: null, p_customer_name: " ", p_customer_email: "invalid@example.test",
-      p_customer_phone: "123", p_total_amount_minor: 5000, p_currency: "EUR",
-    });
-    expect(invalidWrite.error?.code).toBe("23514");
+    await expect(insertCheckoutFixture({
+      paymentMethod: "pay_at_club", provider: null, holdSeconds: 600,
+      courtId, bookingDate: date, startMinute: 720, endMinute: 780,
+      accountUserId: null, customerName: " ", customerEmail: "invalid@example.test",
+      customerPhone: "123", totalAmountMinor: 5000, currency: "EUR",
+    })).rejects.toMatchObject({ driverError: { code: "23514" } });
     expect(await count()).toEqual(orphanBefore);
     assert.strictEqual((await service.from("location_pricing_rules").delete().eq("location_id", locationId)).error, null);
     expect(await createCustomerBooking({ ...base, startMinute: 720, endMinute: 780 }, guest, now))

@@ -9,9 +9,9 @@ import { listPublicDayOpeningHours, listPublicDayCoverage } from "@/lib/db/repos
 import { listPublicDayPricing } from "@/lib/db/repositories/pricing.repository";
 import { listPublicDayOccupancy } from "@/lib/db/repositories/reservations.repository";
 import { logger } from "@/lib/logger";
-import { openingIntervalSchema } from "@/lib/admin/opening-hours-validation";
-import { coveragePeriodSchema } from "@/lib/courts/coverage-validation";
-import { pricingRuleSchema } from "@/lib/pricing/validation";
+import { openingIntervalSchema, type OpeningInterval } from "@/lib/admin/opening-hours-validation";
+import { coveragePeriodSchema, type CoveragePeriod } from "@/lib/courts/coverage-validation";
+import { pricingRuleSchema, type PricingRule } from "@/lib/pricing/validation";
 import { mondayWeekday } from "@/lib/pricing/resolution";
 import { buildCourtDay, courtSlotRates, localMinute, localToday } from "./calendar";
 import { listPublicLocationsWithCourts, type PublicLocation } from "./public";
@@ -22,19 +22,34 @@ const calendarReservationSchema = z.object({
   ends_at_minute: z.number().int().min(1).max(1440),
 });
 
+type PublicDayConfiguration = { hours: OpeningInterval[]; coverage: CoveragePeriod[]; pricing: PricingRule[] };
+
 // Effective opening hours, court coverage and pricing of one public location date.
 export async function readPublicDayConfiguration(manager: EntityManager, location: PublicLocation, date: string) {
-  const courtIds = location.courts.map((court) => court.id);
+  return (await readPublicDayConfigurations(manager, [{ location, date }]))?.[0] ?? null;
+}
+
+// Batched form for distinct locations, each on its own local date: three reads in total,
+// grouped back per location; null when any row is malformed.
+async function readPublicDayConfigurations(manager: EntityManager,
+  days: readonly { location: PublicLocation; date: string }[]): Promise<PublicDayConfiguration[] | null> {
+  const reads = days.map(({ location, date }) => ({ locationId: location.id,
+    courtIds: location.courts.map((court) => court.id), weekday: mondayWeekday(date), date }));
   const [hoursResult, coverageResult, pricingResult] = await readIndependently(manager, [
-    () => listPublicDayOpeningHours(manager, location.id, mondayWeekday(date), date),
-    () => listPublicDayCoverage(manager, location.id, courtIds, date),
-    () => listPublicDayPricing(manager, location.id, courtIds, mondayWeekday(date), date),
+    () => listPublicDayOpeningHours(manager, reads),
+    () => listPublicDayCoverage(manager, reads),
+    () => listPublicDayPricing(manager, reads),
   ]);
   const hours = z.array(openingIntervalSchema).safeParse(hoursResult);
   const coverage = z.array(coveragePeriodSchema).safeParse(coverageResult);
   const pricing = z.array(pricingRuleSchema).safeParse(pricingResult);
   if (!hours.success || !coverage.success || !pricing.success) return null;
-  return { hours: hours.data, coverage: coverage.data, pricing: pricing.data };
+  const courtLocation = new Map(reads.flatMap((read) => read.courtIds.map((courtId) => [courtId, read.locationId])));
+  return reads.map(({ locationId }) => ({
+    hours: hours.data.filter((row) => row.location_id === locationId),
+    coverage: coverage.data.filter((row) => courtLocation.get(row.court_id) === locationId),
+    pricing: pricing.data.filter((row) => courtLocation.get(row.court_id) === locationId),
+  }));
 }
 
 // Live court occupancy of one public location date; null when a row is malformed.
@@ -74,13 +89,14 @@ export async function listPublicLocationsToday(now = new Date()): Promise<Public
   const locations = await listPublicLocationsWithCourts();
   try {
     const manager = (await getDataSource()).manager;
-    return await Promise.all(locations.map(async (location) => {
-      const today = localToday(location.timezone, now);
-      const configuration = await readPublicDayConfiguration(manager, location, today);
-      if (!configuration) {
-        logger.error({ event: "courts.public_overview_read_failed" }, "Failed to load location day");
-        throw new Error("Unable to load courts.");
-      }
+    const days = locations.map((location) => ({ location, date: localToday(location.timezone, now) }));
+    const configurations = days.length ? await readPublicDayConfigurations(manager, days) : [];
+    if (!configurations) {
+      logger.error({ event: "courts.public_overview_read_failed" }, "Failed to load location day");
+      throw new Error("Unable to load courts.");
+    }
+    return days.map(({ location, date: today }, index) => {
+      const configuration = configurations[index];
       const openingHours = configuration.hours
         .map(({ opens_at_minute, closes_at_minute }) => ({ opens_at_minute, closes_at_minute }))
         .sort((a, b) => a.opens_at_minute - b.opens_at_minute);
@@ -91,7 +107,7 @@ export async function listPublicLocationsToday(now = new Date()): Promise<Public
       const rates = location.courts.flatMap((court) => courtSlotRates({ court, date: today, times, ...configuration }).rates)
         .filter((rate): rate is number => rate !== null);
       return { ...location, openingHours, startingRateMinor: rates.length ? Math.min(...rates) : null };
-    }));
+    });
   } catch (error: unknown) {
     logger.error({ event: "courts.public_overview_read_failed", code: normalizeDatabaseError(error).sqlState }, "Database projection failed");
     throw new Error("Unable to load courts.");

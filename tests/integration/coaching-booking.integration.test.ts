@@ -89,6 +89,8 @@ const [program, includedProgram, inactiveProgram, groupProgram] = [randomUUID(),
 const [semiProgram, semiIncludedProgram, unpricedProgram, juniorProgram] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
 // Owned by the duration-removal test, whose Admin save destructively replaces its durations and prices.
 const durationRemovalProgram = randomUUID();
+const tierProgram = randomUUID();
+const rateProgram = randomUUID();
 const courts = [courtA1, courtA2, courtA3, courtB1];
 let memberEmail: string;
 let coach: string, coach2: string, hiddenCoach: string, formerCoach: string, memberId: string;
@@ -229,9 +231,11 @@ beforeAll(async () => {
     SELECT $1,p FROM unnest($5::uuid[]) p UNION ALL SELECT c,$6 FROM unnest(ARRAY[$2,$3,$4]::uuid[]) c`,
   [coach, coach2, hiddenCoach, formerCoach, [program, includedProgram, inactiveProgram, groupProgram, unpricedProgram, juniorProgram], program]);
   // Club-wide prices apply at every location charging in RON.
-  await database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,coach_user_id,amount_minor,currency) VALUES
-    ($1,60,NULL,10000,'RON'),($1,90,NULL,14000,'RON'),($1,60,$5,12000,'RON'),($2,60,NULL,15000,'RON'),($2,90,NULL,22500,'RON'),($2,120,NULL,30000,'RON'),
-    ($3,60,NULL,9000,'RON'),($4,60,NULL,8000,'RON'),($6,60,NULL,7000,'RON')`,
+  // Amounts are lesson prices/person. The Group/Junior prices (5 × 1600, 8 × 875) serve only the
+  // historical lessons booked while those programs were Semi-private.
+  await database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,participant_count,coach_user_id,amount_minor,currency) VALUES
+    ($1,60,1,NULL,10000,'RON'),($1,90,1,NULL,14000,'RON'),($1,60,1,$5,12000,'RON'),($2,60,1,NULL,15000,'RON'),($2,90,1,NULL,22500,'RON'),($2,120,1,NULL,30000,'RON'),
+    ($3,60,1,NULL,9000,'RON'),($4,60,5,NULL,1600,'RON'),($6,60,8,NULL,875,'RON')`,
   [program, includedProgram, inactiveProgram, groupProgram, coach, juniorProgram]);
   await database.query(`INSERT INTO public.coaching_programs(id,name,description,program_type,min_participants,max_participants,court_rental_included)
     VALUES($1,'Semi-private coaching','','semi_private',2,2,false),($2,'Semi-private included','','semi_private',2,2,true)`, [semiProgram, semiIncludedProgram]);
@@ -239,8 +243,9 @@ beforeAll(async () => {
     VALUES($1,60),($1,90),($2,60)`, [semiProgram, semiIncludedProgram]);
   await database.query(`INSERT INTO public.coach_programs(coach_user_id,program_id)
     SELECT c,p FROM unnest($1::uuid[]) c CROSS JOIN unnest($2::uuid[]) p`, [[coach, coach2], [semiProgram, semiIncludedProgram]]);
-  await database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,coach_user_id,amount_minor,currency) VALUES
-    ($1,60,NULL,10000,'RON'),($1,60,$3,12000,'RON'),($1,90,NULL,14000,'RON'),($2,60,NULL,15000,'RON')`,
+  // Semi-private lesson prices/person for 2 players: lesson totals 10000, 12000, 14000 and 15000.
+  await database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,participant_count,coach_user_id,amount_minor,currency) VALUES
+    ($1,60,2,NULL,5000,'RON'),($1,60,2,$3,6000,'RON'),($1,90,2,NULL,7000,'RON'),($2,60,2,NULL,7500,'RON')`,
     [semiProgram, semiIncludedProgram, coach]);
   await database.query(`INSERT INTO public.coach_weekly_availability(coach_user_id,location_id,weekday,start_minute,end_minute,valid_from) VALUES
     ($1,$5,$6,480,960,'2000-01-01'),($1,$7,$6,960,1200,'2000-01-01'),($2,$5,$6,480,900,'2000-01-01'),($3,$5,$6,480,900,'2000-01-01'),($4,$5,$6,480,900,'2000-01-01')`,
@@ -263,11 +268,11 @@ async function removeFixtures() {
         await manager.query("DELETE FROM public.court_reservations WHERE court_id=ANY($1::uuid[])", [courts]);
         await manager.query("DELETE FROM public.coach_availability_exceptions WHERE coach_user_id=ANY($1::uuid[])", [coaches]);
         await manager.query("DELETE FROM public.coach_weekly_availability WHERE coach_user_id=ANY($1::uuid[])", [coaches]);
-        await manager.query("DELETE FROM public.coaching_prices WHERE program_id=ANY($1::uuid[])", [[program, includedProgram, inactiveProgram, groupProgram, juniorProgram, semiProgram, semiIncludedProgram, unpricedProgram, durationRemovalProgram]]);
+        await manager.query("DELETE FROM public.coaching_prices WHERE program_id=ANY($1::uuid[])", [[program, includedProgram, inactiveProgram, groupProgram, juniorProgram, semiProgram, semiIncludedProgram, unpricedProgram, durationRemovalProgram, tierProgram, rateProgram]]);
         await manager.query("DELETE FROM public.coach_programs WHERE coach_user_id=ANY($1::uuid[])", [coaches]);
         await manager.query("DELETE FROM public.coach_locations WHERE coach_user_id=ANY($1::uuid[])", [coaches]);
         await manager.query("DELETE FROM public.coach_profiles WHERE user_id=ANY($1::uuid[])", [coaches]);
-        await manager.query("DELETE FROM public.coaching_programs WHERE id=ANY($1::uuid[])", [[program, includedProgram, inactiveProgram, groupProgram, juniorProgram, semiProgram, semiIncludedProgram, unpricedProgram, durationRemovalProgram]]);
+        await manager.query("DELETE FROM public.coaching_programs WHERE id=ANY($1::uuid[])", [[program, includedProgram, inactiveProgram, groupProgram, juniorProgram, semiProgram, semiIncludedProgram, unpricedProgram, durationRemovalProgram, tierProgram, rateProgram]]);
         await manager.query("DELETE FROM public.location_pricing_rules WHERE location_id=ANY($1::uuid[])", [locations]);
         await manager.query("DELETE FROM public.pricing_rule_sets WHERE location_id=ANY($1::uuid[])", [locations]);
         await manager.query("DELETE FROM public.location_opening_hours WHERE location_id=ANY($1::uuid[])", [locations]);
@@ -767,8 +772,8 @@ test.each([
   const selectedProgram = scenario.semi ? (scenario.included ? semiIncludedProgram : semiProgram) : (scenario.included ? includedProgram : program);
   const extraOverrideId = randomUUID();
   if (scenario.included && scenario.override)
-    await database.query(`INSERT INTO public.coaching_prices(id,program_id,duration_minutes,coach_user_id,amount_minor,currency)
-      VALUES($1,$2,60,$3,16500,'RON')`, [extraOverrideId, selectedProgram, coach]);
+    await database.query(`INSERT INTO public.coaching_prices(id,program_id,duration_minutes,participant_count,coach_user_id,amount_minor,currency)
+      VALUES($1,$2,60,$4,$3,$5,'RON')`, [extraOverrideId, selectedProgram, coach, scenario.semi ? 2 : 1, scenario.semi ? 8250 : 16500]);
   try {
     const lesson = await checkoutLesson(scenario.start, scenario.semi && scenario.override ? member : guest, { date: scenario.semi ? "2100-01-04" : "2099-12-28",
       programId: selectedProgram, participantCount: scenario.semi ? 2 : 1,
@@ -908,7 +913,7 @@ test("Admin coaching records preserve included rental, participants and duration
       coaching: { participantCount: 2, durationMinutes: 60, amountMinor: 15000, courtRentalIncluded: true, courtAmountMinor: 0 } });
   } finally {
     await database.query("UPDATE public.coaching_programs SET name=$2,court_rental_included=$3,min_participants=2,max_participants=2 WHERE id=$1", [semiIncludedProgram, configuration.name, configuration.court_rental_included]);
-    await database.query("UPDATE public.coaching_prices SET amount_minor=15000 WHERE program_id=$1", [semiIncludedProgram]);
+    await database.query("UPDATE public.coaching_prices SET amount_minor=7500 WHERE program_id=$1", [semiIncludedProgram]);
   }
 });
 
@@ -920,15 +925,15 @@ test("removing a priced duration preserves and settles the pending semi-private 
   await database.query("INSERT INTO public.user_roles(user_id,role_code) VALUES($1,'admin')", [admin.id]);
   const adminClient = reader();
   assert.strictEqual((await adminClient.auth.signInWithPassword({ email: admin.email, password: admin.password })).error, null);
-  // A dedicated copy of the included semi-private configuration (60 minutes at 15000): the
+  // A dedicated copy of the included semi-private configuration (60 minutes, 2 × 7500): the
   // shared fixture keeps its 60-minute duration and price for every other test. It is
   // removed with the other fixtures once its booking evidence is gone.
   await database.query(`INSERT INTO public.coaching_programs(id,name,description,program_type,min_participants,max_participants,court_rental_included)
     VALUES($1,'Semi-private duration removal','','semi_private',2,2,true)`, [durationRemovalProgram]);
   await database.query("INSERT INTO public.coaching_program_durations(program_id,duration_minutes) VALUES($1,60)", [durationRemovalProgram]);
   await database.query("INSERT INTO public.coach_programs(coach_user_id,program_id) VALUES($1,$2)", [coach, durationRemovalProgram]);
-  await database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,coach_user_id,amount_minor,currency)
-    VALUES($1,60,NULL,15000,'RON')`, [durationRemovalProgram]);
+  await database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,participant_count,coach_user_id,amount_minor,currency)
+    VALUES($1,60,2,NULL,7500,'RON')`, [durationRemovalProgram]);
   setupStripe();
   const lesson = await checkoutLesson(600, guest, { date: "2100-01-18", programId: durationRemovalProgram, participantCount: 2, expectedTotalAmountMinor: 15000 });
   const agreed = await aggregate(lesson.bookingId);
@@ -948,6 +953,56 @@ test("removing a priced duration preserves and settles the pending semi-private 
   expect(stripeFixture.capture).toHaveBeenCalledTimes(1);
 });
 
+
+test("a lesson is priced from its own participant count, and narrowing the range keeps the pending agreement", async () => {
+  const { saveCoachingProgram } = await import("@/lib/coaching/admin");
+  await ensureIntegrationAdminAnchor(service);
+  const admin = await account();
+  await database.query("INSERT INTO public.user_roles(user_id,role_code) VALUES($1,'admin')", [admin.id]);
+  const adminClient = reader();
+  assert.strictEqual((await adminClient.auth.signInWithPassword({ email: admin.email, password: admin.password })).error, null);
+  // Semi-private for 2–4 players with court rental included, price/person: 2 players 75, 3 players 70,
+  // 4 players 65 (lesson totals 150, 210, 260).
+  await database.query(`INSERT INTO public.coaching_programs(id,name,description,program_type,min_participants,max_participants,court_rental_included)
+    VALUES($1,'Semi-private tiers','','semi_private',2,4,true)`, [tierProgram]);
+  await database.query("INSERT INTO public.coaching_program_durations(program_id,duration_minutes) VALUES($1,60)", [tierProgram]);
+  await database.query("INSERT INTO public.coach_programs(coach_user_id,program_id) VALUES($1,$2)", [coach, tierProgram]);
+  await database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,participant_count,coach_user_id,amount_minor,currency)
+    VALUES($1,60,2,NULL,7500,'RON'),($1,60,3,NULL,7000,'RON'),($1,60,4,NULL,6500,'RON')`, [tierProgram]);
+  setupStripe();
+  const request = { date: "2101-02-07", programId: tierProgram, startMinute: 600 };
+  // The browser's expected total must match the server's price for the requested count; no other tier is substituted.
+  const unchanged = await written();
+  for (const [participantCount, expectedTotalAmountMinor] of [[4, 15000], [4, 21000], [2, 26000]] as const) {
+    expect(await commitCoachingCheckout({ ...base(), ...request, participantCount, expectedTotalAmountMinor }, guest)).toMatchObject({ ok: false });
+  }
+  expect(await written()).toEqual(unchanged);
+  const lesson = await checkoutLesson(600, guest, { ...request, participantCount: 4, expectedTotalAmountMinor: 26000 });
+  const agreed = await aggregate(lesson.bookingId);
+  expect(agreed.revision.pricing_evidence.coaching).toMatchObject({ participantCount: 4, amountMinor: 26000, source: "club", courtAmountMinor: 0 });
+  expect(stripeFixture.create).toHaveBeenLastCalledWith(expect.objectContaining({ amount: 26000 }), expect.anything());
+
+  // The Admin narrows the range to 2–3 and changes the 2-player price: the 4-player price is deleted,
+  // but the pending checkout keeps its agreed price and settles for it.
+  expect(await saveCoachingProgram({ id: tierProgram, fields: { name: "Semi-private tiers", description: "", program_type: "semi_private",
+    min_participants: 2, max_participants: 3, durations: [60], court_rental_included: true, is_active: true },
+    club_prices: [{ currency: "RON", duration_minutes: 60, participant_count: 2, amount: "80" }] }, adminClient)).toEqual({ ok: true, id: tierProgram });
+  expect(await database.query("SELECT participant_count,amount_minor FROM public.coaching_prices WHERE program_id=$1 ORDER BY participant_count", [tierProgram]))
+    .toEqual([{ participant_count: 2, amount_minor: 8000 }, { participant_count: 3, amount_minor: 7000 }]);
+  const pending = await aggregate(lesson.bookingId);
+  expect(pending).toMatchObject({ status: "pending_payment", reservation_status: "held", amount_minor: 26000 });
+  expect(pending.revision).toEqual(agreed.revision);
+  const intent = remote(lesson.paymentAttemptId);
+  intent.status = "requires_capture"; intent.amount_capturable = 26000;
+  expect(await readOnlineCheckout(lesson.checkout)).toMatchObject({ status: "confirmed", totalAmountMinor: 26000 });
+  expect((await aggregate(lesson.bookingId)).revision.pricing_evidence).toEqual(agreed.revision.pricing_evidence);
+  expect(stripeFixture.capture).toHaveBeenCalledTimes(1);
+  // A new 4-player lesson is no longer offered; nothing is derived from the remaining tiers.
+  expect(await commitCoachingCheckout({ ...base(), ...request, startMinute: 720, participantCount: 4, expectedTotalAmountMinor: 26000 }, guest))
+    .toMatchObject({ ok: false, reason: "invalid-participants" });
+  expect(await commitCoachingCheckout({ ...base(), ...request, startMinute: 720, participantCount: 2, expectedTotalAmountMinor: 16000 }, guest))
+    .toMatchObject({ ok: true });
+});
 
 test("personal activity distinguishes coaching snapshots and court bookings before filtering and pagination", async () => {
   setupStripe();
@@ -1602,3 +1657,27 @@ test("concurrent lesson moves create one surcharge and duplicate capture events 
     }
   } finally { await restorePricing(); }
 }, 15000);
+
+
+test("A 90-minute lesson price/person is charged per player without duration scaling, with an immutable snapshot and independent count edits", async () => {
+  await database.query(`INSERT INTO public.coaching_programs(id,name,description,program_type,min_participants,max_participants,court_rental_included)
+    VALUES($1,'Private per-person regression','','private',1,2,true)`, [rateProgram]);
+  await database.query("INSERT INTO public.coaching_program_durations(program_id,duration_minutes) VALUES($1,60),($1,90)", [rateProgram]);
+  await database.query("INSERT INTO public.coach_programs(coach_user_id,program_id) VALUES($1,$2)", [coach, rateProgram]);
+  await database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,participant_count,amount_minor,currency)
+    VALUES($1,60,1,9000,'RON'),($1,60,2,9000,'RON'),($1,90,2,9000,'RON')`, [rateProgram]);
+  setupStripe();
+  const lesson = await checkoutLesson(600, guest, { date: "2102-03-06", programId: rateProgram,
+    durationMinutes: 90, participantCount: 2, expectedTotalAmountMinor: 18000 });
+  const agreed = await aggregate(lesson.bookingId);
+  expect(agreed).toMatchObject({ amount_minor: 18000, revision: { total_amount_minor: 18000,
+    pricing_evidence: { coaching: { amountMinor: 18000, pricePerPersonMinor: 9000, participantCount: 2 } } } });
+  expect(stripeFixture.create).toHaveBeenLastCalledWith(expect.objectContaining({ amount: 18000 }), expect.anything());
+  await database.query("UPDATE public.coaching_prices SET amount_minor=11000 WHERE program_id=$1 AND participant_count=1", [rateProgram]);
+  expect(await database.query("SELECT participant_count,amount_minor FROM public.coaching_prices WHERE program_id=$1 AND duration_minutes=60 ORDER BY participant_count", [rateProgram]))
+    .toEqual([{ participant_count: 1, amount_minor: 11000 }, { participant_count: 2, amount_minor: 9000 }]);
+  const intent = remote(lesson.paymentAttemptId);
+  intent.status = "requires_capture"; intent.amount_capturable = 18000;
+  expect(await readOnlineCheckout(lesson.checkout)).toMatchObject({ status: "confirmed", totalAmountMinor: 18000 });
+  expect((await aggregate(lesson.bookingId)).revision.pricing_evidence).toEqual(agreed.revision.pricing_evidence);
+});

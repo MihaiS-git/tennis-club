@@ -2,6 +2,7 @@ import "server-only";
 import type { BookingCancellationCommandResult } from "@/lib/bookings/domain";
 import { cancelBookingCommand } from "@/lib/bookings/cancellation-service";
 import { paymentFactSchema } from "@/lib/payments/facts";
+import { paymentProviderSchema } from "@/lib/payments/domain";
 import { successfulRefundPayment } from "@/lib/payments/providers/stripe/refund-policy";
 import { latestFinancialStatus, type LatestFinancialStatus } from "@/lib/payments/latest-financial-status";
 import { finishBookingCancellation, type BookingCancellationResult } from "@/lib/payments/refunds";
@@ -14,7 +15,6 @@ import { createClient } from "@/lib/supabase/server";
 import { getDataSource } from "@/lib/db/data-source";
 import { normalizeDatabaseError } from "@/lib/db/errors";
 import * as reservations from "@/lib/db/repositories/reservations.repository";
-import { loadAdminTransactionContext } from "@/lib/db/repositories/payments.repository";
 import { createDirectReservationCommand, editDirectReservationCommand, cancelDirectReservationCommand } from "./commands";
 import { logger } from "@/lib/logger";
 import { localMinute, localToday } from "@/lib/courts/calendar";
@@ -22,7 +22,8 @@ import { localStartInstant } from "@/lib/courts/local-time";
 import { locationCurrencies } from "@/lib/admin/locations-validation";
 import type { LocationCurrency } from "@/lib/pricing/money";
 import { isStructurallyReady, publicationToday } from "@/lib/locations/publication";
-import { requireAdminReservationRole, requireReservationRole } from "./authorization";
+import { requireActiveAdmin } from "@/lib/admin/authorization";
+import { requireReservationRole } from "./authorization";
 import { buildReservationDay, reservationEditSchema, reservationInputSchema, type Occupancy } from "./domain";
 import { loadReservationEditDayForLocation } from "./edit-availability";
 
@@ -35,7 +36,11 @@ const adminOccupancyFields = occupancySchema.extend({ id: z.uuid(),
   booking_date: z.iso.date(), reason: z.string().nullable(), created_by_user_id: z.uuid().nullable(),
   creator_name: z.string().nullable(), creator_email: z.string().nullable(), creator_phone: z.string().nullable(),
   account_user_id: z.uuid().nullable(), customer_name: z.string().nullable(), customer_email: z.string().nullable(),
-  customer_phone: z.string().nullable(), cancellation_notice_minutes: cancellationNoticeMinutesSchema.nullable(), total_amount_minor: z.number().int().nullable(), currency: z.enum(locationCurrencies).nullable(), payment_facts: z.array(paymentFactSchema) });
+  customer_phone: z.string().nullable(), cancellation_notice_minutes: cancellationNoticeMinutesSchema.nullable(), total_amount_minor: z.number().int().nullable(), currency: z.enum(locationCurrencies).nullable(),
+  payment_facts: z.array(paymentFactSchema.extend({ provider: paymentProviderSchema.nullable(),
+    status: z.enum(["pending", "succeeded", "failed", "cancelled", "expired", "due"]) })),
+  refund_facts: z.array(z.object({ id: z.uuid(), provider: paymentProviderSchema,
+    status: z.enum(["pending", "pending_retry", "succeeded", "failed", "voided"]), created_at: z.string() })) });
 const adminOccupancyRowSchema = z.discriminatedUnion("kind", [
   adminOccupancyFields.extend({ kind: z.literal("reservation"), payment_method: z.null() }),
   adminOccupancyFields.extend({ kind: z.literal("booking"), payment_method: z.enum(["online", "pay_at_club"]) }),
@@ -129,14 +134,6 @@ export async function getReservationDay(location: InternalLocation, date: string
     logger.error({ event: "reservations.admin_read_failed" }, "Failed to load admin reservation details");
     throw new Error("Unable to load reservation details.");
   }
-  let financialFacts: Awaited<ReturnType<typeof loadAdminTransactionContext>>;
-  try {
-    financialFacts = await loadAdminTransactionContext((await getDataSource()).manager, { revisionIds: [], adjustmentIds: [],
-      bookingIds: parsed.data.filter((row) => row.kind === "booking").map((row) => row.id) });
-  } catch (error: unknown) {
-    logger.error({ event: "reservations.admin_read_failed", code: normalizeDatabaseError(error).sqlState }, "Failed to load admin reservation details");
-    throw new Error("Unable to load reservation details.");
-  }
   for (const row of parsed.data) {
     if (row.kind === "reservation") {
       adminOccupancy.push({ kind: "reservation", payment_method: row.payment_method, id: row.id, court_id: row.court_id, booking_date: row.booking_date,
@@ -148,8 +145,8 @@ export async function getReservationDay(location: InternalLocation, date: string
         account_user_id: row.account_user_id, payment_method: row.payment_method,
         location_name: row.location_name, court_name: row.court_name, location_timezone: row.location_timezone,
         includes_coaching: row.includes_coaching, coach_user_id: row.coach_user_id, coach_name: row.coach_name, coaching_program_name: row.coaching_program_name, coaching: row.coaching,
-        payment_status: latestFinancialStatus(financialFacts.payments.filter((payment) => payment.bookingId === row.id),
-          financialFacts.refunds.filter((refund) => refund.bookingId === row.id)),
+        // Payment and refund facts come from the same projection snapshot as the booking row.
+        payment_status: latestFinancialStatus(row.payment_facts.map(operationFact), row.refund_facts.map(operationFact)),
         customer_name: row.customer_name, customer_email: row.customer_email, customer_phone: row.customer_phone,
         cancellation_notice_minutes: row.cancellation_notice_minutes,
         stripe_refund_available: successfulRefundPayment(row.payment_facts) !== null, total_amount_minor: row.total_amount_minor, currency: row.currency });
@@ -163,6 +160,10 @@ export async function getReservationDay(location: InternalLocation, date: string
     courts: location.courts, hours, reservations: occupancy }), occupancy,
     adminOccupancy: canManage ? adminOccupancy : adminOccupancy.map((item) => projectStaffOccupancy(item, actor.userId)),
     actorUserId: actor.userId, canManage };
+}
+
+function operationFact<T extends { created_at: string }>({ created_at, ...fact }: T) {
+  return { ...fact, createdAt: new Date(created_at) };
 }
 
 // Non-Admin staff never receive another customer's identity, payments or prices.
@@ -196,7 +197,7 @@ export async function createDirectReservation(input: unknown, supabase?: Client,
 
 export async function cancelDirectReservationAsAdmin(input: unknown, supabase?: Client): Promise<ReservationResult> {
   const client = supabase ?? await createClient();
-  const actor = await requireAdminReservationRole(client);
+  const actor = await requireActiveAdmin(client);
   const parsed = z.uuid().safeParse(input);
   if (!parsed.success) return { ok: false, message: "Choose a valid reservation." };
   try {
@@ -212,7 +213,7 @@ export async function cancelDirectReservationAsAdmin(input: unknown, supabase?: 
 
 export async function cancelCustomerBookingAsAdmin(input: unknown, supabase?: Client): Promise<BookingCancellationResult> {
   const client = supabase ?? await createClient();
-  const actor = await requireAdminReservationRole(client);
+  const actor = await requireActiveAdmin(client);
   const parsed = z.union([z.strictObject({ id: z.uuid() }), z.uuid().transform(id => ({ id }))]).safeParse(input);
   if (!parsed.success) return { ok: false, message: "Choose a valid booking." };
   let data: BookingCancellationCommandResult;
@@ -232,7 +233,7 @@ export async function cancelCustomerBookingAsAdmin(input: unknown, supabase?: Cl
 // and inactive resources. Actions mirror the existing Admin edit/cancel commands, which
 // still decide on submit: active resources, editable until it ends, cancellable until it starts.
 export async function getAdminDirectReservation(input: unknown, supabase?: Client, now = new Date()) {
-  await requireAdminReservationRole(supabase ?? await createClient());
+  await requireActiveAdmin(supabase ?? await createClient());
   const id = z.uuid().safeParse(input);
   if (!id.success) return null;
   let row: Awaited<ReturnType<typeof reservations.findAdminDirectReservationDetails>>;
@@ -254,11 +255,11 @@ export type AdminDirectReservationDetails = NonNullable<Awaited<ReturnType<typeo
 export async function getAdminReservationEditDay(input: { reservationId: unknown; date: unknown },
   supabase?: Client, now = new Date()) {
   const client = supabase ?? await createClient();
-  await requireAdminReservationRole(client);
+  await requireActiveAdmin(client);
   const parsed = z.object({ reservationId: z.uuid(), date: z.iso.date() }).safeParse(input);
   if (!parsed.success) throw new Error("Choose a valid date.");
   const context = await readAdminEditContext(parsed.data.reservationId, parsed.data.date, now);
-  const availability = await loadReservationEditDayForLocation({ client, locationId: context.location_id,
+  const availability = await loadReservationEditDayForLocation({ locationId: context.location_id,
     timezone: context.location_timezone, date: parsed.data.date, occupancy: context.occupancy, now });
   return { ...availability, reservation: context };
 }
@@ -285,7 +286,7 @@ export type AdminEditResult = { ok: true; reservation: {
 
 export async function editDirectReservationAsAdmin(input: unknown, supabase?: Client, now = new Date()): Promise<AdminEditResult> {
   const client = supabase ?? await createClient();
-  const actor = await requireAdminReservationRole(client);
+  const actor = await requireActiveAdmin(client);
   const parsed = reservationEditSchema.safeParse(input);
   if (!parsed.success) {
     const fieldErrors: Record<string, string> = {};

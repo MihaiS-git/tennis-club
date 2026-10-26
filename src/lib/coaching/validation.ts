@@ -8,18 +8,12 @@ export const coachingProgramTypeLabels: Record<CoachingProgramType, string> = {
   private: "Private", semi_private: "Semi-private", group: "Group", junior: "Junior",
 };
 
-// Private and Semi-private lessons are booked and paid online, priced per session duration
-// with optional coach overrides. Group and Junior sessions are organized by the coach or club,
-// paid at the club, and published only as club rates per person per 60 minutes by player count.
+// Private and Semi-private lessons are booked online with optional Coach overrides.
+// Group and Junior sessions are organized by the club and retain Club-only prices.
 export type OnlineCoachingProgramType = "private" | "semi_private";
 export function isOnlineCoachingProgramType(type: CoachingProgramType): type is OnlineCoachingProgramType {
   return type === "private" || type === "semi_private";
 }
-export function hasParticipantRates(type: CoachingProgramType) {
-  return !isOnlineCoachingProgramType(type);
-}
-export const participantRateProgramTypes = coachingProgramTypes.filter(hasParticipantRates);
-
 export const coachingProgramDurations = [60, 90, 120] as const;
 
 export function isCoachingDuration(minutes: number) {
@@ -68,6 +62,13 @@ export function coachingParticipantRange(program: { minParticipants: number | nu
 export function isPermittedParticipantCount(range: { min: number; max: number }, count: number) {
   return Number.isInteger(count) && range.min <= count && count <= range.max;
 }
+// Every permitted count, each of which has its own independently configured price.
+export function coachingParticipantCounts(range: { min: number; max: number } | null) {
+  return range ? Array.from({ length: range.max - range.min + 1 }, (_, index) => range.min + index) : [];
+}
+export function formatPlayers(count: number) {
+  return `${count} ${count === 1 ? "player" : "players"}`;
+}
 
 export const coachingProgramFieldsSchema = z.strictObject({
   name: z.string().trim().min(1, "Enter a program name.").max(100, "Use at most 100 characters."),
@@ -95,25 +96,26 @@ export const coachingProgramFieldsSchema = z.strictObject({
 
 const coachingCurrencySchema = z.enum(locationCurrencies, "Select a supported currency.");
 
-// Club-default prices saved with the program, per currency and selected duration. Omitted
-// prices are unchanged; an empty amount is never sent, and removal is always explicit.
-const clubPriceKey = { currency: coachingCurrencySchema, duration_minutes: z.number().int() };
-const clubPriceKeyText = (price: { currency: string; duration_minutes: number }) => `${price.currency}:${price.duration_minutes}`;
+// Club lesson prices/person saved with the program, per currency, selected duration and
+// participant count. Omitted prices are unchanged; an empty amount is never sent, and removal is
+// always explicit. Prices made obsolete by the saved program are removed by the service.
+const clubPriceKey = { currency: coachingCurrencySchema, duration_minutes: coachingDurationSchema, participant_count: participantCountSchema };
+const clubPriceKeyText = (price: { currency: string; duration_minutes: number; participant_count: number }) =>
+  `${price.currency}:${price.duration_minutes}:${price.participant_count}`;
 export const coachingProgramMutationSchema = z.strictObject({
   id: z.uuid().optional(), fields: coachingProgramFieldsSchema,
-  club_prices: z.array(z.strictObject({ ...clubPriceKey, amount: majorAmountSchema })).max(400).optional(),
-  removed_club_prices: z.array(z.strictObject(clubPriceKey)).max(400).optional(),
+  club_prices: z.array(z.strictObject({ ...clubPriceKey, amount: majorAmountSchema })).max(1000).optional(),
+  removed_club_prices: z.array(z.strictObject(clubPriceKey)).max(1000).optional(),
 }).superRefine((value, context) => {
   const seen = new Set<string>();
+  const range = coachingParticipantRange({ minParticipants: value.fields.min_participants, maxParticipants: value.fields.max_participants });
   value.club_prices?.forEach((price, index) => {
     const key = clubPriceKeyText(price);
-    if (hasParticipantRates(value.fields.program_type)) {
-      context.addIssue({ code: "custom", path: ["club_prices", index, "amount"], message: "Group and Junior programs use per-player rates set under Prices." });
-    } else if (!value.fields.durations.includes(price.duration_minutes)) {
-      context.addIssue({ code: "custom", path: ["club_prices", index, "amount"], message: "Select this duration before setting its price." });
-    } else if (seen.has(key)) {
-      context.addIssue({ code: "custom", path: ["club_prices", index, "amount"], message: "Enter each price once." });
-    }
+    const issue = (message: string) => context.addIssue({ code: "custom", path: ["club_prices", index, "amount"], message });
+    if (!value.fields.durations.includes(price.duration_minutes)) issue("Select this duration before setting its price.");
+    else if (!range) issue("Set the minimum and maximum players before setting prices.");
+    else if (!isPermittedParticipantCount(range, price.participant_count)) issue(`Use a player count from ${range.min} to ${range.max}.`);
+    else if (seen.has(key)) issue("Enter each price once.");
     seen.add(key);
   });
   value.removed_club_prices?.forEach((price, index) => {
@@ -143,22 +145,18 @@ export const coachProfileMutationSchema = z.strictObject({
 });
 export const coachVisibilitySchema = z.strictObject({ user_id: z.uuid(), is_public: z.boolean() });
 
-// One price for a program duration in a currency. The input never names a coach:
-// Admin operations set the club default, Coach operations the signed-in coach's override.
+// One coach's own lesson price/person for a program duration and participant count in a currency.
+// The input never names a coach: the owner is the signed-in coach.
 export const coachingPriceMutationSchema = z.strictObject({
-  program_id: z.uuid(), duration_minutes: coachingDurationSchema,
+  program_id: z.uuid(), duration_minutes: coachingDurationSchema, participant_count: participantCountSchema,
   currency: coachingCurrencySchema, amount: majorAmountSchema,
 });
-// Legacy configuration can still be removed without allowing new unsupported prices.
-export const coachingPriceRemovalSchema = coachingPriceMutationSchema.omit({ amount: true }).extend({
-  duration_minutes: z.number().int().min(15).max(480),
-});
+export const coachingPriceRemovalSchema = coachingPriceMutationSchema.omit({ amount: true });
 
-// Club rates per person per 60 minutes for player counts of a Group/Junior program in one
-// currency. Omitted counts are unchanged; an empty amount is never sent and removal is explicit.
-// Removal accepts any count, so rates left outside a changed range can still be cleared.
-export const participantPriceMutationSchema = z.strictObject({
-  program_id: z.uuid(), currency: coachingCurrencySchema,
+// Club lesson prices/person of one program duration in one currency, by participant count.
+// Omitted counts are unchanged; an empty amount is never sent and removal is explicit.
+export const clubPriceSetMutationSchema = z.strictObject({
+  program_id: z.uuid(), currency: coachingCurrencySchema, duration_minutes: coachingDurationSchema,
   prices: z.array(z.strictObject({ participant_count: participantCountSchema, amount: majorAmountSchema })).max(100),
   removed: z.array(participantCountSchema).max(100),
 }).superRefine((value, context) => {

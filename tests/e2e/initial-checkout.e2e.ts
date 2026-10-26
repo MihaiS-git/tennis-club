@@ -40,7 +40,9 @@ const test = base.extend<{ club: Club }>({
       await db.query("INSERT INTO public.coaching_program_durations(program_id,duration_minutes) VALUES($1,60)", [programId]);
       await db.query("INSERT INTO public.coach_locations(coach_user_id,location_id) VALUES($1,$2)", [coachId, locationId]);
       await db.query("INSERT INTO public.coach_programs(coach_user_id,program_id) VALUES($1,$2)", [coachId, programId]);
-      await db.query("INSERT INTO public.coaching_prices(program_id,duration_minutes,coach_user_id,amount_minor,currency) VALUES($1,60,NULL,10000,'RON')", [programId]);
+      // Independent club lesson prices/person per player count; none is derived from another.
+      await db.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,participant_count,coach_user_id,amount_minor,currency)
+        VALUES($1,60,2,NULL,5000,'RON'),($1,60,3,NULL,4500,'RON'),($1,60,4,NULL,4000,'RON')`, [programId]);
       await db.query(`INSERT INTO public.coach_weekly_availability(coach_user_id,location_id,weekday,start_minute,end_minute,valid_from)
         SELECT $1,$2,weekday,480,1200,'2000-01-01' FROM generate_series(0,6) AS weekday`, [coachId, locationId]);
       await runFixture({ db, locationId, courtId, courtName, coachName, programName });
@@ -136,8 +138,9 @@ test("guest pays online for a semi-private coaching lesson and the server confir
   await expect(confirmed).toContainText(club.programName);
   await expect(confirmed).toContainText("4 players");
   expect(await persisted(club.db, email)).toEqual({
-    booking: { status: "confirmed", payment_method: "online", total: 15000, occupancy: "active", start: 960, end: 1020, coached: true },
-    attempts: [{ status: "succeeded", amount_minor: 15000, captured: 15000 }],
+    // 4 players × the 4-player lesson price/person (40) plus the court rental (50).
+    booking: { status: "confirmed", payment_method: "online", total: 21000, occupancy: "active", start: 960, end: 1020, coached: true },
+    attempts: [{ status: "succeeded", amount_minor: 21000, captured: 21000 }],
   });
   expect(await club.db.query(`SELECT (v.pricing_evidence->'coaching'->>'participantCount')::int AS participants
     FROM public.booking_revisions v WHERE v.customer_email=$1 ORDER BY v.revision_number`, [email])).toEqual([{ participants: 4 }, { participants: 4 }]);

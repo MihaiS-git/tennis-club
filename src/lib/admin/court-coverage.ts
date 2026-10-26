@@ -15,11 +15,12 @@ class CoverageParentChanged extends Error {}
 
 type Client = Awaited<ReturnType<typeof createClient>>;
 
-export async function listAdminCourtCoverage(supabase?: Client) {
+export async function listAdminCourtCoverage(supabase?: Client, locationId?: string) {
   const client = supabase ?? await createClient();
   await requireActiveAdmin(client);
+  if (locationId !== undefined) z.uuid().parse(locationId);
   try {
-    const rows = await clubs.listCourtCoverage((await getDataSource()).manager);
+    const rows = await clubs.listCourtCoverage((await getDataSource()).manager, undefined, locationId);
     return z.array(coveragePeriodSchema).parse(rows.map((row) => ({
       id: row.id, court_id: row.courtId, starts_on: row.startsOn, ends_on: row.endsOn,
       created_at: row.createdAt.toISOString(), updated_at: row.updatedAt.toISOString(),

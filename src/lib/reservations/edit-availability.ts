@@ -7,7 +7,6 @@ import { logger } from "@/lib/logger";
 import { getDataSource } from "@/lib/db/data-source";
 import { normalizeDatabaseError } from "@/lib/db/errors";
 import { findReservationEditLocation, listReservationOpeningHours } from "@/lib/db/repositories/reservations.repository";
-import { createClient } from "@/lib/supabase/server";
 import { buildReservationDay, type Occupancy } from "./domain";
 
 export const reservationEditLocationSchema = z.object({ id: z.uuid(), name: z.string(), timezone: z.string(),
@@ -15,7 +14,7 @@ export const reservationEditLocationSchema = z.object({ id: z.uuid(), name: z.st
   courts: z.array(z.object({ id: z.uuid(), name: z.string(), is_active: z.boolean() })) });
 
 export async function loadReservationEditDayForLocation(input: {
-  client: Awaited<ReturnType<typeof createClient>>; locationId: string; timezone: string;
+  locationId: string; timezone: string;
   date: string; occupancy: Occupancy[]; now: Date;
   configuration?: { location: z.infer<typeof reservationEditLocationSchema>; hours: z.infer<typeof openingIntervalSchema>[] };
 }) {

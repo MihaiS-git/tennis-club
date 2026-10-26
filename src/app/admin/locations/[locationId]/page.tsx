@@ -3,7 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { z } from "zod";
 import { AdminPageHeader } from "@/components/admin-page-controls";
-import { listAdminLocations, listAdminLocationsWithReadiness } from "@/lib/admin/locations";
+import { listAdminLocations, listAdminLocationsWithReadiness, readAdminLocationCurrencyChange } from "@/lib/admin/locations";
 import { listAdminLocationOpeningHours, listAdminOpeningHoursSchedules } from "@/lib/admin/opening-hours";
 import { listAdminCourts } from "@/lib/admin/courts";
 import { listAdminCourtCoverage } from "@/lib/admin/court-coverage";
@@ -25,13 +25,11 @@ export default async function LocationManagementPage({ params }: { params: Promi
   if (!parsed.success) notFound();
   const [location] = await listAdminLocationsWithReadiness("current", parsed.data);
   if (!location) notFound();
-  const [intervals, locations, allCourts, allPeriods, rules, schedules] = await Promise.all([
-    listAdminLocationOpeningHours(location.id), listAdminLocations(), listAdminCourts(),
-    listAdminCourtCoverage(), listAdminPricingRules(location.id), listAdminOpeningHoursSchedules(location.id),
+  const [intervals, locations, courts, periods, rules, schedules, currencyBlockers] = await Promise.all([
+    listAdminLocationOpeningHours(location.id), listAdminLocations(), listAdminCourts(undefined, location.id),
+    listAdminCourtCoverage(undefined, location.id), listAdminPricingRules(location.id), listAdminOpeningHoursSchedules(location.id),
+    readAdminLocationCurrencyChange(location.id),
   ]);
-  const courts = allCourts.filter((court) => court.location_id === location.id);
-  const courtIds = new Set(courts.map(({ id }) => id));
-  const periods = allPeriods.filter((period) => courtIds.has(period.court_id));
   const unavailable = !location.is_active || location.archived_at !== null;
   return <>
     <AdminPageHeader title={location.name} description={[location.address_line1, location.city,
@@ -40,7 +38,7 @@ export default async function LocationManagementPage({ params }: { params: Promi
       <span className="sr-only">Public booking:</span><PublicationStatus location={location} missing={location.missing} />
     </AdminPageHeader>
     <LocationWorkspace key={location.id} panels={{
-      details: <LocationForm location={location} />,
+      details: <LocationForm location={location} currencyBlockers={currencyBlockers} />,
       "opening-hours": <>
         <p className="mb-3 text-sm text-muted-foreground">Weekly opening hours for {location.name} ({location.timezone}).</p>
         {location.archived_at ? <p>Restore this location before changing opening hours.</p>

@@ -39,9 +39,9 @@ test("self-cancellation enforces account ownership, snapshot notice, staff exemp
     const minute = localMinute(timezone, start);
     assert.strictEqual((await service.from("court_reservations").insert({ id: reservationId, court_id: courtId,
       booking_date: localToday(timezone, start), starts_at_minute: minute, ends_at_minute: minute + 60 })).error, null);
-    assert.strictEqual((await insertBookingFixture(service, { id: bookingId, reservation_id: reservationId,
+    await insertBookingFixture({ id: bookingId, reservation_id: reservationId,
       account_user_id: owner, payment_method: "pay_at_club", customer_name: "Stored Owner", customer_email: email, customer_phone: "123",
-      cancellation_notice_minutes: notice, total_amount_minor: 9000, currency: "RON" })).error, null);
+      cancellation_notice_minutes: notice, total_amount_minor: 9000, currency: "RON" });
     return { id: bookingId, reservationId, courtId, start };
   }
   const read = async (item: Awaited<ReturnType<typeof booking>>) => {

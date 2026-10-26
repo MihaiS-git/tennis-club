@@ -45,7 +45,7 @@ test("Admin booking records show persisted history and verified financial operat
     expect((await db.from("court_reservations").insert(reservationIds.map((id, index) => ({ id, court_id: courtId,
       booking_date: `2099-12-0${index + 1}`, starts_at_minute: 600, ends_at_minute: 660, status: index === 0 ? "active" : index === 1 ? "cancelled" : "released",
       cancelled_at: index === 1 ? "2026-10-03T10:00:00Z" : null, cancelled_by_user_id: index === 1 ? users[0] : null })))).error).toBeNull();
-    expect((await insertBookingFixture(db, [
+    await insertBookingFixture([
       { id: paid, reservation_id: reservationIds[0], account_user_id: users[0], customer_name: `${marker} Account`, customer_email: email,
         customer_phone: "1", status: "confirmed", total_amount_minor: 5000, currency: "RON", cancellation_notice_minutes: 1440,
         payment_method: "online", created_at: "2026-10-01T10:00:00Z" },
@@ -55,7 +55,7 @@ test("Admin booking records show persisted history and verified financial operat
       { id: expired, reservation_id: reservationIds[2], customer_name: `${marker} Expired`, customer_email: `${marker}-expired@example.test`,
         customer_phone: "3", status: "expired", total_amount_minor: 4000, currency: "RON", cancellation_notice_minutes: 1440,
         payment_method: "online", created_at: "2026-10-03T10:00:00Z" },
-    ])).error).toBeNull();
+    ]);
     // Two recorded changes; the original revision keeps its own historical total.
     await appendBookingContractFixture(paid, { total_amount_minor: 7500, starts_at_minute: 630, ends_at_minute: 690 });
     await appendBookingContractFixture(paid, { total_amount_minor: 5000 });
@@ -150,9 +150,9 @@ async function onlineBookingFixture(marker: string) {
   expect((await db.from("courts").insert({ id: ids.court, location_id: ids.location, name: "Court", slug: "court", environment: "outdoor", surface: "clay" })).error).toBeNull();
   expect((await db.from("court_reservations").insert({ id: ids.reservation, court_id: ids.court, booking_date: "2099-12-01",
     starts_at_minute: 600, ends_at_minute: 660, status: "active" })).error).toBeNull();
-  expect((await insertBookingFixture(db, [{ id: ids.booking, reservation_id: ids.reservation, customer_name: `${marker} Guest`,
+  await insertBookingFixture([{ id: ids.booking, reservation_id: ids.reservation, customer_name: `${marker} Guest`,
     customer_email: `${marker}-guest@example.test`, customer_phone: "1", status: "pending_payment", total_amount_minor: 5000, currency: "RON",
-    cancellation_notice_minutes: 1440, payment_method: "online", created_at: "2026-10-01T10:00:00Z" }])).error).toBeNull();
+    cancellation_notice_minutes: 1440, payment_method: "online", created_at: "2026-10-01T10:00:00Z" }]);
   const cleanup = async () => {
     await cleanupBookingFixtures({ bookingIds: [ids.booking] });
     expect((await db.from("court_reservations").delete().eq("id", ids.reservation)).error).toBeNull();

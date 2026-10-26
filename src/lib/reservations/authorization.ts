@@ -11,8 +11,3 @@ export async function requireReservationRole(client: Awaited<ReturnType<typeof c
   return account;
 }
 
-export async function requireAdminReservationRole(client: Awaited<ReturnType<typeof createClient>>) {
-  const account = await requireReservationRole(client);
-  if (!account.roles.includes("admin")) notFound();
-  return account;
-}

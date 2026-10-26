@@ -141,7 +141,7 @@ async function reserveLesson(manager: EntityManager, intent: Intent, customerId:
     paymentMethod: "online", cancellationNoticeMinutes: location.customerCancellationNoticeMinutes,
     pricingEvidence: lessonPricingEvidence(quote.evidence.courtPricing, { programId: quote.program.id, coachUserId: quote.coach.userId,
       locationId: quote.location.id, durationMinutes: quote.durationMinutes, source: quote.evidence.coachingPrice.source,
-      amountMinor: quote.coachingAmountMinor, currency: quote.currency, courtRentalIncluded: quote.program.courtRentalIncluded,
+      amountMinor: quote.coachingAmountMinor, pricePerPersonMinor: quote.evidence.coachingPrice.amountMinor, currency: quote.currency, courtRentalIncluded: quote.program.courtRentalIncluded,
       participantCount: intent.participantCount }, quote.evidence.courtRentalMinor),
     coachUserId: quote.coach.userId, coachingProgramId: quote.program.id, coachName: quote.coach.displayName,
     coachingProgramName: quote.program.name,

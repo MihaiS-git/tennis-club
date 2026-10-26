@@ -76,7 +76,8 @@ function ProgramRow({ program, mobile, currencies, prices }: { program: AdminCoa
   const participants = formatParticipants(program.min_participants, program.max_participants) ?? "Not set";
   const rental = program.court_rental_included ? "Included" : "Not included";
   const dialog = open && createPortal(<ProgramDialog program={program} currencies={currencies}
-    prices={prices?.filter((price) => price.program_id === program.id)} open onOpenChange={(nextOpen) => {
+    prices={prices?.filter((price) => price.program_id === program.id)}
+    open onOpenChange={(nextOpen) => {
     setOpen(nextOpen);
     if (!nextOpen) rowRef.current?.focus();
   }} />, document.body);

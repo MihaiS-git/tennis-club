@@ -24,7 +24,7 @@ const query = vi.fn();
 const manager = { query } as unknown as EntityManager;
 const attempt = { id, booking_id: id, adjustment_id: id, status: "pending", amount_minor: 2000, checkout_capability: null } as never;
 const exclusion = (constraint: string) => new QueryFailedError("UPDATE", [], Object.assign(new Error("private"), { code: "23P01", constraint }));
-const settle = () => settleAdjustment(manager, { attempt, event: null, outcome: "succeeded", providerPaymentId: "pi_test", mismatch: false });
+const settle = () => settleAdjustment(manager, { attempt, outcome: "succeeded", providerPaymentId: "pi_test", mismatch: false });
 
 beforeEach(() => {
   vi.clearAllMocks();

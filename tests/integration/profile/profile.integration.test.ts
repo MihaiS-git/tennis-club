@@ -36,7 +36,7 @@ test(
     }
     try {
       const owner = await fixture(); const other = await fixture();
-      expect(await loadProfile(owner.client, owner.id)).toEqual({
+      expect(await loadProfile(owner.id)).toEqual({
         personal: Object.fromEntries(Object.keys(personal).map((key) => [key, null])), player: null,
       });
       expect((await service.from("player_profiles").select("user_id").eq("user_id", owner.id)).data).toEqual([]);
@@ -53,7 +53,7 @@ test(
       });
       expect(Date.parse(accountAfter.data!.updated_at)).toBeGreaterThan(Date.parse(accountBefore.data!.updated_at));
       expect((await service.from("user_roles").select("*").eq("user_id", owner.id)).data).toEqual(rolesBefore.data);
-      expect(await loadProfile(owner.client, owner.id)).toMatchObject({
+      expect(await loadProfile(owner.id)).toMatchObject({
         personal: { first_name: "Ana", phone: "123", date_of_birth: "1990-04-23", country_code: "RO" }, player: null,
       });
       expect((await service.from("users").select("first_name, phone, country_code").eq("id", owner.id).single()).data).toEqual({ first_name: "Ana", phone: "123", country_code: "RO" });
@@ -63,11 +63,11 @@ test(
       expect(await savePersonalInformation({ ...personal, country_code: "ZZ" }, owner.client)).toHaveProperty("fieldErrors.country_code");
       expect(await saveTennisProfile({ ...tennis, sportya_level: "5.5" }, owner.client)).toHaveProperty("fieldErrors.sportya_level");
       expect(await saveTennisProfile({ ...tennis, display_name: "Ana", sportya_level: "6" }, owner.client)).toHaveProperty("success");
-      const loaded = await loadProfile(owner.client, owner.id);
+      const loaded = await loadProfile(owner.id);
       expect(loaded?.player).toMatchObject({ display_name: "Ana", sportya_level: "6", avatar_path: null, rating: null });
       assert.ok(loaded?.player);
       expect(loaded.player.updated_at).toBe(new Date(loaded.player.updated_at).toISOString());
-      expect(await loadProfile(owner.client, randomUUID())).toBeNull();
+      expect(await loadProfile(randomUUID())).toBeNull();
       expect(await savePersonalInformation({ ...personal, first_name: "Changed" }, owner.client)).toHaveProperty("success");
       expect((await service.from("player_profiles").select("display_name, sportya_level").eq("user_id", owner.id).single()).data)
         .toEqual({ display_name: "Ana", sportya_level: "6" });

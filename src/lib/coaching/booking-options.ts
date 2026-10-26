@@ -5,16 +5,22 @@ import { localMinute, localToday } from "@/lib/courts/local-time";
 import { getDataSource } from "@/lib/db/data-source";
 import { listLocationCoachBookingAvailability } from "@/lib/db/repositories/coach-availability.repository";
 import { mondayWeekday } from "@/lib/pricing/resolution";
-import type { LocationCurrency } from "@/lib/pricing/money";
+import { coachingLessonAmount, resolveCoachingPrice, type ResolvedCoachingPrice } from "./pricing";
 import type { PublicCoaching } from "./public";
-import { coachingParticipantRange, isCoachingDuration, isOnlineCoachingProgramType, type OnlineCoachingProgramType } from "./validation";
+import {
+  coachingParticipantCounts, coachingParticipantRange, isCoachingDuration, isOnlineCoachingProgramType, type OnlineCoachingProgramType,
+} from "./validation";
 
-// Effective coaching amount for one duration in the location's currency:
-// the coach's override ?? the club default; null means unpriced (no checkout).
+// Coaching lesson total of each permitted participant count for one duration in the location's
+// currency: that exact count's price/person (coach override ?? club default) times the count;
+// null means unpriced (no checkout). No count's price is derived from another.
 export type CoachingDurationOption = {
   durationMinutes: number;
-  price: { amountMinor: number; currency: LocationCurrency; source: "coach" | "club" } | null;
+  prices: { participantCount: number; price: ResolvedCoachingPrice | null }[];
 };
+export function coachingDurationPrice(option: CoachingDurationOption | undefined, participantCount: number) {
+  return option?.prices.find((item) => item.participantCount === participantCount)?.price ?? null;
+}
 type CoachingProgramOption = {
   id: string; name: string; type: OnlineCoachingProgramType; courtRentalIncluded: boolean;
   // The participant counts one booking may name, from the program's explicit configuration.
@@ -40,17 +46,16 @@ export async function coachingBookingOptions(data: PublicCoaching, location: Pic
     }).map(program => ({
       id: program.id, name: program.name, type: program.type, courtRentalIncluded: program.courtRentalIncluded,
       participants: program.participants,
-      // Only canonical lesson durations are offered.
-      durations: program.durations.filter(isCoachingDuration).map(durationMinutes => {
-        const matches = (price: { durationMinutes: number; currency: LocationCurrency }) =>
-          price.durationMinutes === durationMinutes && price.currency === location.currency;
-        const override = coach.rates.find(rate => rate.programId === program.id && matches(rate));
-        const club = program.prices.find(matches);
-        const price = override ? { ...override, source: "coach" as const } : club ? { ...club, source: "club" as const } : null;
-        return { durationMinutes, price: price && { amountMinor: price.amountMinor, currency: price.currency, source: price.source } };
+      // Only canonical lesson durations are offered, each count with its own resolved price.
+      durations: program.durations.filter(isCoachingDuration).map((durationMinutes): CoachingDurationOption => {
+        const records = [...program.prices.map(price => ({ ...price, programId: program.id, coachUserId: null })),
+          ...coach.rates.filter(rate => rate.programId === program.id).map(rate => ({ ...rate, coachUserId: coach.id }))];
+        return { durationMinutes, prices: coachingParticipantCounts(program.participants).map(participantCount => ({ participantCount,
+          price: (() => { const price = resolveCoachingPrice(records, { programId: program.id, durationMinutes, participantCount, currency: location.currency, coachUserId: coach.id });
+            return price ? { ...price, amountMinor: coachingLessonAmount(price.amountMinor, participantCount) } : null; })() })) };
       }),
     })),
-  })).filter(coach => coach.programs.some(program => program.durations.some(duration => duration.price)));
+  })).filter(coach => coach.programs.some(program => program.durations.some(duration => duration.prices.some(item => item.price))));
   if (!options.length) return [];
   const today = localToday(location.timezone, now);
   const minute = localMinute(location.timezone, now);

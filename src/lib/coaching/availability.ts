@@ -3,7 +3,7 @@ import "server-only";
 import type { EntityManager } from "typeorm";
 
 import { requireActiveAdmin } from "@/lib/admin/authorization";
-import { localToday } from "@/lib/courts/local-time";
+import { addDays, localToday } from "@/lib/courts/local-time";
 import { normalizeDatabaseError } from "@/lib/db/errors";
 import { findAccountById, lockActiveAdminAccount, lockReservationActorFacts } from "@/lib/db/repositories/accounts.repository";
 import * as availability from "@/lib/db/repositories/coach-availability.repository";
@@ -50,12 +50,6 @@ export type AdminCoachAvailability = {
   coaches: { user_id: string; display_name: string; ineligibility: AdminCoach["ineligibility"] }[];
   selected: CoachAvailabilityView | null;
 };
-
-function addDays(date: string, days: number) {
-  const value = new Date(`${date}T00:00:00Z`);
-  value.setUTCDate(value.getUTCDate() + days);
-  return value.toISOString().slice(0, 10);
-}
 
 // Coach-wide dates (whole-day absences) start at the earliest local date across locations.
 function earliestToday(locations: readonly Pick<LocationEntity, "timezone">[], now: Date) {

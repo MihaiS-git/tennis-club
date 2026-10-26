@@ -72,6 +72,54 @@ test("registered migrations match application metadata without schema changes", 
     .toMatchObject({ onDelete: "RESTRICT" });
 });
 
+test("the fresh baseline defines one coaching price table: lesson price/person per program, duration, count, currency and scope", async () => {
+  expect(await database.query(`SELECT column_name,is_nullable FROM information_schema.columns
+    WHERE table_schema='public' AND table_name='coaching_prices' ORDER BY column_name`)).toEqual([
+    ["amount_minor", "NO"], ["coach_user_id", "YES"], ["created_at", "NO"], ["currency", "NO"], ["duration_minutes", "NO"],
+    ["id", "NO"], ["participant_count", "NO"], ["program_id", "NO"], ["updated_at", "NO"],
+  ].map(([column_name, is_nullable]) => ({ column_name, is_nullable })));
+  // No pricing unit and no separate participant rate table exist.
+  expect(await database.query(`SELECT column_name FROM information_schema.columns
+    WHERE table_schema='public' AND table_name='coaching_programs' AND column_name='pricing_unit'`)).toEqual([]);
+  expect(await database.query("SELECT to_regclass('public.coaching_participant_prices') AS rates")).toEqual([{ rates: null }]);
+  expect(await database.query(`SELECT conname FROM pg_constraint WHERE conname LIKE '%pricing_unit%' OR conname LIKE 'coaching_participant_prices%'`)).toEqual([]);
+  const indexes: { indexname: string; indexdef: string }[] = await database.query(`SELECT indexname,indexdef FROM pg_indexes
+    WHERE schemaname='public' AND tablename='coaching_prices' AND indexname IN ('coaching_prices_club_default','coaching_prices_coach_override') ORDER BY indexname`);
+  expect(indexes).toHaveLength(2);
+  for (const index of indexes) {
+    expect(index.indexdef).toContain("UNIQUE INDEX");
+    expect(index.indexdef).toContain("program_id, duration_minutes, participant_count, currency");
+    expect(index.indexdef).toContain(index.indexname === "coaching_prices_club_default" ? "coach_user_id IS NULL" : "coach_user_id IS NOT NULL");
+  }
+  const runner = database.createQueryRunner();
+  await runner.startTransaction();
+  try {
+    const rejects = async (sql: string, code: string, constraint: string) => {
+      await runner.query("SAVEPOINT prices");
+      try { await expect(runner.query(sql)).rejects.toMatchObject({ driverError: { code, constraint } }); }
+      finally { await runner.query("ROLLBACK TO SAVEPOINT prices"); }
+    };
+    const program = randomUUID();
+    await runner.query(`INSERT INTO public.coaching_programs(id,name,description,program_type,court_rental_included,is_active,min_participants,max_participants)
+      VALUES($1,$2,'','group',false,false,3,6)`, [program, `Prices ${program}`]);
+    await runner.query("INSERT INTO public.coaching_program_durations(program_id,duration_minutes) VALUES($1,90)", [program]);
+    const insert = (count: number, amount: number, currency = "RON", duration = 90) => `INSERT INTO public.coaching_prices(program_id,duration_minutes,participant_count,amount_minor,currency)
+      VALUES('${program}',${duration},${count},${amount},'${currency}')`;
+    await runner.query(insert(3, 6000));
+    await rejects(insert(3, 5000), "23505", "coaching_prices_club_default");
+    await runner.query(insert(3, 1500, "EUR"));
+    await rejects(insert(4, 0), "23514", "coaching_prices_amount_check");
+    await rejects(insert(0, 100), "23514", "coaching_prices_participants_check");
+    await rejects(insert(4, 100, "JPY"), "23514", "coaching_prices_currency_check");
+    // A price exists only for one of the program's explicit durations.
+    await rejects(insert(4, 100, "RON", 60), "23503", "coaching_prices_duration_fkey");
+    // A coach override needs the coach's assignment to the program.
+    await rejects(`INSERT INTO public.coaching_prices(program_id,duration_minutes,participant_count,coach_user_id,amount_minor,currency)
+      VALUES('${program}',90,3,'${randomUUID()}',100,'RON')`, "23503", "coaching_prices_coach_program_fkey");
+    await rejects(`DELETE FROM public.coaching_program_durations WHERE program_id='${program}'`, "23503", "coaching_prices_duration_fkey");
+  } finally { await runner.rollbackTransaction(); await runner.release(); }
+});
+
 test("initial schema defines disabled club email settings, suppression evidence and canonical coaching durations", async () => {
   expect(await database.query("SELECT id,official_email,sender_name,emails_enabled FROM public.club_settings"))
     .toEqual([{ id: true, official_email: "", sender_name: "", emails_enabled: false }]);
@@ -99,38 +147,6 @@ test("initial schema defines disabled club email settings, suppression evidence 
     for (const minutes of [60, 90, 120])
       await rejects(`INSERT INTO public.coaching_program_durations(program_id,duration_minutes) VALUES ('${randomUUID()}',${minutes})`,
         "23503", "coaching_program_durations_program_id_fkey");
-  } finally { await runner.rollbackTransaction(); await runner.release(); }
-});
-
-test("initial schema stores Group and Junior club rates per program, player count and currency only", async () => {
-  expect(await database.query(`SELECT column_name FROM information_schema.columns
-    WHERE table_schema='public' AND table_name='coaching_participant_prices' ORDER BY column_name`))
-    .toEqual(["amount_minor", "created_at", "currency", "id", "participant_count", "program_id", "updated_at"].map(column_name => ({ column_name })));
-  expect(await database.query(`SELECT has_table_privilege('anon','public.coaching_participant_prices','SELECT') AS anon,
-    has_table_privilege('authenticated','public.coaching_participant_prices','SELECT') AS authenticated`))
-    .toEqual([{ anon: false, authenticated: false }]);
-  const runner = database.createQueryRunner();
-  await runner.startTransaction();
-  try {
-    const rejects = async (sql: string, code: string, constraint: string) => {
-      await runner.query("SAVEPOINT rates");
-      try { await expect(runner.query(sql)).rejects.toMatchObject({ driverError: { code, constraint } }); }
-      finally { await runner.query("ROLLBACK TO SAVEPOINT rates"); }
-    };
-    const program = randomUUID();
-    await runner.query(`INSERT INTO public.coaching_programs(id,name,description,program_type,court_rental_included,is_active,min_participants,max_participants)
-      VALUES($1,$2,'','group',false,false,3,6)`, [program, `Rates ${program}`]);
-    const insert = (count: number, amount: number, currency = "RON") => `INSERT INTO public.coaching_participant_prices(program_id,participant_count,amount_minor,currency)
-      VALUES('${program}',${count},${amount},'${currency}')`;
-    await runner.query(insert(3, 6000));
-    await rejects(insert(3, 5000), "23505", "coaching_participant_prices_rate");
-    await runner.query(insert(3, 1500, "EUR"));
-    await rejects(insert(4, 0), "23514", "coaching_participant_prices_amount_check");
-    await rejects(insert(0, 100), "23514", "coaching_participant_prices_participants_check");
-    await rejects(insert(4, 100, "JPY"), "23514", "coaching_participant_prices_currency_check");
-    await rejects(insert(4, 100).replace(program, randomUUID()), "23503", "coaching_participant_prices_program_id_fkey");
-    // Rates are never silently destroyed with their program.
-    await rejects(`DELETE FROM public.coaching_programs WHERE id='${program}'`, "23503", "coaching_participant_prices_program_id_fkey");
   } finally { await runner.rollbackTransaction(); await runner.release(); }
 });
 

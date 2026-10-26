@@ -4,7 +4,7 @@ import { useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { formatMoney } from "@/lib/pricing/money";
-import type { CoachingDurationOption } from "@/lib/coaching/booking-options";
+import type { ResolvedCoachingPrice } from "@/lib/coaching/pricing";
 
 const dependents = { coach: ["program", "duration", "participants"], program: ["duration", "participants"], duration: [], participants: [] } as const;
 
@@ -13,7 +13,8 @@ export function CoachingControls({ locationId, date, coaches, programs, duration
   coaches: { id: string; displayName: string }[];
   // The selected coach's own program assignments; empty until a coach is chosen.
   programs: { id: string; name: string }[];
-  durations: CoachingDurationOption[];
+  // Each duration's configured price for the selected participant count; null when unpriced.
+  durations: { durationMinutes: number; price: ResolvedCoachingPrice | null }[];
   // The selected program's configured participant range; null until a program is chosen.
   participants: { min: number; max: number } | null;
   coachId: string; programId: string; durationMinutes: number; participantCount: number; courtRentalIncluded: boolean;

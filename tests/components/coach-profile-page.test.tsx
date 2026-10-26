@@ -25,13 +25,13 @@ const coach: PublicCoachProfile = {
   qualifications: "Level 3 coach", specialties: ["Serve", "Doubles", "Footwork", "Fitness"], languages: ["Romanian", "English"],
   locations: [east, west], programs: [privateLesson],
   lessons: [
-    { currency: "RON", programId: privateLesson.id, programName: privateLesson.name, durationMinutes: 60,
+    { currency: "RON", programId: privateLesson.id, programName: privateLesson.name, durationMinutes: 60, participantCount: 1,
       price: { amountMinor: 25000, currency: "RON", source: "coach" } },
-    { currency: "RON", programId: privateLesson.id, programName: privateLesson.name, durationMinutes: 90,
+    { currency: "RON", programId: privateLesson.id, programName: privateLesson.name, durationMinutes: 90, participantCount: 1,
       price: { amountMinor: 28000, currency: "RON", source: "club" } },
-    { currency: "EUR", programId: privateLesson.id, programName: privateLesson.name, durationMinutes: 60,
+    { currency: "EUR", programId: privateLesson.id, programName: privateLesson.name, durationMinutes: 60, participantCount: 1,
       price: { amountMinor: 5000, currency: "EUR", source: "club" } },
-    { currency: "EUR", programId: privateLesson.id, programName: privateLesson.name, durationMinutes: 90, price: null },
+    { currency: "EUR", programId: privateLesson.id, programName: privateLesson.name, durationMinutes: 90, participantCount: 1, price: null },
   ],
 };
 
@@ -82,6 +82,18 @@ it("labels coach and club prices per currency and leaves missing prices unpublis
   expect(priceRow("RON", "90 min").textContent).toContain("Club price");
   expect(priceRow("EUR", "60 min").textContent).toMatch(/€|EUR/);
   expect(priceRow("EUR", "90 min").textContent).toContain("Price not published");
+});
+
+it("lists a separate price for each number of players", async () => {
+  const semi = { ...privateLesson, id: "a1000000-0000-4000-8000-000000000002", name: "Semi-private", type: "semi_private" as const,
+    durations: [60], minParticipants: 2, maxParticipants: 3 };
+  const lesson = (participantCount: number, price: PublicCoachProfile["lessons"][number]["price"]) =>
+    ({ currency: "RON" as const, programId: semi.id, programName: semi.name, durationMinutes: 60, participantCount, price });
+  readPublicCoach.mockResolvedValue({ ...coach, programs: [semi], lessons: [
+    lesson(2, { amountMinor: 15000, currency: "RON", source: "club" }), lesson(3, null)] });
+  await page();
+  expect(priceRow("RON", "2 players").textContent).toMatch(/Semi-private · 60 min · 2 players.*150[.,]00/);
+  expect(priceRow("RON", "3 players").textContent).toContain("Price not published");
 });
 
 it("links to the shared coaching timetable with the coach preselected", async () => {

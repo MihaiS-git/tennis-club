@@ -46,14 +46,14 @@ test("Admin cancellation atomically preserves snapshots, frees occupancy and mov
       { id: reservationId, court_id: courtId, booking_date: date, starts_at_minute: 600, ends_at_minute: 660 },
       { id: guestReservationId, court_id: courtId, booking_date: date, starts_at_minute: 660, ends_at_minute: 720 },
     ])).error, null);
-    assert.strictEqual((await insertBookingFixture(service, [
+    await insertBookingFixture([
       { id: bookingId, reservation_id: reservationId, account_user_id: owner.id,
         payment_method: "pay_at_club", customer_name: "Ana Pop", customer_email: "ana@example.test", customer_phone: "+40 123",
         cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON" },
       { id: guestBookingId, reservation_id: guestReservationId, account_user_id: null,
         payment_method: "pay_at_club", customer_name: "Guest", customer_email: "guest@example.test", customer_phone: "+40 999",
         cancellation_notice_minutes: 120, total_amount_minor: 7000, currency: "RON" },
-    ])).error, null);
+    ]);
     const beforeBooking = (await readBookingContracts(service, { ids: [bookingId] }))[0];
     const beforeReservation = (await service.from("court_reservations").select("*").eq("id", reservationId).single()).data!;
     expect((await listOwnUpcomingCustomerBookings(owner.client)).map((item) => item.id)).toContain(bookingId);
@@ -98,12 +98,12 @@ test("Admin cancellation atomically preserves snapshots, frees occupancy and mov
       { id: pastDirectId, court_id: courtId, booking_date: "2000-01-01", starts_at_minute: 660, ends_at_minute: 720 },
       { id: startedReservationId, court_id: courtId, booking_date: localToday("UTC", clock), starts_at_minute: startedMinute, ends_at_minute: startedMinute + 120 },
     ])).error, null);
-    assert.strictEqual((await insertBookingFixture(service, [
+    await insertBookingFixture([
       { id: pastBookingId, reservation_id: pastReservationId, payment_method: "pay_at_club", customer_name: "Historical",
         customer_email: "past@example.test", customer_phone: "+40 123", cancellation_notice_minutes: 120, total_amount_minor: 5000, currency: "RON" },
       { id: startedBookingId, reservation_id: startedReservationId, payment_method: "pay_at_club", customer_name: "Started",
         customer_email: "started@example.test", customer_phone: "+40 123", cancellation_notice_minutes: 120, total_amount_minor: 5000, currency: "RON" },
-    ])).error, null);
+    ]);
     for (const id of [pastBookingId, startedBookingId]) {
       const bookingBefore = (await readBookingContracts(service, { ids: [id] }))[0];
       const reservationBefore = (await service.from("court_reservations").select("*").eq("id", bookingBefore.reservation_id).single()).data!;

@@ -29,8 +29,6 @@ export function describeFinancialContext(input: {
   base: RevisionSnapshot | null;
   confirmationRevisionId: string | null;
   reason: RefundReason | null;
-  amount: number;
-  capturedAmount: number | null;
 }) {
   const { kind, revision, adjustment, appliedRevisionId, base, reason } = input;
   if (adjustment && (!base || !input.adjustmentStatus)) throw new Error("Missing adjustment contract context");

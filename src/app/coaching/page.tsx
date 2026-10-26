@@ -122,7 +122,7 @@ export default function CoachingPage() {
             <p className={`${eyebrowClassName} text-accent-on-dark`}>Prices</p>
             <h2 id="coaching-prices-title" className={`${headingClassName} mt-4 max-w-[12ch]`}>What a lesson costs.</h2>
             <p className={`${bodyClassName} mt-6 max-w-xl text-ivory`}>
-              Private and Semi-private prices are per lesson, the same at every location that charges in that currency. Each line states whether court rental is included.
+              Private and Semi-private prices are lesson prices per person: what each player pays for one complete lesson of that length and group size, the same at every location that charges in that currency. Each line states whether court rental is included.
             </p>
             <p className="mt-4 max-w-xl font-sans text-sm leading-6 text-ivory">
               The club price applies to every coach unless a coach has an individual price, listed beneath it.
@@ -144,7 +144,7 @@ export default function CoachingPage() {
             <div className={`${bodyClassName} max-w-xl space-y-3 text-muted-foreground`}>
               <p>Group and Junior sessions are organized by the coach or the club, who also reserve the court. They cannot be booked online.</p>
               <p className="font-sans text-sm leading-6 md:text-base md:leading-7">
-                The published club rates are indicative and shown <strong className="font-semibold text-foreground">per person for 60 minutes</strong>.
+                The published club prices are indicative and shown <strong className="font-semibold text-foreground">per person per lesson</strong>, for each session length and group size.
                 Court rental arrangements and any additional costs are confirmed by the club. To take part, contact the club or your coach;
                 payment is made at the club.
               </p>

@@ -2,7 +2,8 @@ import "server-only";
 
 import { z } from "zod";
 import { requireActiveAdmin } from "@/lib/admin/authorization";
-import { courtSurfaces, courtEnvironments, courtMutationSchema, generateCourtSlug, type CourtMutationResult } from "@/lib/admin/courts-validation";
+import { generateSlug } from "@/lib/admin/slug";
+import { courtSurfaces, courtEnvironments, courtMutationSchema, type CourtMutationResult } from "@/lib/admin/courts-validation";
 import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
 import { getDataSource } from "@/lib/db/data-source";
@@ -21,10 +22,11 @@ const courtSchema = z.object({
   created_at: z.iso.datetime({ offset: true }), updated_at: z.iso.datetime({ offset: true }),
 });
 export type AdminCourt = z.infer<typeof courtSchema>;
-export async function listAdminCourts(supabase?: Awaited<ReturnType<typeof createClient>>): Promise<AdminCourt[]> {
+export async function listAdminCourts(supabase?: Awaited<ReturnType<typeof createClient>>, locationId?: string): Promise<AdminCourt[]> {
   await requireActiveAdmin(supabase ?? await createClient());
+  if (locationId !== undefined) z.uuid().parse(locationId);
   try {
-    const rows = await clubs.listAdminCourts((await getDataSource()).manager);
+    const rows = await clubs.listAdminCourts((await getDataSource()).manager, locationId);
     return z.array(courtSchema).parse(rows.map((row) => ({
       id: row.id, location_id: row.locationId, name: row.name, slug: row.slug,
       surface: row.surface, environment: row.environment, has_lighting: row.hasLighting,
@@ -47,7 +49,7 @@ export async function saveAdminCourt(input: unknown, supabase?: Awaited<ReturnTy
     return { ok: false, reason: "invalid-input", fieldErrors };
   }
   const { id, fields } = parsed.data;
-  const slug = id ? "" : generateCourtSlug(fields.name);
+  const slug = id ? "" : generateSlug(fields.name);
   if (!id && !slug) return { ok: false, reason: "invalid-input", fieldErrors: { name: "Use a name containing letters A–Z or numbers to generate a court slug." } };
 
   const values: clubs.CourtFields = {

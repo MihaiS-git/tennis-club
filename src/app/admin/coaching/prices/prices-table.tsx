@@ -1,17 +1,19 @@
 import { SortableTableHeading, type TableSortLink } from "@/components/sortable-table-heading";
 import type { PriceFilters } from "@/lib/coaching/admin-filters";
-import type { AdminCoach, AdminCoachingCurrency, AdminCoachingPrice, AdminCoachingProgram, AdminParticipantPrice } from "@/lib/coaching/admin";
-import { formatCoachingDuration } from "@/lib/coaching/validation";
+import type { AdminCoach, AdminCoachingCurrency, AdminCoachingPrice, AdminCoachingProgram } from "@/lib/coaching/admin";
+import { formatCoachingDuration, isOnlineCoachingProgramType, formatPlayers } from "@/lib/coaching/validation";
 import { formatMoney } from "@/lib/pricing/money";
-import { ParticipantPriceEditor } from "./participant-price-editor";
-import { PriceEditor } from "./price-editor";
+import { ClubPriceEditor } from "./club-price-editor";
 
-// A null duration is a Group/Junior program's club rates by number of players.
-type Row = { program: AdminCoachingProgram; durationMinutes: number | null; currency: AdminCoachingCurrency };
+// Remount an editor when its stored prices or the program's range change, so entered values follow the server.
+const editorKey = (prices: readonly { participant_count: number; amount_minor: number }[], program: AdminCoachingProgram) =>
+  prices.map((price) => `${price.participant_count}:${price.amount_minor}`).join() + `|${program.min_participants}-${program.max_participants}`;
 
-// Club defaults are edited inline. Individual coach prices belong to each coach and are read-only here.
-export function PricesTable({ rows, coaches, prices, participantPrices, filters, filtered, sortLinks }: {
-  rows: Row[]; coaches: AdminCoach[]; prices: AdminCoachingPrice[]; participantPrices: AdminParticipantPrice[];
+type Row = { program: AdminCoachingProgram; durationMinutes: number; currency: AdminCoachingCurrency };
+
+// Club lesson prices/person are edited per player count. Individual coach prices belong to each coach and are read-only here.
+export function PricesTable({ rows, coaches, prices, filters, filtered, sortLinks }: {
+  rows: Row[]; coaches: AdminCoach[]; prices: AdminCoachingPrice[];
   filters: PriceFilters; filtered: boolean; sortLinks: Record<string, TableSortLink>;
 }) {
   if (!rows.length) return <p className="rounded-card border border-border bg-surface px-4 py-5 text-sm text-muted-foreground">
@@ -25,62 +27,46 @@ export function PricesTable({ rows, coaches, prices, participantPrices, filters,
           <SortableTableHeading label="Program" sort={sortLinks.program} />
           <SortableTableHeading label="Currency" sort={sortLinks.currency} />
           <SortableTableHeading label="Duration" sort={sortLinks.duration} />
-          <SortableTableHeading label="Club price" sort={sortLinks.amount} />
+          <SortableTableHeading label="Club lesson price/person by players" sort={sortLinks.amount} />
           <th scope="col" className="px-4 py-2.5">Individual coach prices</th>
         </tr>
       </thead>
       <tbody className="divide-y divide-border">
         {rows.map((row) => {
           const { currency } = row.currency;
-          if (row.durationMinutes === null) return <tr key={`${currency}-${row.program.id}`} className="align-top">
-            <td className="px-4 py-3">
-              <p className="font-semibold text-foreground">{row.program.name}</p>
-              <p className="text-xs text-muted-foreground">Organized by the coach or club · Paid at the club{row.program.is_active ? "" : " · Inactive"}</p>
-            </td>
-            <td className="px-4 py-3">
-              <p className="font-semibold text-foreground">{currency}</p>
-              <p className="text-xs text-muted-foreground">{row.currency.location_names.length ? row.currency.location_names.join(", ") : "No current location"}</p>
-            </td>
-            <td className="px-4 py-3">Per person / 60 min</td>
-            <td className="px-4 py-3">
-              <ParticipantPriceEditor key={participantPrices.filter((price) => price.program_id === row.program.id && price.currency === currency)
-                .map((price) => `${price.participant_count}:${price.amount_minor}`).join() + `|${row.program.min_participants}-${row.program.max_participants}`}
-                program={row.program} currency={currency} chargeable={row.currency.location_names.length > 0}
-                prices={participantPrices.filter((price) => price.program_id === row.program.id && price.currency === currency)} />
-            </td>
-            <td className="px-4 py-3 text-muted-foreground">Club prices only</td>
-          </tr>;
-          const durationMinutes = row.durationMinutes;
+          const { durationMinutes } = row;
+          const online = isOnlineCoachingProgramType(row.program.program_type);
           const search = filters.search?.toLowerCase();
           const programMatches = !search || row.program.name.toLowerCase().includes(search);
           const showClub = filters.scope !== "coach" && !filters.coach && programMatches;
           const matching = prices.filter((price) => price.currency === currency && price.program_id === row.program.id && price.duration_minutes === durationMinutes);
-          const offering = coaches.filter((coach) => coach.program_ids.includes(row.program.id)
+          const offering = coaches.filter((coach) => online && coach.program_ids.includes(row.program.id)
             && (!filters.coach || coach.user_id === filters.coach)
             && (programMatches || (search && `${coach.display_name} ${coach.email}`.toLowerCase().includes(search))));
           const overrides = matching.filter((price) => price.coach_user_id !== null && offering.some(coach => coach.user_id === price.coach_user_id));
-          const label = `${row.program.name}, ${formatCoachingDuration(durationMinutes)}, ${currency}`;
+          const club = matching.filter((price) => price.coach_user_id === null);
           return <tr key={`${currency}-${row.program.id}-${durationMinutes}`} className="align-top">
             <td className="px-4 py-3">
               <p className="font-semibold text-foreground">{row.program.name}</p>
               <p className="text-xs text-muted-foreground">
-                Court rental {row.program.court_rental_included ? "included" : "not included"}{row.program.is_active ? "" : " · Inactive"}
+                {online ? `Court rental ${row.program.court_rental_included ? "included" : "not included"}` : "Organized by the coach or club · Paid at the club"}
+                {row.program.is_active ? "" : " · Inactive"}
               </p>
             </td>
             <td className="px-4 py-3">
               <p className="font-semibold text-foreground">{currency}</p>
               <p className="text-xs text-muted-foreground">{row.currency.location_names.length ? row.currency.location_names.join(", ") : "No current location"}</p>
             </td>
-            <td className="whitespace-nowrap px-4 py-3">{formatCoachingDuration(durationMinutes)}</td>
+            <td className="whitespace-nowrap px-4 py-3">{formatCoachingDuration(durationMinutes)}<p className="text-xs text-muted-foreground">Lesson price/person</p></td>
             <td className="px-4 py-3">
-              {showClub ? <PriceEditor label={`Club price for ${label}`} emptyHint="Not set"
-                target={{ program_id: row.program.id, duration_minutes: durationMinutes, currency }}
-                price={matching.find((price) => price.coach_user_id === null)} /> : "—"}
+              {showClub ? <ClubPriceEditor key={editorKey(club, row.program)} program={row.program} currency={currency} durationMinutes={durationMinutes}
+                chargeable={row.currency.location_names.length > 0} prices={club} /> : "—"}
             </td>
             <td className="px-4 py-3">
-              {filters.scope !== "club" && (overrides.length > 0 ? <ul className="space-y-0.5 text-sm">
+              {!online ? <span className="text-muted-foreground">Club prices only</span>
+                : filters.scope !== "club" && (overrides.length > 0 ? <ul className="space-y-0.5 text-sm">
                 {overrides.map((price) => <li key={price.id}>
-                  {coachName.get(price.coach_user_id ?? "") ?? "Coach"}: {formatMoney(price.amount_minor, price.currency)}
+                  {coachName.get(price.coach_user_id ?? "") ?? "Coach"}, {formatPlayers(price.participant_count)}: {formatMoney(price.amount_minor, price.currency)} /person
                 </li>)}
               </ul> : <span className="text-muted-foreground">—</span>)}
             </td>

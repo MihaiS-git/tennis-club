@@ -1,15 +1,31 @@
 import "server-only";
 
+import { randomUUID } from "node:crypto";
+import type { EntityManager } from "typeorm";
 import { readClubSettings, emailDispatchAllowed } from "@/lib/db/repositories/club-settings.repository";
 import { inTransaction } from "@/lib/db/transaction";
 import { claimEmailDeliveries, completeEmailAttempt, failExpiredFinalClaims,
-  insertEmailFailureAlerts, type ClaimedEmail } from "@/lib/db/repositories/notifications.repository";
+  insertUserMessages, listActiveUserIdsWithRole, type ClaimedEmail } from "@/lib/db/repositories/notifications.repository";
 import { brevoConfig, sendBrevoEmail, type BrevoConfig } from "./brevo";
 import { deliveryCutoff } from "./delivery-retry";
 
 const retryMinutes = [5, 15, 60, 360] as const;
 export type DeliverySummary = { claimed: number; accepted: number; sandboxAccepted: number; retried: number;
   failed: number; stale: number };
+
+// Operational alerts are in-app only: one message per failed delivery for every active Admin.
+// Callers pass deliveries they just failed in the same transaction. Sorted keys give
+// concurrent replays one insert order; (user_id, event_key) conflicts are ignored.
+export async function recordEmailFailureAlerts(manager: EntityManager, deliveryIds: readonly string[], occurredAt: Date) {
+  const ids = [...new Set(deliveryIds)].sort();
+  if (ids.length === 0) return;
+  const adminIds = await listActiveUserIdsWithRole(manager, "admin");
+  await insertUserMessages(manager, ids.flatMap((deliveryId) => adminIds.map((userId) => ({
+    id: randomUUID(), userId, eventKey: `email.delivery-failed:${deliveryId}`, kind: "email.delivery_failed",
+    subject: "Booking email delivery failed",
+    bodyText: "An outbound booking email could not be delivered. Open Delivery details to review the failure and retry eligibility.",
+    href: null, createdAt: occurredAt }))));
+}
 
 export async function processClaim(config: BrevoConfig, delivery: ClaimedEmail): Promise<"accepted" | "sandboxAccepted" | "retried" | "failed" | "stale"> {
   const settings = await inTransaction(manager => emailDispatchAllowed(manager, delivery.id));
@@ -25,7 +41,7 @@ export async function processClaim(config: BrevoConfig, delivery: ClaimedEmail):
       lockedUntil: delivery.lockedUntil, status, nextAttemptAt,
       providerMessageId: result.ok ? result.messageId : null, lastError: result.ok ? null : result.error });
     if (!updated) return "stale";
-    if (status === "failed") await insertEmailFailureAlerts(manager, delivery.id, now);
+    if (status === "failed") await recordEmailFailureAlerts(manager, [delivery.id], now);
     return status === "sandbox_accepted" ? "sandboxAccepted" : status === "pending" ? "retried" : status;
   });
 }
@@ -39,7 +55,7 @@ export async function processPendingEmailDeliveries(): Promise<DeliverySummary> 
   const { claims, expired } = await inTransaction(async (manager) => {
     if (!(await readClubSettings(manager, "pessimistic_read")).emailsEnabled) return { claims: [], expired: [] };
     const expired = await failExpiredFinalClaims(manager, 20);
-    for (const id of expired) await insertEmailFailureAlerts(manager, id, new Date());
+    if (expired.length > 0) await recordEmailFailureAlerts(manager, expired, new Date());
     const claims = await claimEmailDeliveries(manager, 20 - expired.length, notBefore);
     return { claims, expired };
   });

@@ -4,15 +4,15 @@ import type { PublicCoaching } from "@/lib/coaching/public";
 const { schedules, source } = vi.hoisted(() => ({ schedules: vi.fn(), source: vi.fn() }));
 vi.mock("@/lib/db/data-source", () => ({ getDataSource: source }));
 vi.mock("@/lib/db/repositories/coach-availability.repository", () => ({ listLocationCoachBookingAvailability: schedules }));
-import { coachingBookingOptions } from "@/lib/coaching/booking-options";
+import { coachingBookingOptions, coachingDurationPrice } from "@/lib/coaching/booking-options";
 
 const central = { id: "central", currency: "RON", timezone: "Europe/Bucharest" } as const;
 const riverside = { ...central, id: "riverside" };
 const now = new Date("2026-10-23T09:00:00Z"); // Friday, 12:00 local.
-const price = { durationMinutes: 60, amountMinor: 20000, currency: "RON" } as const;
+const price = { durationMinutes: 60, participantCount: 1, amountMinor: 20000, currency: "RON" } as const;
 const program: PublicCoaching["programs"][number] = {
   id: "private", name: "Private", description: "", type: "private", durations: [60],
-  minParticipants: 1, maxParticipants: 1, courtRentalIncluded: false, prices: [price], participantPrices: [],
+  minParticipants: 1, maxParticipants: 1, courtRentalIncluded: false, prices: [price], fromPrices: [],
 };
 const coach: PublicCoaching["coaches"][number] = {
   id: "coach", displayName: "Coach", bio: "", qualifications: "", specialties: [], languages: [],
@@ -85,15 +85,16 @@ it("ignores an ended extra interval today but accepts one that has not ended", a
 
 it("offers a Semi-private program with its configured participant range", async () => {
   const facts = data();
-  facts.programs[0] = { ...facts.programs[0], type: "semi_private", minParticipants: 2, maxParticipants: 3 };
+  facts.programs[0] = { ...facts.programs[0], type: "semi_private", minParticipants: 2, maxParticipants: 3, prices: [{ ...price, participantCount: 2 }] };
   expect(await options(facts)).toMatchObject([{ id: coach.id, programs: [{ id: "private", type: "semi_private", participants: { min: 2, max: 3 },
-    durations: [{ durationMinutes: 60, price: { amountMinor: 20000, source: "club" } }] }] }]);
+    durations: [{ durationMinutes: 60, prices: [{ participantCount: 2, price: { amountMinor: 40000, source: "club" } }, { participantCount: 3, price: null }] }] }] }]);
 });
 
 it.each([[null, 4], [2, null], [null, null], [5, 3], [0, 4], [1, 101]])(
   "never offers a program without valid explicit participant limits (min=%s, max=%s)", async (minParticipants, maxParticipants) => {
   const facts = data();
-  facts.programs.push({ ...program, id: "semi", name: "Semi-private", type: "semi_private", minParticipants: 2, maxParticipants: 2 });
+  facts.programs.push({ ...program, id: "semi", name: "Semi-private", type: "semi_private", minParticipants: 2, maxParticipants: 2,
+    prices: [{ ...price, participantCount: 2 }] });
   facts.coaches[0].programs = [...coach.programs, { id: "semi", name: "Semi-private" }];
   facts.programs[0] = { ...facts.programs[0], minParticipants, maxParticipants };
   expect((await options(facts))[0].programs.map(item => [item.id, item.participants])).toEqual([["semi", { min: 2, max: 2 }]]);
@@ -107,6 +108,26 @@ it("excludes online lessons with no effective price or only another currency's p
   expect(await options(facts)).toEqual([]);
   facts.programs[0].prices = [{ ...price, currency: "EUR" }];
   expect(await options(facts)).toEqual([]);
+  // A price for a count outside the range never makes the lesson bookable.
+  facts.programs[0].prices = [{ ...price, participantCount: 2 }];
+  expect(await options(facts)).toEqual([]);
+});
+
+it("resolves each permitted participant count's own configured price, without deriving missing counts", async () => {
+  const facts = data();
+  facts.programs[0] = { ...facts.programs[0], type: "semi_private", durations: [60, 90], minParticipants: 2, maxParticipants: 4,
+    prices: [{ ...price, participantCount: 2, amountMinor: 15000 }, { ...price, participantCount: 3, amountMinor: 21000 },
+      { ...price, durationMinutes: 90, participantCount: 2, amountMinor: 22000 }] };
+  facts.coaches[0].rates = [{ ...price, participantCount: 3, amountMinor: 19000, programId: program.id, programName: program.name, courtRentalIncluded: false }];
+  const [sixty, ninety] = (await options(facts))[0].programs[0].durations;
+  // Each option is the lesson total: the count's own price/person times the count.
+  expect(coachingDurationPrice(sixty, 2)).toEqual({ amountMinor: 30000, currency: "RON", source: "club" });
+  expect(coachingDurationPrice(sixty, 3)).toEqual({ amountMinor: 57000, currency: "RON", source: "coach" });
+  expect(coachingDurationPrice(sixty, 4)).toBeNull();
+  expect(coachingDurationPrice(ninety, 2)).toEqual({ amountMinor: 44000, currency: "RON", source: "club" });
+  expect(coachingDurationPrice(ninety, 3)).toBeNull();
+  expect(coachingDurationPrice(ninety, 5)).toBeNull();
+  expect(coachingDurationPrice(undefined, 2)).toBeNull();
 });
 
 it("requires a priced duration supported by the lesson grid", async () => {
@@ -117,10 +138,10 @@ it("requires a priced duration supported by the lesson grid", async () => {
 });
 
 it("accepts the club default and prefers a coach override, including override-only prices", async () => {
-  expect((await options())[0].programs[0].durations[0].price).toEqual({ amountMinor: price.amountMinor, currency: price.currency, source: "club" });
+  expect(coachingDurationPrice((await options())[0].programs[0].durations[0], 1)).toEqual({ amountMinor: price.amountMinor, currency: price.currency, source: "club" });
   const facts = data();
   facts.coaches[0].rates = [{ ...price, programId: program.id, programName: program.name, courtRentalIncluded: false, amountMinor: 25000 }];
-  expect((await options(facts))[0].programs[0].durations[0].price).toMatchObject({ amountMinor: 25000, source: "coach" });
+  expect(coachingDurationPrice((await options(facts))[0].programs[0].durations[0], 1)).toMatchObject({ amountMinor: 25000, source: "coach" });
   facts.programs[0].prices = [];
   expect(await options(facts)).toHaveLength(1);
 });

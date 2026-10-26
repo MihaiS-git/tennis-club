@@ -26,10 +26,10 @@ const court = { id: "22222222-2222-4222-8222-222222222222", name: "Court 1", slu
 const east: PublicVisitorLocation = { id: "11111111-1111-4111-8111-111111111111", name: "East Club", slug: "east",
   address_line1: "1 Court Road", address_line2: null, city: "Cluj-Napoca", postal_code: "400000", country_code: "RO",
   timezone: "Europe/Bucharest", currency: "RON", allow_pay_at_club: true, courts: [court], todayOpeningHours: open(480, 1320),
-  cancellationNoticeMinutes: 1440, weekOpeningHours: week((day) => (day < 5 ? open(480, 1320) : open(540, 1200))) };
+  customer_cancellation_notice_minutes: 1440, cancellationNoticeMinutes: 1440, weekOpeningHours: week((day) => (day < 5 ? open(480, 1320) : open(540, 1200))) };
 const west: PublicVisitorLocation = { ...east, id: "44444444-4444-4444-8444-444444444444", name: "West Club",
   address_line1: null, city: null, postal_code: null, country_code: null, allow_pay_at_club: false,
-  cancellationNoticeMinutes: 0, weekOpeningHours: week((day) => (day === 0 ? [] : open(420, 1380))) };
+  customer_cancellation_notice_minutes: 0, cancellationNoticeMinutes: 0, weekOpeningHours: week((day) => (day === 0 ? [] : open(420, 1380))) };
 
 const render$ = async (component: typeof ClubLocations | typeof ClubBookingTerms, locations: PublicVisitorLocation[] | Error) =>
   render(await component({ locations: locations instanceof Error ? Promise.reject(locations) : Promise.resolve(locations) }));
@@ -133,7 +133,7 @@ it("renders empty and failure states without booking links", async () => {
 });
 
 it("shows each location's configured cancellation notice and pay-at-club option", async () => {
-  await render$(ClubBookingTerms, [east, west, { ...west, id: "66666666-6666-4666-8666-666666666666", name: "North Club", cancellationNoticeMinutes: null }]);
+  await render$(ClubBookingTerms, [east, west, { ...west, id: "66666666-6666-4666-8666-666666666666", name: "North Club", customer_cancellation_notice_minutes: null, cancellationNoticeMinutes: null }]);
   const [first, second, third] = within(screen.getByRole("list", { name: "Booking terms by location" })).getAllByRole("listitem")
     .filter((item) => item.parentElement?.getAttribute("aria-label") === "Booking terms by location");
   expect(first.textContent).toBe("East ClubCancel with at least 24 hours' noticePay at the club available");

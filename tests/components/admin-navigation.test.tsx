@@ -23,12 +23,16 @@ it.each([
   ["/admin/locations", "Locations"],
   ["/admin/locations/location-id", "Locations"],
   ["/admin/payments/transactions", "Transactions"],
-  ["/admin/payments/settings", "Settings"],
+  ["/admin/payments/settings", "Payment settings"],
   ["/admin/bookings", "Bookings & Reservations"],
+  ["/admin/bookings/booking-id", "Bookings & Reservations"],
+  ["/admin/bookings/reservations/reservation-id", "Bookings & Reservations"],
+  ["/admin/payments/transactions/refund/transaction-id", "Transactions"],
+  ["/admin/users/user-id", "Users"],
   ["/admin/coaching/programs", "Programs"],
   ["/admin/coaching/coaches", "Coaches"],
   ["/admin/coaching/prices", "Prices"],
-  ["/admin/coaching/availability", "Availability"],
+  ["/admin/coaching/availability", "Coach availability"],
   ["/admin/users", "Users"],
   ["/admin/club", "Club"],
 ])("activates only %s's primary section", (pathname, label) => {
@@ -36,8 +40,8 @@ it.each([
   render(<AdminNavigation isAdmin={true} />);
   const nav = screen.getByRole("navigation", { name: "Management navigation" });
   const links = within(nav).getAllByRole("link");
-  expect(links.map((link) => link.textContent)).toEqual(["Locations", "Bookings & Reservations", "Programs", "Coaches", "Prices", "Availability", "Transactions", "Settings", "Users", "Club"]);
-  expect(links.map((link) => link.getAttribute("href"))).toEqual(["/admin/locations", "/admin/bookings", "/admin/coaching/programs", "/admin/coaching/coaches", "/admin/coaching/prices", "/admin/coaching/availability", "/admin/payments/transactions", "/admin/payments/settings", "/admin/users", "/admin/club"]);
+  expect(links.map((link) => link.textContent)).toEqual(["Bookings & Reservations", "Transactions", "Users", "Coach availability", "Locations", "Programs", "Coaches", "Prices", "Payment settings", "Club"]);
+  expect(links.map((link) => link.getAttribute("href"))).toEqual(["/admin/bookings", "/admin/payments/transactions", "/admin/users", "/admin/coaching/availability", "/admin/locations", "/admin/coaching/programs", "/admin/coaching/coaches", "/admin/coaching/prices", "/admin/payments/settings", "/admin/club"]);
   for (const link of links) {
     expect(link.getAttribute("aria-current")).toBe(link.textContent === label ? "page" : null);
   }
@@ -52,9 +56,67 @@ it.each(["/admin", "/admin/locations-extra", "/administrator", "/admin/unknown",
 );
 
 it.each([
-  ["/admin/payments/transactions", "Transactions", "Settings"],
-  ["/admin/payments/settings", "Settings", "Transactions"],
-])("keeps Payments active on %s with the correct secondary tab", async (pathname, active, inactive) => {
+  [true, false], [false, true], [true, true],
+] as const)("groups every destination once (Admin: %s, Coach: %s)", (isAdmin, isCoach) => {
+  navigation.pathname = "/coach/pricing";
+  render(<AdminNavigation isAdmin={isAdmin} isCoach={isCoach} />);
+  const nav = screen.getByRole("navigation", { name: "Management navigation" });
+  const operations = within(nav).getByRole("region", { name: "Operations" });
+  const configuration = within(nav).getByRole("region", { name: "Configuration" });
+  const hrefs = (element: HTMLElement) => within(element).getAllByRole("link").map((link) => link.getAttribute("href"));
+  expect(hrefs(operations)).toEqual([
+    ...(isAdmin ? ["/admin/bookings", "/admin/payments/transactions", "/admin/users", "/admin/coaching/availability"] : ["/coach/bookings"]),
+    ...(isCoach ? ["/coach/availability"] : []),
+  ]);
+  expect(hrefs(configuration)).toEqual([
+    ...(isAdmin ? ["/admin/locations", "/admin/coaching/programs", "/admin/coaching/coaches", "/admin/coaching/prices", "/admin/payments/settings", "/admin/club"] : []),
+    ...(isCoach ? ["/coach/pricing"] : []),
+  ]);
+  expect(new Set(hrefs(nav)).size).toBe(hrefs(nav).length);
+  expect(within(nav).getAllByRole("link", { name: "Bookings & Reservations" })).toHaveLength(1);
+  for (const heading of within(nav).getAllByRole("heading")) {
+    expect(heading.hasAttribute("tabindex")).toBe(false);
+    expect(heading.hasAttribute("aria-current")).toBe(false);
+  }
+  expect(within(nav).queryByText("Payments", { exact: true })).toBeNull();
+});
+
+it.each([
+  ["/admin/coaching/programs", true],
+  ["/admin/coaching/programs/program-id", true],
+  ["/admin/coaching/coaches/coach-id", true],
+  ["/admin/coaching/prices", true],
+  ["/admin/coaching/prices/price-id", true],
+  ["/admin/coaching/programs-extra", false],
+  ["/admin/coaching", false],
+  ["/admin/coaching/availability", false],
+])("keeps Coaching expanded and highlights only its configuration destinations on %s", (pathname, active) => {
+  navigation.pathname = pathname;
+  render(<AdminNavigation isAdmin />);
+  const configuration = screen.getByRole("region", { name: "Configuration" });
+  const coaching = within(configuration).getByText("Coaching", { exact: true });
+  expect(coaching.classList.contains("text-primary")).toBe(active);
+  expect(within(configuration).queryByRole("button")).toBeNull();
+  for (const label of ["Programs", "Coaches", "Prices"]) {
+    expect(within(configuration).getByRole("link", { name: label })).toBeDefined();
+  }
+});
+
+it.each([
+  ["/coach/availability", "My availability"],
+  ["/coach/pricing", "My prices"],
+  ["/coach/bookings/reservations/reservation-id", "Bookings & Reservations"],
+  ["/coach/bookings/lessons/lesson-id", "Bookings & Reservations"],
+] as const)("activates only the Coach destination on %s", (pathname, label) => {
+  navigation.pathname = pathname;
+  render(<AdminNavigation isAdmin={false} isCoach />);
+  expect(screen.getAllByRole("link").filter((link) => link.hasAttribute("aria-current")).map((link) => link.textContent)).toEqual([label]);
+});
+
+it.each([
+  ["/admin/payments/transactions", "Transactions", "Payment settings"],
+  ["/admin/payments/settings", "Payment settings", "Transactions"],
+])("activates the correct payment destination on %s without a Payments navigation group", async (pathname, active, inactive) => {
   navigation.pathname = pathname;
   render(<><AdminNavigation isAdmin={true} />{await PaymentsLayout({ children: <p>Settings content</p> })}</>);
   expect(screen.queryByRole("link", { name: "Payments" })).toBeNull();
@@ -98,7 +160,7 @@ it("shows Coaches only their own Bookings & Reservations area", () => {
 
 it.each([
   [false, ["Bookings & Reservations", "My availability", "My prices"]],
-  [true, ["Locations", "Bookings & Reservations", "Programs", "Coaches", "Prices", "Availability", "Transactions", "Settings", "Users", "Club", "My availability", "My prices"]],
+  [true, ["Bookings & Reservations", "Transactions", "Users", "Coach availability", "My availability", "Locations", "Programs", "Coaches", "Prices", "Payment settings", "Club", "My prices"]],
 ] as const)("adds the Coach area for coaches (Admin: %s)", (isAdmin, labels) => {
   navigation.pathname = "/coach/availability";
   render(<AdminNavigation isAdmin={isAdmin} isCoach />);
@@ -109,14 +171,16 @@ it.each([
   expect(within(nav).getByRole("link", { name: "My prices" })).toMatchObject({ pathname: "/coach/pricing" });
 });
 
-it("closes the drawer with Escape and restores focus", () => {
-  render(<AdminNavigation isAdmin={true} />);
+it.each([
+  [true, false, "Club"], [false, true, "My prices"], [true, true, "My prices"],
+] as const)("traps focus across both sections and restores it on Escape (Admin: %s, Coach: %s)", (isAdmin, isCoach, lastLabel) => {
+  render(<AdminNavigation isAdmin={isAdmin} isCoach={isCoach} />);
   const trigger = screen.getByRole("button", { name: "Management menu" });
   fireEvent.click(trigger);
   const drawer = screen.getByRole("dialog", { name: "Management menu" });
   const close = within(drawer).getByRole("button", { name: "Close management menu" });
   expect(document.activeElement).toBe(close);
-  const last = within(drawer).getByRole("link", { name: "Club" });
+  const last = within(drawer).getByRole("link", { name: lastLabel });
   fireEvent.keyDown(close, { key: "Tab", shiftKey: true });
   expect(document.activeElement).toBe(last);
   fireEvent.keyDown(last, { key: "Tab" });
@@ -136,7 +200,7 @@ it("closes after navigation and browser route changes", () => {
   navigation.pathname = "/admin/payments/settings";
   rerender(<AdminNavigation isAdmin={true} />);
   expect(screen.queryByRole("dialog")).toBeNull();
-  expect(screen.getByRole("link", { name: "Settings" }).getAttribute("aria-current")).toBe("page");
+  expect(screen.getByRole("link", { name: "Payment settings" }).getAttribute("aria-current")).toBe("page");
 });
 
 it.each(["backdrop", "close button"])("closes with the %s and restores focus and scrolling", (control) => {
@@ -157,7 +221,7 @@ it.each(["backdrop", "close button"])("closes with the %s and restores focus and
 it.each([
   [true, "/admin/users", "Users"],
   [false, "/coach/bookings", "Bookings & Reservations"],
-  [true, "/admin/unknown", "Locations"],
+  [true, "/admin/unknown", "Bookings & Reservations"],
 ] as const)("moves hidden mobile-control focus to a desktop destination (Admin: %s, path: %s)", (isAdmin, pathname, label) => {
   const desktop = new EventTarget();
   const matchMedia = vi.fn(() => desktop);

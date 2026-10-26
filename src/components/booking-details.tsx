@@ -14,7 +14,7 @@ export function CoachingBookingDetails({ booking, title = "Coaching details" }: 
   return <DetailSection title={title}>
     <dt className="text-muted-foreground">Coach</dt><dd>{booking.coach_name}</dd>
     <dt className="text-muted-foreground">Program</dt><dd>{booking.coaching_program_name}</dd>
-    <dt className="text-muted-foreground">Participants</dt><dd>{coaching.participantCount ?? "Not recorded"}</dd>
+    <dt className="text-muted-foreground">Participants</dt><dd>{coaching.participantCount}</dd>
     <dt className="text-muted-foreground">Lesson duration</dt><dd>{coaching.durationMinutes} min</dd>
     <dt className="text-muted-foreground">Coaching fee</dt><dd className="tabular-nums">{formatMoney(coaching.amountMinor, coaching.currency)}</dd>
     <dt className="text-muted-foreground">Court rental</dt><dd>{coaching.courtRentalIncluded ? "Included" : <>Charged separately · {formatMoney(coaching.courtAmountMinor, coaching.currency)}</>}</dd>

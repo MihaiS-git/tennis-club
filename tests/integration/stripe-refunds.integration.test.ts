@@ -1,7 +1,7 @@
 import { appendBookingContractFixture } from "./checkout-fixtures";
 import { configureCheckoutPolicyFixture } from "./opening-hours-fixtures";
 import { processOnlinePaymentEvent } from "@/lib/payments/service";
-import { cleanupBookingFixtures, insertCheckoutFixture } from "./checkout-fixtures";
+import { cleanupBookingFixtures, insertCheckoutFixture, type CheckoutFixtureInput } from "./checkout-fixtures";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { expect, test, vi } from "vitest";
@@ -28,13 +28,12 @@ test("customer/Admin refunds preserve occupancy until verified, complete on a la
     expect((await rows("bookings", booking.booking_id))[0].status).toBe("cancelled");
     expect((await db.from("court_reservations").select("status").eq("id", booking.reservation_id).single()).data?.status).toBe("cancelled");
   };
-  async function book(start: number, method = "online") {
-    const result = await insertCheckoutFixture(db, { p_court_id: courtId, p_booking_date: "2099-10-15",
-      p_starts_at_minute: start, p_ends_at_minute: start + 60, p_account_user_id: users[0],
-      p_customer_name: "Refund customer", p_customer_email: "refund@example.test", p_customer_phone: "123",
-      p_total_amount_minor: 5000, p_currency: "RON", p_payment_method: method,
-      p_provider: method === "online" ? "stripe" : null, p_hold_seconds: 600 });
-    expect(result.error).toBeNull(); const booking = result.data[0];
+  async function book(start: number, method: CheckoutFixtureInput["paymentMethod"] = "online") {
+    const booking = await insertCheckoutFixture({ courtId, bookingDate: "2099-10-15",
+      startMinute: start, endMinute: start + 60, accountUserId: users[0],
+      customerName: "Refund customer", customerEmail: "refund@example.test", customerPhone: "123",
+      totalAmountMinor: 5000, currency: "RON", paymentMethod: method,
+      provider: method === "online" ? "stripe" : null, holdSeconds: 600 });
     if (method === "online") {
       const providerPaymentId=`original-${booking.payment_attempt_id}`;
       expect((await db.from("payment_attempts").update({provider_payment_id:providerPaymentId})

@@ -53,13 +53,11 @@ afterAll(async () => {
 });
 
 async function booking(owner: string | null = null, method: "online" | "pay_at_club" = "online", duration = 60) {
-  const held = await insertCheckoutFixture(localFixtureClient(), { p_court_id: courtId, p_booking_date: "2099-10-15",
-    p_starts_at_minute: nextMinute, p_ends_at_minute: nextMinute + duration, p_account_user_id: owner,
-    p_customer_name: "Exception customer", p_customer_email: "original@example.test", p_customer_phone: "123",
-    p_total_amount_minor: 5000 * duration / 60, p_currency: "RON", p_payment_method: method, p_provider: method === "online" ? "stripe" : null, p_hold_seconds: 600 });
+  const row = await insertCheckoutFixture({ courtId, bookingDate: "2099-10-15",
+    startMinute: nextMinute, endMinute: nextMinute + duration, accountUserId: owner,
+    customerName: "Exception customer", customerEmail: "original@example.test", customerPhone: "123",
+    totalAmountMinor: 5000 * duration / 60, currency: "RON", paymentMethod: method, provider: method === "online" ? "stripe" : null, holdSeconds: 600 });
   nextMinute += duration;
-  expect(held.error).toBeNull();
-  const row = held.data[0];
   bookingIds.push(row.booking_id);
   const { manager } = await getDataSource();
   const [identity] = await manager.query("SELECT current_revision_id FROM public.bookings WHERE id=$1", [row.booking_id]);

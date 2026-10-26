@@ -7,11 +7,10 @@ import { requireActiveAdmin } from "@/lib/admin/authorization";
 import { getDataSource } from "@/lib/db/data-source";
 import { inTransaction } from "@/lib/db/transaction";
 import { lockActiveAdminAccount } from "@/lib/db/repositories/accounts.repository";
-import { claimEmailDeliveries, findDeliveryBooking, findMessageDelivery } from "@/lib/db/repositories/notifications.repository";
+import { claimEmailDeliveries, findDeliveryBooking, findMessageDelivery, findNotificationAccounts } from "@/lib/db/repositories/notifications.repository";
 import { brevoConfig } from "./brevo";
 import { processClaim } from "./delivery";
 import { deliveryCutoff, readableDeliveryError, retryEligibility } from "./delivery-retry";
-import { resolveNotificationAccounts } from "./recipient-resolution";
 import { resolveNotificationChannels } from "./policy";
 
 export async function adminMessageDelivery(rawMessageId: unknown) {
@@ -22,7 +21,7 @@ export async function adminMessageDelivery(rawMessageId: unknown) {
   const { manager } = await getDataSource();
   const delivery = await findMessageDelivery(manager, account.userId, id.data);
   if (!delivery) return null;
-  const accounts = await resolveNotificationAccounts(manager, delivery.recipientEmail);
+  const accounts = await findNotificationAccounts(manager, delivery.recipientEmail);
   let retry;
   try { retry = retryEligibility(delivery, deliveryCutoff()); }
   catch { retry = { eligible: false, reason: "Delivery cutoff configuration is invalid." }; }
@@ -58,7 +57,7 @@ export async function retryMessageDelivery(rawMessageId: unknown): Promise<strin
     if (!delivery) return { message: "Delivery details unavailable." };
     const eligibility = retryEligibility(delivery, notBefore);
     if (!eligibility.eligible) return { message: eligibility.reason };
-    const accounts = await resolveNotificationAccounts(manager, delivery.recipientEmail);
+    const accounts = await findNotificationAccounts(manager, delivery.recipientEmail);
     if (!resolveNotificationChannels(delivery.recipientEmail, accounts, "customer").email) {
       return { message: "Admin and Coach accounts do not receive transactional emails." };
     }

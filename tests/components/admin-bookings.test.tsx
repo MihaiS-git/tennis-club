@@ -295,14 +295,6 @@ test.each([true, false])("Admin coaching details show stored names, participants
   expect(screen.getByRole("link", { name: "Back to Bookings" }).getAttribute("href")).toBe("/admin/bookings?type=coaching&page=2");
 });
 
-test("older lessons explicitly show when participant count was not recorded", async () => {
-  withBooking({ ...details, includes_coaching: true, coach_name: "Historical Coach", coaching_program_name: "Historical program",
-    coaching: { durationMinutes: 60, amountMinor: 12000, currency: "RON", courtRentalIncluded: true, courtAmountMinor: 0 } });
-  render(await AdminBookingPage({ params: Promise.resolve({ bookingId: guestId }), searchParams: Promise.resolve({}) }));
-  expect(screen.getByText("Participants").nextElementSibling?.textContent).toBe("Not recorded");
-});
-
-
 const coaches = [{ id: userId, name: "Historical archived coach" }, { id: court, name: "Historical archived coach" }];
 
 test.each(["", "type=court"])("hides Coach outside Coaching (%s)", (query) => {

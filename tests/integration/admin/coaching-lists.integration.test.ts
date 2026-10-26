@@ -3,7 +3,8 @@ import { afterAll, assert, expect, test } from "vitest";
 import { getDataSource } from "@/lib/db/data-source";
 import { listPriceGroupsPage, listProgramsPage } from "@/lib/db/repositories/coaching-lists.repository";
 import { priceFiltersSchema, programFiltersSchema } from "@/lib/coaching/admin-filters";
-import { participantRateProgramTypes } from "@/lib/coaching/validation";
+import { isOnlineCoachingProgramType } from "@/lib/coaching/validation";
+import { listCoachingPrograms } from "@/lib/db/repositories/coaching.repository";
 import { cleanupAuthFixtures, localFixtureClient } from "../auth-fixtures";
 
 const service = localFixtureClient();
@@ -24,20 +25,22 @@ test("program and grouped price queries filter, sort, count and paginate without
     const programs = Array.from({ length: 23 }, () => randomUUID());
     for (const [i, location] of locations.entries()) await runner.query(
       "INSERT INTO public.locations(id,name,slug,timezone,currency) VALUES($1,$2,$3,'UTC',$4)", [location, `${prefix} location ${i}`, location, i ? "EUR" : "RON"]);
+    // Each program is for one player count (Private 1, Semi-private 2) and priced for that count.
+    const players = (i: number) => i % 2 ? 2 : 1;
     for (const [i, program] of programs.entries()) {
-      await runner.query(`INSERT INTO public.coaching_programs(id,name,description,program_type,court_rental_included,is_active)
-        VALUES($1,$2,'',$3,true,$4)`, [program, `${prefix} ${String(i).padStart(2, "0")}`, i % 2 ? "semi_private" : "private", i % 3 !== 0]);
+      await runner.query(`INSERT INTO public.coaching_programs(id,name,description,program_type,court_rental_included,is_active,min_participants,max_participants)
+        VALUES($1,$2,'',$3,true,$4,$5,$5)`, [program, `${prefix} ${String(i).padStart(2, "0")}`, i % 2 ? "semi_private" : "private", i % 3 !== 0, players(i)]);
       await runner.query("INSERT INTO public.coaching_program_durations(program_id,duration_minutes) VALUES($1,60),($1,90)", [program]);
-      await runner.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,amount_minor,currency)
-        VALUES($1,60,$2,'RON')`, [program, (i + 1) * 100]);
+      await runner.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,participant_count,amount_minor,currency)
+        VALUES($1,60,$2,$3,'RON')`, [program, players(i), (i + 1) * 100]);
     }
     for (const [i, user] of users.entries()) {
       await runner.query("INSERT INTO public.coach_profiles(user_id,display_name,bio,qualifications,specialties,languages,is_public) VALUES($1,$2,'','','{}','{}',false)", [user, `${prefix} coach ${i}`]);
       await runner.query("INSERT INTO public.coach_locations(coach_user_id,location_id) VALUES($1,$2)", [user, locations[0]]);
-      for (const program of programs) {
+      for (const [p, program] of programs.entries()) {
         await runner.query("INSERT INTO public.coach_programs(coach_user_id,program_id) VALUES($1,$2)", [user, program]);
-        await runner.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,coach_user_id,amount_minor,currency)
-          VALUES($1,60,$2,$3,'RON')`, [program, user, i ? 20000 : 10000]);
+        await runner.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,participant_count,coach_user_id,amount_minor,currency)
+          VALUES($1,60,$2,$3,$4,'RON')`, [program, players(p), user, i ? 20000 : 10000]);
       }
     }
     const list = (input: unknown) => listProgramsPage(runner.manager, programFiltersSchema.parse(input));
@@ -54,7 +57,8 @@ test("program and grouped price queries filter, sort, count and paginate without
       expect(sort === "type" ? asc.programs[0].programType : asc.programs[0].isActive)
         .not.toEqual(sort === "type" ? desc.programs[0].programType : desc.programs[0].isActive);
     }
-    const prices = (input: Record<string, unknown>) => listPriceGroupsPage(runner.manager, priceFiltersSchema.parse(input), participantRateProgramTypes);
+    const ids = (await listCoachingPrograms(runner.manager)).filter(program => isOnlineCoachingProgramType(program.programType)).map(program => program.id);
+    const prices = (input: Record<string, unknown>) => listPriceGroupsPage(runner.manager, priceFiltersSchema.parse(input), ids);
     const groups = await prices({ search: prefix, currency: "RON", duration: "60" });
     expect(groups).toMatchObject({ total: 23, totalPages: 2 });
     expect(groups.groups.map(g => g.program_id)).toEqual(programs.slice(0, 20));
@@ -106,7 +110,7 @@ test("program and grouped price queries filter, sort, count and paginate without
   }
 });
 
-test("Group and Junior programs list one rate group per currency with every stored rate, never duration or coach targets", async () => {
+test("Group and Junior programs list club lesson prices/person per explicit duration, never coach targets", async () => {
   const database = await getDataSource();
   const runner = database.createQueryRunner();
   await runner.connect(); await runner.startTransaction();
@@ -120,22 +124,23 @@ test("Group and Junior programs list one rate group per currency with every stor
         VALUES($1,$2,'',$3,false,true,3,6)`, [id, `${prefix} ${name}`, type]);
       await runner.query("INSERT INTO public.coaching_program_durations(program_id,duration_minutes) VALUES($1,60),($1,90)", [id]);
     }
-    // An obsolete duration price of a Group program stays stored but does not create a duration group.
-    await runner.query("INSERT INTO public.coaching_prices(program_id,duration_minutes,amount_minor,currency) VALUES($1,60,9999,'RON')", [group]);
-    await runner.query(`INSERT INTO public.coaching_participant_prices(program_id,participant_count,amount_minor,currency)
-      VALUES($1,3,6000,'RON'),($1,4,5000,'RON'),($1,8,1000,'RON')`, [group]);
-    const prices = (input: Record<string, unknown>) => listPriceGroupsPage(runner.manager, priceFiltersSchema.parse(input), participantRateProgramTypes);
+    await runner.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,participant_count,amount_minor,currency)
+      VALUES($1,60,3,6000,'RON'),($1,60,4,5000,'RON'),($1,90,3,8000,'RON')`, [group]);
+    const ids = (await listCoachingPrograms(runner.manager)).filter(program => isOnlineCoachingProgramType(program.programType)).map(program => program.id);
+    const prices = (input: Record<string, unknown>) => listPriceGroupsPage(runner.manager, priceFiltersSchema.parse(input), ids);
     const result = await prices({ search: prefix, currency: "RON", sort: "amount", dir: "asc" });
     expect(result.groups).toEqual([
-      { program_id: group, currency: "RON", duration_minutes: null },
-      { program_id: junior, currency: "RON", duration_minutes: null },
+      { program_id: group, currency: "RON", duration_minutes: 60 },
+      { program_id: group, currency: "RON", duration_minutes: 90 },
+      { program_id: junior, currency: "RON", duration_minutes: 60 },
+      { program_id: junior, currency: "RON", duration_minutes: 90 },
     ]);
-    expect(result.prices).toEqual([]);
-    // The rate outside the 3–6 range is listed so it can be removed, but does not set the lowest amount.
-    expect(result.participantPrices.map(price => [price.participantCount, price.amountMinor])).toEqual([[3, 6000], [4, 5000], [8, 1000]]);
-    expect((await prices({ search: prefix, currency: "RON", duration: "60" })).total).toBe(0);
+    expect(result.prices.map(price => [price.durationMinutes, price.participantCount, price.amountMinor, price.coachUserId])
+      .sort((x, y) => Number(x[0]) - Number(y[0]) || Number(x[1]) - Number(y[1]))).toEqual([[60, 3, 6000, null], [60, 4, 5000, null], [90, 3, 8000, null]]);
+    expect((await prices({ search: prefix, currency: "RON", duration: "90" })).total).toBe(2);
     expect((await prices({ search: prefix, currency: "RON", scope: "coach" })).total).toBe(0);
-    expect((await prices({ search: prefix, currency: "RON", scope: "club" })).groups.map(g => g.program_id)).toEqual([group]);
+    expect((await prices({ search: prefix, currency: "RON", scope: "club" })).groups.map(g => [g.program_id, g.duration_minutes]))
+      .toEqual([[group, 60], [group, 90]]);
   } finally {
     await runner.rollbackTransaction(); await runner.release();
   }

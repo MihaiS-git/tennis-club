@@ -9,7 +9,7 @@ const emptyClass = "rounded-card border border-border bg-surface px-4 py-5 text-
 export default async function CoachPricingPage() {
   const view = await loadOwnCoachPricing();
   return <>
-    <AdminPageHeader title="My prices" description="Your price for each assigned program and duration, in the currencies of your active locations. Your price replaces the club price for your lessons; remove it to use the club price again. Changes apply to new bookings only." />
+    <AdminPageHeader title="My prices" description="Your lesson price/person for each assigned program, duration and number of players, in the currencies of your active locations: what each player pays for one complete lesson. Each duration and number of players has its own price. Your price replaces the club price for that lesson; remove it to use the club price again. Changes apply to new bookings only." />
     {!view ? <p className={emptyClass}>Your coaching profile has not been set up yet. Ask an Admin to create it and assign your programs and locations.</p>
       : <>
         {!view.rows.length ? <p className={emptyClass}>
@@ -18,7 +18,7 @@ export default async function CoachPricingPage() {
             : "No programs are assigned to you yet. Ask an Admin to assign the programs you offer."}
         </p> : <CoachPricingTable view={view} />}
         {view.clubPricedPrograms.length > 0 && <p className="mt-4 text-sm text-muted-foreground">
-          {view.clubPricedPrograms.map((program) => program.name).join(", ")}: Group and Junior rates are set by the club per number of players and cannot be changed here.
+          {view.clubPricedPrograms.map((program) => program.name).join(", ")}: Group and Junior lesson prices/person are set by the club and cannot be changed here.
         </p>}
       </>}
   </>;

@@ -4,16 +4,132 @@ import { IsNull, type EntityManager } from "typeorm";
 import { z } from "zod";
 import { EmailDeliveryEntity } from "../entities/email-delivery.entity";
 import { UserMessageEntity } from "../entities/user-message.entity";
+import { UserRoleEntity } from "../entities/user-role.entity";
+import { UserEntity } from "../entities/user.entity";
+import type { BookingContext } from "@/lib/notifications/content";
 import { definitiveRejectionPattern } from "@/lib/notifications/delivery-retry";
 import type { InboxQuery } from "@/lib/notifications/inbox-query";
+import type { NotificationAccount } from "@/lib/notifications/types";
 
-export async function insertUserMessage(manager: EntityManager, message: Omit<UserMessageEntity, "readAt" | "deletedAt">) {
+type NewUserMessage = Omit<UserMessageEntity, "readAt" | "deletedAt">;
+
+export async function insertUserMessage(manager: EntityManager, message: NewUserMessage) {
   await manager.getRepository(UserMessageEntity).createQueryBuilder().insert().values({ ...message, readAt: null, deletedAt: null })
     .orIgnore().execute();
 }
 
+const userMessageBatchSize = 1000;
+
+// Each row conflicts independently on (user_id, event_key), exactly as single-row inserts do.
+export async function insertUserMessages(manager: EntityManager, messages: readonly NewUserMessage[]) {
+  for (let offset = 0; offset < messages.length; offset += userMessageBatchSize) {
+    await manager.getRepository(UserMessageEntity).createQueryBuilder().insert()
+      .values(messages.slice(offset, offset + userMessageBatchSize).map((message) => ({ ...message, readAt: null, deletedAt: null })))
+      .orIgnore().execute();
+  }
+}
+
 export async function insertEmailDelivery(manager: EntityManager, delivery: EmailDeliveryEntity) {
   await manager.getRepository(EmailDeliveryEntity).createQueryBuilder().insert().values(delivery).orIgnore().execute();
+}
+
+const accountRows = z.array(z.object({
+  user_id: z.uuid(), email: z.string(), auth_email: z.string().nullable(),
+  email_confirmed: z.boolean(), active: z.boolean(), role_code: z.string().nullable(),
+}));
+
+// Matches either the account or the Auth email; channel policy decides which matches qualify.
+export async function findNotificationAccounts(manager: EntityManager, email: string): Promise<NotificationAccount[]> {
+  const rows: unknown = await manager.query(`
+    SELECT u.id AS user_id, u.email, a.email AS auth_email,
+      (a.email_confirmed_at IS NOT NULL) AS email_confirmed, (u.status = 'active') AS active, r.role_code
+    FROM public.users u
+    JOIN auth.users a ON a.id = u.id
+    LEFT JOIN public.user_roles r ON r.user_id = u.id
+    WHERE lower(u.email) = lower($1) OR lower(a.email) = lower($1)
+    ORDER BY u.id, r.role_code`, [email]);
+  const accounts = new Map<string, NotificationAccount>();
+  for (const row of accountRows.parse(rows)) {
+    const account = accounts.get(row.user_id) ?? { userId: row.user_id, email: row.email,
+      authEmail: row.auth_email, emailConfirmed: row.email_confirmed, active: row.active, roles: [] };
+    if (row.role_code) account.roles.push(row.role_code);
+    accounts.set(row.user_id, account);
+  }
+  return [...accounts.values()];
+}
+
+function activeRoleUsers(manager: EntityManager, roleCode: string) {
+  return manager.getRepository(UserEntity).createQueryBuilder("account").select("account.id")
+    .innerJoin(UserRoleEntity, "role", "role.userId = account.id")
+    .where("account.status = 'active' AND role.roleCode = :roleCode", { roleCode });
+}
+
+export function hasActiveUserRole(manager: EntityManager, userId: string, roleCode: string) {
+  return activeRoleUsers(manager, roleCode).andWhere("account.id = :userId", { userId }).getExists();
+}
+
+export async function listActiveUserIdsWithRole(manager: EntityManager, roleCode: string): Promise<string[]> {
+  const users = await activeRoleUsers(manager, roleCode).orderBy("account.id").getMany();
+  return users.map((user) => user.id);
+}
+
+const currency = z.enum(["EUR", "USD", "GBP", "RON", "CHF"]);
+const bookingContextRow = z.object({ location_name: z.string(), court_name: z.string(), booking_date: z.iso.date(),
+  starts_at_minute: z.number().int(), ends_at_minute: z.number().int(), timezone: z.string(),
+  coaching_program_name: z.string().nullable(), coach_name: z.string().nullable() });
+
+function bookingContext(row: z.infer<typeof bookingContextRow>): BookingContext {
+  return { locationName: row.location_name, courtName: row.court_name, bookingDate: row.booking_date,
+    startMinute: row.starts_at_minute, endMinute: row.ends_at_minute, timezone: row.timezone,
+    coachingProgramName: row.coaching_program_name, coachName: row.coach_name };
+}
+
+const exceptionRow = bookingContextRow.extend({ event_key: z.string(), kind: z.string(), booking_id: z.uuid(),
+  customer_email: z.string(), currency, amount_minor: z.number().nullable(), occurred_at: z.date() });
+
+export type FinancialExceptionNotificationFact = {
+  eventKey: string; kind: string; bookingId: string; customerEmail: string; currency: z.infer<typeof currency>;
+  amountMinor: number | null; occurredAt: Date; booking: BookingContext;
+};
+
+// Booking context comes from the referenced historical revision, never the current booking.
+export async function findFinancialExceptionNotificationFact(manager: EntityManager, eventKey: string):
+  Promise<FinancialExceptionNotificationFact | null> {
+  const rows: unknown = await manager.query(`SELECT e.event_key, e.kind, e.booking_id, e.occurred_at,
+      v.customer_email, v.currency, v.location_name, v.court_name, v.booking_date::text AS booking_date,
+      v.starts_at_minute, v.ends_at_minute, v.timezone, v.coaching_program_name, v.coach_name,
+      COALESCE(f.amount_minor, p.amount_minor,
+        nullif(abs(a.new_total-a.original_total), 0)) AS amount_minor
+    FROM public.booking_financial_exceptions e
+    JOIN public.booking_revisions v ON v.id=e.revision_id
+    LEFT JOIN public.payment_refunds f ON f.id=e.refund_id
+    LEFT JOIN public.payment_attempts p ON p.id=e.payment_attempt_id
+    LEFT JOIN public.booking_adjustments a ON a.id=e.adjustment_id
+    WHERE e.event_key=$1`, [eventKey]);
+  const row = z.array(exceptionRow).parse(rows)[0];
+  return row ? { eventKey: row.event_key, kind: row.kind, bookingId: row.booking_id, customerEmail: row.customer_email,
+    currency: row.currency, amountMinor: row.amount_minor, occurredAt: row.occurred_at, booking: bookingContext(row) } : null;
+}
+
+const refundRow = bookingContextRow.extend({ id: z.uuid(), booking_id: z.uuid(), reason: z.string(),
+  amount_minor: z.number(), currency, customer_email: z.string() });
+
+export type SucceededRefundNotificationFact = {
+  refundId: string; bookingId: string; reason: string; amountMinor: number; currency: z.infer<typeof currency>;
+  customerEmail: string; booking: BookingContext;
+};
+
+export async function findSucceededRefundNotificationFact(manager: EntityManager, refundId: string, executionId: string):
+  Promise<SucceededRefundNotificationFact | null> {
+  const rows: unknown = await manager.query(`SELECT f.id, f.booking_id, f.reason, f.amount_minor, f.currency, v.customer_email,
+      v.location_name, v.court_name, v.booking_date::text AS booking_date, v.starts_at_minute,
+      v.ends_at_minute, v.timezone, v.coaching_program_name, v.coach_name
+    FROM public.payment_refunds f JOIN public.booking_revisions v ON v.id=f.context_revision_id
+    JOIN public.refund_executions x ON x.id=$2 AND x.refund_id=f.id AND x.terminal_result='succeeded'
+    WHERE f.id=$1 AND f.status='succeeded'`, [refundId, executionId]);
+  const row = z.array(refundRow).parse(rows)[0];
+  return row ? { refundId: row.id, bookingId: row.booking_id, reason: row.reason, amountMinor: row.amount_minor,
+    currency: row.currency, customerEmail: row.customer_email, booking: bookingContext(row) } : null;
 }
 
 function filteredMessages(manager: EntityManager, userId: string, query: InboxQuery) {
@@ -140,17 +256,6 @@ export async function failEmailFromWebhook(manager: EntityManager, input: {
           OR trim(both '<>' from provider_message_id)=trim(both '<>' from $2))))
     RETURNING id`, [input.recipientEmail, input.messageId, input.deliveryId, input.reason]);
   return z.tuple([z.array(z.object({ id: z.uuid() })), z.number().int()]).parse(result)[0][0]?.id ?? null;
-}
-
-export async function insertEmailFailureAlerts(manager: EntityManager, deliveryId: string, occurredAt: Date) {
-  await manager.query(`INSERT INTO public.user_messages
-      (id, user_id, event_key, kind, subject, body_text, href, read_at, created_at)
-    SELECT gen_random_uuid(), u.id, $1, 'email.delivery_failed',
-      'Booking email delivery failed', 'An outbound booking email could not be delivered. Open Delivery details to review the failure and retry eligibility.',
-      NULL, NULL, $3
-    FROM public.email_deliveries delivery CROSS JOIN public.users u JOIN public.user_roles r ON r.user_id=u.id
-    WHERE delivery.id=$2::uuid AND u.status='active' AND r.role_code='admin'
-    ON CONFLICT (user_id, event_key) DO NOTHING`, [`email.delivery-failed:${deliveryId}`, deliveryId, occurredAt]);
 }
 
 // The persisted event key is the association for both existing and new failure alerts.
