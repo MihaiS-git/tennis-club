@@ -22,6 +22,8 @@ it("keeps the management main area in place without role-specific navigation", (
   expect(screen.queryAllByRole("link")).toHaveLength(0);
   expect(screen.queryByRole("navigation")).toBeNull();
   expect(screen.queryByRole("button")).toBeNull();
+  // Lets globals.css keep the footer unpainted until the loaded page height is known.
+  expect(container.querySelectorAll("[data-defers-footer]")).toHaveLength(1);
 });
 
 it.each([

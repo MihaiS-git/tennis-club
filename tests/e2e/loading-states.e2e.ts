@@ -42,7 +42,8 @@ test.describe("loading feedback", () => {
     const created = await auth.auth.admin.createUser({ email, password, email_confirm: true });
     expect(created.error).toBeNull(); user = created.data.user!.id;
     await db.query("INSERT INTO public.user_roles(user_id,role_code) VALUES($1,'admin')", [user]);
-    await db.query("INSERT INTO public.locations(id,name,slug,timezone,currency,is_public) VALUES($1,'Loading Club',$2,'UTC','RON',true)", [location, `loading-${location}`]);
+    // A Romanian address needs Inter's latin-ext glyphs on the homepage.
+    await db.query("INSERT INTO public.locations(id,name,slug,address_line1,city,timezone,currency,is_public) VALUES($1,'Loading Club',$2,'Splaiul Independenței 1','București','UTC','RON',true)", [location, `loading-${location}`]);
     await db.query("INSERT INTO public.courts(id,location_id,name,slug,surface,environment) VALUES($1,$2,'L1','l1','clay','outdoor')", [court, location]);
     await db.query("INSERT INTO public.opening_hours_schedules(id,location_id,starts_on) VALUES($1,$2,'0001-01-01')", [schedule, location]);
     await db.query("INSERT INTO public.pricing_rule_sets(id,location_id) VALUES($1,$2)", [rules, location]);
@@ -84,17 +85,57 @@ test.describe("loading feedback", () => {
         await session.send("Emulation.setScriptExecutionDisabled", { value: true });
         await page.goto(path);
         await expectLoading(page.getByRole("status").filter({ hasText: label }), label);
-        if (path.startsWith("/admin")) await expect(page.getByRole("navigation", { name: "Management navigation" })).toHaveCount(0);
+        if (path.startsWith("/admin")) {
+          await expect(page.getByRole("navigation", { name: "Management navigation" })).toHaveCount(0);
+          // The page height is unknown until authorization, so the footer is not painted yet.
+          await expect(page.locator("body > footer")).toBeHidden();
+        }
         await fitsViewport(page);
         await session.send("Emulation.setScriptExecutionDisabled", { value: false });
         await page.reload();
         await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
         await expect(page.getByRole("status").filter({ hasText: label })).toHaveCount(0);
+        await expect(page.locator("body > footer")).toBeVisible();
       }
     } finally {
       await session.send("Emulation.setScriptExecutionDisabled", { value: false });
       await session.detach();
     }
+  });
+
+  // The management fallback fills the viewport; loaded pages may be taller at either width.
+  for (const width of [1440, 390]) {
+    test(`initial management load does not shift the footer at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.addInitScript(() => {
+        const footerShifts: number[] = [];
+        Object.assign(window, { footerShifts });
+        new PerformanceObserver(list => {
+          for (const entry of list.getEntries() as (PerformanceEntry & { value: number; sources: { node?: Node }[] })[]) {
+            if (entry.sources.some(source => source.node?.nodeName === "FOOTER")) footerShifts.push(entry.value);
+          }
+        }).observe({ type: "layout-shift", buffered: true });
+      });
+      await page.goto("/admin/locations");
+      await expect(page.getByRole("heading", { name: "Locations", exact: true })).toBeVisible();
+      await expect(page.locator("body > footer")).toBeVisible();
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      expect(await page.evaluate(() => (window as unknown as { footerShifts: number[] }).footerShifts)).toEqual([]);
+    });
+  }
+
+  test("homepage requests the latin-ext font only once Locations nears the viewport", async ({ page }) => {
+    const latinExtInter = () => page.evaluate(() => [...document.fonts]
+      .filter(font => font.family.replaceAll('"', "") === "Inter" && font.unicodeRange.startsWith("U+100-2BA"))
+      .map(font => font.status));
+    await page.goto("/");
+    const address = page.locator("#locations address").filter({ hasText: "București" });
+    await expect(address).toHaveCount(1);
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    expect(await latinExtInter()).toEqual(["unloaded"]);
+    await address.scrollIntoViewIfNeeded();
+    await expect(address).toContainText("Splaiul Independenței 1");
+    await expect.poll(latinExtInter).toEqual(["loaded"]);
   });
 
   // Desktop and mobile headers have different controls and spinner placement.

@@ -17,9 +17,10 @@ export function ManagementShell({ isAdmin, isCoach = false, children }: { isAdmi
 }
 
 // Shown while a management layout authorizes. Keeps the main area and sidebar column in
-// place (so the footer does not jump) without any role-specific links or page content.
+// place without any role-specific links or page content. The page height is unknown
+// until then, so the footer stays unpainted (globals.css) rather than visibly moving.
 export function ManagementShellFallback() {
-  return <AreaShell navigation={<div aria-hidden="true" className="mb-5 h-11 lg:sticky lg:top-24 lg:mb-0 lg:h-72 lg:rounded-card lg:border lg:border-border lg:bg-surface" />}>
+  return <AreaShell navigation={<div aria-hidden="true" data-defers-footer="" className="mb-5 h-11 lg:sticky lg:top-24 lg:mb-0 lg:h-72 lg:rounded-card lg:border lg:border-border lg:bg-surface" />}>
     <LoadingStatus variant="page" label="Loading management area…" />
   </AreaShell>;
 }

@@ -19,6 +19,15 @@
   text-decoration-thickness: 2px;
 }
 
+/* The Locations section is far below the fold, and its Romanian addresses are the
+   only homepage text needing Inter's latin-ext file. Skipping its rendering until it
+   nears the viewport keeps that font request from competing with the hero image (the
+   LCP element). The size is a placeholder; `auto` keeps the rendered height. */
+.deferredSection {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 1200px;
+}
+
 @keyframes heroEnter {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }

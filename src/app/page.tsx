@@ -306,7 +306,7 @@ export default function Home({ searchParams }: PageProps<"/">) {
         </div>
       </section>
 
-      <section id="locations" aria-labelledby="visit-club-title" className="scroll-mt-20 bg-forest-900 px-6 py-16 md:px-8 md:py-20 xl:py-28">
+      <section id="locations" aria-labelledby="visit-club-title" className={`${styles.deferredSection} scroll-mt-20 bg-forest-900 px-6 py-16 md:px-8 md:py-20 xl:py-28`}>
         <Suspense fallback={
           <HomeLocationsShell map={<div className="h-full w-full border border-ivory/30" />}>
             <LoadingStatus tone="inverse" label="Loading locations…" className="border-t border-ivory/30 pt-5" />

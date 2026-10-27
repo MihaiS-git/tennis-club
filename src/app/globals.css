@@ -168,6 +168,13 @@
     text-rendering: optimizeLegibility;
   }
 
+  /* A streamed page fallback cannot know the loaded page's height. Keep the footer laid
+     out but unpainted until the fallback is replaced, so revealing taller content does
+     not count as a footer layout shift. */
+  body:has([data-defers-footer]) > footer {
+    visibility: hidden;
+  }
+
   h1,
   h2,
   h3,
