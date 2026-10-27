@@ -41,8 +41,10 @@ export function CustomerBookingCancellation({ booking, staff, onCancelled, onPen
       if (!result.ok) { toast.error(result.message, { id: notification }); return; }
       cancelledMessage = cancelledBookingMessage(result);
       setConfirming(false);
-      await onCancelled();
+      // Report the authoritative result before the separate activity refresh.
+      // A slow refresh must not withhold confirmation of a completed cancellation.
       toast.success(cancelledMessage, { id: notification });
+      await onCancelled();
     } catch {
       if (cancelledMessage) toast.warning(cancelledMessage, { id: notification, description: "Unable to refresh details. Reopen your activity to see the cancellation." });
       else toast.error("Unable to cancel this booking. Try again.", { id: notification });

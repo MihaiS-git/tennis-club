@@ -72,7 +72,7 @@ async function signIn(page: Page, booking: BookingFixture) {
   await expect(page).toHaveURL(/\/$/);
 }
 
-async function cancelThroughBrowser(page: Page, booking: BookingFixture, message: string) {
+async function cancelThroughBrowser(page: Page, booking: BookingFixture, message: string, onFeedback?: () => void) {
   await page.goto("/my-activity/bookings");
   const row = page.getByRole("row", { name: /Details for/ }).filter({ hasText: booking.courtName });
   await row.click();
@@ -81,6 +81,7 @@ async function cancelThroughBrowser(page: Page, booking: BookingFixture, message
   await expect(confirmation).toContainText("This will cancel your booking and free the court.");
   await confirmation.getByRole("button", { name: "Cancel booking", exact: true }).click();
   await expect(page.getByText(message, { exact: true })).toBeVisible();
+  onFeedback?.();
   await expect(row).toHaveCount(0);
 }
 
@@ -134,7 +135,29 @@ test("Definitive refund failure keeps the booking confirmed; a fresh customer ca
   const initial=evidenceSchema.parse(await (await request.get(`${providerUrl}/fixture/evidence?paymentId=${booking.paymentId}`)).json());
   expect(initial.refunds).toEqual([expect.objectContaining({status:"failed",amount:5000})]);
   await page.reload();
-  await cancelThroughBrowser(page,booking,"Booking cancelled. Your payment has been refunded.");
+  // Confirmation must not depend on the follow-up activity read completing.
+  let releaseRefresh!: () => void;
+  let refreshRequested = false;
+  const refreshGate = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+  await page.route("**/my-activity/bookings*", async (route) => {
+    const request = route.request();
+    if (request.method() === "POST"
+      && z.tuple([z.object({ type: z.literal("booking") })]).safeParse(request.postDataJSON()).success) {
+      refreshRequested = true;
+      const response = await route.fetch();
+      await refreshGate;
+      await route.fulfill({ response });
+      return;
+    }
+    await route.continue();
+  });
+  try {
+    await cancelThroughBrowser(page, booking, "Booking cancelled. Your payment has been refunded.", releaseRefresh);
+    expect(refreshRequested).toBe(true);
+  } finally {
+    releaseRefresh();
+    await page.unrouteAll({ behavior: "wait" });
+  }
   const evidence=evidenceSchema.parse(await (await request.get(`${providerUrl}/fixture/evidence?paymentId=${booking.paymentId}`)).json());
   expect(evidence.refunds.filter(r=>r.status==="succeeded")).toEqual([expect.objectContaining({amount:5000})]);
   expect(evidence.refunds).toHaveLength(2);
