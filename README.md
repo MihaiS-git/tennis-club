@@ -48,7 +48,7 @@ This is **not a multi-tenant SaaS platform**. One tennis club owns and operates 
 - React
 - TypeScript
 - Zod
-- TanStack Query when interactive client-side server state is introduced
+- TanStack Query is planned and not installed; introduce it only when a concrete workflow needs interactive client-side server state
 
 ### Backend services
 
@@ -102,8 +102,7 @@ Next.js
 ├── Server Actions         ← application UI mutations
 ├── Route Handlers         ← webhooks and external HTTP boundaries
 └── Client Components
-    └── TanStack Query     ← when interactive client-side server state is needed
-        └── calls the Next.js server boundary, not Supabase directly
+    └── calls Next.js server boundaries (TanStack Query remains planned)
    │
    ▼
 TypeScript application/domain logic
@@ -305,9 +304,6 @@ rescheduleBooking()
 cancelBooking()
 calculateRefund()
 resolveMembershipEntitlements()
-findPartnerMatches()
-recordMatch()
-calculateElo()
 ```
 
 These should remain framework-light and unit-testable where practical.
@@ -321,7 +317,6 @@ Use it when client interactions benefit from caching, invalidation, background r
 - court availability by location/date;
 - coach availability;
 - booking lists and booking state;
-- partner requests;
 - interactive admin screens.
 
 TanStack Query must call the Next.js server boundary rather than query Supabase directly. Server Components remain the default for initial/simple reads.
@@ -640,44 +635,7 @@ Consumable credits should preferably use a ledger/transaction model instead of o
 
 ## Partner matching
 
-> **Deferred indefinitely.** Matches, partner matching/matchmaking, match results and rankings are not part of the current product. There are no `/matches` or `/rankings` routes and no related tables; the application focuses on court booking, coaching, club facilities and member management. Player profiles, Sportya levels and player ratings remain. The design below is kept only as a reference for possible future work.
-
-Members can create partner requests.
-
-Example:
-
-```text
-Looking for partner
-
-Location: Central Club
-Tuesday: 18:00–20:00
-Level: 3.5–4.5
-Game: Singles
-```
-
-Matching can consider:
-
-- location;
-- availability;
-- player level/rating;
-- game type;
-- optional player preferences.
-
-Initial matching should remain deterministic and simple.
-
-```text
-Create request
-→ find compatible players
-→ player accepts
-→ choose common time
-→ select court
-→ book/pay
-→ play
-→ record result
-→ update rating
-```
-
-AI-based partner matching is not required initially.
+Matches, partner matching/matchmaking, match results and rankings are deferred indefinitely. There are no `/matches` or `/rankings` routes or related tables. Player profiles, Sportya levels and player ratings remain in scope.
 
 ---
 
@@ -703,8 +661,6 @@ Potentially includes:
 
 - display name;
 - rating;
-- ranking;
-- match statistics;
 - rating history;
 - optional tennis preferences.
 
@@ -721,34 +677,6 @@ This separation is important because PostgreSQL RLS primarily protects rows rath
 
 ---
 
-## Rankings
-
-> **Deferred indefinitely.** Matches, partner matching/matchmaking, match results and rankings are not part of the current product. There are no `/matches` or `/rankings` routes and no related tables; the application focuses on court booking, coaching, club facilities and member management. Player profiles, Sportya levels and player ratings remain. The design below is kept only as a reference for possible future work.
-
-The initial ranking system uses Elo-style ratings.
-
-Ranking calculations remain in TypeScript.
-
-A ranked match should update:
-
-```text
-match result
-+
-player A rating
-+
-player B rating
-+
-player A rating history
-+
-player B rating history
-```
-
-The database persistence must be atomic.
-
-The application must never leave a partially applied rating update.
-
----
-
 ## Transactional operations
 
 Application database operations use TypeORM repositories.
@@ -760,7 +688,6 @@ Examples:
 - confirming bookings;
 - rescheduling;
 - consuming membership credits;
-- recording match results and rating changes;
 - certain payment/refund state transitions.
 
 Use the existing TypeORM `inTransaction` helper for atomic application persistence. TypeScript owns hold expiry; PostgreSQL enforces structural constraints and overlap exclusions.
@@ -775,7 +702,7 @@ PostgreSQL transaction
 → guarantees all required changes happen atomically
 ```
 
-Do not move domain algorithms such as Elo, pricing, partner matching, or membership rules into SQL.
+Do not move domain algorithms such as pricing or membership rules into SQL.
 
 ---
 
@@ -807,8 +734,6 @@ TypeScript owns application and domain logic such as:
 - membership entitlements;
 - cancellation policy;
 - refund calculation;
-- partner matching;
-- Elo calculations;
 - Stripe orchestration;
 - workflow decisions.
 
@@ -816,52 +741,48 @@ TypeScript owns application and domain logic such as:
 
 ## Initial data model
 
-The exact schema should be derived incrementally from implemented workflows.
-
-Likely starting entities:
+The three baseline migrations in `src/lib/db/migrations/` define the current schema.
+Supabase manages `auth.users`; TypeORM creates these application tables in `public`:
 
 ```text
-auth.users
-    Supabase managed
-
-public.users
-public.player_profiles
-
+users
+user_messages
+email_deliveries
+player_profiles
 roles
 user_roles
-
 locations
-
+booking_adjustments
+coach_profiles
 courts
-court_availability
-court_availability_exceptions
-
-coaches
-coach_locations
-coach_availability
-coach_availability_exceptions
-
+court_reservations
 bookings
-booking_participants
-booking_reschedules
-
-partner_requests
-partner_request_members
-
-matches
-ratings
-rating_history
-
-membership_plans
-subscriptions
-membership_credit_ledger
-
-payments
-refunds
-stripe_events
-
-audit_events
+coaching_programs
+booking_revisions
+payment_attempts
+payment_capture_receipts
+payment_provider_changes
+payment_provider_events
+payment_provider_settings
+club_settings
+payment_refunds
+refund_executions
+court_coverage_periods
+opening_hours_schedules
+location_opening_hours
+pricing_rule_sets
+location_pricing_rules
+coach_locations
+coach_programs
+coach_availability_exceptions
+coach_weekly_availability
+coaching_program_durations
+coaching_prices
+booking_financial_exceptions
 ```
+
+Membership plans, subscriptions and credits remain future work. Matches, partner
+requests, rankings and rating history are deferred indefinitely and have no tables.
 
 Do not create every table mechanically before the corresponding workflow exists.
 
@@ -1001,14 +922,17 @@ for application initialization. No backup or data reconciliation is performed.
 
 ## Admin UI
 
-`/admin/courts` groups all courts by physical location, including inactive resources.
+`/admin/locations` opens a location workspace at `/admin/locations/[locationId]`.
+Its Courts tab (`?tab=courts`) lists that location’s courts, including inactive resources.
+The legacy `/admin/courts?location=<id>` route redirects to this tab; without a valid
+current location it redirects to `/admin/locations`.
 Active administrators create, edit, move, and activate/deactivate courts through
 user-scoped Server Actions. Each court has a clay/hard/grass/carpet surface, an
 outdoor/indoor environment, and a lighting flag. Counts are derived from records.
 Slugs are generated on creation, preserved on edits (including moves), and unique
 within the selected location. Next.js authorizes Admin mutations and TypeORM persists them. Temporary balloon capability/installation flags have
 been removed. Outdoor courts have exact, inclusive calendar-date coverage periods
-managed within `/admin/courts` (add, edit, remove). Coverage periods for active
+managed within the location workspace’s Courts tab (add, edit, remove). Coverage periods for active
 public courts are readable for the public calendar; writes remain admin-only. A GiST exclusion
 constraint prevents overlaps for the same court. TypeScript validates outdoor coverage and rejects changing a court to indoor until
 its periods are removed, under the shared configuration/location locking protocol. `updated_at`
@@ -1078,7 +1002,7 @@ existing provider refund/reconciliation path. Guest and signed-in checkout still
 recalculate stale quotes transactionally. Archived locations retain their existing
 hours and must be restored before edits.
 
-`/admin/pricing` manages logical hourly rule sets for one or more specific courts at a
+The location workspace’s Pricing tab (`/admin/locations/[locationId]?tab=pricing`) manages logical hourly rule sets for one or more specific courts at a
 location. Each definition selects a compatible operational state (outdoor or covered
 for outdoor courts; indoor for indoor courts), weekdays, a half-open local minute
 interval `[start, end)`, optional inclusive calendar-date bounds, and a price in
@@ -1093,10 +1017,10 @@ consumers still check applicable opening hours independently. The resolver uses
 court, derived state, date, weekday and local minute. Public `/courts` discovers
 only eligible locations and courts. See [Pricing](docs/pricing.md).
 
-`/book` and `/admin/reservations` default to the selected location's current calendar
+`/book` and the staff calendars (`/admin/bookings?view=calendar` and `/coach/bookings?view=calendar`) default to the selected location's current calendar
 date when the URL omits a date. An explicit valid date overrides that default;
 malformed explicit dates retain the validation error, and `/book` also rejects past dates.
-Admins and Coaches can navigate to past dates in `/admin/reservations` using Prev or the
+Admins and Coaches can navigate to past dates in their respective staff calendars using Prev or the
 date picker. Past occupancy opens read-only details with existing role visibility;
 past slots cannot be reserved and past activity cannot be edited or cancelled. The server renders
 only the chosen day, without a client redirect or adjacent-day preload.
@@ -1126,7 +1050,7 @@ active intervals for the same court/date. An optional `reason` (up to 255 charac
 describes direct reservations; customer bookings have their own commercial record.
 Reservations have `active`, `cancelled`, `held` or `released` status; active rows and
 non-expired payment holds block occupancy. Active Admins
-and Coaches can create direct reservations at `/admin/reservations` for active courts at
+and Coaches can create direct reservations in their respective staff calendars for active courts at
 structurally ready locations, including unpublished locations.
 The Server Action checks the account, resources, location-local time, opening hours,
 duration and required trimmed reason before a TypeORM transaction rechecks locked facts and inserts. The GiST
@@ -1160,7 +1084,7 @@ for reconciliation. Existing attempt providers are immutable. Every booking's cu
 has a required payment method (`online` or `pay_at_club`); original payment attempts remain
 financial evidence. Pay at club defaults OFF per location and is edited in Booking policy.
 Direct reservations have no price or payment flow. Next.js permits only active Admins
-and Coaches to create rows with a reason and their verified user ID as creator. Existing rows can have a null creator. `/admin/reservations` reads active occupancy
+and Coaches to create rows with a reason and their verified user ID as creator. Existing rows can have a null creator. The staff calendars read active occupancy
 for all staff; active Admins and Coaches receive the same narrow staff-authorized
 TypeORM projection of direct-reservation identity, reason and creator contact, plus
 authenticated customer and guest booking contact, price, currency and payment details.
@@ -1295,14 +1219,15 @@ Deferred indefinitely (not planned):
 
 ### V3 — Possible expansion
 
+Group/Junior program configuration, public rates and staff-reserved sessions are implemented;
+online Group/Junior booking remains unavailable. Booking/financial notifications and guest
+court/lesson checkout are implemented (guest self-management remains unavailable).
+
 - tournaments;
 - club leagues;
 - recurring bookings;
 - waiting lists;
-- group coaching;
-- notifications;
 - advanced membership credits;
-- guest players;
 - advanced player statistics;
 - club events.
 
@@ -1337,8 +1262,7 @@ Test pure TypeScript business logic:
 - membership entitlements;
 - cancellation rules;
 - refund calculations;
-- Elo calculations;
-- partner matching rules.
+- workflow decisions.
 
 ### Database/integration tests
 
@@ -1348,7 +1272,6 @@ Verify:
 - foreign key integrity;
 - court overlap protection;
 - coach overlap protection;
-- atomic rating updates;
 - membership-credit consistency;
 - privileged vs user-scoped Supabase access.
 
@@ -1429,9 +1352,6 @@ Recommended sequence:
 13. Rescheduling
 14. Membership plans and subscriptions
 15. Admin operational dashboard
-16. Partner matching (deferred indefinitely)
-17. Match recording (deferred indefinitely)
-18. Elo ranking (deferred indefinitely)
 ```
 
 The goal is to prove the difficult architectural constraints before adding secondary tennis features.
@@ -1487,9 +1407,7 @@ Before expanding the platform, prove the following cases locally:
 - rescheduling cannot create an overlapping reservation;
 - rescheduling correctly charges/refunds price differences;
 - cancellation policy produces the expected refund;
-- refunds cannot be issued twice;
-- match result and both rating updates commit atomically;
-- Elo calculations are deterministic and unit-tested.
+- refunds cannot be issued twice.
 
 ---
 
@@ -1603,7 +1521,7 @@ See [focused disposable validation](docs/testing.md#typeorm-cutover-validation).
 Management routing uses `/admin/bookings` ("Bookings & Reservations") for active Admins,
 with URL-backed Calendar (`?view=calendar`, the existing day scheduler) and List (default,
 the customer booking list) tabs; Admin requests to `/admin/reservations` redirect to the
-Calendar tab with their location and date. Coaches keep `/admin/reservations`.
+Calendar tab with their location and date. Coach requests redirect to `/coach/bookings?view=calendar`, preserving location and date.
 Both views open `/admin/bookings/[bookingId]`, whose Back link restores the originating
 Calendar (location/date) or List (filters/sort/page). Booking Details offers the existing
 Admin cancellation (`cancelCustomerBookingAsAdmin`) only for confirmed bookings before start
@@ -1637,7 +1555,7 @@ acknowledgement and automatic refunds. Other records remain read-only for Coache
 Admin management permissions remain unchanged. The desktop/mobile Admin link is staff-only, targets
 `/admin`, and stays active throughout `/admin/**`; no separate Reservations primary
 link remains. `/admin` redirects Admins
-to Locations and Coaches to Reservations. Legacy `/reservations` and `/admin/payments`
+to Locations and Coaches to `/coach/bookings`. Legacy `/reservations` and `/admin/payments`
 redirect to their canonical destinations while preserving query parameters.
 
 Coaching management lists support URL-based search, filters, sorting and server-side

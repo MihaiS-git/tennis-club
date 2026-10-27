@@ -45,7 +45,7 @@ export default async function LocationManagementPage({ params }: { params: Promi
           : <LocationOpeningHours locationId={location.id} intervals={intervals} schedules={schedules} today={publicationToday(location.timezone)} />}
       </>,
       courts: location.archived_at ? <p>Restore this location before managing courts.</p>
-        : <CourtInventory scoped location={location} courts={courts} locations={locations} periods={periods} />,
+        : <CourtInventory location={location} courts={courts} locations={locations} periods={periods} />,
       pricing: location.archived_at ? <p>Restore this location before configuring pricing.</p>
         : <PricingRules location={location} courts={courts} rules={rules} openingHours={intervals} schedules={schedules} />,
       "public-booking": <div className="grid gap-6 md:grid-cols-[minmax(0,1fr)_minmax(0,18rem)] md:gap-8">

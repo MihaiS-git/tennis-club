@@ -10,12 +10,11 @@ import { CourtItem } from "./court-item";
 import { CourtsToolbar } from "./courts-toolbar";
 import { courtInventorySchema, selectLocationCourts } from "./inventory";
 
-export function CourtInventory({ location: selected, courts, locations, periods, scoped = false }: {
+export function CourtInventory({ location: selected, courts, locations, periods }: {
   location: Pick<AdminLocation, "id" | "name">;
   courts: AdminCourt[];
   locations: Pick<AdminLocation, "id" | "name" | "is_active">[];
   periods: CoveragePeriod[];
-  scoped?: boolean;
 }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -32,14 +31,13 @@ export function CourtInventory({ location: selected, courts, locations, periods,
   const hasFilters = Boolean(options.status || options.surface || options.environment);
   function sortHref(column: typeof options.sort) {
     const query = new URLSearchParams(searchParams);
-    if (scoped) query.set("tab", "courts");
-    else query.set("location", selected.id);
+    query.set("tab", "courts");
     query.set("sort", column);
     query.set("dir", options.sort === column && options.dir === "asc" ? "desc" : "asc");
     return `${pathname}?${query}`;
   }
   return <>
-    <CourtsToolbar locations={locations} selectedId={selected.id} scoped={scoped} />
+    <CourtsToolbar locations={locations} selectedId={selected.id} />
     <section aria-label={`${selected.name} courts`}>
       {visibleIds.size === 0 ? <div className="rounded-card border border-border bg-surface px-4 py-5 text-sm text-muted-foreground">{hasFilters && locationCourtCount ? "No courts match these filters at this location." : "No courts at this location."}</div> : null}
       <div hidden={visibleIds.size === 0} className="space-y-3 lg:hidden">
@@ -52,11 +50,11 @@ export function CourtInventory({ location: selected, courts, locations, periods,
               const active = options.sort === column;
               const Icon = active ? options.dir === "asc" ? ArrowUp : ArrowDown : ArrowUpDown;
               return <th key={column} scope="col" aria-sort={active ? options.dir === "asc" ? "ascending" : "descending" : "none"} className="px-4 py-2.5">
-                <Link href={sortHref(column)} scroll={false} onClick={scoped ? (event) => {
+                <Link href={sortHref(column)} scroll={false} onClick={(event) => {
                   if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
                   event.preventDefault();
                   window.history.pushState(null, "", sortHref(column));
-                } : undefined} className="inline-flex items-center gap-1.5 rounded-control hover:text-primary focus-visible:outline-2 focus-visible:outline-primary">
+                }} className="inline-flex items-center gap-1.5 rounded-control hover:text-primary focus-visible:outline-2 focus-visible:outline-primary">
                   {column[0].toUpperCase() + column.slice(1)}<Icon aria-hidden="true" size={14} />
                 </Link>
               </th>;

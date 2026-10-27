@@ -13,15 +13,16 @@ import { savePricingRuleAction, removePricingRuleAction } from "../../../src/app
 beforeEach(() => vi.resetAllMocks());
 
 it.each([
-  [saveCourtAction, mocks.saveCourt, "/admin/courts"],
-  [saveCoverageAction, mocks.saveCoverage, "/admin/courts"],
-  [removeCoverageAction, mocks.removeCoverage, "/admin/courts"],
-  [savePricingRuleAction, mocks.savePricing, "/admin/pricing"],
-  [removePricingRuleAction, mocks.removePricing, "/admin/pricing"],
-] as const)("refreshes both the workspace and global view after a successful resource mutation", async (action, service, globalPath) => {
+  [saveCourtAction, mocks.saveCourt, ["/courts"]],
+  [saveCoverageAction, mocks.saveCoverage, []],
+  [removeCoverageAction, mocks.removeCoverage, []],
+  [savePricingRuleAction, mocks.savePricing, ["/book", "/courts", "/admin/bookings", "/coach/bookings"]],
+  [removePricingRuleAction, mocks.removePricing, ["/book", "/courts", "/admin/bookings", "/coach/bookings"]],
+] as const)("refreshes the workspace and affected destinations after a successful resource mutation", async (action, service, paths) => {
   service.mockResolvedValue({ ok: true, id: "resource" });
   expect(await action({ intent: "existing service validates input" })).toEqual({ ok: true, id: "resource" });
-  expect(mocks.revalidate).toHaveBeenCalledWith(globalPath);
+  for (const path of paths) expect(mocks.revalidate).toHaveBeenCalledWith(path);
+  expect(mocks.revalidate).toHaveBeenCalledTimes(paths.length + 1);
   expect(mocks.revalidate).toHaveBeenCalledWith("/admin/locations", "layout");
 });
 
@@ -41,5 +42,6 @@ it("refreshes pricing, readiness and public discovery only after committed openi
   mocks.openingHours.mockResolvedValueOnce({ ok: true, intervals: [], pricingAdjusted: true });
   await mutateOpeningHoursAction({});
   expect(mocks.revalidate).toHaveBeenCalledWith("/admin/locations", "layout");
-  for (const path of ["/admin/pricing", "/book", "/courts", "/admin/reservations"]) expect(mocks.revalidate).toHaveBeenCalledWith(path);
+  for (const path of ["/book", "/courts", "/admin/bookings", "/coach/bookings"]) expect(mocks.revalidate).toHaveBeenCalledWith(path);
+  expect(mocks.revalidate).toHaveBeenCalledTimes(5);
 });

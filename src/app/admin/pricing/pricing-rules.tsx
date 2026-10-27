@@ -18,7 +18,6 @@ import { formatWeekdays } from "@/lib/pricing/resolution";
 import { PricingRuleForm, type PricingCourt } from "./pricing-rule-form";
 import { savePricingRuleAction, removePricingRuleAction } from "./actions";
 import { useLocationPanelActive } from "../locations/location-workspace";
-import { PricingLocationSelect } from "./location-select";
 import { pricingFilterKeys, pricingInventorySchema, pricingSortColumns, selectPricingRules, type PricingInventoryOptions } from "./inventory";
 import { localToday } from "@/lib/courts/local-time";
 
@@ -35,9 +34,8 @@ function validity(rule: PricingRuleSet) {
   return "All dates";
 }
 
-export function PricingRules({ location, locations = [], courts, rules, openingHours, schedules }: {
+export function PricingRules({ location, courts, rules, openingHours, schedules }: {
   location: Pick<AdminLocation, "id" | "name" | "currency" | "timezone">;
-  locations?: Pick<AdminLocation, "id" | "name" | "is_active">[];
   courts: PricingCourt[]; rules: PricingRuleSet[]; openingHours: DatedOpeningInterval[];
   schedules: OpeningHoursSchedule[];
 }) {
@@ -104,7 +102,7 @@ export function PricingRules({ location, locations = [], courts, rules, openingH
   const displayedRules = selectPricingRules(rules, courts, options);
   return <section aria-label={`${location.name} pricing rules`}>
     <AdminToolbar
-      primary={locations.length > 0 && <PricingLocationSelect locations={locations} selectedId={location.id} />}
+      primary={null}
       action={<Button type="button" variant="secondary" size="small" disabled={pending || courts.length === 0} onClick={() => begin()}>Add rule</Button>}
       metadata={<p>Currency: {location.currency} · Times: {location.timezone} · Pricing must fit within configured opening hours.</p>}
     />

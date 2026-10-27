@@ -234,9 +234,6 @@ rescheduleBooking()
 cancelBooking()
 calculateRefund()
 resolveMembershipEntitlements()
-findPartnerMatches()
-recordMatch()
-calculateElo()
 ```
 
 Keep domain functions framework-light and unit-testable where practical.
@@ -442,8 +439,6 @@ Examples:
 - membership entitlements;
 - cancellation policy;
 - refund calculations;
-- partner matching;
-- Elo calculations;
 - workflow decisions.
 
 Do not implement these algorithms in SQL unless there is a specific demonstrated reason.
@@ -485,7 +480,6 @@ Examples may include:
 
 - moving a booking during rescheduling;
 - consuming membership credits;
-- recording a match and both rating changes;
 - selected payment/refund state transitions.
 
 Keep retained database functions integrity-oriented.
@@ -510,9 +504,10 @@ Public location discovery for `/book` and `/courts` uses `listPublicLocationsWit
 
 The public `/book` page reads opening hours, coverage periods, and pricing
 rules for active public resources for one valid location-local date through
-explicit public TypeORM projections. Both `/book` and `/admin/reservations` default to
+explicit public TypeORM projections. Both `/book` and the staff calendars (`/admin/bookings?view=calendar` and
+`/coach/bookings?view=calendar`) default to
 location-local today when the URL omits a date; explicit invalid dates remain
-rejected, and `/book` also rejects past dates. `/admin/reservations` allows staff to
+rejected, and `/book` also rejects past dates. The staff calendars allow Admins and Coaches to
 navigate to past dates with read-only occupancy details under the existing role
 visibility rules. Past slots and records remain protected by mutation guards.
 The default is resolved during server rendering, without a
@@ -524,8 +519,10 @@ It also reads only reservation occupancy columns for the selected date and
 active courts at that location. Only active reservation rows block their half-open
 intervals; reservation identity, reason, creator, canceller, status, and timestamps are not publicly readable.
 
-Internal `/admin/reservations` is a separate direct court-reservation workflow for active
-Admins and Coaches. It lists structurally ready locations without requiring publication.
+The internal calendars at `/admin/bookings?view=calendar` (Admin) and
+`/coach/bookings?view=calendar` (Coach) provide the direct court-reservation workflow.
+Both areas default to a List tab. `/admin/reservations` redirects to the appropriate
+Calendar, preserving location and date. The calendars list structurally ready locations without requiring publication.
 The user-scoped Server Action validates location-local
 time, a single opening-hours interval, 30-minute alignment, at least 60 minutes,
 and a required trimmed reason of at most 255 characters. TypeORM create transactions
@@ -578,15 +575,15 @@ notifications only on the confirmed transition.
 Stripe uses the existing checkout/hold lifecycle through its isolated adapter and
 signature-verified webhook. No browser-callable settlement endpoint exists.
 Direct reservations store the authenticated creator in nullable
-`court_reservations.created_by_user_id` (historical rows stay null). `/admin/reservations`
-reads occupancy for Admins and Coaches and creates new direct reservations. Active
+`court_reservations.created_by_user_id` (historical rows stay null). The staff calendars
+read occupancy for Admins and Coaches and creates new direct reservations. Active
 Admins and Coaches read the same active direct-reservation identity, reason, creator
 contact and customer/guest booking snapshots through a staff-authorized TypeORM projection for a whole-reservation details dialog. A distinct
 Admin-only TypeORM cancellation transaction changes an active direct row to cancelled
 strictly before start, records the verified Admin as canceller, and preserves its creator and details.
 Personal cancellation remains owner-only and is allowed until reservation end. Coach
 management details are read-only; public `/book` remains occupancy-only.
-Admin Edit on `/admin/reservations` currently uses the shared reservation edit form and a
+Admin Edit at `/admin/bookings/reservations/[reservationId]` uses the shared reservation edit form and a
 separate Admin-only availability read for the active reservation's fixed location.
 It excludes the edited row from occupancy and includes other active reservations.
 Admin Save uses an Admin-only TypeORM transaction with a row lock, a lossless
@@ -615,7 +612,7 @@ Owner-scoped availability excludes its own reservation and returns only active c
 opening hours and occupancy for its fixed location, independent of public publication.
 Focused TypeORM command/edit reads retain separate owner and Admin authorization
 boundaries against locked authoritative facts. Success calls `revalidateCourtActivity("edit")`
-for `/book`, `/admin/reservations`, and `/my-activity/bookings`. Full Stripe cancellation
+for `/book`, `/admin/bookings`, `/coach/bookings`, and `/my-activity/bookings`. Full Stripe cancellation
 refunds are implemented; guest self-management is not implemented. Booking/coaching lifecycle and relevant financial notifications use the application
 notification boundary described below and in `docs/notifications-delivery.md`.
 
@@ -653,6 +650,12 @@ Owner cancellation stores transaction `now()`; Admin cancellation checks databas
 All trusted direct commands explicitly reject a linked `bookings` row. Keep customer
 commands, TypeScript hold expiry, GiST, grant restrictions, advisory fencing and
 direct-reservation database invariants unchanged. No Auth/network calls occur in transactions.
+
+Admin Courts and Pricing live in `/admin/locations/[locationId]?tab=courts` and
+`?tab=pricing`. Legacy `/admin/courts` and `/admin/pricing` redirect to the matching
+workspace tab when given a valid current location, otherwise to `/admin/locations`.
+Court creation is fixed to the workspace location; editing retains the full location
+list so courts can move between locations.
 
 Admin pricing definitions apply to selected courts, not surfaces. One definition has
 one stable `rule_set_id` and expands to one atomic `location_pricing_rules` row per
@@ -816,29 +819,7 @@ If consumable credits are introduced, prefer a ledger/transaction approach over 
 
 ## Rankings
 
-> **Deferred indefinitely.** Matches, partner matching/matchmaking, match results and rankings are not part of the current product. There are no `/matches` or `/rankings` routes and no related tables; the application focuses on court booking, coaching, club facilities and member management. Player profiles, Sportya levels and player ratings remain. The design below is kept only as a reference for possible future work.
-
-Initial player rankings use an Elo-style system.
-
-Elo calculations belong in TypeScript.
-
-A ranked match update must persist atomically:
-
-```text
-match
-+
-player A rating
-+
-player B rating
-+
-player A rating history
-+
-player B rating history
-```
-
-Never leave partially applied rating changes.
-
-Elo calculation code should be deterministic and covered by unit tests.
+Matches, partner matching, match results, Elo rankings and rating history are deferred indefinitely. Do not implement their routes, tables or algorithms without an explicit scope change. Player profiles and player ratings remain in scope.
 
 ---
 
@@ -1048,8 +1029,7 @@ Use unit tests for deterministic TypeScript domain logic such as:
 - membership entitlements;
 - cancellation rules;
 - refund calculation;
-- partner compatibility;
-- Elo calculation.
+- workflow decisions.
 
 ### Database/integration tests
 
@@ -1172,7 +1152,7 @@ Unless explicitly requested, do not introduce:
 - multi-tenancy;
 - microservices;
 - a separate backend service;
-- an ORM;
+- another ORM;
 - event sourcing;
 - AI-based partner matching;
 - complex dynamic pricing;

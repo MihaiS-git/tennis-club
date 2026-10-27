@@ -62,16 +62,17 @@ Deferred indefinitely (not planned):
 - rating history;
 - match history.
 
+Group/Junior program configuration, public pricing and staff reservations are implemented;
+online Group/Junior booking remains unavailable. Booking/financial notifications and guest
+court/lesson checkout are implemented; guest self-management remains unavailable.
+
 ## Possible later expansion
 
 - tournaments;
 - club leagues;
 - recurring bookings;
 - waiting lists;
-- group coaching;
-- notifications;
 - advanced membership credits;
-- guest players;
 - advanced player statistics;
 - club events.
 
@@ -95,9 +96,6 @@ Recommended sequence:
 13. Rescheduling
 14. Membership plans and subscriptions
 15. Admin operational dashboard
-16. Partner matching (deferred indefinitely)
-17. Match recording (deferred indefinitely)
-18. Elo ranking (deferred indefinitely)
 ```
 
 The intent is to prove the difficult security/concurrency/payment constraints before secondary tennis features.
@@ -109,7 +107,7 @@ Do not introduce prematurely:
 - multi-tenancy;
 - microservices;
 - a separate backend service;
-- an ORM;
+- another ORM;
 - event sourcing;
 - AI-based partner matching;
 - complex dynamic pricing;

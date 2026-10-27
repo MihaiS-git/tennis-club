@@ -2,7 +2,7 @@
 
 ## System boundary
 
-The application is a modular Next.js application for one tennis club with multiple locations. The diagram below shows the intended architecture as booking and payment features are added; the current implementation includes authentication, RBAC/Admin Users, personal/contact information, and player profiles with Storage avatars.
+The application is a modular Next.js application for one tennis club with multiple locations. The diagram below shows the current architecture, including court/coaching bookings, Stripe payments/refunds, notifications, staff management, authentication and profiles with private Storage avatars.
 
 ```text
 Browser
@@ -34,11 +34,20 @@ Architectural rule:
 
 > Next.js is the complete primary application authorization boundary, TypeScript decides business behavior, PostgreSQL guarantees data integrity, application table grants deny direct browser access and Storage RLS protects private objects, and Stripe owns payment processing.
 
-`src/lib/db/data-source.ts` registers all 28 application entities and the
+`src/lib/db/data-source.ts` registers the application entities and the
 additional non-synchronized reference to Supabase-managed `auth.users`, and lazily initializes a module-scoped connection. This preserves constructor identity across Next.js route/action
 bundles; do not move the connection into a process-global registry. `DATABASE_POOL_MAX`
 defaults to 2. Synchronization, dropping schemas and automatic migrations are disabled.
 The standalone migration CLI reuses the DataSource and TypeScript loader.
+
+## Management routes
+
+Admin Courts and Pricing are tabs at `/admin/locations/[locationId]?tab=courts`
+and `?tab=pricing`. Legacy `/admin/courts` and `/admin/pricing` redirect to the
+workspace when a valid current location is supplied, otherwise to Locations.
+Admins use `/admin/bookings` and Coaches use `/coach/bookings`; both default to
+List and expose Calendar at `?view=calendar`. `/admin/reservations` redirects to
+the role’s Calendar with location/date preserved.
 
 ## Resource persistence
 
@@ -215,8 +224,6 @@ Keep application/domain algorithms in TypeScript, including:
 - membership entitlements;
 - cancellation policy;
 - refund calculation;
-- partner matching;
-- Elo calculations;
 - Stripe orchestration;
 - workflow decisions.
 
@@ -248,7 +255,6 @@ Examples:
 
 - moving a booking during rescheduling;
 - consuming membership credits;
-- recording a match plus both rating updates;
 - selected payment/refund state transitions.
 
 Responsibility split:
@@ -261,7 +267,7 @@ PostgreSQL transaction
 → guarantees required persistence happens atomically
 ```
 
-Keep pricing, Elo, partner matching, entitlement rules and other application algorithms in TypeScript.
+Keep pricing, entitlement rules and other application algorithms in TypeScript.
 
 ## Initial schema approach
 
@@ -305,17 +311,13 @@ patch chains; released production migrations remain immutable. Rebuilding local 
 
 Future domain entities are introduced when their workflow is implemented rather than creating the full future schema mechanically.
 
-Likely domains include:
+Implemented domains include locations/courts, coaching, booking revisions, payments/refunds
+and notifications. Memberships, subscriptions and credits remain planned; Matches/Rankings
+are deferred indefinitely. Other future domains may include:
 
-- locations/courts;
-- court availability/exceptions;
-- coaches/coach locations/availability (programs, coach profiles, assignments,
-  prices and coach availability are implemented; see `coaching.md`);
-- bookings/participants/rescheduling history;
-- partner requests;
-- matches/ratings/rating history;
+- court availability exceptions;
+- booking participant management;
 - membership plans/subscriptions/credit ledger;
-- payments/refunds/Stripe events;
 - audit events.
 
 ## Current authentication flow

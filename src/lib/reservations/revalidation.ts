@@ -5,7 +5,6 @@ import { revalidatePath } from "next/cache";
 /** Call only after a successful booking or direct reservation mutation. */
 export function revalidateCourtActivity(mutation: "create" | "edit" | "cancel") {
   revalidatePath("/book");
-  revalidatePath("/admin/reservations");
   revalidatePath("/admin/bookings");
   revalidatePath("/coach/bookings");
   // These are shared route paths, including when an Admin changes another owner's activity.

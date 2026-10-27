@@ -721,11 +721,10 @@ not touched. Remove seeded data through Admin (deactivate programs, hide coaches
 ```bash
 npx vitest run tests/unit/coaching tests/components/coaching-page.test.tsx \
   tests/components/admin-coaching.test.tsx tests/components/homepage-coaching.test.tsx \
-  tests/components/coach-profile-page.test.tsx tests/components/public-page-layout.test.tsx \
+  tests/components/coach-profile-page.test.tsx \
   tests/components/coach-availability.test.tsx tests/components/admin-navigation.test.tsx
 npm run test:integration -- tests/integration/admin/coaching.integration.test.ts \
   tests/integration/admin/coach-availability.integration.test.ts \
-  tests/integration/coaching-seed.integration.test.ts \
   tests/integration/coaching-lesson-availability.integration.test.ts \
   tests/integration/coaching-booking.integration.test.ts
 ```

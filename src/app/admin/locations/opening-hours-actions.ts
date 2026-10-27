@@ -7,11 +7,10 @@ export async function mutateOpeningHoursAction(input: unknown) {
   const result = await mutateAdminOpeningHours(input);
   if (result.ok) {
     revalidatePath("/admin/locations", "layout");
-    revalidatePath("/admin/pricing");
     revalidatePath("/book");
     revalidatePath("/courts");
-    revalidatePath("/admin/reservations");
     revalidatePath("/admin/bookings");
+    revalidatePath("/coach/bookings");
   }
   return result;
 }

@@ -11,7 +11,6 @@ vi.mock("../../src/lib/supabase/server", () => ({ createClient: vi.fn() }));
 import { AdminNavigation } from "../../src/components/admin-navigation";
 import PaymentsLayout from "../../src/app/admin/payments/layout";
 import AdminPage from "../../src/app/admin/page";
-import { PricingLocationSelect } from "../../src/app/admin/pricing/location-select";
 
 afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
 
@@ -137,15 +136,6 @@ it("does not redirect when Admin authorization rejects access", async () => {
   navigation.requireReservationRole.mockRejectedValueOnce(new Error("Unauthorized"));
   await expect(AdminPage()).rejects.toThrow("Unauthorized");
   expect(navigation.redirect).not.toHaveBeenCalled();
-});
-
-it("navigates pricing location selection directly to the workspace tab", () => {
-  const id = "a1000000-0000-4000-8000-000000000001";
-  render(<PricingLocationSelect locations={[{ id, name: "Central", is_active: true }]} />);
-  fireEvent.change(screen.getByRole("combobox", { name: "Location" }), { target: { value: id } });
-  expect(navigation.push).toHaveBeenLastCalledWith(`/admin/locations/${id}?tab=pricing`);
-  fireEvent.change(screen.getByRole("combobox", { name: "Location" }), { target: { value: "" } });
-  expect(navigation.push).toHaveBeenLastCalledWith("/admin/locations");
 });
 
 it("shows Coaches only their own Bookings & Reservations area", () => {

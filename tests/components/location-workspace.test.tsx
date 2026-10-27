@@ -187,6 +187,7 @@ it("creates a local court and edits/moves it with the existing dialog", async ()
   fireEvent.click(screen.getByRole("button", { name: "Create court" }));
   let dialog = screen.getByRole("dialog", { name: "Create court" });
   expect(within(dialog).getByLabelText("Location")).toHaveProperty("value", location.id);
+  expect(within(dialog).queryByRole("option", { name: "North" })).toBeNull();
   fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "Court Two" } });
   fireEvent.submit(within(dialog).getByRole("button", { name: "Save court" }).closest("form")!);
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -215,6 +216,9 @@ it("preserves coverage drafts through court filtering, sorting and tab selection
   expect(within(table).getByLabelText("Start date")).toBe(start);
   fireEvent.click(within(table).getByRole("link", { name: "Name" }));
   expect(window.location.search).toContain("sort=name");
+  expect(window.location.pathname).toBe(url);
+  expect(new URLSearchParams(window.location.search).get("tab")).toBe("courts");
+  expect(new URLSearchParams(window.location.search).has("location")).toBe(false);
   tab("Details"); tab("Courts");
   expect(within(table).getByLabelText("Start date")).toHaveProperty("value", "2026-11-01");
   fireEvent.click(within(table).getByRole("button", { name: "Save period" }));

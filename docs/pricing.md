@@ -1,9 +1,9 @@
 # Location pricing policies
 
-`/admin/pricing` is active-admin-only. A selected location supplies its courts,
-timezone, opening hours and currency. With multiple locations, changing the selector
-navigates immediately to `/admin/pricing?location=<id>`; a single location displays
-its context without a selector.
+Pricing is active-Admin-only at `/admin/locations/[locationId]?tab=pricing`. The
+location workspace supplies courts, timezone, opening hours and currency; there is
+no separate location picker in the Pricing tab. The legacy `/admin/pricing?location=<id>`
+route redirects to this tab, or to `/admin/locations` without a valid current location.
 
 An administrator manages one logical rule set in one shared Create/Edit form. The
 form selects one or more courts and weekdays, one compatible state, a local time
