@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { PendingLink } from "@/components/navigation-pending";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
 type PageItem = number | "ellipsis-start" | "ellipsis-end";
@@ -49,7 +49,7 @@ export function Pagination({ currentPage, totalPages, hasNext, buildHref, ariaLa
       <ul className="flex max-w-full flex-wrap items-center justify-center gap-0.5 sm:gap-1.5">
         <li>
           {currentPage > 1 ? (
-            <Link href={buildHref(currentPage - 1)} scroll={scroll} aria-label="Previous" className={`${navigationControl} ${inactive}`}>{previous}</Link>
+            <PendingLink href={buildHref(currentPage - 1)} scroll={scroll} aria-label="Previous" className={`${navigationControl} ${inactive}`}>{previous}</PendingLink>
           ) : (
             <span aria-disabled="true" aria-label="Previous" className={`${navigationControl} ${disabled}`}>{previous}</span>
           )}
@@ -61,13 +61,13 @@ export function Pagination({ currentPage, totalPages, hasNext, buildHref, ariaLa
             ) : item === currentPage ? (
               <span aria-current="page" aria-label={`Page ${item}`} className={`${control} border-primary bg-primary font-semibold text-primary-foreground`}>{item}</span>
             ) : (
-              <Link href={buildHref(item)} scroll={scroll} className={`${control} ${inactive}`}>{item}</Link>
+              <PendingLink href={buildHref(item)} scroll={scroll} className={`${control} ${inactive}`}>{item}</PendingLink>
             )}
           </li>
         ))}
         <li>
           {canGoNext ? (
-            <Link href={buildHref(currentPage + 1)} scroll={scroll} aria-label="Next" className={`${navigationControl} ${inactive}`}>{next}</Link>
+            <PendingLink href={buildHref(currentPage + 1)} scroll={scroll} aria-label="Next" className={`${navigationControl} ${inactive}`}>{next}</PendingLink>
           ) : (
             <span aria-disabled="true" aria-label="Next" className={`${navigationControl} ${disabled}`}>{next}</span>
           )}

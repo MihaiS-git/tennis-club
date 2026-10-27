@@ -10,7 +10,7 @@ vi.mock("next/navigation", () => ({
   usePathname: () => navigation.pathname,
   useRouter: () => ({ replace: navigation.replace }),
 }));
-vi.mock("next/link", () => ({ default: ({ href, children, ...props }:
+vi.mock("next/link", () => ({ useLinkStatus: () => ({ pending: false }), default: ({ href, children, ...props }:
   import("react").ComponentProps<"a"> & Pick<import("react").ComponentProps<typeof import("next/link").default>, "scroll" | "transitionTypes" | "onNavigate">) =>
   {
     delete props.scroll;
@@ -51,7 +51,7 @@ it.each(["upcoming", "history"] as const)("offers Court and Coaching filters to 
   render(<ActivityControls staff={false} scope={scope}
     query={parseActivityQuery({ type: "coaching", page: "3", sort: "duration" }, scope, false)} options={options} />);
   const select = screen.getByRole("combobox", { name: "Type" }) as HTMLSelectElement;
-  expect([...select.options].map(option => option.textContent)).toEqual(["All", "Court", "Coaching"]);
+  expect([...select.options].map(option => option.textContent)).toEqual(["All bookings", "Court bookings", "Coaching lessons"]);
   expect(select.value).toBe("coaching");
   fireEvent.change(select, { target: { value: "court" } });
   const params = new URL(navigation.replace.mock.lastCall![0], "http://localhost").searchParams;
@@ -143,4 +143,45 @@ it("treats a direct URL court from another location as no court filter", () => {
   expect(courtOptions()).toEqual([["All courts", ""], ["C1", mivusC1]]);
   expect(courtSelect().value).toBe("");
   expect(screen.getByRole("button", { name: /^Filters\s*1\s*active$/ })).toBeTruthy();
+});
+
+const typeSelect = () => screen.getByRole("combobox", { name: "Type" }) as HTMLSelectElement;
+const clearSlot = (container: HTMLElement) => container.querySelector("[data-filter-clear-slot]")!;
+
+it("offers staff each distinct activity type once, with clear labels", () => {
+  render(<ActivityControls staff scope="upcoming" query={parseActivityQuery({}, "upcoming")} options={options} />);
+  expect([...typeSelect().options].map(option => [option.value, option.textContent])).toEqual([
+    ["all", "All activity"], ["court", "Court bookings"], ["coaching", "Coaching lessons"],
+    ["booking", "All bookings"], ["reservation", "Staff reservations"]]);
+});
+
+it.each([false, true])("keeps the selected Type synchronized with URL navigation, including Back/Forward (staff=%s)", (staff) => {
+  const { rerender } = render(<ActivityControls staff={staff} scope="upcoming"
+    query={parseActivityQuery({ type: "court", page: "2", sort: "duration" }, "upcoming", staff)} options={options} />);
+  expect(typeSelect().value).toBe("court");
+  fireEvent.change(typeSelect(), { target: { value: "coaching" } });
+  expect(Object.fromEntries(lastParams())).toMatchObject({ type: "coaching", sort: "duration" });
+  expect(lastParams().has("page")).toBe(false);
+  // The server re-renders with the URL's query after navigation and after Back/Forward.
+  rerender(<ActivityControls staff={staff} scope="upcoming" query={parseActivityQuery({ type: "coaching" }, "upcoming", staff)} options={options} />);
+  expect(typeSelect().value).toBe("coaching");
+  rerender(<ActivityControls staff={staff} scope="upcoming" query={parseActivityQuery({ type: "court", page: "2" }, "upcoming", staff)} options={options} />);
+  expect(typeSelect().value).toBe("court");
+  fireEvent.change(typeSelect(), { target: { value: "all" } });
+  expect(lastParams().get("type")).toBe("all");
+  expect(lastParams().has("page")).toBe(false);
+});
+
+it("hides Clear for explicit default URL values while always reserving its slot", () => {
+  const defaults = { type: "booking", status: "all", page: "1", sort: "datetime", direction: "desc" };
+  const { container, rerender } = render(<ActivityControls staff={false} scope="history"
+    query={parseActivityQuery(defaults, "history", false)} options={options} />);
+  expect(typeSelect().value).toBe("all");
+  expect(screen.queryByRole("link", { name: "Clear filters" })).toBeNull();
+  const slot = clearSlot(container);
+  expect(slot).toBeTruthy();
+  rerender(<ActivityControls staff={false} scope="history" query={parseActivityQuery({ ...defaults, type: "court" }, "history", false)} options={options} />);
+  expect(clearSlot(container)).toBe(slot);
+  expect(slot.querySelector("a")?.textContent).toBe("Clear filters");
+  expect(slot.className).toBe(clearSlot(container).className);
 });

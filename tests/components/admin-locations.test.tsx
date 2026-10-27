@@ -54,7 +54,7 @@ function openEditLocation(value: AdminLocation = location) {
 
 function renderLocationRow() {
   render(<table><tbody><LocationItem location={location} missing={[]} countryName="Romania" /></tbody></table>);
-  return screen.getByRole("row", { name: `Manage location ${location.name}` });
+  return screen.getByRole("row");
 }
 
 it("links creation to the full-page shared form", async () => {
@@ -144,30 +144,15 @@ it("explains a server-rejected currency change in place and keeps the draft", as
   expect(screen.queryByText(/The currency was not changed/)).toBeNull();
 });
 
-it.each(["Enter", " "])("navigates from the focused location row with %s", (key) => {
+it("uses a native stretched name link and independent setup actions", () => {
   const row = renderLocationRow();
-  row.focus();
-  fireEvent.keyDown(row, { key });
-  expect(push).toHaveBeenCalledExactlyOnceWith(`/admin/locations/${location.id}`);
-  expect(screen.queryByRole("dialog")).toBeNull();
-});
-
-it("navigates on row clicks and preserves native management/configuration links", () => {
-  const row = renderLocationRow();
-  fireEvent.click(within(row).getByText("RON"));
-  expect(push).toHaveBeenCalledExactlyOnceWith(`/admin/locations/${location.id}`);
-  push.mockClear();
   const name = within(row).getByRole("link", { name: location.name });
+  expect(row.hasAttribute("tabindex")).toBe(false);
   expect(name.getAttribute("href")).toBe(`/admin/locations/${location.id}`);
-  fireEvent.click(name);
-  const manage = within(row).getByRole("link", { name: `Manage location ${location.name}` });
-  expect(manage.getAttribute("href")).toBe(`/admin/locations/${location.id}`);
-  fireEvent.click(manage);
+  expect(name.className).toContain("after:inset-0");
   const hours = within(row).getByRole("link", { name: "Opening hours configured" });
   expect(hours.getAttribute("href")).toBe(`/admin/locations/${location.id}?tab=opening-hours`);
-  fireEvent.click(hours);
-  fireEvent.keyDown(hours, { key: "Enter" });
-  expect(push).not.toHaveBeenCalled();
+  expect(hours.className).toContain("z-10");
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 

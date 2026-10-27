@@ -1,14 +1,29 @@
 // @vitest-environment jsdom
 
 import { renderToReadableStream } from "react-dom/server";
+import { Suspense, useState, type ComponentProps } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 
 import type { CurrentAccount } from "../../src/lib/auth/account";
 
-const { readCurrentAccount, signOut, avatar, route } = vi.hoisted(() => ({ readCurrentAccount: vi.fn(), signOut: vi.fn(), avatar: { url: null as string | null }, route: { pathname: "/courts" } }));
+const { readCurrentAccount, signOut, avatar, route } = vi.hoisted(() => ({ readCurrentAccount: vi.fn(), signOut: vi.fn(), avatar: { url: null as string | null }, route: { pathname: "/courts", push: vi.fn() } }));
 
-vi.mock("next/navigation", () => ({ usePathname: () => route.pathname, useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }));
+vi.mock("next/navigation", () => ({ usePathname: () => route.pathname, useRouter: () => ({ push: route.push, replace: vi.fn() }) }));
+vi.mock("next/link", () => ({
+  useLinkStatus: () => ({ pending: false }),
+  default: ({ href, onNavigate, onClick, children, scroll, replace, transitionTypes, ...props }: Omit<ComponentProps<"a">, "href"> & {
+    href: string; scroll?: boolean; replace?: boolean; transitionTypes?: string[]; onNavigate?: (event: { preventDefault: () => void }) => void;
+  }) => {
+    void scroll; void replace; void transitionTypes;
+    return <a {...props} href={href} onClick={event => {
+      onClick?.(event);
+      if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      onNavigate?.({ preventDefault() {} });
+    }}>{children}</a>;
+  },
+}));
 
 vi.mock("../../src/app/account/actions", () => ({ signOutAction: signOut }));
 vi.mock("../../src/lib/auth/account", () => ({ readCurrentAccount }));
@@ -21,14 +36,32 @@ import { DesktopNavbar } from "../../src/components/desktop-navbar";
 import { MobileNavbar } from "../../src/components/mobile-navbar";
 
 beforeEach(() => {
+  route.pathname = "/courts";
+  route.push.mockReset();
   vi.stubGlobal("matchMedia", vi.fn((query: string) => Object.assign(new EventTarget(), {
     matches: false, media: query, onchange: null,
   })));
 });
 afterEach(() => { cleanup(); avatar.url = null; signOut.mockReset(); vi.unstubAllGlobals(); });
 
-it("shows signed-out links and closes on link selection or Escape", () => {
-  render(<MobileNavbarMenu isAuthenticated={false} canReserve={false} />);
+it("shows signed-out links and closes after navigation settles or on Escape", async () => {
+  let finish!: () => void;
+  const gate = new Promise<void>(resolve => { finish = resolve; });
+  let ready = false;
+  function Destination({ navigating }: { navigating: boolean }) {
+    if (navigating && !ready) throw gate;
+    return <p>Current page</p>;
+  }
+  function App() {
+    const [navigating, setNavigating] = useState(false);
+    // Like Next's router, push returns void and schedules a suspending React update.
+    route.push.mockImplementation(() => { setNavigating(true); });
+    return <Suspense fallback="Loading destination">
+      <MobileNavbarMenu isAuthenticated={false} canReserve={false} />
+      <Destination navigating={navigating} />
+    </Suspense>;
+  }
+  render(<App />);
 
   const trigger = screen.getByRole("button", { name: "Open menu" });
   expect(trigger.getAttribute("aria-expanded")).toBe("false");
@@ -48,15 +81,29 @@ it("shows signed-out links and closes on link selection or Escape", () => {
   expect(within(navigation).queryByRole("button", { name: "Sign out" })).toBeNull();
   expect(within(navigation).queryByText("Book a court")).toBeNull();
 
-  fireEvent.click(within(navigation).getByRole("link", { name: "Courts" }));
+  const courts = within(navigation).getByRole("link", { name: "Courts" });
+  courts.focus();
+  fireEvent.click(courts);
+  expect(route.push).toHaveBeenCalledExactlyOnceWith("/courts");
+  expect(screen.getByRole("dialog", { name: "Mobile navigation menu" })).toBe(drawer);
+  expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  expect(courts.querySelector("svg.motion-safe\\:animate-spin")).toBeTruthy();
+  expect(document.activeElement).toBe(courts);
+  expect(document.body.style.overflow).toBe("hidden");
+
+  await act(async () => { ready = true; finish(); });
+  expect(screen.queryByRole("dialog", { name: "Mobile navigation menu" })).toBeNull();
   expect(trigger.getAttribute("aria-expanded")).toBe("false");
+  expect(courts.querySelector("svg.motion-safe\\:animate-spin")).toBeNull();
   expect(document.activeElement).toBe(trigger);
   expect(document.body.style.overflow).toBe("");
 
   fireEvent.click(trigger);
   fireEvent.keyDown(window, { key: "Escape" });
   expect(trigger.getAttribute("aria-expanded")).toBe("false");
+  expect(screen.queryByRole("dialog", { name: "Mobile navigation menu" })).toBeNull();
   expect(document.activeElement).toBe(trigger);
+  expect(document.body.style.overflow).toBe("");
 });
 
 it("closes on backdrop or drawer close button and restores focus", () => {
@@ -212,4 +259,32 @@ it("does not render a notification bell for guests", async () => {
   const markup = await new Response(await renderToReadableStream(<DesktopNavbar />)).text();
   const desktop = new DOMParser().parseFromString(markup, "text/html");
   expect(desktop.querySelector('[aria-label^="Notifications"]')).toBeNull();
+});
+
+it.each([null, "/profile/avatar?v=1"])("shares icon geometry and interaction styles across desktop and mobile (avatar %s)", async url => {
+  readCurrentAccount.mockResolvedValue({ state: "active", roles: [], userId: "member-1", email: "member@example.com" });
+  avatar.url = url;
+  const stream = await renderToReadableStream(<DesktopNavbar />);
+  await stream.allReady;
+  const desktop = new DOMParser().parseFromString(await new Response(stream).text(), "text/html");
+  const { container } = render(await MobileNavbar());
+  const controls = [
+    desktop.querySelector('a[aria-label="Notifications"]')!,
+    desktop.querySelector('a[aria-label="Profile"]')!,
+    container.querySelector('a[aria-label="Notifications"]')!,
+  ];
+  expect(container.querySelector('a[aria-label="Profile"]')).toBeNull();
+  expect(controls.every(control => control.className === controls[0].className)).toBe(true);
+  for (const control of controls) {
+    expect(control.className).toContain("size-10 shrink-0 items-center justify-center");
+    expect(control.className).toContain("p-0");
+    expect(control.className).toContain("hover:bg-surface-muted active:bg-surface-muted focus-visible:outline-2");
+    const icon = control.querySelector("svg, img")!;
+    expect(icon.getAttribute("class")).toContain("size-5");
+    if (icon.tagName.toLowerCase() === "img") {
+      expect(icon.getAttribute("width")).toBe("20");
+      expect(icon.getAttribute("height")).toBe("20");
+    }
+  }
+  expect(controls.map(control => control.getAttribute("href"))).toEqual(["/messages", "/profile", "/messages"]);
 });

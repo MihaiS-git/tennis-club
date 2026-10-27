@@ -9,6 +9,7 @@ import { EditorialHero } from "../editorial-hero";
 import styles from "../page.module.css";
 import { PageSectionNav } from "../page-section-nav";
 import { CoachingCoaches, CoachingGroupPrices, CoachingPrices, CoachingPrograms } from "./coaching-sections";
+import { LoadingStatus } from "@/components/loading-status";
 
 export const metadata: Metadata = {
   title: "Coaching | Tennis Club",
@@ -90,7 +91,7 @@ export default function CoachingPage() {
             </p>
           </div>
           <div className="mt-10 md:mt-14">
-            <Suspense fallback={<p role="status" className="border-t border-border pt-5 font-sans text-base text-muted-foreground">Loading programs…</p>}>
+            <Suspense fallback={<LoadingStatus label="Loading programs…" className="border-t border-border pt-5" />}>
               <CoachingPrograms coaching={coaching} />
             </Suspense>
           </div>
@@ -109,7 +110,7 @@ export default function CoachingPage() {
             </p>
           </div>
           <div className="mt-10 md:mt-14">
-            <Suspense fallback={<p role="status" className="border-t border-border pt-5 font-sans text-base text-muted-foreground">Loading coaches…</p>}>
+            <Suspense fallback={<LoadingStatus label="Loading coaches…" className="border-t border-border pt-5" />}>
               <CoachingCoaches coaching={coaching} />
             </Suspense>
           </div>
@@ -128,7 +129,7 @@ export default function CoachingPage() {
               The club price applies to every coach unless a coach has an individual price, listed beneath it.
             </p>
           </div>
-          <Suspense fallback={<p role="status" className="border-t border-ivory/30 pt-5 font-sans text-base text-ivory">Loading prices…</p>}>
+          <Suspense fallback={<LoadingStatus tone="inverse" label="Loading prices…" className="border-t border-ivory/30 pt-5" />}>
             <CoachingPrices coaching={coaching} />
           </Suspense>
         </div>
@@ -151,7 +152,7 @@ export default function CoachingPage() {
             </div>
           </div>
           <div className="mt-10 md:mt-14">
-            <Suspense fallback={<p role="status" className="border-t border-border pt-5 font-sans text-base text-muted-foreground">Loading prices…</p>}>
+            <Suspense fallback={<LoadingStatus label="Loading prices…" className="border-t border-border pt-5" />}>
               <CoachingGroupPrices coaching={coaching} />
             </Suspense>
           </div>

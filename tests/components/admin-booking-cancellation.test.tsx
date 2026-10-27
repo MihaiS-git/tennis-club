@@ -45,7 +45,7 @@ test("Booking Details cancels through the existing Admin action, shows the refun
     "Captured online funds will be refunded automatically."]) expect(confirmation.textContent).toContain(value);
   expect(mocks.cancel).not.toHaveBeenCalled();
   fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel booking" }));
-  fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel booking" }));
+  fireEvent.click(within(confirmation).getByRole("button", { name: "Cancelling booking…" }));
   await waitFor(() => expect(mocks.refresh).toHaveBeenCalledOnce());
   // One request: the service, not the page, owns lifecycle, refunds and idempotency.
   expect(mocks.cancel).toHaveBeenCalledExactlyOnceWith({ id: bookingId });

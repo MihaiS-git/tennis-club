@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useRef } from "react";
 import { AdminToolbar } from "@/components/admin-page-controls";
+import { FilterClearSlot } from "@/components/filter-clear-slot";
 import { courtEnvironments, courtSurfaces, courtEnvironmentLabels, courtSurfaceLabels } from "@/lib/admin/courts-validation";
 import { CourtDialog } from "./court-dialog";
 import { courtInventorySchema } from "./inventory";
@@ -57,11 +58,13 @@ export function CourtsToolbar({ locations, selectedId }: {
         <option value="">All environments</option>{courtEnvironments.map((environment) => <option key={environment} value={environment}>{courtEnvironmentLabels[environment]}</option>)}
       </select>
     </label>
-    {hasFilters && <Link href={clearHref} onClick={(event) => {
-      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-      event.preventDefault(); window.history.replaceState(null, "", clearHref);
-    }}
-      className="px-3 py-2 font-medium text-primary underline">Clear filters</Link>}
+    <FilterClearSlot active={hasFilters}>
+      <Link href={clearHref} onClick={(event) => {
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        event.preventDefault(); window.history.replaceState(null, "", clearHref);
+      }}
+        className="inline-flex min-h-10 items-center whitespace-nowrap rounded-control px-2 font-medium text-primary underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">Clear filters</Link>
+    </FilterClearSlot>
     </>}
   />;
 }

@@ -131,6 +131,28 @@ it("does not show the coaching reset in court-booking mode", () => {
   expect(screen.queryByRole("button", { name: "Clear filters" })).toBeNull();
 });
 
+it("reserves the Clear filters slot so switching booking mode keeps the other calendar controls fixed", () => {
+  const props = { locations: [{ id: "one", name: "One" }], locationId: "one", date: "2026-10-20", today: "2026-10-20" };
+  // Every element outside the slot (and its classes) must be identical with and without Clear.
+  const layout = (container: HTMLElement) => [...container.querySelectorAll(":not(option)")]
+    .filter((element) => !element.closest("[data-filter-clear-slot]")).map((element) => `${element.tagName}.${element.getAttribute("class") ?? ""}`);
+  const { container, rerender } = render(<CalendarControls {...props} />);
+  const slot = container.querySelector("[data-filter-clear-slot]")!;
+  expect(slot.children).toHaveLength(0);
+  const courtLayout = layout(container);
+
+  rerender(<CalendarControls {...props} coaching={{ coach: "ana" }} />);
+  const clear = screen.getByRole("button", { name: "Clear filters" });
+  expect(container.querySelector("[data-filter-clear-slot]")).toBe(slot);
+  expect(slot.contains(clear)).toBe(true);
+  expect(layout(container)).toEqual(courtLayout);
+
+  rerender(<CalendarControls {...props} />);
+  expect(screen.queryByRole("button", { name: "Clear filters" })).toBeNull();
+  expect(container.querySelector("[data-filter-clear-slot]")).toBe(slot);
+  expect(layout(container)).toEqual(courtLayout);
+});
+
 it("allows recovery from an invalid date using the same clear action", () => {
   render(<CalendarControls locations={[{ id: "one", name: "One" }]} locationId="one" date={null} today="2026-10-20" coaching={{ coach: "invalid" }} />);
   fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));

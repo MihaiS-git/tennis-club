@@ -7,7 +7,7 @@ import { Pagination, paginationItems } from "../../src/components/pagination";
 import { ActivityPagination } from "@/app/my-activity/activity-pagination";
 import { activityHref, parseActivityQuery } from "@/lib/bookings/activity-query";
 
-vi.mock("next/link", () => ({
+vi.mock("next/link", () => ({ useLinkStatus: () => ({ pending: false }),
   default: ({ scroll, ...props }: ComponentProps<"a"> & { scroll?: boolean }) => <a {...props} data-scroll={String(scroll)} />,
 }));
 

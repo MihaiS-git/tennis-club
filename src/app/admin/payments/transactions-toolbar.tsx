@@ -1,13 +1,16 @@
 "use client";
 
 import Link from "next/link";
+
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { AdminToolbar } from "@/components/admin-page-controls";
+import { FilterClearSlot } from "@/components/filter-clear-slot";
 import { parseAdminPaymentQuery, paymentStatusLabels, paymentProviderLabels, paymentMethodLabels } from "@/lib/payments/admin-query";
 
 export function TransactionsToolbar() {
   const router = useRouter(), pathname = usePathname(), searchParams = useSearchParams();
+  const [pending, startTransition] = useTransition();
   const queryString = searchParams.toString();
   const filters = parseAdminPaymentQuery(Object.fromEntries(["q", "status", "provider", "method", "attention"].map((key) => {
     const values = searchParams.getAll(key); return [key, values.length === 1 ? values[0] : undefined];
@@ -24,10 +27,10 @@ export function TransactionsToolbar() {
     const params = new URLSearchParams(currentQuery.current);
     if (value && value !== "all") params.set(key, value); else params.delete(key);
     params.delete("page"); currentQuery.current = params.toString();
-    router.replace(`${pathname}${params.size ? `?${params}` : ""}`, { scroll: false });
+    startTransition(() => router.replace(`${pathname}${params.size ? `?${params}` : ""}`, { scroll: false }));
   }
   const control = "min-h-10 w-full rounded-control border border-border-strong bg-surface px-3 py-2 text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus";
-  return <AdminToolbar primary={<label className="flex w-full flex-col gap-1.5 font-medium text-primary sm:w-72">
+  return <AdminToolbar pending={pending} primary={<label className="flex w-full flex-col gap-1.5 font-medium text-primary sm:w-72">
     Search<input type="search" value={text} maxLength={200} placeholder="Customer, booking or transaction ID" className={control}
       onChange={(event) => {
         const next = event.target.value; setDraft({ queryString, text: next }); cancelSearch();
@@ -43,7 +46,8 @@ export function TransactionsToolbar() {
         <option value="all">All</option>{Object.entries(options).map(([value, name]) => <option key={value} value={value}>{name}</option>)}
       </select>
     </label>)}
-    {(filters.q || [filters.status, filters.provider, filters.method, filters.attention].some((value) => value !== "all")) &&
-      <Link href={pathname} onClick={cancelSearch} className="px-3 py-2 text-primary underline">Clear filters</Link>}
+    <FilterClearSlot active={Boolean(filters.q || [filters.status, filters.provider, filters.method, filters.attention].some((value) => value !== "all"))}>
+      <Link scroll={false} href={pathname} onNavigate={event => { event.preventDefault(); currentQuery.current = ""; startTransition(() => router.replace(pathname, { scroll: false })); }} onClick={cancelSearch} className="inline-flex min-h-10 items-center whitespace-nowrap rounded-control px-2 font-medium text-primary underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">Clear filters</Link>
+    </FilterClearSlot>
   </>} />;
 }

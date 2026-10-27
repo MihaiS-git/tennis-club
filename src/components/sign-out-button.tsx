@@ -1,11 +1,11 @@
 "use client";
 
 import { useFormStatus } from "react-dom";
+import { Button } from "@/components/button";
 
 export function SignOutButton({ className }: { className: string }) {
   const { pending } = useFormStatus();
-  return <button type="submit" disabled={pending} aria-busy={pending}
-    className={`${className} enabled:hover:text-accent disabled:cursor-not-allowed disabled:opacity-60`}>
+  return <Button type="submit" variant="text" disabled={pending} aria-busy={pending} className={className}>
     {pending ? "Signing out…" : "Sign out"}
-  </button>;
+  </Button>;
 }

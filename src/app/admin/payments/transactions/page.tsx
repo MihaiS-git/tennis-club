@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { PendingLink } from "@/components/navigation-pending";
 import { ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
 import { Pagination } from "@/components/pagination";
 import { listAdminPaymentTransactions } from "@/lib/payments/admin";
@@ -30,8 +30,8 @@ export default async function AdminPaymentsPage({ searchParams }: {
             const active = query.sort === sort;
             const Icon = active ? query.dir === "asc" ? ArrowUp : ArrowDown : ArrowUpDown;
             return <th key={label} scope="col" className={`whitespace-nowrap px-3 py-2.5 ${label === "Amount" ? "text-right" : ""}`} aria-sort={sort ? active ? query.dir === "asc" ? "ascending" : "descending" : "none" : undefined}>
-              {sort ? <Link scroll={false} href={adminPaymentHref({ ...query,sort,dir: active && query.dir === "desc" ? "asc" : "desc" },1)}
-                className="inline-flex items-center gap-1.5 hover:text-primary">{label}<Icon size={14} aria-hidden /></Link> : label}
+              {sort ? <PendingLink scroll={false} href={adminPaymentHref({ ...query,sort,dir: active && query.dir === "desc" ? "asc" : "desc" },1)}
+                className="inline-flex items-center gap-1.5 hover:text-primary">{label}<Icon size={14} aria-hidden /></PendingLink> : label}
             </th>;
           })}</tr>
         </thead><tbody className="divide-y divide-border">{result.rows.map((row) => <TransactionRow key={`${row.transaction_kind}/${row.transaction_id}`} transaction={row} listHref={adminPaymentHref(query)} showTimezone={!sharedTimezone} />)}</tbody>

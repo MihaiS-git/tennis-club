@@ -51,14 +51,11 @@ afterEach(cleanup);
 it.each([false, true])("navigates user rows by pointer and keyboard and preserves table query (mobile=%s)", (mobile) => {
   window.history.replaceState(null, "", "/admin/users?q=member&role=coach&status=active&sort=email&dir=asc&page=2");
   render(mobile ? <UserItem user={user} mobile /> : <table><tbody><UserItem user={user} /></tbody></table>);
-  const row = screen.getByRole(mobile ? "button" : "row", { name: `Manage user ${user.email}` });
+  const row = screen.getByRole(mobile ? "article" : "row");
   const href = `${pathname}?q=member&role=coach&status=active&sort=email&dir=asc&page=2`;
   expect(screen.getByRole("link", { name: user.email }).getAttribute("href")).toBe(href);
-  fireEvent.click(row);
-  fireEvent.keyDown(row, { key: "Enter" });
-  fireEvent.keyDown(row, { key: " " });
-  expect(mocks.push).toHaveBeenCalledTimes(3);
-  expect(mocks.push).toHaveBeenLastCalledWith(href);
+  expect(row.hasAttribute("tabindex")).toBe(false);
+  expect(screen.getByRole("link", { name: user.email }).className).toContain("after:inset-0");
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 

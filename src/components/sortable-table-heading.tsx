@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { PendingLink } from "@/components/navigation-pending";
 import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 
 export type TableSortLink = { href: string; direction?: "asc" | "desc" };
@@ -10,9 +10,9 @@ export function tableAriaSort(sort?: TableSortLink) {
 // The active direction is shown by its arrow and announced through aria-sort on the heading.
 export function SortableTableLink({ label, sort }: { label: string; sort: TableSortLink }) {
   const Icon = sort.direction === "asc" ? ArrowUp : sort.direction === "desc" ? ArrowDown : ArrowUpDown;
-  return <Link href={sort.href} scroll={false} className={`inline-flex items-center gap-1.5 rounded-control hover:text-primary focus-visible:outline-2 focus-visible:outline-primary ${sort.direction ? "text-primary" : ""}`}>
+  return <PendingLink href={sort.href} scroll={false} className={`inline-flex items-center gap-1.5 rounded-control hover:text-primary focus-visible:outline-2 focus-visible:outline-primary ${sort.direction ? "text-primary" : ""}`}>
     {label}<Icon aria-hidden size={14} />
-  </Link>;
+  </PendingLink>;
 }
 
 export function SortableTableHeading({ label, sort, className = "px-4 py-2.5" }: {

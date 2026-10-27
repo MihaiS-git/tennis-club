@@ -105,6 +105,7 @@ test("Coach opens own lessons and reservations from Calendar and List, managing 
     await expect(page).toHaveURL(new RegExp(`/coach/bookings/lessons/${lessonA}\\?back=`));
     await expect(page.getByRole("dialog")).toHaveCount(0);
     await expect(page.getByRole("heading", { name: `Lesson #${lessonA.slice(0, 8)}` })).toBeVisible();
+    expect((await page.request.get(`/coach/bookings/lessons/${lessonA}`)).status()).toBe(200);
     for (const text of ["Coach Club", "S1", "08:00–09:00 (UTC)", "60 min", "E2E private", "Coach Alpha", studentA, "+40 711"])
       await expect(page.getByText(text, { exact: true }).first()).toBeVisible();
     for (const hidden of [/Payment/, /Refund/, /Total/, /RON/]) await expect(page.getByText(hidden)).toHaveCount(0);
@@ -117,6 +118,7 @@ test("Coach opens own lessons and reservations from Calendar and List, managing 
     await page.getByRole("dialog", { name: "Reservation details" }).getByRole("link", { name: "View full reservation details" }).click();
     await expect(page).toHaveURL(new RegExp(`/coach/bookings/reservations/${ownRes}\\?back=`));
     const actions = page.getByRole("region", { name: "Reservation actions" });
+    expect((await page.request.get(`/coach/bookings/reservations/${ownRes}`)).status()).toBe(200);
     await actions.getByRole("button", { name: "Edit reservation" }).click();
     const dialog = page.getByRole("dialog", { name: "Edit reservation" });
     await dialog.getByRole("button", { name: `S2 ${date} 14:00–14:30, Available` }).click();
@@ -135,6 +137,18 @@ test("Coach opens own lessons and reservations from Calendar and List, managing 
     expect(cancelled).toEqual({ status: "cancelled", cancelled_by_user_id: coachA });
     await page.getByRole("link", { name: "Back to Calendar" }).click();
     await expect(page.getByRole("button", { name: /Reservation · coach-a-/ })).toHaveCount(0);
+
+    // Invalid and unauthorized Coach details render the not-found page without protected data.
+    for (const route of [`/coach/bookings/reservations/${otherRes}`, `/coach/bookings/lessons/${lessonB}`,
+      `/coach/bookings/lessons/${courtBooking}`, `/coach/bookings/reservations/${lessonARes}`,
+      `/coach/bookings/lessons/not-a-uuid`, `/coach/bookings/reservations/not-a-uuid`,
+      `/coach/bookings/lessons/${randomUUID()}`, `/coach/bookings/reservations/${randomUUID()}`]) {
+      await page.goto(route);
+      await expect(page.getByRole("heading", { name: /404|not found/i })).toBeVisible();
+      for (const hidden of [studentA, studentB, courtCustomer, reason, "B clinic", "+40 711",
+        `${lessonA.slice(0, 8)}@example.test`, `${lessonB.slice(0, 8)}@example.test`, `${courtBooking.slice(0, 8)}@example.test`])
+        await expect(page.getByText(hidden, { exact: true })).toHaveCount(0);
+    }
 
     // Direct requests for another Coach's records, a court booking, or Admin routes are not found.
     for (const route of [`/coach/bookings/reservations/${otherRes}`, `/coach/bookings/lessons/${lessonB}`, `/coach/bookings/lessons/${courtBooking}`,

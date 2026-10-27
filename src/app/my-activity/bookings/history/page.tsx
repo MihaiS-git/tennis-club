@@ -1,12 +1,13 @@
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
+import { LoadingStatus } from "@/components/loading-status";
 
 type LegacyBookingHistoryProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
 
 export default function LegacyBookingHistoryPage({ searchParams }: LegacyBookingHistoryProps) {
-  return <Suspense fallback={<p role="status" className="text-sm text-muted-foreground">Loading booking history…</p>}>
+  return <Suspense fallback={<LoadingStatus variant="page" label="Loading booking history…" />}>
     <LegacyBookingHistoryRedirect searchParams={searchParams} />
   </Suspense>;
 }

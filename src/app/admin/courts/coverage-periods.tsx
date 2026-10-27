@@ -60,8 +60,8 @@ export function CoveragePeriods({ courtId, courtName, periods }: { courtId: stri
       {periods.map((period) => <li key={period.id} className="inline-flex items-center gap-1 rounded-full border border-border bg-surface py-0.5 pl-3 pr-1">
         <span className="min-w-0 tabular-nums">{dateLabel(period.starts_on)} — {dateLabel(period.ends_on)}</span>
         <div className="flex shrink-0">
-          <Button type="button" variant="subtle" size="icon" className="rounded-full" aria-label="Edit period" title="Edit period" disabled={pending} onClick={() => { reset(); setEditing(period); setFieldErrors({}); }}><Pencil size={14} aria-hidden="true" /></Button>
-          <Button type="button" variant="subtle" size="icon" className="rounded-full enabled:hover:bg-danger-background enabled:hover:text-danger" aria-label="Remove period" title="Remove period" disabled={pending} onClick={(event) => { removeTriggerRef.current = event.currentTarget; setRemoving(period); }}><Trash2 size={14} aria-hidden="true" /></Button>
+          <Button type="button" variant="subtle" size="icon" aria-label="Edit period" title="Edit period" disabled={pending} onClick={() => { reset(); setEditing(period); setFieldErrors({}); }}><Pencil size={14} aria-hidden="true" /></Button>
+          <Button type="button" variant="destructive" size="icon" aria-label="Remove period" title="Remove period" disabled={pending} onClick={(event) => { removeTriggerRef.current = event.currentTarget; setRemoving(period); }}><Trash2 size={14} aria-hidden="true" /></Button>
         </div>
       </li>)}
     </ul>

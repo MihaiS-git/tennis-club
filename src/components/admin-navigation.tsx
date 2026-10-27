@@ -8,7 +8,6 @@ const adminOperations: readonly SidebarEntry[] = [
   { label: "Bookings & Reservations", href: "/admin/bookings", icon: ClipboardList },
   { label: "Transactions", href: "/admin/payments/transactions", icon: CreditCard },
   { label: "Users", href: "/admin/users", icon: Users },
-  { label: "Coach availability", href: "/admin/coaching/availability", icon: CalendarClock },
 ];
 const adminConfiguration: readonly SidebarEntry[] = [
   { label: "Locations", href: "/admin/locations", icon: MapPin },
@@ -16,6 +15,7 @@ const adminConfiguration: readonly SidebarEntry[] = [
     { label: "Programs", href: "/admin/coaching/programs" },
     { label: "Coaches", href: "/admin/coaching/coaches" },
     { label: "Prices", href: "/admin/coaching/prices" },
+    { label: "Coach availability", href: "/admin/coaching/availability" },
   ] },
   { label: "Payment settings", href: "/admin/payments/settings", icon: CreditCard },
   { label: "Club", href: "/admin/club", icon: Building2 },

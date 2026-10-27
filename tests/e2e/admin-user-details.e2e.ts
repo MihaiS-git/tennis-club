@@ -40,11 +40,11 @@ test("Admin Users shows live profiles and private avatars while preserving manag
     await expect(page).toHaveURL(/\/$/);
     await page.goto(`/admin/users?q=${encodeURIComponent(`admin-details-${runId}`)}`);
     await expect(page.getByRole("columnheader")).toHaveCount(4);
-    await expect(page.getByRole("row", { name: /Manage user/ })).toHaveCount(3);
+    await expect(page.getByRole("row").filter({ has: page.getByRole("link", { name: new RegExp(`^admin-details-${runId}-`) }) })).toHaveCount(3);
     await expect(page.getByText("Sportya level")).toHaveCount(0);
     // Change contact data after the table read; opening must fetch current data.
     expect((await service.from("users").update({ phone: "+40799999999" }).eq("id", populated.id)).error).toBeNull();
-    await page.getByRole("row", { name: `Manage user ${populated.email}` }).click();
+    await page.getByRole("link", { name: populated.email, exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/admin/users/${populated.id}`));
     const tabs = page.getByRole("navigation", { name: "User management" });
     const account = page.getByRole("region", { name: "Account & access", exact: true });
@@ -86,7 +86,7 @@ test("Admin Users shows live profiles and private avatars while preserving manag
     await account.getByRole("button", { name: "Reactivate user", exact: true }).click();
     await expect(account.getByText("Active", { exact: true })).toBeVisible();
     await page.goto(`/admin/users?q=${encodeURIComponent(`admin-details-${runId}`)}`);
-    await page.getByRole("row", { name: `Manage user ${incomplete.email}` }).click();
+    await page.getByRole("link", { name: incomplete.email, exact: true }).click();
     await expect(account.getByRole("button", { name: "Suspend user", exact: true })).toBeEnabled();
     await tabs.getByRole("link", { name: "Tennis profile", exact: true }).click();
     await expect(tennis.getByRole("img")).toHaveCount(0);

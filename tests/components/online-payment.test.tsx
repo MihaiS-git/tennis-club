@@ -5,13 +5,17 @@ import { afterEach, expect, test, vi } from "vitest";
 import { useEffect, type ReactNode } from "react";
 import { toast } from "sonner";
 
-const { pay, status, elements } = vi.hoisted(() => ({ pay: vi.fn(), status: vi.fn(), elements: {} }));
+const { pay, status, elements, element } = vi.hoisted(() => ({ pay: vi.fn(), status: vi.fn(), elements: {},
+  element: { deferred: false, ready: undefined as (() => void) | undefined, failed: undefined as (() => void) | undefined } }));
 vi.mock("@stripe/stripe-js", () => ({ loadStripe: vi.fn() }));
 vi.mock("@stripe/react-stripe-js", () => ({
   Elements: ({ children }: { children: ReactNode }) => children,
   useStripe: () => ({ confirmPayment: pay }), useElements: () => elements,
-  PaymentElement: ({ onReady }: { onReady: () => void }) => {
-    useEffect(() => { onReady(); }, [onReady]);
+  PaymentElement: ({ onReady, onLoadError }: { onReady: () => void; onLoadError: () => void }) => {
+    useEffect(() => {
+      if (!element.deferred) onReady();
+      else { element.ready = onReady; element.failed = onLoadError; }
+    }, [onReady, onLoadError]);
     return <input aria-label="Card" />;
   },
 }));
@@ -21,7 +25,7 @@ import { OnlinePayment } from "@/app/book/online-payment";
 const props = { checkout: { attemptId: "c9000000-0000-4000-8000-000000000011", token: "a".repeat(64),
   presentation: { kind: "stripe" as const, publishableKey: "pk_test_Fixture", clientSecret: "pi_fixture_secret" } },
   holdExpiresAt: "2099-10-15T10:00:00Z", onConfirmed: vi.fn() };
-afterEach(() => { cleanup(); vi.useRealTimers(); vi.clearAllMocks(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.clearAllMocks(); element.deferred = false; });
 
 test.each(["non-card error", "rejected confirmation"])("a %s leaves payment uncertain and blocks another submission", async outcome => {
   const onPaymentStatus = vi.fn();
@@ -282,4 +286,18 @@ test.each([
   fireEvent.submit(screen.getByRole("form", { name: "Online payment" }));
   expect(pay).toHaveBeenCalledTimes(2);
   expect(status.mock.calls.some(call => call[0].attemptId === next.attemptId)).toBe(true);
+});
+
+test.each(["ready", "load error"])("shows inline feedback while Payment Element loads, until %s", async outcome => {
+  element.deferred = true;
+  status.mockResolvedValue({ ok: true, status: "pending_payment", paymentStatus: "pending" });
+  render(<OnlinePayment {...props} />);
+  await waitFor(() => expect(status).toHaveBeenCalled());
+  const card = screen.getByLabelText("Card");
+  expect(screen.getByRole("status").textContent).toBe("Loading secure payment form…");
+  expect((screen.getByRole("button", { name: "Pay and confirm booking" }) as HTMLButtonElement).disabled).toBe(true);
+  act(() => { if (outcome === "ready") element.ready?.(); else element.failed?.(); });
+  expect(screen.queryByText("Loading secure payment form…")).toBeNull();
+  expect(screen.getByLabelText("Card")).toBe(card);
+  expect((screen.getByRole("button", { name: "Pay and confirm booking" }) as HTMLButtonElement).disabled).toBe(outcome !== "ready");
 });

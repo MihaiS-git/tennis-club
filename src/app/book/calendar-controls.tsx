@@ -1,10 +1,12 @@
 "use client";
 
-import { useTransition } from "react";
+import { useOptimistic, useTransition } from "react";
 import { Button } from "@/components/button";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { LoadingStatus } from "@/components/loading-status";
 import { CalendarDateNavigation } from "@/components/calendar-date-navigation";
+import { FilterClearSlot } from "@/components/filter-clear-slot";
 import { LocationSelect } from "@/components/location-select";
 
 export const clearCoachingFiltersEvent = "tennis-club:clear-coaching-filters";
@@ -22,6 +24,11 @@ export function CalendarControls({ locations, locationId, date, today, timezone,
 }) {
   const router = useRouter();
   const [resetPending, startReset] = useTransition();
+  const [navigationPending, startNavigation] = useTransition();
+  // Inputs show the requested choice while the current calendar stays rendered.
+  const [shownLocation, showLocation] = useOptimistic(locationId ?? "");
+  const [shownDate, showDate] = useOptimistic(date);
+  const pending = navigationPending || resetPending;
   const clearFilters = () => {
     // The mounted timetable can veto a reset while its confirmation/payment
     // dialog is open. Native modal inertness also blocks background interaction.
@@ -38,11 +45,16 @@ export function CalendarControls({ locations, locationId, date, today, timezone,
     params.set("location", location);
     if (coaching) {
       params.set("mode", "coaching");
-      // A date change keeps lesson choices; a location change resolves fresh defaults.
-      if (selectedDate) for (const [key, value] of Object.entries(coaching)) if (value) params.set(key, value);
+      // A date change keeps lesson choices; a location change resolves fresh defaults,
+      // including a date chosen while that location change is still pending.
+      if (selectedDate && location === locationId) for (const [key, value] of Object.entries(coaching)) if (value) params.set(key, value);
     }
     if (selectedDate) params.set("date", selectedDate);
-    router.push(`/book${params.size ? `?${params}` : ""}`);
+    startNavigation(() => {
+      showLocation(location);
+      if (selectedDate) showDate(selectedDate);
+      router.push(`/book${params.size ? `?${params}` : ""}`);
+    });
   };
   const dateLabel = date && new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })
     .format(new Date(`${date}T00:00:00Z`));
@@ -52,15 +64,23 @@ export function CalendarControls({ locations, locationId, date, today, timezone,
     <Link href="/book?mode=coaching" aria-current={coaching ? "page" : undefined} className="rounded-control border border-border-strong px-4 py-2 text-sm font-semibold text-primary aria-[current=page]:bg-primary aria-[current=page]:text-primary-foreground">Coaching</Link>
   </nav><div className="mt-5 flex flex-col gap-4 rounded-card border border-border bg-surface p-4 shadow-card sm:p-5 lg:flex-row lg:items-end lg:justify-between">
     <div className="min-w-0">
-      {relative && <p className="text-xs font-semibold uppercase tracking-[0.14em] text-accent">{relative}</p>}
+      {/* The relative-day line is always rendered so the heading block, and the
+          controls stacked below it on narrow screens, keep their height between days. */}
+      <p className="min-h-4 text-xs font-semibold uppercase leading-4 tracking-[0.14em] text-accent">{relative}</p>
       <h2 className="font-heading text-xl font-semibold leading-tight text-primary sm:text-2xl">{dateLabel || (locationId ? "Choose a date" : "Choose a location")}</h2>
       {timezone && <p className="mt-1 text-xs text-muted-foreground">Times shown in {timezone}.</p>}
     </div>
-    <div className="grid gap-3 sm:flex sm:flex-wrap sm:items-end">
-      <LocationSelect id="book-location" locations={locations} selectedId={locationId ?? ""} onChange={(id) => navigate(id)} />
-      {locationId && <CalendarDateNavigation id="book-date" date={date} today={today} onChange={(selectedDate) => navigate(locationId, selectedDate)} />}
-      {coaching && <Button type="button" variant="secondary" disabled={resetPending} aria-busy={resetPending}
-        onClick={clearFilters} className="min-h-11 self-end sm:min-h-10">Clear filters</Button>}
+    <div aria-busy={pending} className="grid gap-3 sm:flex sm:flex-wrap sm:items-end">
+      <LocationSelect id="book-location" locations={locations} selectedId={shownLocation} onChange={(id) => navigate(id)} />
+      {locationId && <CalendarDateNavigation id="book-date" date={shownDate} today={today} pending={pending}
+        onChange={(selectedDate) => navigate(shownLocation, selectedDate)} />}
+      <FilterClearSlot active={!!coaching} className="max-sm:min-h-11 max-sm:w-full">
+        <Button type="button" variant="secondary" disabled={resetPending} aria-busy={resetPending}
+          onClick={clearFilters} className="min-h-11 max-sm:w-full sm:min-h-10">Clear filters</Button>
+      </FilterClearSlot>
+      {/* Inline-size containment keeps the status label out of the group's intrinsic
+          width, so the right-aligned controls do not move while it is shown. */}
+      <LoadingStatus compact pending={pending} label="Updating availability…" className="contain-inline-size" />
     </div>
   </div></>;
 }

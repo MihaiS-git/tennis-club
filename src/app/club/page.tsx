@@ -10,6 +10,7 @@ import { EditorialHero } from "../editorial-hero";
 import styles from "../page.module.css";
 import { PageSectionNav } from "../page-section-nav";
 import { ClubBookingTerms, ClubLocations } from "./club-locations";
+import { LoadingStatus } from "@/components/loading-status";
 
 export const metadata: Metadata = {
   title: "The Club | Tennis Club",
@@ -315,7 +316,7 @@ export default function ClubPage() {
 
               <h4 className={`${eyebrowClassName} mt-8 text-muted-foreground`}>Notice by location</h4>
               <div className="mt-3">
-                <Suspense fallback={<p role="status" className="border-t border-border pt-4 font-sans text-sm text-muted-foreground">Loading booking terms…</p>}>
+                <Suspense fallback={<LoadingStatus label="Loading booking terms…" className="border-t border-border pt-4" />}>
                   <ClubBookingTerms locations={locations} />
                 </Suspense>
               </div>
@@ -336,7 +337,7 @@ export default function ClubPage() {
             </p>
           </div>
           <div className="mt-10 md:mt-14">
-            <Suspense fallback={<p role="status" className="border-t border-ivory/30 pt-5 font-sans text-base text-ivory">Loading locations…</p>}>
+            <Suspense fallback={<LoadingStatus tone="inverse" label="Loading locations…" className="border-t border-ivory/30 pt-5" />}>
               <ClubLocations locations={locations} />
             </Suspense>
           </div>

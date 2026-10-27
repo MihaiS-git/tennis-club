@@ -1,6 +1,9 @@
 "use client";
 
 import Link from "next/link";
+
+import { FilterClearSlot } from "@/components/filter-clear-slot";
+import { FilterPendingIndicator } from "@/components/navigation-pending";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { inboxCategories, inboxHref, inboxSearch, inboxSorts, inboxStatuses, parseInboxQuery, type InboxQuery } from "@/lib/notifications/inbox-query";
@@ -20,6 +23,7 @@ export function InboxFilters({ query }: { query: InboxQuery }) {
       submitted: query.q });
   }
   const text = draft.source !== queryString && draft.text === draft.submitted ? query.q : draft.text;
+  const hasFilters = Boolean(query.q || query.status !== "all" || query.category !== "all" || query.sort !== "newest");
   const currentQuery = useRef(queryString);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   function cancelSearch() { clearTimeout(timer.current); timer.current = undefined; }
@@ -40,8 +44,8 @@ export function InboxFilters({ query }: { query: InboxQuery }) {
   }
 
   return (
-    <form role="search" aria-busy={pending} onSubmit={(event) => { event.preventDefault(); navigate("q", text.trim()); }}
-      className="mb-4 flex flex-wrap items-end gap-2 rounded-card border border-border bg-surface-elevated p-3 shadow-card">
+    <form role="search" onSubmit={(event) => { event.preventDefault(); navigate("q", text.trim()); }}
+      className="relative mb-4 flex flex-wrap items-end gap-2 rounded-card border border-border bg-surface-elevated p-3 shadow-card">
       <label className="min-w-48 flex-[2_1_16rem] text-xs font-semibold text-muted-foreground">Search notifications
         <input type="search" name="q" value={text} onChange={(event) => {
           const next = event.target.value;
@@ -66,8 +70,11 @@ export function InboxFilters({ query }: { query: InboxQuery }) {
           {inboxSorts.map(value => <option key={value} value={value}>{sortLabels[value]}</option>)}
         </select>
       </label>
-      {(query.q || query.status !== "all" || query.category !== "all" || query.sort !== "newest") &&
-        <Link href="/messages" onClick={() => { cancelSearch(); setDraft({ source: queryString, text: "", submitted: "" }); }} className="inline-flex min-h-10 items-center px-2 text-sm font-semibold text-primary underline">Clear</Link>}
+      <FilterClearSlot active={hasFilters}>
+        <Link scroll={false} href="/messages" onNavigate={event => { event.preventDefault(); currentQuery.current = ""; startTransition(() => router.replace("/messages", { scroll: false })); }} className="inline-flex min-h-10 items-center px-2 text-sm font-semibold text-primary underline"
+          onClick={() => { cancelSearch(); setDraft({ source: queryString, text: "", submitted: "" }); }}>Clear</Link>
+      </FilterClearSlot>
+      <FilterPendingIndicator pending={pending} />
     </form>
   );
 }

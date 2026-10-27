@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { PendingLink } from "@/components/navigation-pending";
 import { AdminPageHeader } from "@/components/admin-page-controls";
 import { Pagination } from "@/components/pagination";
 import { ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
@@ -68,9 +68,9 @@ export default async function AdminUsersPage({ searchParams }: {
                     const Icon = active ? filters.dir === "asc" ? ArrowUp : ArrowDown : ArrowUpDown;
                     return (
                       <th key={column} scope="col" aria-sort={active ? filters.dir === "asc" ? "ascending" : "descending" : "none"} className={`${width} px-4 py-2.5 lg:px-5`}>
-                        <Link href={`/admin/users?${query}`} scroll={false} className="inline-flex items-center gap-1.5 rounded-control hover:text-primary focus-visible:outline-2 focus-visible:outline-primary">
+                        <PendingLink href={`/admin/users?${query}`} scroll={false} className="inline-flex items-center gap-1.5 rounded-control hover:text-primary focus-visible:outline-2 focus-visible:outline-primary">
                           {label}<Icon aria-hidden="true" size={14} />
-                        </Link>
+                        </PendingLink>
                       </th>
                     );
                   })}

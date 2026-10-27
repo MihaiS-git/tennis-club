@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { PendingLink as Link } from "@/components/navigation-pending";
 import { AdminPageHeader, AdminToolbar } from "@/components/admin-page-controls";
 import { listAdminLocationsWithReadiness } from "@/lib/admin/locations";
 import { countries } from "@/lib/profile/countries";

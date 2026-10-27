@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { PendingLink } from "@/components/navigation-pending";
 import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 import { Pagination } from "@/components/pagination";
 import type { AdminBookingListItem } from "@/lib/bookings/admin-details";
@@ -34,9 +34,9 @@ export function BookingsList({ result, query, href, scope = "admin" }: {
               const Icon = active ? query.dir === "asc" ? ArrowUp : ArrowDown : ArrowUpDown;
               return <th key={label} scope="col" className={`whitespace-nowrap px-3 py-2.5 ${label === "Total" ? "text-right" : ""}`}
                 aria-sort={sort ? active ? query.dir === "asc" ? "ascending" : "descending" : "none" : undefined}>
-                {sort ? <Link scroll={false} href={href({ ...query, sort, dir: active && query.dir === "desc" ? "asc" : "desc" }, 1)}
+                {sort ? <PendingLink scroll={false} href={href({ ...query, sort, dir: active && query.dir === "desc" ? "asc" : "desc" }, 1)}
                   className="inline-flex items-center gap-1.5 rounded-control hover:text-primary focus-visible:outline-2 focus-visible:outline-focus">
-                  {label}<Icon size={14} aria-hidden /></Link> : label}
+                  {label}<Icon size={14} aria-hidden /></PendingLink> : label}
               </th>;
             })}</tr>
           </thead>

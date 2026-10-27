@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { Button } from "@/components/button";
 import { retryMessageDeliveryAction } from "../actions";
 
 export function RetryDeliveryButton({ messageId, eligible, reason }: {
@@ -11,14 +12,14 @@ export function RetryDeliveryButton({ messageId, eligible, reason }: {
   const [outcome, setOutcome] = useState<string | null>(null);
   const router = useRouter();
   return <div className="mt-4">
-    <button type="button" disabled={pending || !eligible} onClick={() => start(async () => {
+    <Button type="button" variant="secondary" disabled={pending || !eligible} onClick={() => start(async () => {
       setOutcome(null);
       try { setOutcome(await retryMessageDeliveryAction(messageId)); }
       catch { setOutcome("Unable to retry delivery. Refresh the details before trying again."); }
       router.refresh();
-    })} className="min-h-10 rounded-control border border-border-strong px-3 text-sm font-semibold text-primary hover:bg-surface-muted disabled:opacity-60">
+    })}>
       {pending ? "Retrying…" : "Retry now"}
-    </button>
+    </Button>
     <p className="mt-2 text-sm text-muted-foreground" role="status">{outcome ?? reason}</p>
   </div>;
 }

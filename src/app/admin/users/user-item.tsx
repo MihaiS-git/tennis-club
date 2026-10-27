@@ -1,7 +1,7 @@
 "use client";
 
-import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { RowLink } from "@/components/row-link";
+import { useSearchParams } from "next/navigation";
 import type { AdminUserListItem } from "@/lib/admin/users";
 import { StatusBadge as SharedStatusBadge } from "@/components/status-badge";
 import { formatUserDate } from "./date-format";
@@ -21,27 +21,14 @@ export function RoleChips({ roles }: { roles: AdminUserListItem["roles"] }) {
 export function UserItem({ user, mobile }: {
   user: AdminUserListItem; mobile?: boolean;
 }) {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const query = new URLSearchParams(searchParams);
   query.delete("tab");
   const href = `/admin/users/${user.id}${query.size ? `?${query}` : ""}`;
-  const rowProps = {
-    tabIndex: 0,
-    "aria-label": `Manage user ${user.email}`,
-    onClick: (event: React.MouseEvent) => {
-      if (event.target instanceof Element && event.target.closest("a, button")) return;
-      router.push(href);
-    },
-    onKeyDown: (event: React.KeyboardEvent) => {
-      if (event.target !== event.currentTarget) return;
-      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); router.push(href); }
-    },
-  };
-  const hover = "cursor-pointer transition-colors hover:bg-surface-muted focus-within:bg-surface-muted focus-visible:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-focus";
+  const hover = "relative cursor-pointer transition-colors hover:bg-surface-muted focus-within:bg-surface-muted";
   return mobile ? <>
-    <article {...rowProps} role="button" className={`min-w-0 rounded-card border border-border bg-surface p-4 ${hover}`}>
-      <Link href={href} className="break-words font-semibold text-foreground hover:text-primary focus-visible:outline-2 focus-visible:outline-focus">{user.email}</Link>
+    <article className={`min-w-0 rounded-card border border-border bg-surface p-4 ${hover}`}>
+      <RowLink href={href} className="break-words font-semibold text-foreground hover:text-primary focus-visible:outline-2 focus-visible:outline-focus">{user.email}</RowLink>
       <dl className="mt-3 grid grid-cols-[4.5rem_minmax(0,1fr)] items-start gap-x-3 gap-y-2 text-sm">
         <dt className="pt-1 text-xs text-muted-foreground">Status</dt><dd><StatusBadge status={user.status} /></dd>
         <dt className="pt-1 text-xs text-muted-foreground">Roles</dt><dd><RoleChips roles={user.roles} /></dd>
@@ -49,8 +36,8 @@ export function UserItem({ user, mobile }: {
       </dl>
     </article>
   </> : <>
-    <tr {...rowProps} className={hover}>
-      <td className="[overflow-wrap:anywhere] px-4 py-3 font-semibold text-foreground lg:px-5"><Link href={href} className="rounded-control hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">{user.email}</Link></td>
+    <tr className={hover}>
+      <td className="[overflow-wrap:anywhere] px-4 py-3 font-semibold text-foreground lg:px-5"><RowLink href={href} className="rounded-control hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">{user.email}</RowLink></td>
       <td className="px-4 py-3 lg:px-5"><StatusBadge status={user.status} /></td>
       <td className="px-4 py-3 lg:px-5"><RoleChips roles={user.roles} /></td>
       <td className="whitespace-nowrap px-4 py-3 text-muted-foreground lg:px-5">{formatUserDate(user.created_at)}</td>

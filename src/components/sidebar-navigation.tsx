@@ -1,9 +1,10 @@
 "use client";
 
-import Link from "next/link";
+import { NavigationLink as Link } from "./navigation-pending";
+import { Button } from "@/components/button";
 import { usePathname } from "next/navigation";
 import { Menu, X, type LucideIcon } from "lucide-react";
-import { Fragment, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 
 export type SidebarLink = { label: string; href: string; icon?: LucideIcon; exact?: boolean };
 export type SidebarGroup = { label: string; icon?: LucideIcon; links: readonly SidebarLink[] };
@@ -26,8 +27,8 @@ export function SidebarNavigation({ title, entries, sections, slideIn = false }:
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [openedAt, setOpenedAt] = useState(pathname);
-  // A new destination (including Back/Forward) closes the drawer, keeping the element mounted
-  // so a sliding drawer can animate out. No route state is stored.
+  // Confirmed draft departures can navigate outside the link's own transition.
+  // Close on the committed destination as well as on direct link activation.
   if (openedAt !== pathname) {
     setOpenedAt(pathname);
     setOpen(false);
@@ -42,11 +43,20 @@ export function SidebarNavigation({ title, entries, sections, slideIn = false }:
   const linkActive = ({ href, exact }: SidebarLink) => exact ? pathname === href : matches(href);
   const closeDrawer = () => {
     setOpen(false);
-    trigger.current?.focus();
+    trigger.current?.focus({ preventScroll: true });
   };
+
+  // As in the main mobile menu: when a navigation commit closes the mobile drawer, move
+  // focus out in that commit's layout phase, before the browser hides the drawer.
+  // At desktop the same destination links remain visible and keep focus.
+  useLayoutEffect(() => {
+    if (open || window.matchMedia?.("(min-width: 1024px)").matches) return;
+    if (navigation.current?.contains(document.activeElement) || document.activeElement === close.current) trigger.current?.focus({ preventScroll: true });
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
+    const [drawerTrigger, drawerClose, drawerNavigation] = [trigger.current, close.current, navigation.current];
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     close.current?.focus();
@@ -64,15 +74,20 @@ export function SidebarNavigation({ title, entries, sections, slideIn = false }:
     const escape = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") {
         setOpen(false);
-        trigger.current?.focus();
+        trigger.current?.focus({ preventScroll: true });
       }
     };
+    const closeOnHistory = () => setOpen(false);
+    window.addEventListener("popstate", closeOnHistory);
     desktop?.addEventListener("change", resize);
     window.addEventListener("keydown", escape);
     return () => {
+      // At desktop the same destination links remain visible and keep focus.
+      if (!desktop?.matches && (drawerNavigation?.contains(document.activeElement) || document.activeElement === drawerClose || document.activeElement === document.body)) drawerTrigger?.focus({ preventScroll: true });
       document.body.style.overflow = previousOverflow;
       desktop?.removeEventListener("change", resize);
       window.removeEventListener("keydown", escape);
+      window.removeEventListener("popstate", closeOnHistory);
     };
   }, [open]);
 
@@ -101,9 +116,7 @@ export function SidebarNavigation({ title, entries, sections, slideIn = false }:
         href={link.href}
         aria-current={active ? "page" : undefined}
         className={sidebarLinkClass(active)}
-        onClick={(event) => {
-          if (!event.defaultPrevented) closeDrawer();
-        }}
+        dismissDrawer={open ? () => setOpen(false) : undefined}
       >
         {Icon && <Icon aria-hidden="true" className="size-4 shrink-0" />}
         {link.label}
@@ -134,17 +147,18 @@ export function SidebarNavigation({ title, entries, sections, slideIn = false }:
 
   return (
     <>
-      <button
+      <Button
         ref={trigger}
         type="button"
         onClick={() => setOpen(true)}
         aria-expanded={open}
         aria-controls={id}
-        className={`mb-5 inline-flex min-h-11 items-center gap-2 rounded-control border border-border-strong bg-surface px-4 text-sm font-semibold text-primary lg:hidden ${unsavedDot}`}
+        variant="secondary"
+        className={`mb-5 gap-2 max-lg:min-h-11 lg:hidden ${unsavedDot}`}
       >
         <Menu aria-hidden="true" className="size-5" />
         {title} menu
-      </button>
+      </Button>
       {open && (
         <button
           type="button"
@@ -169,15 +183,17 @@ export function SidebarNavigation({ title, entries, sections, slideIn = false }:
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-accent">
             {title}
           </p>
-          <button
+          <Button
             ref={close}
             type="button"
             onClick={closeDrawer}
             aria-label={`Close ${name} menu`}
-            className="inline-flex size-10 items-center justify-center rounded-control border border-border-strong text-primary lg:hidden"
+            variant="secondary"
+            size="iconLarge"
+            className="lg:hidden"
           >
             <X aria-hidden="true" className="size-5" />
-          </button>
+          </Button>
         </div>
         <nav ref={navigation} aria-label={`${title} navigation`} className="space-y-1">
           {sections ? sections.filter((section) => section.entries.length > 0).map((section, index) => (

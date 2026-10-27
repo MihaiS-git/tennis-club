@@ -1,9 +1,12 @@
-import { redirect } from "next/navigation";
+import { Suspense } from "react";
 
-import { requireReservationRole } from "@/lib/reservations/authorization";
-import { createClient } from "@/lib/supabase/server";
+import { LoadingStatus } from "@/components/loading-status";
+import { AdminEntryRedirect } from "./admin-entry-redirect";
 
-export default async function AdminPage() {
-  const account = await requireReservationRole(await createClient());
-  redirect(account.roles.includes("admin") ? "/admin/locations" : "/coach/bookings");
+export default function AdminPage() {
+  // The Admin layout's boundary only covers entering the area. Navigations within it
+  // keep that layout mounted, so the role lookup needs its own page-level boundary.
+  return <Suspense fallback={<LoadingStatus variant="page" label="Loading management area…" />}>
+    <AdminEntryRedirect />
+  </Suspense>;
 }

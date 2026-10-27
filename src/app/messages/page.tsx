@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import { PendingLink } from "@/components/navigation-pending";
 import { redirect } from "next/navigation";
 import { logger } from "@/lib/logger";
 import { listOwnMessages, messageAccess, messageCategory, messagesPerPage } from "@/lib/notifications/inbox";
@@ -37,9 +37,9 @@ export default async function MessagesPage({ searchParams }: {
           }))} />}
     </div>
     {inbox.total > 0 && <nav aria-label="Notifications pages" className="mt-5 flex items-center justify-between gap-3 text-sm">
-      <div>{inbox.hasPrevious ? <Link className="font-semibold text-primary hover:text-accent" href={inboxHref({ ...query, page: query.page - 1 })}>Previous</Link> : <span className="text-muted-foreground">Previous</span>}</div>
+      <div>{inbox.hasPrevious ? <PendingLink className="font-semibold text-primary hover:text-accent" href={inboxHref({ ...query, page: query.page - 1 })}>Previous</PendingLink> : <span className="text-muted-foreground">Previous</span>}</div>
       <span className="text-muted-foreground">Page {query.page} of {Math.max(1, Math.ceil(inbox.total / messagesPerPage))}</span>
-      <div>{inbox.hasNext ? <Link className="font-semibold text-primary hover:text-accent" href={inboxHref({ ...query, page: query.page + 1 })}>Next</Link> : <span className="text-muted-foreground">Next</span>}</div>
+      <div>{inbox.hasNext ? <PendingLink className="font-semibold text-primary hover:text-accent" href={inboxHref({ ...query, page: query.page + 1 })}>Next</PendingLink> : <span className="text-muted-foreground">Next</span>}</div>
     </nav>}
   </section>;
 }

@@ -12,14 +12,15 @@ export function ClubSettingsForm({ settings }: { settings: ClubSettings }) {
   const id = useId();
   const [values, setValues] = useState(settings);
   const [saved, setSaved] = useState(settings);
-  const [pending, setPending] = useState(false);
+  const [operation, setOperation] = useState<"save" | "test" | null>(null);
+  const pending = operation !== null;
   const busy = useRef(false);
   const changed = values.officialEmail !== saved.officialEmail || values.senderName !== saved.senderName
     || values.emailsEnabled !== saved.emailsEnabled;
 
   async function perform(test: boolean) {
     if (busy.current || (!test && !changed)) return;
-    busy.current = true; setPending(true);
+    busy.current = true; setOperation(test ? "test" : "save");
     try {
       if (test) {
         const result = await sendClubTestEmailAction();
@@ -32,7 +33,7 @@ export function ClubSettingsForm({ settings }: { settings: ClubSettings }) {
       }
     } catch {
       toast.error(test ? "Unable to send the test email. Try again." : "Unable to save Club settings. Try again.");
-    } finally { busy.current = false; setPending(false); }
+    } finally { busy.current = false; setOperation(null); }
   }
 
   return <section className="max-w-3xl rounded-card border border-border bg-surface p-4 sm:p-5">
@@ -53,9 +54,10 @@ export function ClubSettingsForm({ settings }: { settings: ClubSettings }) {
       </label>
       <p className="text-sm text-muted-foreground">Turning this off suppresses queued emails permanently. In-app notifications and Supabase Auth emails continue normally. Requests already in flight may complete.</p>
       <div className="flex flex-wrap gap-3">
-        <Button type="submit" fullWidth={false} disabled={pending || !changed}>Save changes</Button>
+        <Button type="submit" fullWidth={false} disabled={pending || !changed} aria-busy={operation === "save"}>
+          {operation === "save" ? "Saving…" : "Save changes"}</Button>
         <Button type="button" fullWidth={false} disabled={pending || changed || !saved.emailsEnabled || !clubSettingsSchema.safeParse(saved).success}
-          onClick={() => void perform(true)}>Send test email</Button>
+          aria-busy={operation === "test"} onClick={() => void perform(true)}>{operation === "test" ? "Sending test email…" : "Send test email"}</Button>
       </div>
       <p className="text-sm text-muted-foreground">The test uses saved settings and goes to your verified Admin email address. Brevo acceptance does not confirm inbox delivery.</p>
     </form>

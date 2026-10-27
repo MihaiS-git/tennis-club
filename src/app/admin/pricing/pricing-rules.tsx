@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { usePathname, useSearchParams, useRouter } from "next/navigation";
 import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 import { AdminToolbar } from "@/components/admin-page-controls";
+import { FilterClearSlot } from "@/components/filter-clear-slot";
 import { Button } from "@/components/button";
 import { DialogHeader } from "@/components/dialog-layout";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
@@ -126,7 +127,9 @@ export function PricingRules({ location, courts, rules, openingHours, schedules 
       <label className={`${filterClass} xl:w-44`}>Applies on
         <input type="date" value={options.pricingDate ?? ""} className={controlClass} onChange={(event) => navigate({ pricingDate: event.target.value })} />
       </label>
-      {hasFilters && <Button type="button" variant="subtle" size="small" onClick={() => navigate(Object.fromEntries(pricingFilterKeys.map((key) => [key, ""])))}>Reset filters</Button>}
+      <FilterClearSlot active={hasFilters}>
+        <Button type="button" variant="subtle" size="small" onClick={() => navigate(Object.fromEntries(pricingFilterKeys.map((key) => [key, ""])))}>Reset filters</Button>
+      </FilterClearSlot>
     </div>
     <div className="mb-4 flex items-end gap-3 text-sm lg:hidden">
       <label className={`${filterClass} flex-1`}>Sort pricing by
@@ -159,7 +162,7 @@ export function PricingRules({ location, courts, rules, openingHours, schedules 
               const active = options.pricingSort === key;
               const Icon = active ? options.pricingDir === "asc" ? ArrowUp : ArrowDown : ArrowUpDown;
               return <th key={key} scope="col" className="px-3 py-3" aria-sort={active ? options.pricingDir === "asc" ? "ascending" : "descending" : "none"}>
-                <button type="button" onClick={() => sort(key)} className="inline-flex items-center gap-1.5 rounded-control hover:text-primary focus-visible:outline-2 focus-visible:outline-primary">
+                <button type="button" onClick={() => sort(key)} className="inline-flex items-center gap-1.5 rounded-control transition-colors hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">
                   {label}<Icon aria-hidden="true" size={14} />
                 </button>
               </th>;

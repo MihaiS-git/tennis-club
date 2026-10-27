@@ -1,3 +1,4 @@
+import { FilterPendingIndicator } from "@/components/navigation-pending";
 import type { ReactNode } from "react";
 
 // One compact header for every Admin page, matching the My activity and Profile areas.
@@ -9,16 +10,18 @@ export function AdminPageHeader({ title, description, children }: { title: strin
   </header>;
 }
 
-export function AdminToolbar({ primary, action, filters, metadata }: {
+export function AdminToolbar({ primary, action, filters, metadata, pending = false }: {
   primary: ReactNode;
   action?: ReactNode;
   filters?: ReactNode;
   metadata?: ReactNode;
+  pending?: boolean;
 }) {
-  return <div className="mb-4 flex flex-wrap items-end gap-3 text-sm">
+  return <div className="relative mb-4 flex flex-wrap items-end gap-3 text-sm">
     {primary}
     {filters}
     {metadata && <div className="min-w-60 flex-1 pb-2 text-sm text-muted-foreground">{metadata}</div>}
+    <FilterPendingIndicator pending={pending} />
     {action && <div className="ml-auto">{action}</div>}
   </div>;
 }

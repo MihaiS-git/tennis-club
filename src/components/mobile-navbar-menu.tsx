@@ -3,9 +3,11 @@
 import { SignOutButton } from "./sign-out-button";
 
 import { Menu, X } from "lucide-react";
+import { Button } from "@/components/button";
 import { signOutAction } from "@/app/account/actions";
-import { ProfileDepartureForm, ProfileDepartureLink as Link } from "./profile-departure-navigation";
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { ProfileDepartureForm } from "./profile-departure-navigation";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { NavigationLink as Link } from "./navigation-pending";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import { PrimaryNavigationLink } from "./primary-navigation-link";
@@ -16,11 +18,11 @@ import { NotificationBell } from "./notification-bell";
 export function MobileNavbarShell({ children }: { children: ReactNode }) {
   return <header className="sticky top-0 z-30 w-full border-b border-border bg-surface lg:hidden">
     <div className="flex h-16 items-center justify-between gap-2 px-4">
-      <Link href="/" className="font-heading text-base font-semibold tracking-tight text-primary hover:text-accent sm:text-lg">
+      <Link pendingPlacement="below" href="/" className="relative font-heading text-base font-semibold tracking-tight text-primary hover:text-accent sm:text-lg">
         Tennis Club
       </Link>
       <div className="flex items-center gap-2">
-        <BookCourtLink className="inline-flex min-h-10 items-center justify-center whitespace-nowrap rounded-control bg-primary px-3 text-xs font-semibold text-primary-foreground transition hover:bg-primary-hover sm:text-sm" />
+        <BookCourtLink pendingSize="compact" className="inline-flex min-h-10 items-center justify-center whitespace-nowrap rounded-control bg-primary px-3 text-xs font-semibold text-primary-foreground transition hover:bg-primary-hover sm:text-sm" />
         {children}
       </div>
     </div>
@@ -36,16 +38,30 @@ export function MobileNavbarControls({ isAuthenticated, hasMessageAccess = false
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const menuId = useId();
+  const drawerRef = useRef<HTMLElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
 
   function closeMenu() {
     setIsOpen(false);
-    triggerRef.current?.focus();
+    triggerRef.current?.focus({ preventScroll: true });
   }
+
+  // A dismissal that commits with a navigation (or history/viewport change) hides the
+  // drawer while its link may still have focus. Move focus out in that same commit,
+  // before the browser observes focus inside the aria-hidden, inert drawer. This runs
+  // in the layout phase: React reverts focus changes made during DOM mutation.
+  useLayoutEffect(() => {
+    const drawer = drawerRef.current;
+    if (isOpen || !drawer?.contains(document.activeElement)) return;
+    triggerRef.current?.focus({ preventScroll: true });
+    // At desktop width the whole mobile header is hidden and the trigger cannot take focus.
+    if (drawer.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) return;
+    const [drawer, trigger] = [drawerRef.current, triggerRef.current];
 
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -54,10 +70,12 @@ export function MobileNavbarControls({ isAuthenticated, hasMessageAccess = false
     function closeOnEscape(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setIsOpen(false);
-        triggerRef.current?.focus();
+        triggerRef.current?.focus({ preventScroll: true });
       }
     }
 
+    const closeOnHistory = () => setIsOpen(false);
+    window.addEventListener("popstate", closeOnHistory);
     const desktopViewport = window.matchMedia?.("(min-width: 1024px)");
     function closeOnDesktop(event: MediaQueryListEvent) {
       if (event.matches) setIsOpen(false);
@@ -67,8 +85,11 @@ export function MobileNavbarControls({ isAuthenticated, hasMessageAccess = false
     desktopViewport?.addEventListener("change", closeOnDesktop);
     return () => {
       window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("popstate", closeOnHistory);
       desktopViewport?.removeEventListener("change", closeOnDesktop);
       document.body.style.overflow = previousOverflow;
+      // Return focus only if navigation has not already moved it outside the drawer.
+      if (drawer?.contains(document.activeElement) || document.activeElement === document.body) trigger?.focus({ preventScroll: true });
     };
   }, [isOpen]);
 
@@ -93,17 +114,18 @@ export function MobileNavbarControls({ isAuthenticated, hasMessageAccess = false
   return (
     <>
       {hasMessageAccess && <NotificationBell viewport="mobile" />}
-          <button
+          <Button
             ref={triggerRef}
             type="button"
             aria-label={isOpen ? "Close menu" : "Open menu"}
             aria-controls={menuId}
             aria-expanded={isOpen}
             onClick={() => isOpen ? closeMenu() : setIsOpen(true)}
-            className="inline-flex size-10 items-center justify-center rounded-control border border-border-strong text-primary hover:bg-surface-muted"
+            variant="secondary"
+            size="iconLarge"
           >
             <Menu aria-hidden="true" className="size-5" strokeWidth={1.8} />
-          </button>
+          </Button>
 
       {isOpen && (
         <button
@@ -117,6 +139,7 @@ export function MobileNavbarControls({ isAuthenticated, hasMessageAccess = false
       )}
 
       <section
+        ref={drawerRef}
         id={menuId}
         role="dialog"
         aria-modal="true"
@@ -130,29 +153,30 @@ export function MobileNavbarControls({ isAuthenticated, hasMessageAccess = false
           <span className="font-heading text-base font-semibold tracking-tight text-primary sm:text-lg">
             Tennis Club
           </span>
-          <button
+          <Button
             ref={closeRef}
             type="button"
             aria-label="Close menu"
             onClick={closeMenu}
-            className="inline-flex size-10 items-center justify-center rounded-control border border-border-strong text-primary hover:bg-surface-muted"
+            variant="secondary"
+            size="iconLarge"
           >
             <X aria-hidden="true" className="size-5" strokeWidth={1.8} />
-          </button>
+          </Button>
         </div>
 
         <nav aria-label="Mobile navigation" className="flex-1 overflow-y-auto px-4 py-2">
-          <PrimaryNavigationLink onClick={closeMenu} href="/courts" className="flex min-h-12 items-center text-sm font-medium">
+          <PrimaryNavigationLink pendingPlacement="end" href="/courts" dismissDrawer={() => setIsOpen(false)} className="flex min-h-12 items-center text-sm font-medium">
             Courts
           </PrimaryNavigationLink>
-          <PrimaryNavigationLink onClick={closeMenu} href="/coaching" className="flex min-h-12 items-center text-sm font-medium">
+          <PrimaryNavigationLink pendingPlacement="end" href="/coaching" dismissDrawer={() => setIsOpen(false)} className="flex min-h-12 items-center text-sm font-medium">
             Coaching
           </PrimaryNavigationLink>
-          <PrimaryNavigationLink onClick={closeMenu} href="/club" className="flex min-h-12 items-center text-sm font-medium">
+          <PrimaryNavigationLink pendingPlacement="end" href="/club" dismissDrawer={() => setIsOpen(false)} className="flex min-h-12 items-center text-sm font-medium">
             Club
           </PrimaryNavigationLink>
           {isAuthenticated && canReserve && (
-            <PrimaryNavigationLink onClick={closeMenu} section={["/admin", "/coach"]} href="/admin" className="flex min-h-12 items-center text-sm font-medium">
+            <PrimaryNavigationLink pendingPlacement="end" section={["/admin", "/coach"]} href="/admin" dismissDrawer={() => setIsOpen(false)} className="flex min-h-12 items-center text-sm font-medium">
               Admin
             </PrimaryNavigationLink>
           )}
@@ -160,17 +184,17 @@ export function MobileNavbarControls({ isAuthenticated, hasMessageAccess = false
           <div className="mt-2 border-t border-border pt-2">
             {isAuthenticated ? (
               <>
-                <Link onClick={closeMenu} href="/profile" className="flex min-h-12 items-center gap-2 text-sm font-medium text-primary hover:text-accent">
+                <Link href="/profile" dismissDrawer={() => setIsOpen(false)} className="flex min-h-12 items-center gap-2 text-sm font-medium text-primary hover:text-accent">
                   <ProfileNavigationAvatar src={avatarUrl} />
                   Profile
                 </Link>
                 {/* The departure guard protects unsaved Profile drafts before the unchanged action runs. */}
                 <ProfileDepartureForm action={signOutAction} onSubmit={closeMenu}>
-                  <SignOutButton className="flex min-h-12 w-full items-center text-left text-sm font-medium text-primary" />
+                  <SignOutButton className="flex min-h-12 w-full items-center text-left text-sm font-medium" />
                 </ProfileDepartureForm>
               </>
             ) : (
-              <Link onClick={closeMenu} href="/login" className="flex min-h-12 items-center text-sm font-medium text-primary hover:text-accent">
+              <Link href="/login" dismissDrawer={() => setIsOpen(false)} className="flex min-h-12 items-center text-sm font-medium text-primary hover:text-accent">
                 Sign in
               </Link>
             )}

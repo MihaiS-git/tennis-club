@@ -74,7 +74,7 @@ export function PriceEditor({ label, target, price, emptyHint, actions, confirmR
           className="min-w-0 flex-1 bg-transparent px-2.5 py-1.5 text-sm text-foreground outline-none" />
         <span className="text-xs font-semibold text-muted-foreground">{currency}</span>
       </div>
-      {dirty && <Button type="submit" size="small" fullWidth={false} disabled={pending || !valid} aria-busy={pending}>Save</Button>}
+      {dirty && <Button type="submit" size="small" fullWidth={false} disabled={pending || !valid} aria-busy={pending}>{pending ? "Saving price…" : "Save"}</Button>}
       {dirty && <Button type="button" variant="subtle" size="small" disabled={pending} onClick={() => { setValue(baseline); setError(null); }}>Cancel</Button>}
       {!dirty && price && <Button ref={removeRef} type="button" variant="subtle" size="small" disabled={pending} onClick={() => confirmRemoval ? setRemoving(true) : void run(true)}>Remove</Button>}
     </div>

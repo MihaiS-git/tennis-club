@@ -96,10 +96,10 @@ test("My Activity paid edit collects only the difference, X discards an unpaid m
     await page.goto(listUrl);
     const table = page.getByRole('table', {name:'Payment transactions'});
     await expect(table.getByRole('row')).toHaveCount(4);
-    // Rows show short booking references; full transaction ids are in each row's accessible name.
-    const originalRow = table.getByRole('row', {name:new RegExp(`^Booking payment ${attemptId}, booking ${bookingId}$`)});
-    const adjustmentRow = table.getByRole('row', {name:new RegExp(`^Modification payment ${financial[1].id}, booking ${bookingId}$`)});
-    const refundRow = table.getByRole('row', {name:new RegExp(`^Price reduction refund ${refund.id}, booking ${bookingId}$`)});
+    // Identify each financial row by its exact transaction link, independently of display text.
+    const originalRow = table.getByRole('row').filter({has:page.locator(`a[href^="/admin/payments/transactions/payment/${attemptId}?"]`)});
+    const adjustmentRow = table.getByRole('row').filter({has:page.locator(`a[href^="/admin/payments/transactions/payment/${financial[1].id}?"]`)});
+    const refundRow = table.getByRole('row').filter({has:page.locator(`a[href^="/admin/payments/transactions/refund/${refund.id}?"]`)});
     await expect(originalRow).toContainText(/50\.00/);
     await expect(originalRow).toContainText('Paid');
     await expect(originalRow).not.toContainText('refunded');

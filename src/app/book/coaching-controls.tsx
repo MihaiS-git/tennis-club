@@ -2,9 +2,9 @@
 
 import { useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2 } from "lucide-react";
 import { formatMoney } from "@/lib/pricing/money";
 import type { ResolvedCoachingPrice } from "@/lib/coaching/pricing";
+import { LoadingStatus } from "@/components/loading-status";
 
 const dependents = { coach: ["program", "duration", "participants"], program: ["duration", "participants"], duration: [], participants: [] } as const;
 
@@ -64,11 +64,14 @@ export function CoachingControls({ locationId, date, coaches, programs, duration
         {counts.map(count => <option key={count} value={count}>{count} {count === 1 ? "player" : "players"}</option>)}
       </select>
     </label>
-    {pending ? <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground sm:col-span-2 lg:col-span-4">
-      <Loader2 aria-hidden className="size-4 motion-safe:animate-spin" />Loading lesson options…
-    </p> : selected?.price && <p className="text-sm text-muted-foreground sm:col-span-2 lg:col-span-4">
-      Coaching price: <strong className="tabular-nums text-primary">{formatMoney(selected.price.amountMinor, selected.price.currency)}</strong>
-      {selected.price.source === "coach" ? " (coach’s price)" : " (club price)"} · {courtRentalIncluded ? "Court rental included" : "Court rental charged separately at the court’s rate"}
-    </p>}
+    {/* Status and price share one grid area, so the row keeps the taller of the two
+        while pending and the calendar below does not move. */}
+    <div className="grid sm:col-span-2 lg:col-span-4">
+      <LoadingStatus pending={pending} label="Loading lesson options…" className="[grid-area:1/1]" />
+      {selected?.price && <p className={`text-sm text-muted-foreground [grid-area:1/1] ${pending ? "invisible" : ""}`}>
+        Coaching price: <strong className="tabular-nums text-primary">{formatMoney(selected.price.amountMinor, selected.price.currency)}</strong>
+        {selected.price.source === "coach" ? " (coach’s price)" : " (club price)"} · {courtRentalIncluded ? "Court rental included" : "Court rental charged separately at the court’s rate"}
+      </p>}
+    </div>
   </fieldset>;
 }

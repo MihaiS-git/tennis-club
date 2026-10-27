@@ -31,8 +31,9 @@ test("location rows navigate to the shared workspace form and edits stay in plac
     await expect(page.getByRole("link", { name: "Create location", exact: true })).toHaveAttribute("href", "/admin/locations/new");
     const table = page.getByRole("table", { name: "Locations" });
     await expect(table.getByRole("columnheader")).toHaveCount(5);
-    const row = table.getByRole("row", { name: `Manage location ${locationName}` });
-    await row.getByText("Cluj", { exact: true }).click();
+    const row = table.getByRole("row").filter({ has: page.getByRole("link", { name: locationName, exact: true }) });
+    await expect(row.getByText("Cluj", { exact: true })).toBeVisible();
+    await row.click();
     await expect(page).toHaveURL(new RegExp(`/admin/locations/${locationId}$`));
     const form = page.getByRole("form", { name: "Edit location" });
     await expect(form.getByRole("textbox", { name: "Name", exact: true })).toHaveValue(locationName);
@@ -45,8 +46,9 @@ test("location rows navigate to the shared workspace form and edits stay in plac
     await expect(page.getByRole("textbox", { name: "City", exact: true })).toHaveValue("Updated city");
     await page.getByRole("navigation", { name: "Management navigation" }).getByRole("link", { name: "Locations", exact: true }).click();
     await expect(row.getByText("Updated city", { exact: true })).toBeVisible();
-    await row.focus();
-    await row.press("Enter");
+    const locationLink = row.getByRole("link", { name: locationName, exact: true });
+    await locationLink.focus();
+    await locationLink.press("Enter");
     await expect(page).toHaveURL(new RegExp(`/admin/locations/${locationId}$`));
     await expect(page.getByRole("heading", { name: locationName, exact: true })).toBeVisible();
     await expect(page.getByRole("textbox", { name: "City", exact: true })).toHaveValue("Updated city");

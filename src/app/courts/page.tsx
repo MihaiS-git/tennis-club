@@ -9,6 +9,7 @@ import styles from "../page.module.css";
 import { PageSectionNav, type PageSection } from "../page-section-nav";
 import { CourtsConditions } from "./courts-conditions";
 import { CourtsDiscovery } from "./courts-discovery";
+import { LoadingStatus } from "@/components/loading-status";
 
 export const metadata: Metadata = {
   title: "Courts | Tennis Club",
@@ -61,7 +62,7 @@ export default function CourtsPage() {
             </h2>
           </div>
           <div className="mt-6 min-h-96 md:mt-8">
-            <Suspense fallback={<p role="status" className="font-sans text-base leading-7 text-muted-foreground">Loading court information…</p>}>
+            <Suspense fallback={<LoadingStatus label="Loading court information…" />}>
               <CourtsDiscovery locations={locations} />
             </Suspense>
           </div>

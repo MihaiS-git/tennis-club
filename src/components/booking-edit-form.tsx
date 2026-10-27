@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { Button } from "@/components/button";
 import { ReservationEditForm, type ReservationEditDraft, type ReservationEditSaveResult } from "@/components/reservation-edit-form";
 import type { ReservationTimetableDay } from "@/components/reservation-timetable";
 import { TimelineLegend } from "@/components/court-timeline-grid";
@@ -15,6 +16,7 @@ import type { BookingRescheduleResult } from "@/lib/bookings/reschedule";
 import { minuteToTime } from "@/lib/admin/opening-hours-validation";
 import { formatMoney } from "@/lib/pricing/money";
 import { loadOwnBookingEditDayAction, quoteOwnBookingAction, rescheduleOwnBookingAction } from "@/app/my-activity/bookings/actions";
+import { LoadingStatus } from "@/components/loading-status";
 
 export type BookingEditActions = {
   load: typeof loadOwnBookingEditDayAction;
@@ -180,8 +182,8 @@ function BookingEditSession({ booking, location, onCancel, onSaved, onPendingCha
     return () => { active.current = false; disposed = true; if (notification !== undefined) toast.dismiss(notification); };
   }, [booking.id, booking.booking_date, actions]);
   if (!context) return <div className="mt-4 min-h-20 text-sm" aria-busy={!error}>
-    <p role={error ? "alert" : "status"}>{error || "Loading booking…"}</p>
-    <button type="button" onClick={onCancel} className="mt-3 underline">Back to details</button></div>;
+    {error ? <p role="alert">{error}</p> : <LoadingStatus label="Loading booking…" />}
+    <Button type="button" variant="text" onClick={onCancel} className="mt-3 underline">Back to details</Button></div>;
   if (adjustment) return <section aria-label="Booking modification" data-booking-modification className="mx-auto mt-4 max-w-xl space-y-4 text-sm">
     <div className="rounded-control border border-border bg-surface-muted p-4">
       <h3 className="mb-3 font-heading text-base font-semibold text-primary">{adjustment.adjustmentStatus === "pending" ? "Complete your modification"

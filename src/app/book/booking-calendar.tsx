@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { TimelineLegend } from "@/components/court-timeline-grid";
+import { Button } from "@/components/button";
 import { BookingTimetable, lessonStartOffers, lessonTimetableDay, lessonTimetableLabels, type LessonOffer } from "@/components/booking-timetable";
 import { BookingCancellationTerms } from "@/components/booking-cancellation-terms";
 import { startAnotherBookingEvent } from "@/components/book-court-link";
@@ -111,7 +112,7 @@ function BookingCalendarContent({ day, date, locationName, currency, initialCont
     <div>{committed.cancellationPolicy && <BookingCancellationTerms noticeMinutes={committed.cancellationPolicy.noticeMinutes} cutoff={committed.cancellationPolicy.cutoff} timezone={timezone} guest={!authenticated} />}</div>
     <div className="mt-5 flex flex-wrap gap-2">
       {authenticated && <Link href="/my-activity/bookings" className="inline-flex min-h-11 items-center rounded-control bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus sm:min-h-10">View my bookings</Link>}
-      <button type="button" onClick={() => setCommitted(null)} className={`min-h-11 rounded-control border px-4 text-sm font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus sm:min-h-10 ${authenticated ? "border-border-strong bg-surface text-primary hover:bg-surface-muted" : "border-primary bg-primary text-primary-foreground hover:bg-primary-hover"}`}>{coaching ? "Book another lesson" : "Book another court"}</button>
+      <Button type="button" variant={authenticated ? "secondary" : "primary"} fullWidth={false} className="max-sm:min-h-11" onClick={() => setCommitted(null)}>{coaching ? "Book another lesson" : "Book another court"}</Button>
     </div>
   </section>;
   return <div ref={contentRef} className="relative min-w-0" onFocusCapture={(event) => {
@@ -158,8 +159,8 @@ function BookingCalendarContent({ day, date, locationName, currency, initialCont
           <p className="shrink-0 text-right text-xs font-semibold text-muted-foreground sm:text-left">Total: <strong className="block text-lg tabular-nums text-primary sm:text-xl">{formatMoney(selection.priceMinor, currency)}</strong></p>
         </div>
         <div className="flex gap-2">
-          <button type="button" onClick={() => setSelection(null)} className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-control border border-border-strong bg-surface px-3 text-sm font-semibold text-primary transition-colors hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus sm:min-h-10"><X aria-hidden className="size-4" />Clear selection</button>
-          <button type="button" onClick={() => { setContact((current) => current ?? initialContact); setConfirming(true); }} className="inline-flex min-h-11 flex-1 items-center justify-center rounded-control bg-primary px-6 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus sm:min-h-10 sm:flex-none">Continue</button>
+          <Button type="button" variant="secondary" className="gap-1.5 max-sm:min-h-11" onClick={() => setSelection(null)}><X aria-hidden className="size-4" />Clear selection</Button>
+          <Button type="button" fullWidth={false} className="flex-1 max-sm:min-h-11 sm:flex-none" onClick={() => { setContact((current) => current ?? initialContact); setConfirming(true); }}>Continue</Button>
         </div>
       </div>
     </section>}

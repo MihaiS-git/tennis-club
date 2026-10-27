@@ -2,7 +2,7 @@
 
 import { SortableTableHeading, type TableSortLink } from "@/components/sortable-table-heading";
 import { CoachingDeleteButton } from "../delete-button";
-import { useRef, useState } from "react";
+import { useOptimistic, useRef, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -20,31 +20,35 @@ const hover = "cursor-pointer transition-colors hover:bg-surface-muted focus-vis
 function ProgramStatusControl({ program }: { program: AdminCoachingProgram }) {
   const router = useRouter();
   const selectRef = useRef<HTMLSelectElement>(null);
+  // The ref fences re-entry before React renders; pending also spans the refresh.
   const pendingRef = useRef(false);
-  const [pending, setPending] = useState(false);
+  const [pending, startTransition] = useTransition();
+  const [isActive, showSavedValue] = useOptimistic(program.is_active);
   const [confirming, setConfirming] = useState(false);
-  async function save(isActive: boolean) {
-    if (pendingRef.current) return;
-    pendingRef.current = true; setPending(true);
-    const notification = toast.loading("Updating program…");
-    try {
-      const result = await setCoachingProgramStatusAction({ id: program.id, is_active: isActive });
-      if (result.ok) {
-        toast.success(isActive ? "Program activated." : "Program deactivated.", { id: notification });
-        setConfirming(false);
-        router.refresh();
-      } else {
-        toast.error(result.reason === "invalid-input" ? "Invalid program update." : coachingFailureMessages[result.reason], { id: notification });
+  function save(active: boolean) {
+    if (pendingRef.current || pending) return;
+    pendingRef.current = true;
+    startTransition(async () => {
+      const notification = toast.loading("Updating program…");
+      try {
+        const result = await setCoachingProgramStatusAction({ id: program.id, is_active: active });
+        if (result.ok) {
+          toast.success(active ? "Program activated." : "Program deactivated.", { id: notification });
+          setConfirming(false);
+          startTransition(() => { showSavedValue(active); router.refresh(); });
+        } else {
+          toast.error(result.reason === "invalid-input" ? "Invalid program update." : coachingFailureMessages[result.reason], { id: notification });
+        }
+      } catch {
+        toast.error("Unable to update program. Please try again.", { id: notification });
+      } finally {
+        pendingRef.current = false;
       }
-    } catch {
-      toast.error("Unable to update program. Please try again.", { id: notification });
-    } finally {
-      pendingRef.current = false; setPending(false);
-    }
+    });
   }
   return <span onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
-    <select ref={selectRef} aria-label={`Status of ${program.name}`} value={String(program.is_active)} disabled={pending} className={statusSelectClass}
-      onChange={(event) => { if (event.target.value === "true") void save(true); else setConfirming(true); }}>
+    <select ref={selectRef} aria-label={`Status of ${program.name}`} value={String(isActive)} disabled={pending} aria-busy={pending} className={statusSelectClass}
+      onChange={(event) => { if (event.target.value === "true") save(true); else if (!pendingRef.current && !pending) setConfirming(true); }}>
       <option value="true">Active</option><option value="false">Inactive</option>
     </select>
     <ConfirmationDialog open={confirming} title={`Deactivate ${program.name}?`}

@@ -92,8 +92,6 @@ test("list renders guest and account bookings with links that preserve filters a
   const sort = table.getByRole("link", { name: "Scheduled" });
   expect(sort.getAttribute("href")).toBe(`/admin/bookings?status=cancelled&location=${archived}&court=${oldCourt}&sort=scheduled`);
   expect(screen.getByRole("navigation", { name: "Pagination" })).toBeDefined();
-  fireEvent.keyDown(table.getAllByRole("row")[1], { key: "Enter" });
-  expect(mocks.push).toHaveBeenCalledWith(link.getAttribute("href"));
 });
 
 test("unknown locations and courts from another location are not queried", async () => {
@@ -297,10 +295,13 @@ test.each([true, false])("Admin coaching details show stored names, participants
 
 const coaches = [{ id: userId, name: "Historical archived coach" }, { id: court, name: "Historical archived coach" }];
 
-test.each(["", "type=court"])("hides Coach outside Coaching (%s)", (query) => {
+// Coach keeps its grid column outside Coaching, so choosing a Type never moves the later filters.
+test.each(["", "type=court"])("disables Coach outside Coaching (%s)", (query) => {
   mocks.query = query;
   render(<BookingsToolbar locations={locations} coaches={coaches} />);
-  expect(screen.queryByRole("combobox", { name: "Coach" })).toBeNull();
+  const coach = screen.getByRole<HTMLSelectElement>("combobox", { name: "Coach" });
+  expect(coach.disabled).toBe(true);
+  expect([...coach.options].map((option) => option.textContent)).toEqual(["Select Coaching type"]);
 });
 
 test("Coach uses distinct stored IDs even for matching historical names and resets page without dropping list state", () => {
@@ -399,8 +400,6 @@ test("the List shows staff reservations beside bookings, linking to their own de
   }
   const [link] = within(table).getAllByRole("link").filter((item) => item.getAttribute("href")!.includes(staffReservationId));
   expect(link.getAttribute("href")).toBe(`/admin/bookings/reservations/${staffReservationId}?q=court&sort=scheduled`);
-  fireEvent.keyDown(within(table).getByRole("row", { name: `Staff reservation ac000000 by Staff Member` }), { key: "Enter" });
-  expect(mocks.push).toHaveBeenCalledWith(link.getAttribute("href"));
 });
 
 test("the Type filter offers staff reservations and each Type offers only its own statuses", () => {

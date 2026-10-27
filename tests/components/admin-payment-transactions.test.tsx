@@ -74,9 +74,9 @@ test("NETOPIA transactions expose no manual Stripe recovery actions", () => {
 test("rows navigate to the actual operation and retain list filters", () => {
   render(<table><tbody><TransactionRow transaction={transaction} listHref="/admin/payments/transactions?q=Ana&page=2" /></tbody></table>);
   const href = `/admin/payments/transactions/refund/${transaction.transaction_id}?q=Ana&page=2`;
-  expect(screen.getByRole("link", { name: "Full refund" }).getAttribute("href")).toBe(href);
-  fireEvent.keyDown(screen.getByRole("row", { name: /Full refund/ }), { key: "Enter" });
-  expect(push).toHaveBeenCalledWith(href);
+  const operation = screen.getByRole("link", { name: "Full refund" });
+  expect(operation.getAttribute("href")).toBe(href);
+  expect(operation.className).toContain("after:inset-0");
 });
 
 test("the booking reference opens Booking Details by full UUID and keeps the row action unambiguous", () => {
@@ -86,8 +86,7 @@ test("the booking reference opens Booking Details by full UUID and keeps the row
   const href = link.getAttribute("href")!;
   expect(href.startsWith(`/admin/bookings/${transaction.booking_id}?`)).toBe(true);
   expect(new URL(href, "http://x").searchParams.get("back")).toBe("/admin/payments/transactions?q=Ana&page=2");
-  // Clicking a link inside the row follows only that link, never the row's transaction navigation.
-  fireEvent.click(link);
+  expect(link.className).toContain("z-10");
   expect(push).not.toHaveBeenCalled();
   expect(screen.getByRole("link", { name: "Full refund" }).getAttribute("href"))
     .toBe(`/admin/payments/transactions/refund/${transaction.transaction_id}?q=Ana&page=2`);

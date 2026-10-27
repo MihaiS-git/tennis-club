@@ -5,12 +5,13 @@ import { createPortal } from "react-dom";
 import { Button } from "@/components/button";
 import { ModalDialog } from "@/components/modal-dialog";
 
-export function ConfirmationDialog({ open, title, message, confirmLabel, cancelLabel = "Cancel", pending = false, confirmDisabled = false, onConfirm, onClose, returnFocusRef, children }: {
+export function ConfirmationDialog({ open, title, message, confirmLabel, pendingLabel, cancelLabel = "Cancel", pending = false, confirmDisabled = false, onConfirm, onClose, returnFocusRef, children }: {
   children?: ReactNode;
   open: boolean;
   title: string;
   message: string;
   confirmLabel: string;
+  pendingLabel?: string;
   cancelLabel?: string;
   pending?: boolean;
   confirmDisabled?: boolean;
@@ -37,7 +38,7 @@ export function ConfirmationDialog({ open, title, message, confirmLabel, cancelL
       {children}
       <div className="mt-4 flex justify-end gap-2">
         <Button type="button" variant="secondary" size="small" disabled={pending} onClick={() => dialogRef.current?.close()}>{cancelLabel}</Button>
-        <Button type="button" variant="destructive" size="small" disabled={pending || confirmDisabled} aria-busy={pending} onClick={() => { if (!pending && !confirmDisabled) onConfirm(); }}>{confirmLabel}</Button>
+        <Button type="button" variant="destructive" size="small" disabled={pending || confirmDisabled} aria-busy={pending} onClick={() => { if (!pending && !confirmDisabled) onConfirm(); }}>{pending && pendingLabel ? pendingLabel : confirmLabel}</Button>
       </div>
     </ModalDialog>, document.body,
   );

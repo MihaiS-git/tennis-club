@@ -8,8 +8,10 @@ import { createPortal } from "react-dom";
 import { DialogHeader, DialogFooter } from "@/components/dialog-layout";
 import { BookingDetails } from "@/components/booking-details";
 import { ModalDialog } from "@/components/modal-dialog";
+import { LoadingStatus } from "@/components/loading-status";
 import { ReservationDetailsView } from "@/components/reservation-details";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
+import { Button } from "@/components/button";
 import { activityBookingHref, activityHref, parseActivityQuery, type ActivitySearchParams } from "@/lib/bookings/activity-query";
 import type { UpcomingActivity as Activity, UpcomingCourtActivity as CourtActivity } from "@/lib/bookings/activity-service";
 import { upcomingBookingStatus, type PersonalCustomerBooking } from "@/lib/bookings/personal";
@@ -103,13 +105,12 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
   useEffect(() => {
     if (activity || error) return;
     let cancelled = false;
-    const notification = toast.loading("Loading your court activity…");
     loadPersonalActivityAction(listQuery).then((value) => {
       if (!cancelled) setActivity(value);
     }).catch(() => {
       if (!cancelled) setError("Unable to load your court activity. Try again.");
     });
-    return () => { cancelled = true; toast.dismiss(notification); };
+    return () => { cancelled = true; };
   }, [activity, error, listQuery]);
 
   async function cancel() {
@@ -156,8 +157,10 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
     }
   }
 
-  if (!activity && !error) return <div aria-busy="true" className="min-h-20" />;
-  if (error) return <button type="button" className="text-sm font-semibold underline" onClick={() => setError("")}>Retry loading court activity</button>;
+  if (!activity && !error) return <div className="min-h-20">
+    <LoadingStatus label="Loading your court activity…" />
+  </div>;
+  if (error) return <Button type="button" variant="text" className="text-sm font-semibold underline" onClick={() => setError("")}>Retry loading court activity</Button>;
   if (!activity) return null;
 
   function openDetails(item: CourtActivity, row: HTMLTableRowElement) {
@@ -235,8 +238,7 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
         <DialogFooter>
           <CustomerBookingCancellation booking={selectedBooking} staff={staff}
             onCancelled={refreshCancelledBooking} onPendingChange={setPending} onEdit={() => setEditing(true)} />
-          <button type="button" disabled={pending} onClick={(event) => event.currentTarget.closest("dialog")?.close()}
-          className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button></DialogFooter>
+          <Button type="button" variant="secondary" disabled={pending} onClick={(event) => event.currentTarget.closest("dialog")?.close()}>Close</Button></DialogFooter>
         </>}
       </ModalDialog>, document.body)}
     {selected && typeof document !== "undefined" && createPortal(
@@ -253,17 +255,14 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
           {staff && selected.status === "active" && activity.upcoming.some((row) => row.id === selected.id)
             && isReservationUpcoming(selected, new Date())
             && selected.created_by_user_id === userId && <>
-            <button type="button" disabled={pending} onClick={() => {  setEditing(true); }}
-              className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold text-primary">Edit reservation</button>
-            <button ref={cancelButtonRef} type="button" disabled={pending} onClick={() => {  setConfirming(true); }}
-              className="min-h-10 rounded-control border border-danger px-4 text-sm font-semibold text-danger">Cancel reservation</button></>}
-          <button type="button" disabled={pending} onClick={() => dialogRef.current?.close()}
-          className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button></DialogFooter>
+            <Button type="button" variant="secondary" disabled={pending} onClick={() => {  setEditing(true); }}>Edit reservation</Button>
+            <Button ref={cancelButtonRef} type="button" variant="destructive" disabled={pending} onClick={() => {  setConfirming(true); }}>Cancel reservation</Button></>}
+          <Button type="button" variant="secondary" disabled={pending} onClick={() => dialogRef.current?.close()}>Close</Button></DialogFooter>
         </>}
       </ModalDialog>, document.body)}
     <ConfirmationDialog open={confirming && !!selected} title="Cancel reservation?"
       message={selected ? `${selected.location_name} · ${selected.court_name}\n${dateLabel(selected.booking_date)} · ${timeLabel(selected.starts_at_minute)}–${timeLabel(selected.ends_at_minute)}\nThis will free the court for other bookings.` : ""}
-      confirmLabel="Cancel reservation" cancelLabel="Keep reservation" pending={pending}
+      confirmLabel="Cancel reservation" pendingLabel="Cancelling reservation…" cancelLabel="Keep reservation" pending={pending}
       onConfirm={cancel} onClose={() => { if (!pending) setConfirming(false); }} returnFocusRef={cancelButtonRef} />
   </>;
 }

@@ -1,5 +1,6 @@
-import { UserAreaShell } from "@/components/management-shell";
+import { AreaShell } from "@/components/management-shell";
 
+// Notifications stay outside the My account sidebar.
 export default function MessagesLayout({ children }: { children: React.ReactNode }) {
-  return <UserAreaShell>{children}</UserAreaShell>;
+  return <AreaShell>{children}</AreaShell>;
 }

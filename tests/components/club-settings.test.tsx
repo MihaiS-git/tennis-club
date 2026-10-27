@@ -67,3 +67,24 @@ test("shows a safe error toast when the test action throws", async () => {
   expect(screen.queryByText(/smtp-id/)).toBeNull();
   expect(screen.getByRole("button", { name: "Send test email" })).toHaveProperty("disabled", false);
 });
+
+test.each(["save", "test"] as const)("labels a pending %s and blocks every action until it settles", async (operation) => {
+  let finish!: (value: unknown) => void;
+  const pending = new Promise((resolve) => { finish = resolve; });
+  mocks.save.mockReturnValue(pending); mocks.send.mockReturnValue(pending);
+  render(<ClubSettingsForm settings={settings} />);
+  if (operation === "save") {
+    fireEvent.change(screen.getByLabelText("Email sender name"), { target: { value: "New Club" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+  } else fireEvent.click(screen.getByRole("button", { name: "Send test email" }));
+  const label = operation === "save" ? "Saving…" : "Sending test email…";
+  const button = await screen.findByRole("button", { name: label });
+  expect(button).toHaveProperty("disabled", true);
+  expect(button.getAttribute("aria-busy")).toBe("true");
+  expect(screen.getAllByRole("button").every((item) => (item as HTMLButtonElement).disabled)).toBe(true);
+  fireEvent.submit(button.closest("form")!);
+  expect(operation === "save" ? mocks.save : mocks.send).toHaveBeenCalledOnce();
+  finish(operation === "save" ? { ok: true, settings: { ...settings, senderName: "New Club" } } : { ok: true, message: "Sent." });
+  await screen.findByRole("button", { name: operation === "save" ? "Save changes" : "Send test email" });
+  expect(screen.queryByRole("button", { name: label })).toBeNull();
+});

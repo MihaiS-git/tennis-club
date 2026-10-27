@@ -2,6 +2,7 @@ import Link from "next/link";
 import { connection } from "next/server";
 import { Suspense } from "react";
 
+import { LoadingStatus } from "@/components/loading-status";
 import { readPublicCoaching } from "@/lib/coaching/public";
 import { listPublicLocationsWithCourts, type PublicLocation } from "@/lib/courts/public";
 import { CourtAvailabilityCard, CourtAvailabilityCardShell } from "./home-court-availability";
@@ -98,7 +99,7 @@ export default function Home({ searchParams }: PageProps<"/">) {
             <h2 className="font-heading text-lg font-semibold text-primary lg:shrink-0 lg:leading-tight">
               Play today
             </h2>
-            <Suspense fallback={<p className={`${heroSummaryClassName} text-muted-foreground`}>Loading court information…</p>}>
+            <Suspense fallback={<div className={heroSummaryClassName}><LoadingStatus label="Loading court information…" /></div>}>
               <HeroCourtSummary locations={locations} />
             </Suspense>
             <Link
@@ -126,7 +127,7 @@ export default function Home({ searchParams }: PageProps<"/">) {
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)] lg:items-start lg:gap-5">
             <Suspense fallback={
               <CourtAvailabilityCardShell>
-                <p role="status" className="py-8 font-sans text-sm leading-6 text-muted-foreground">Loading court availability…</p>
+                <LoadingStatus label="Loading court availability…" className="py-8 font-sans leading-6" />
               </CourtAvailabilityCardShell>
             }>
               <CourtAvailabilityCard locations={locations} searchParams={searchParams} />
@@ -200,7 +201,7 @@ export default function Home({ searchParams }: PageProps<"/">) {
             </div>
 
             <div className="mt-10 grid gap-x-8 gap-y-8 md:grid-cols-2 md:gap-y-10 lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:mt-0">
-              <Suspense fallback={<FacilitiesCourtsFallback message="Loading court information…" />}>
+              <Suspense fallback={<FacilitiesCourtsFallback><LoadingStatus label="Loading court information…" className="mt-3" /></FacilitiesCourtsFallback>}>
                 <FacilitiesCourtsSummary locations={locations} />
               </Suspense>
               <div className="border-t border-border pt-4">
@@ -308,7 +309,7 @@ export default function Home({ searchParams }: PageProps<"/">) {
       <section id="locations" aria-labelledby="visit-club-title" className="scroll-mt-20 bg-forest-900 px-6 py-16 md:px-8 md:py-20 xl:py-28">
         <Suspense fallback={
           <HomeLocationsShell map={<div className="h-full w-full border border-ivory/30" />}>
-            <p role="status" className="border-t border-ivory/30 pt-5 font-sans text-base text-ivory">Loading locations…</p>
+            <LoadingStatus tone="inverse" label="Loading locations…" className="border-t border-ivory/30 pt-5" />
           </HomeLocationsShell>
         }>
           <HomeLocations locations={locations} searchParams={searchParams} />

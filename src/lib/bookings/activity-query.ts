@@ -14,9 +14,14 @@ const fields = {
   sort: z.enum(["datetime", "location", "court", "type", "duration", "status"]).catch("datetime"),
 };
 
+export function normalizeActivityType(type: z.infer<typeof fields.type>, staff: boolean) {
+  return !staff && (type === "reservation" || type === "booking") ? "all" : type;
+}
+
 export function parseActivityQuery(params: ActivitySearchParams, scope: ActivityScope, staff = true) {
   const filters = z.object(fields).parse(params);
-  if (!staff && filters.type === "reservation") filters.type = "all";
+  // Regular users only have bookings, so "booking" is their default "all", and reservations are staff-only.
+  filters.type = normalizeActivityType(filters.type, staff);
   if (scope === "upcoming") {
     filters.status = "all";
     if (filters.sort === "status") filters.sort = "datetime";

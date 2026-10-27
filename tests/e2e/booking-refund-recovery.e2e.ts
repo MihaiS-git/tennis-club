@@ -142,7 +142,7 @@ test("Definitive refund failure keeps the booking confirmed; a fresh customer ca
   await page.route("**/my-activity/bookings*", async (route) => {
     const request = route.request();
     if (request.method() === "POST"
-      && z.tuple([z.object({ type: z.literal("booking") })]).safeParse(request.postDataJSON()).success) {
+      && z.tuple([z.strictObject({})]).safeParse(request.postDataJSON()).success) {
       refreshRequested = true;
       const response = await route.fetch();
       await refreshGate;

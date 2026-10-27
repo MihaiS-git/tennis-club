@@ -43,7 +43,8 @@ export function CoachingDeleteButton({ kind, id, name }: { kind: "program" | "co
     <ConfirmationDialog open={open} title={`${kind === "coach" ? "Remove" : "Delete"} ${name}?`}
       message={kind === "coach" ? "The coach will leave the active coaching roster. Profiles with historical lessons are archived; unused profiles are permanently deleted."
         : "Permanently delete this program and its prices and coach assignments? Programs with booking history must be deactivated instead."}
-      confirmLabel={kind === "coach" ? "Remove coach" : "Delete program"} pending={pending} confirmDisabled={hasBookings}
+      confirmLabel={kind === "coach" ? "Remove coach" : "Delete program"}
+      pendingLabel={kind === "coach" ? "Removing coach…" : "Deleting program…"} pending={pending} confirmDisabled={hasBookings}
       returnFocusRef={buttonRef} onClose={() => { if (!pendingRef.current) setOpen(false); }} onConfirm={() => void remove()}>
       {error && <p role="alert" className="mt-3 text-sm text-danger">{error}</p>}
       {hasBookings && <Button type="button" variant="secondary" size="small" disabled={pending} onClick={() => void remove(true)}>Deactivate program</Button>}

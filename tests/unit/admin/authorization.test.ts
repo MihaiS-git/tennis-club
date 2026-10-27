@@ -1,23 +1,26 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import { createElement, type ReactNode } from "react";
+import { createElement, Suspense, type ReactElement, type ReactNode } from "react";
 import { renderToReadableStream } from "react-dom/server";
 
 import type { CurrentAccount, readCurrentAccount as readAccount } from "../../../src/lib/auth/account";
 
-const { readCurrentAccount, notFound, redirect, managementShell } = vi.hoisted(() => ({
+const { readCurrentAccount, notFound, redirect, managementShell, managementShellFallback } = vi.hoisted(() => ({
   readCurrentAccount: vi.fn(),
   notFound: vi.fn(() => { throw new Error("notFound"); }),
   redirect: vi.fn((path: string) => { throw new Error(`redirect:${path}`); }),
   managementShell: vi.fn((props: { children: ReactNode; isAdmin: boolean; isCoach: boolean }) => props.children),
+  managementShellFallback: () => null,
 }));
 
 vi.mock("../../../src/lib/auth/account", () => ({ readCurrentAccount }));
 vi.mock("next/navigation", () => ({ notFound, redirect }));
-vi.mock("../../../src/components/management-shell", () => ({ ManagementShell: managementShell }));
+vi.mock("../../../src/components/management-shell", () => ({ ManagementShell: managementShell,
+  ManagementShellFallback: managementShellFallback }));
 
 vi.mock("../../../src/lib/supabase/server", () => ({ createClient: vi.fn(async () => client) }));
 import AdminLayout from "../../../src/app/admin/layout";
 import AdminPage from "../../../src/app/admin/page";
+import { AdminEntryRedirect } from "../../../src/app/admin/admin-entry-redirect";
 import LocationsLayout from "../../../src/app/admin/locations/layout";
 import CourtsLayout from "../../../src/app/admin/courts/layout";
 import PricingLayout from "../../../src/app/admin/pricing/layout";
@@ -102,14 +105,14 @@ it.each(["admin", "coach"] as const)("allows active %s into the management shell
   expect(managementShell.mock.calls[0][0]).toEqual({
     isAdmin: role === "admin", isCoach: role === "coach", children: "Reservations",
   });
-  await expect(AdminPage()).rejects.toThrow(`redirect:${role === "admin" ? "/admin/locations" : "/coach/bookings"}`);
+  await expect(AdminEntryRedirect()).rejects.toThrow(`redirect:${role === "admin" ? "/admin/locations" : "/coach/bookings"}`);
 });
 
 it("preserves both role flags and Admin entry precedence for a Coach who is also an Admin", async () => {
   readCurrentAccount.mockResolvedValue({ state: "active", userId: "staff", roles: ["coach", "admin"] });
   await renderAdminLayout("Bookings");
   expect(managementShell.mock.calls[0][0]).toEqual({ isAdmin: true, isCoach: true, children: "Bookings" });
-  await expect(AdminPage()).rejects.toThrow("redirect:/admin/locations");
+  await expect(AdminEntryRedirect()).rejects.toThrow("redirect:/admin/locations");
 });
 
 it.each([
@@ -120,7 +123,26 @@ it.each([
   readCurrentAccount.mockResolvedValue(account);
   await expect(renderAdminLayout("Private")).rejects.toThrow(error);
   expect(managementShell).not.toHaveBeenCalled();
-  await expect(AdminPage()).rejects.toThrow(error);
+  await expect(AdminEntryRedirect()).rejects.toThrow(error);
+});
+
+it("streams the Admin entry fallback without relying on the Admin layout boundary", async () => {
+  // Navigations within the management area keep the Admin layout mounted, so the
+  // entry page must place its own role lookup below a page-level boundary.
+  let resolveAccount!: (account: CurrentAccount) => void;
+  readCurrentAccount.mockReturnValue(new Promise<CurrentAccount>((resolve) => { resolveAccount = resolve; }));
+  const errors: unknown[] = [];
+  // Without that boundary the suspended lookup and its redirect would fail the shell.
+  const stream = await renderToReadableStream(createElement(AdminPage), { onError: (error) => { errors.push(error); } });
+  expect(redirect).not.toHaveBeenCalled();
+
+  resolveAccount({ state: "active", userId: "staff", email: "staff@example.com", roles: ["admin"] });
+  const html = await new Response(stream).text();
+  expect(html).toMatch(/^<!--\$[?!]-->/);
+  expect(html).toContain("Loading management area…");
+  // The SSR test renderer retries an async component when it resolves; RSC renders it once.
+  expect(redirect).toHaveBeenLastCalledWith("/admin/locations");
+  expect(errors).toContainEqual(new Error("redirect:/admin/locations"));
 });
 
 it.each([LocationsLayout, CourtsLayout, PricingLayout, UsersLayout, PaymentsLayout])(
@@ -131,3 +153,10 @@ it.each([LocationsLayout, CourtsLayout, PricingLayout, UsersLayout, PaymentsLayo
     await expect(layout({ children: "Private" })).resolves.toBeDefined();
   },
 );
+
+it("shows only the role-neutral management fallback while authorization is pending", () => {
+  const layout = AdminLayout({ children: "Private" }) as ReactElement<{ fallback: ReactElement }>;
+  expect(layout.type).toBe(Suspense);
+  expect(layout.props.fallback.type).toBe(managementShellFallback);
+  expect(layout.props.fallback.props).toEqual({});
+});

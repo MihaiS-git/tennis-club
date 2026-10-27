@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { PendingLink } from "@/components/navigation-pending";
 import { usePathname, useSearchParams } from "next/navigation";
 import { SegmentedNavigation, segmentedNavigationItemClass } from "@/components/segmented-navigation";
 import type { AdminUserDetails } from "@/lib/admin/users";
@@ -23,10 +23,10 @@ export function UserWorkspace({ user, currentAdminId }: { user: AdminUserDetails
       {tabs.map(({ id, label }) => {
         const query = new URLSearchParams(searchParams);
         query.set("tab", id);
-        return <Link key={id} href={`${pathname}?${query}`} scroll={false}
+        return <PendingLink key={id} href={`${pathname}?${query}`} scroll={false}
           aria-current={selected === id ? "page" : undefined} className={segmentedNavigationItemClass(selected === id)}>
           {label}
-        </Link>;
+        </PendingLink>;
       })}
     </SegmentedNavigation>
     <section aria-label="Account & access" hidden={selected !== "account"}

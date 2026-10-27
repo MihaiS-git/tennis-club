@@ -519,3 +519,21 @@ it("requires common intervals even when all selected days are individually open"
   expect(timeSelect(dialog, "From").disabled).toBe(true);
   expect(within(dialog).getByText("No common opening hours are available for the selected days and dates.")).toBeTruthy();
 });
+
+it("keeps the removal confirmation open with a pending label until the removal settles", async () => {
+  let finish!: (value: { ok: true; id: string }) => void;
+  const action = vi.fn().mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+  render(<AvailabilityManager view={view} action={action} />);
+  fireEvent.click(screen.getByRole("button", { name: /^09:00–12:00/ }));
+  fireEvent.click(within(screen.getByRole("dialog", { name: "Edit working hours" })).getByRole("button", { name: "Remove" }));
+  const confirmation = screen.getByRole("dialog", { name: "Remove working hours" });
+  fireEvent.click(within(confirmation).getByRole("button", { name: "Remove" }));
+  const pending = await within(confirmation).findByRole("button", { name: "Removing…" });
+  expect(pending).toHaveProperty("disabled", true);
+  expect(within(confirmation).getByRole("button", { name: "Cancel" })).toHaveProperty("disabled", true);
+  fireEvent.click(pending);
+  expect(action).toHaveBeenCalledOnce();
+  finish({ ok: true, id: view.weekly[0].id });
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Remove working hours" })).toBeNull());
+  expect(screen.queryByRole("dialog", { name: "Edit working hours" })).toBeNull();
+});

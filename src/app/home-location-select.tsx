@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { LocationSelect } from "@/components/location-select";
+import { LoadingStatus } from "@/components/loading-status";
 
 // Re-renders the homepage on the server for the selected location; the server
 // remains authoritative and falls back to the first public location.
@@ -17,6 +18,6 @@ export function HomeLocationSelect({ locations, selectedId }: {
       setValue(id);
       startTransition(() => router.push(`/?${new URLSearchParams({ location: id })}`, { scroll: false }));
     }} />
-    <span role="status" className="min-h-4 font-sans text-xs text-muted-foreground">{pending ? "Updating availability…" : ""}</span>
+    <LoadingStatus compact pending={pending} label="Updating availability…" />
   </div>;
 }

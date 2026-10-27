@@ -1,10 +1,11 @@
 import type { PublicCoaching } from "@/lib/coaching/public";
+import { LoadingStatus } from "@/components/loading-status";
 
 const listClassName = "mt-10 grid gap-x-8 font-sans text-base font-medium text-ivory md:grid-cols-2";
 const noteClassName = "mt-10 max-w-xl border-t border-ivory/30 pt-4 font-sans text-base leading-7 text-ivory";
 
 export function HomeCoachingFallback() {
-  return <p role="status" className={noteClassName}>Loading coaching programs…</p>;
+  return <LoadingStatus tone="inverse" label="Loading coaching programs…" className="mt-10 max-w-xl border-t border-ivory/30 pt-4" />;
 }
 
 // Only programs the club has published are named; nothing is advertised otherwise.

@@ -174,7 +174,7 @@ export function OpeningHours({ locationId, intervals, schedules = [], today = ""
         {([[false, "Current & scheduled"], [true, "Expired"]] as const).map(([value, label]) =>
           <button key={label} type="button" aria-pressed={history === value} disabled={pending || !hydrated}
             onClick={() => { if (history !== value) requestSelection({ history: value, schedule: value ? schedules.find((s) => scheduleStatus(s, today) === "History") ?? null : defaultSchedule() }); }}
-            className={`min-h-9 rounded-[calc(var(--radius-control)-2px)] px-3 text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus disabled:opacity-60 ${history === value ? "bg-primary text-primary-foreground" : "text-muted-foreground enabled:hover:bg-surface-muted enabled:hover:text-primary"}`}>{label}</button>)}
+            className={`min-h-9 rounded-[calc(var(--radius-control)-2px)] px-3 text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus disabled:cursor-not-allowed disabled:opacity-60 ${history === value ? "bg-primary text-primary-foreground" : "text-muted-foreground enabled:hover:bg-surface-muted enabled:hover:text-primary"}`}>{label}</button>)}
       </div>
     </div>
     <div className="mb-4 flex flex-wrap items-end gap-3">

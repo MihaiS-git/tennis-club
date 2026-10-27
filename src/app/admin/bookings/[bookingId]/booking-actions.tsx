@@ -6,6 +6,7 @@ import { createPortal } from "react-dom";
 import { AdminBookingCancellation, type AdminCancellableBooking } from "@/app/admin/reservations/admin-booking-cancellation";
 import { dismissOwnBookingAdjustmentAction } from "@/app/my-activity/bookings/actions";
 import { BookingEditForm } from "@/components/booking-edit-form";
+import { Button } from "@/components/button";
 import { DialogHeader } from "@/components/dialog-layout";
 import { ModalDialog } from "@/components/modal-dialog";
 import type { AdminCancellationAvailability } from "@/lib/bookings/admin-history";
@@ -39,8 +40,7 @@ export function BookingActions({ booking, availability, startsAt, refundAvailabl
   if (current === "unavailable") return null;
   return <section aria-label="Booking actions" className="mb-6 flex max-w-4xl flex-wrap items-center gap-3">
     {current === "eligible" ? <>
-      {editable && <button type="button" disabled={pending} onClick={() => setEditing(true)}
-        className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold text-primary disabled:opacity-50">Edit booking</button>}
+      {editable && <Button type="button" variant="secondary" disabled={pending} onClick={() => setEditing(true)}>Edit booking</Button>}
       <AdminBookingCancellation booking={booking} refundAvailable={refundAvailable} onCancelled={() => router.refresh()} />
     </> : <p role="status" className="text-sm text-muted-foreground">{unavailableMessages[current]}</p>}
     {editing && typeof document !== "undefined" && createPortal(

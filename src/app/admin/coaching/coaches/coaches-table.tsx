@@ -5,7 +5,7 @@ import type { AdminCoachListItem } from "@/lib/coaching/admin-lists";
 import { Pencil } from "lucide-react";
 import { Button } from "@/components/button";
 import { CoachingDeleteButton } from "../delete-button";
-import { useRef, useState } from "react";
+import { useOptimistic, useRef, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -23,31 +23,35 @@ const ineligibilityLabels = { suspended: "Account suspended", "no-coach-role": "
 // Inline visibility edit. Hidden coaches without a valid coach account cannot be shown.
 function VisibilityControl({ coach }: { coach: AdminCoach }) {
   const router = useRouter();
+  // The ref fences re-entry before React renders; pending also spans the refresh.
   const pendingRef = useRef(false);
-  const [pending, setPending] = useState(false);
-  async function save(isPublic: boolean) {
-    if (pendingRef.current) return;
-    pendingRef.current = true; setPending(true);
-    const notification = toast.loading("Updating visibility…");
-    try {
-      const result = await setCoachVisibilityAction({ user_id: coach.user_id, is_public: isPublic });
-      if (result.ok) {
-        toast.success(isPublic ? `${coach.display_name} is shown publicly.` : `${coach.display_name} is hidden.`, { id: notification });
-        router.refresh();
-      } else {
-        toast.error(result.reason === "invalid-input" ? "Invalid visibility update." : coachingFailureMessages[result.reason], { id: notification });
+  const [pending, startTransition] = useTransition();
+  const [isPublic, showSavedValue] = useOptimistic(coach.is_public);
+  function save(visible: boolean) {
+    if (pendingRef.current || pending) return;
+    pendingRef.current = true;
+    startTransition(async () => {
+      const notification = toast.loading("Updating visibility…");
+      try {
+        const result = await setCoachVisibilityAction({ user_id: coach.user_id, is_public: visible });
+        if (result.ok) {
+          toast.success(visible ? `${coach.display_name} is shown publicly.` : `${coach.display_name} is hidden.`, { id: notification });
+          startTransition(() => { showSavedValue(visible); router.refresh(); });
+        } else {
+          toast.error(result.reason === "invalid-input" ? "Invalid visibility update." : coachingFailureMessages[result.reason], { id: notification });
+        }
+      } catch {
+        toast.error("Unable to update visibility. Please try again.", { id: notification });
+      } finally {
+        pendingRef.current = false;
       }
-    } catch {
-      toast.error("Unable to update visibility. Please try again.", { id: notification });
-    } finally {
-      pendingRef.current = false; setPending(false);
-    }
+    });
   }
   return <span className="inline-flex flex-wrap items-center gap-2" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
-    <select aria-label={`Visibility of ${coach.display_name}`} value={String(coach.is_public)} disabled={pending}
+    <select aria-label={`Visibility of ${coach.display_name}`} value={String(isPublic)} disabled={pending} aria-busy={pending}
       className="min-h-9 rounded-control border border-border-strong bg-surface px-2 text-sm text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-60"
-      onChange={(event) => void save(event.target.value === "true")}>
-      <option value="true" disabled={coach.ineligibility !== null && !coach.is_public}>Public</option>
+      onChange={event => save(event.target.value === "true")}>
+      <option value="true" disabled={coach.ineligibility !== null && !isPublic}>Public</option>
       <option value="false">Hidden</option>
     </select>
     {coach.ineligibility && <StatusBadge tone="warning">{ineligibilityLabels[coach.ineligibility]}</StatusBadge>}

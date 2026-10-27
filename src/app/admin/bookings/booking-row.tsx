@@ -1,7 +1,4 @@
-"use client";
-
-import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { RowLink } from "@/components/row-link";
 import { StatusBadge } from "@/components/status-badge";
 import { reservationDateLabel } from "@/components/reservation-details";
 import { minuteToTime } from "@/lib/admin/opening-hours-validation";
@@ -25,24 +22,11 @@ export function BookingRow({ booking, listQuery, mobile = false, scope = "admin"
     : <CustomerBookingRow booking={booking} listQuery={listQuery} mobile={mobile} scope={scope} />;
 }
 
-const hover = "cursor-pointer hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-focus";
-
-function useRowLink(href: string, label: string) {
-  const router = useRouter();
-  return {
-    tabIndex: 0,
-    "aria-label": label,
-    onClick: (event: React.MouseEvent) => { if (!(event.target instanceof Element && event.target.closest("a"))) router.push(href); },
-    onKeyDown: (event: React.KeyboardEvent) => {
-      if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); router.push(href); }
-    },
-  };
-}
+const hover = "relative cursor-pointer hover:bg-surface-muted focus-within:bg-surface-muted";
 
 function CustomerBookingRow({ booking: b, listQuery, mobile, scope }: { booking: ListItem<"booking">; listQuery: string; mobile: boolean; scope: ListScope }) {
   const href = `${detailBase[scope].booking}/${b.id}${listQuery ? `?${listQuery}` : ""}`;
-  const rowProps = useRowLink(href, `Booking ${b.id.slice(0, 8)} for ${b.customer_name}`);
-  const reference = <Link href={href} className="font-mono text-xs text-primary underline focus-visible:outline-2 focus-visible:outline-focus">#{b.id.slice(0, 8)}</Link>;
+  const reference = <RowLink href={href} className="font-mono text-xs text-primary underline focus-visible:outline-2 focus-visible:outline-focus">#{b.id.slice(0, 8)}</RowLink>;
   const status = <StatusBadge tone={bookingStatusTones[b.status]}>{bookingStatusLabels[b.status]}</StatusBadge>;
   const total = "total_amount_minor" in b ? formatMoney(b.total_amount_minor, b.currency) : null;
   const date = reservationDateLabel(b.booking_date), time = `${minuteToTime(b.starts_at_minute)}–${minuteToTime(b.ends_at_minute)}`;
@@ -50,7 +34,7 @@ function CustomerBookingRow({ booking: b, listQuery, mobile, scope }: { booking:
   const type = <><span className="block">{bookingTypeLabel(b)}</span>
     {typeDetail && <span className="mt-0.5 block text-xs text-muted-foreground [overflow-wrap:anywhere]">{typeDetail}</span>}</>;
   const guest = "account_user_id" in b && !b.account_user_id && <span className="ml-1.5 text-xs font-normal text-muted-foreground">Guest</span>;
-  return mobile ? <li {...rowProps} className={`min-w-0 rounded-card border border-border bg-surface p-4 ${hover}`}>
+  return mobile ? <li className={`min-w-0 rounded-card border border-border bg-surface p-4 ${hover}`}>
     <div className="flex items-start justify-between gap-3">{reference}{status}</div>
     <p className="mt-2 font-semibold text-foreground [overflow-wrap:anywhere]">{b.customer_name}{guest}</p>
     <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">{b.customer_email}</p>
@@ -61,7 +45,7 @@ function CustomerBookingRow({ booking: b, listQuery, mobile, scope }: { booking:
       {total && <><dt className="text-xs text-muted-foreground">Total</dt><dd className="font-semibold tabular-nums">{total}</dd></>}
       <dt className="text-xs text-muted-foreground">Created</dt><dd>{bookingCreatedLabel(b.created_at, b.location_timezone)}</dd>
     </dl>
-  </li> : <tr {...rowProps} className={`${hover} [&_td]:px-3 [&_td]:py-2.5 [&_td]:align-top`}>
+  </li> : <tr className={`${hover} [&_td]:px-3 [&_td]:py-2.5 [&_td]:align-top`}>
     <td>{reference}</td>
     <td className="w-48 min-w-40 max-w-48">{type}</td>
     <td className="[overflow-wrap:anywhere]"><span className="block font-medium">{b.customer_name}{guest}</span>
@@ -78,15 +62,14 @@ function CustomerBookingRow({ booking: b, listQuery, mobile, scope }: { booking:
 function ReservationRow({ reservation: r, listQuery, mobile, scope }: { reservation: ListItem<"reservation">; listQuery: string; mobile: boolean; scope: ListScope }) {
   const href = `${detailBase[scope].reservation}/${r.id}${listQuery ? `?${listQuery}` : ""}`;
   const creator = r.creator_name || "Unknown creator";
-  const rowProps = useRowLink(href, `Staff reservation ${r.id.slice(0, 8)} by ${creator}`);
-  const reference = <Link href={href} className="font-mono text-xs text-primary underline focus-visible:outline-2 focus-visible:outline-focus">#{r.id.slice(0, 8)}</Link>;
+  const reference = <RowLink href={href} className="font-mono text-xs text-primary underline focus-visible:outline-2 focus-visible:outline-focus">#{r.id.slice(0, 8)}</RowLink>;
   const status = <StatusBadge tone={reservationStatusTones[r.status]}>{reservationStatusLabels[r.status]}</StatusBadge>;
   const date = reservationDateLabel(r.booking_date), time = `${minuteToTime(r.starts_at_minute)}–${minuteToTime(r.ends_at_minute)}`;
   const type = <><span className="block">{adminListTypeLabels.reservation}</span>
     {r.reason && <span className="mt-0.5 block text-xs text-muted-foreground [overflow-wrap:anywhere]">{r.reason}</span>}</>;
   const staff = <span className="ml-1.5 text-xs font-normal text-muted-foreground">Staff</span>;
   const total = <><span aria-hidden>—</span><span className="sr-only">No charge</span></>;
-  return mobile ? <li {...rowProps} className={`min-w-0 rounded-card border border-border bg-surface p-4 ${hover}`}>
+  return mobile ? <li className={`min-w-0 rounded-card border border-border bg-surface p-4 ${hover}`}>
     <div className="flex items-start justify-between gap-3">{reference}{status}</div>
     <p className="mt-2 font-semibold text-foreground [overflow-wrap:anywhere]">{creator}{staff}</p>
     {r.creator_email && <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">{r.creator_email}</p>}
@@ -97,7 +80,7 @@ function ReservationRow({ reservation: r, listQuery, mobile, scope }: { reservat
       {scope === "admin" && <><dt className="text-xs text-muted-foreground">Total</dt><dd>{total}</dd></>}
       <dt className="text-xs text-muted-foreground">Created</dt><dd>{bookingCreatedLabel(r.created_at, r.location_timezone)}</dd>
     </dl>
-  </li> : <tr {...rowProps} className={`${hover} [&_td]:px-3 [&_td]:py-2.5 [&_td]:align-top`}>
+  </li> : <tr className={`${hover} [&_td]:px-3 [&_td]:py-2.5 [&_td]:align-top`}>
     <td>{reference}</td>
     <td className="w-48 min-w-40 max-w-48">{type}</td>
     <td className="[overflow-wrap:anywhere]"><span className="block font-medium">{creator}{staff}</span>

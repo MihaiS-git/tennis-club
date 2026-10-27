@@ -1,4 +1,4 @@
-import { ProfileDepartureForm, ProfileDepartureLink as Link } from "./profile-departure-navigation";
+import { ProfileDepartureForm } from "./profile-departure-navigation";
 import { Suspense } from "react";
 
 import { SignOutButton } from "./sign-out-button";
@@ -10,6 +10,8 @@ import { PrimaryNavigationLink } from "./primary-navigation-link";
 import { BookCourtLink } from "./book-court-link";
 import { ProfileNavigationAvatar } from "./profile-navigation-avatar";
 import { NotificationBell } from "./notification-bell";
+import { NavigationLink } from "./navigation-pending";
+import { NavbarIconAction } from "./navbar-icon-action";
 
 async function AdminNavigationLink() {
   const { account } = await readNavigationProfile();
@@ -28,17 +30,16 @@ async function AccountControls({ authenticated }: { authenticated: boolean }) {
   const isAuthenticated = account.state !== "unauthenticated";
   if (isAuthenticated !== authenticated) return null;
 
-  if (!authenticated) return <Link className="text-sm font-medium text-primary hover:text-accent" href="/login">Sign in</Link>;
+  if (!authenticated) return <NavigationLink className="relative text-sm font-medium text-primary hover:text-accent" href="/login" pendingPlacement="below">Sign in</NavigationLink>;
 
   return <>
     {(account.state === "active" || account.state === "suspended") && <NotificationBell viewport="desktop" />}
-    <Link href="/profile" aria-label="Profile"
-      className="inline-flex min-h-10 items-center rounded-control border border-border-strong px-1.5 text-primary hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-primary">
-      <ProfileNavigationAvatar src={avatarUrl} desktop />
-    </Link>
+    <NavbarIconAction href="/profile" aria-label="Profile">
+      <ProfileNavigationAvatar src={avatarUrl} compact />
+    </NavbarIconAction>
     {/* The departure guard protects unsaved Profile drafts before the unchanged action runs. */}
     <ProfileDepartureForm action={signOutAction}>
-      <SignOutButton className="inline-flex min-h-10 items-center whitespace-nowrap text-sm font-medium text-primary" />
+      <SignOutButton className="inline-flex min-h-10 items-center whitespace-nowrap text-sm font-medium" />
     </ProfileDepartureForm>
   </>;
 }
@@ -47,12 +48,12 @@ export function DesktopNavbar() {
   return (
     <header className="sticky top-0 z-30 hidden w-full border-b border-border bg-surface lg:block">
       <div className="mx-auto grid h-18 max-w-7xl grid-cols-[1fr_auto_1fr] items-center gap-3 px-6 xl:gap-8 xl:px-8">
-        <Link
+        <NavigationLink pendingPlacement="below"
           href="/"
-          className="w-fit font-heading text-lg font-semibold tracking-tight text-primary hover:text-accent xl:text-xl"
+          className="relative w-fit font-heading text-lg font-semibold tracking-tight text-primary hover:text-accent xl:text-xl"
         >
           Tennis Club
-        </Link>
+        </NavigationLink>
 
         <nav aria-label="Main navigation" className="flex items-center gap-1 xl:gap-3">
           <PrimaryNavigationLink className="inline-flex min-h-10 items-center text-sm font-medium" href="/courts">

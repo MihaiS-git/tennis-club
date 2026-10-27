@@ -4,6 +4,8 @@ import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } fr
 import { toast } from "sonner";
 import { z } from "zod";
 import { minuteToTime } from "@/lib/admin/opening-hours-validation";
+import { LoadingStatus } from "@/components/loading-status";
+import { Button } from "@/components/button";
 import { ReservationTimetable, type ReservationTimetableDay } from "@/components/reservation-timetable";
 import { localToday } from "@/lib/courts/local-time";
 import { reservationEditSchema, reservationReasonSchema, reservationSelectionForInterval, selectReservationCell,
@@ -171,8 +173,8 @@ export function ReservationEditForm<Day extends ReservationTimetableDay = Reserv
       </label>
       <p id={`${prefix}-date-error`} className="text-sm text-danger">{!validDate ? "Choose a valid date from today onward." : fieldErrors.date}</p>
       <p className="text-xs text-muted-foreground">Times shown in {reservation.location_timezone}.</p>
-      {loading && <div aria-busy="true" className="min-h-20" />}
-      {availabilityError && <button type="button" className="text-sm font-semibold underline" onClick={() => setRefreshKey((key) => key + 1)}>Retry loading availability</button>}
+      {loading && <LoadingStatus variant="section" label="Loading court availability…" />}
+      {availabilityError && <Button type="button" variant="text" className="text-sm font-semibold underline" onClick={() => setRefreshKey((key) => key + 1)}>Retry loading availability</Button>}
       {day && (renderTimetable ? renderTimetable({ day, date, selection, select: setSelection, disabled: pending })
         : <ReservationTimetable day={day} date={date} selection={selection} onChoose={choose} disabled={pending} />)}
       {(fieldErrors.courtId || fieldErrors.startMinute || fieldErrors.endMinute) && <p role="alert" className="text-sm text-danger">{fieldErrors.courtId || fieldErrors.startMinute || fieldErrors.endMinute}</p>}
@@ -190,10 +192,10 @@ export function ReservationEditForm<Day extends ReservationTimetableDay = Reserv
     </div>}
     {fieldErrors.form && <p role="alert" className="text-xs text-danger">{fieldErrors.form}</p>}
     <div className="flex justify-end gap-2 pt-2">
-      <button type="button" disabled={pending} onClick={onCancel} className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Cancel</button>
-      <button type="submit" disabled={!ready || pending} aria-busy={pending} className="min-h-10 rounded-control bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-50">
+      <Button type="button" variant="secondary" disabled={pending} onClick={onCancel}>Cancel</Button>
+      <Button type="submit" fullWidth={false} disabled={!ready || pending} aria-busy={pending}>
         {pending ? "Saving…" : "Save changes"}
-      </button>
+      </Button>
     </div>
   </form>;
 }

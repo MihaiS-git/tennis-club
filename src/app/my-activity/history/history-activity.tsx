@@ -4,6 +4,7 @@ import { useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import { DialogHeader, DialogFooter } from "@/components/dialog-layout";
+import { Button } from "@/components/button";
 import { BookingDetails } from "@/components/booking-details";
 import { ModalDialog } from "@/components/modal-dialog";
 import { historyStatus, type CourtHistoryItem, type CustomerBookingHistoryItem } from "@/lib/bookings/history";
@@ -58,8 +59,7 @@ export function HistoryActivity({ rows, page = 1, staff = false, query = parseAc
         <DialogHeader titleId={titleId} title={selected.kind === "booking" ? "Booking details" : "Reservation details"} status={historyStatus(selected)} statusTone={historyTone(selected)} onClose={() => dialogRef.current?.close()} />
         {selected.kind === "reservation" ? <ReservationDetails reservation={selected} /> :
           <><BookingDetails booking={selected} /><BookingPayment bookingId={selected.id} /></>}
-        <DialogFooter><button type="button" onClick={() => dialogRef.current?.close()}
-          className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button></DialogFooter>
+        <DialogFooter><Button type="button" variant="secondary" onClick={() => dialogRef.current?.close()}>Close</Button></DialogFooter>
       </ModalDialog>, document.body)}
   </>;
 }

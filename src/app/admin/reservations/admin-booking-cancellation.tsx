@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { toast } from "sonner";
+import { Button } from "@/components/button";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { reservationDateLabel } from "@/components/reservation-details";
 import { minuteToTime } from "@/lib/admin/opening-hours-validation";
@@ -44,11 +45,10 @@ export function AdminBookingCancellation({ booking, refundAvailable, onCancelled
     }
   }
   return <>
-    <button ref={triggerRef} type="button" disabled={pending} onClick={() => setConfirming(true)}
-      className="min-h-10 rounded-control border border-danger px-4 text-sm font-semibold text-danger">Cancel booking</button>
+    <Button ref={triggerRef} type="button" variant="destructive" disabled={pending} onClick={() => setConfirming(true)}>Cancel booking</Button>
     <ConfirmationDialog open={confirming} title="Cancel booking?"
       message={`Customer\n${booking.customer_name}\n\n${booking.location_name} · ${booking.court_name}\n${reservationDateLabel(booking.booking_date)} · ${minuteToTime(booking.starts_at_minute)}–${minuteToTime(booking.ends_at_minute)}\n\nTotal\n${formatMoney(booking.total_amount_minor, booking.currency)} · ${booking.currency}\n\nThis will cancel the booking and free the court.`}
-      confirmLabel="Cancel booking" cancelLabel="Keep booking" pending={pending}
+      confirmLabel="Cancel booking" pendingLabel="Cancelling booking…" cancelLabel="Keep booking" pending={pending}
       onConfirm={cancel} onClose={() => { if (!pendingRef.current) setConfirming(false); }} returnFocusRef={triggerRef}>
       {refundAvailable && <p className="mt-3 text-sm">Captured online funds will be refunded automatically.</p>}
     </ConfirmationDialog>

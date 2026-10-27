@@ -17,21 +17,28 @@ export function useProfileDepartureRegistration() {
   return useContext(ProfileDepartureContext);
 }
 
-type ProfileLinkProps = Omit<ComponentProps<typeof Link>, "href" | "onNavigate"> & { href: string };
+type ProfileLinkProps = Omit<ComponentProps<typeof Link>, "href"> & { href: string };
 
-export function ProfileDepartureLink({ href, replace, scroll, transitionTypes, ...props }: ProfileLinkProps) {
+export function ProfileDepartureLink({ href, replace, scroll, transitionTypes, onNavigate, ...props }: ProfileLinkProps) {
   const handler = useContext(ProfileDepartureContext);
   const router = useRouter();
   return <Link {...props} href={href} replace={replace} scroll={scroll} transitionTypes={transitionTypes}
     onNavigate={(event) => {
       // Re-selecting the current page is not a departure from its drafts.
-      if (new URL(href, window.location.href).pathname === window.location.pathname) return;
+      if (new URL(href, window.location.href).pathname === window.location.pathname) {
+        onNavigate?.(event);
+        return;
+      }
       const proceed = () => {
+        let prevented = false;
+        onNavigate?.({ preventDefault: () => { prevented = true; } });
+        if (prevented) return;
         const options = { scroll, transitionTypes };
         if (replace) router.replace(href, options);
         else router.push(href, options);
       };
       if (handler?.current?.(proceed)) event.preventDefault();
+      else onNavigate?.(event);
     }} />;
 }
 

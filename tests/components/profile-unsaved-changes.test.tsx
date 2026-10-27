@@ -10,7 +10,7 @@ vi.mock("../../src/app/profile/actions", () => ({ savePersonalAction: personal, 
 vi.mock("../../src/app/account/actions", () => ({ changePasswordAction: password, signOutAction: signOut }));
 vi.mock("next/navigation", () => ({ usePathname: () => route.pathname, useRouter: () => ({ bfcacheId: "visit", push, replace }) }));
 // Exercise the documented Link.onNavigate contract; real Next routing is covered in E2E.
-vi.mock("next/link", () => ({ default: ({ onNavigate, href, children, replace: shouldReplace, scroll, transitionTypes, ...props }:
+vi.mock("next/link", () => ({ useLinkStatus: () => ({ pending: false }), default: ({ onNavigate, href, children, replace: shouldReplace, scroll, transitionTypes, ...props }:
   Omit<ComponentProps<"a">, "href"> & { href: string; replace?: boolean; scroll?: boolean; transitionTypes?: string[]; onNavigate?: (event: { preventDefault: () => void }) => void }) =>
   <a {...props} href={href} onClick={(event) => {
     props.onClick?.(event);

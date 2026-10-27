@@ -1,3 +1,5 @@
+import { LoadingStatus } from "@/components/loading-status";
+
 export default function LoadingUser() {
-  return <p role="status" className="text-sm text-muted-foreground">Loading user details…</p>;
+  return <LoadingStatus variant="page" label="Loading user details…" />;
 }

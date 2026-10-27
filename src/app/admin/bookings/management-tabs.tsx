@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { PendingLink } from "@/components/navigation-pending";
 import { SegmentedNavigation, segmentedNavigationItemClass } from "@/components/segmented-navigation";
 
 export type ManagementView = "calendar" | "list";
@@ -9,10 +9,10 @@ export function ManagementTabs({ view, base = "/admin/bookings" }: { view: Manag
   return <SegmentedNavigation columns={2} aria-label="Bookings and reservations views" className="mb-5">
     {tabs.map(([value, label, href]) => {
       const active = value === view;
-      return <Link key={value} href={href} aria-current={active ? "page" : undefined}
+      return <PendingLink key={value} href={href} aria-current={active ? "page" : undefined}
         className={segmentedNavigationItemClass(active)}>
         {label}
-      </Link>;
+      </PendingLink>;
     })}
   </SegmentedNavigation>;
 }

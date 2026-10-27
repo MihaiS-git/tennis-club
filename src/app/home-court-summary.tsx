@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { PublicLocation } from "@/lib/courts/public";
 import { countLabel, summarizeClubCourts } from "@/lib/courts/summary";
 
@@ -39,19 +40,19 @@ export async function HeroCourtSummary({ locations }: { locations: Promise<Publi
 const facilityTitleClassName = "font-heading text-xl font-semibold leading-snug tracking-[-0.02em] text-primary";
 const facilityTextClassName = "mt-3 font-sans text-sm leading-6 text-muted-foreground md:text-base md:leading-7";
 
-export function FacilitiesCourtsFallback({ message }: { message: string }) {
+export function FacilitiesCourtsFallback({ children }: { children: ReactNode }) {
   return (
     <div className="border-t border-border pt-4">
       <h3 className={facilityTitleClassName}>Courts</h3>
-      <p className={facilityTextClassName}>{message}</p>
+      {children}
     </div>
   );
 }
 
 export async function FacilitiesCourtsSummary({ locations }: { locations: Promise<PublicLocation[]> }) {
   const summary = await readSummary(locations);
-  if (!summary) return <FacilitiesCourtsFallback message="Court information is currently unavailable." />;
-  if (summary.courtCount === 0) return <FacilitiesCourtsFallback message="Court details will appear once a club location opens for public booking." />;
+  if (!summary) return <FacilitiesCourtsFallback><p className={facilityTextClassName}>Court information is currently unavailable.</p></FacilitiesCourtsFallback>;
+  if (summary.courtCount === 0) return <FacilitiesCourtsFallback><p className={facilityTextClassName}>Court details will appear once a club location opens for public booking.</p></FacilitiesCourtsFallback>;
   const surfaces = new Intl.ListFormat("en", { type: "conjunction" })
     .format(summary.surfaces.map(({ surface, count }) => countLabel(count, `${surface} court`)));
   return (

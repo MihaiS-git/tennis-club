@@ -8,6 +8,7 @@ import { ReservationContent } from "../reservations/reservation-content";
 import { BookingsList } from "./bookings-list";
 import { BookingsToolbar } from "./bookings-toolbar";
 import { ManagementTabs } from "./management-tabs";
+import { LoadingStatus } from "@/components/loading-status";
 
 export const metadata: Metadata = { title: "Bookings & Reservations | Tennis Club" };
 export const instant = false;
@@ -21,7 +22,7 @@ export default async function AdminBookingsPage({ searchParams }: {
   if (params.view === "calendar") return <>
     <AdminPageHeader title="Bookings & Reservations" description="Reserve courts and review the day’s bookings by location." />
     <ManagementTabs view="calendar" />
-    <Suspense fallback={<p role="status" className="mt-4 text-muted-foreground">Loading reservations…</p>}>
+    <Suspense fallback={<LoadingStatus variant="page" label="Loading reservations…" />}>
       <ReservationContent href="/admin/bookings?view=calendar"
         searchParams={Promise.resolve({ location: single(params.location), date: single(params.date) })} />
     </Suspense>

@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { cancelAdminReservationAction, editAdminReservationAction, loadAdminReservationEditDayAction } from "@/app/admin/reservations/actions";
 import { cancelOwnReservationAction, editOwnReservationAction, loadReservationEditDayAction } from "@/app/my-activity/bookings/actions";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
+import { Button } from "@/components/button";
 import { DialogHeader } from "@/components/dialog-layout";
 import { ModalDialog } from "@/components/modal-dialog";
 import { reservationDateLabel } from "@/components/reservation-details";
@@ -87,10 +88,8 @@ export function ReservationActions({ reservation, creatorName, startsAt, endsAt,
     <p role="status" className="text-sm text-muted-foreground">This reservation has ended and can no longer be changed.</p>
   </section>;
   return <section aria-label="Reservation actions" className="mb-6 flex max-w-4xl flex-wrap items-center gap-3">
-    {canEdit && <button type="button" disabled={pending} onClick={openEdit}
-      className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold text-primary disabled:opacity-50">Edit reservation</button>}
-    {canCancel ? <button ref={cancelButtonRef} type="button" disabled={pending} onClick={() => setConfirming(true)}
-      className="min-h-10 rounded-control border border-danger px-4 text-sm font-semibold text-danger disabled:opacity-50">Cancel reservation</button>
+    {canEdit && <Button type="button" variant="secondary" disabled={pending} onClick={openEdit}>Edit reservation</Button>}
+    {canCancel ? <Button ref={cancelButtonRef} type="button" variant="destructive" disabled={pending} onClick={() => setConfirming(true)}>Cancel reservation</Button>
       : clock.started && <p role="status" className="text-sm text-muted-foreground">This reservation has started and can no longer be cancelled.</p>}
     {editing && typeof document !== "undefined" && createPortal(
       <ModalDialog ref={dialogRef} active aria-labelledby={titleId}
@@ -100,7 +99,7 @@ export function ReservationActions({ reservation, creatorName, startsAt, endsAt,
         <DialogHeader titleId={titleId} title="Edit reservation" disabled={pending} onClose={() => dialogRef.current?.close()} />
         {!editToken ? <div className="mt-4 min-h-20 text-sm" aria-busy={!editError}>
           {editError && <><span role="alert">{editError}</span>
-            <button type="button" className="ml-2 font-semibold underline" onClick={openEdit}>Retry</button></>}
+            <Button type="button" variant="text" className="ml-2 font-semibold underline" onClick={openEdit}>Retry</Button></>}
         </div> : <ReservationEditForm reservation={reservation} inProgress={inProgress}
           loadAvailability={actions.load} onPendingChange={setPending}
           onCancel={() => dialogRef.current?.close()}
@@ -120,7 +119,7 @@ export function ReservationActions({ reservation, creatorName, startsAt, endsAt,
       </ModalDialog>, document.body)}
     <ConfirmationDialog open={confirming && canCancel} title="Cancel reservation?"
       message={`${reservation.location_name} · ${reservation.court_name}\n${reservationDateLabel(reservation.booking_date)} · ${minuteToTime(reservation.starts_at_minute)}–${minuteToTime(reservation.ends_at_minute)}\nCreated by\n${creatorName}\n\nThis will free the court for other bookings and reservations.`}
-      confirmLabel="Cancel reservation" cancelLabel="Keep reservation" pending={pending}
+      confirmLabel="Cancel reservation" pendingLabel="Cancelling reservation…" cancelLabel="Keep reservation" pending={pending}
       onConfirm={cancelReservation} onClose={() => { if (!pending) setConfirming(false); }} returnFocusRef={cancelButtonRef} />
   </section>;
 }

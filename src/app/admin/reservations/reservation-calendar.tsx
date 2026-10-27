@@ -13,6 +13,7 @@ import { cancelOwnReservationAction, editOwnReservationAction, loadReservationEd
 import { CustomerBookingCancellation } from "@/app/my-activity/bookings/customer-booking-cancellation";
 import { localStartInstant } from "@/lib/courts/local-time";
 import { BookingEditForm, type BookingEditActions } from "@/components/booking-edit-form";
+import { Button } from "@/components/button";
 import { minuteToTime } from "@/lib/admin/opening-hours-validation";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { DetailSection, DialogHeader, DialogFooter } from "@/components/dialog-layout";
@@ -151,9 +152,8 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
           className="min-h-10 rounded-control border border-border-strong bg-background px-3 font-normal text-foreground" />
         {fieldErrors.reason && <p id={`${titleId}-reason-error`} role="alert" className="text-sm font-normal text-danger">{fieldErrors.reason}</p>}
       </label>
-      <div className="mt-3 flex gap-2"><button type="button" disabled={pending || !reason.trim()} onClick={submit}
-        className="min-h-10 rounded-control bg-primary px-5 text-sm font-semibold text-primary-foreground disabled:opacity-50">{pending ? "Reserving…" : "Reserve court"}</button>
-        <button type="button" disabled={pending} onClick={() => { setSelection(null); }} className="min-h-10 rounded-control border border-border-strong px-3 text-sm font-semibold text-primary disabled:opacity-50">Clear selection</button></div>
+      <div className="mt-3 flex gap-2"><Button type="button" fullWidth={false} disabled={pending || !reason.trim()} onClick={submit}>{pending ? "Reserving…" : "Reserve court"}</Button>
+        <Button type="button" variant="secondary" disabled={pending} onClick={() => { setSelection(null); }}>Clear selection</Button></div>
     </section>}
     {(selectedOccupancy || selectedGenericOccupancy) && typeof document !== "undefined" && createPortal(
       <ModalDialog ref={dialogRef} active aria-labelledby={titleId}
@@ -178,8 +178,7 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
           {/* Coaches open only their own lessons, from the Coach Calendar. */}
           <Link href={coachLessonLinkFrom(selectedLesson.id, `/coach/bookings?${new URLSearchParams({ view: "calendar", location: location.id, date })}`)}
             onClick={() => dialogRef.current?.close()} className="mt-4 inline-flex min-h-10 items-center text-sm font-semibold text-primary underline focus-visible:outline-2 focus-visible:outline-focus">View lesson details</Link>
-          <DialogFooter><button type="button" onClick={() => dialogRef.current?.close()}
-            className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button></DialogFooter>
+          <DialogFooter><Button type="button" variant="secondary" onClick={() => dialogRef.current?.close()}>Close</Button></DialogFooter>
         </> : selectedBooking ? <>
           {!editing && <>
           <BookingDetails booking={{ ...selectedBooking, location_name: selectedBooking.location_name ?? location.name,
@@ -216,11 +215,10 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
               booking={{ ...selectedBooking, location_name: location.name, court_name: selectedCourtName }}
               refundAvailable={selectedBooking.stripe_refund_available} onPendingChange={setCancelPending}
               onCancelled={() => { dialogRef.current?.close(); setSelectedOccupancyId(null); setSelection(null); router.refresh(); }} />}
-            <button type="button" disabled={cancelPending} onClick={() => dialogRef.current?.close()}
-              className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button>
+            <Button type="button" variant="secondary" disabled={cancelPending} onClick={() => dialogRef.current?.close()}>Close</Button>
           </DialogFooter>}
         </> : selectedReservation && editing && !editToken ? <div className="mt-4 min-h-20 text-sm" aria-busy={!editError}>
-          {editError && <button type="button" className="ml-2 font-semibold underline" onClick={openEdit}>Retry</button>}
+          {editError && <Button type="button" variant="text" className="ml-2 font-semibold underline" onClick={openEdit}>Retry</Button>}
         </div> : selectedReservation && editing ? <ReservationEditForm key={selectedReservation.id} reservation={{ ...selectedReservation,
           location_name: location.name, location_timezone: location.timezone, court_name: selectedCourtName }}
           inProgress={editInProgress} loadAvailability={loadReservationEdit}
@@ -262,13 +260,10 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
           `/coach/bookings?${new URLSearchParams({ view: "calendar", location: location.id, date })}`)}
           onClick={() => dialogRef.current?.close()} className="mt-4 inline-flex min-h-10 items-center text-sm font-semibold text-primary underline focus-visible:outline-2 focus-visible:outline-focus">View full reservation details</Link>}
         <DialogFooter>
-          {canEditReservation && <button type="button" disabled={cancelPending} onClick={openEdit}
-              className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold text-primary">Edit reservation</button>}
-          {canCancelReservation && <button ref={cancelButtonRef} type="button" disabled={cancelPending}
-            onClick={() => {  setConfirming(true); }}
-            className="min-h-10 rounded-control border border-danger px-4 text-sm font-semibold text-danger">Cancel reservation</button>}
-          <button type="button" disabled={cancelPending} onClick={() => dialogRef.current?.close()}
-          className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button></DialogFooter>
+          {canEditReservation && <Button type="button" variant="secondary" disabled={cancelPending} onClick={openEdit}>Edit reservation</Button>}
+          {canCancelReservation && <Button ref={cancelButtonRef} type="button" variant="destructive" disabled={cancelPending}
+            onClick={() => {  setConfirming(true); }}>Cancel reservation</Button>}
+          <Button type="button" variant="secondary" disabled={cancelPending} onClick={() => dialogRef.current?.close()}>Close</Button></DialogFooter>
         </> : selectedGenericOccupancy ? <>
           <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
             <dt className="text-muted-foreground">Location</dt><dd>{location.name}</dd>
@@ -276,13 +271,12 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
             <dt className="text-muted-foreground">Date</dt><dd>{reservationDateLabel(date)}</dd>
             <dt className="text-muted-foreground">Time</dt><dd>{minuteToTime(selectedGenericOccupancy.starts_at_minute)}–{minuteToTime(selectedGenericOccupancy.ends_at_minute)} ({location.timezone})</dd>
           </dl>
-          <DialogFooter><button type="button" onClick={() => dialogRef.current?.close()}
-            className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold">Close</button></DialogFooter>
+          <DialogFooter><Button type="button" variant="secondary" onClick={() => dialogRef.current?.close()}>Close</Button></DialogFooter>
         </> : null}
       </ModalDialog>, document.body)}
     <ConfirmationDialog open={confirming && !selectedBooking && canCancelReservation} title="Cancel reservation?"
       message={selectedReservation ? `${location.name} · ${selectedCourtName}\n${reservationDateLabel(selectedReservation.booking_date)} · ${minuteToTime(selectedReservation.starts_at_minute)}–${minuteToTime(selectedReservation.ends_at_minute)}\nCreated by\n${selectedReservation.creator_name || "Unknown creator"}\n\nThis will free the court for other bookings and reservations.` : ""}
-      confirmLabel="Cancel reservation" cancelLabel="Keep reservation" pending={cancelPending}
+      confirmLabel="Cancel reservation" pendingLabel="Cancelling reservation…" cancelLabel="Keep reservation" pending={cancelPending}
       onConfirm={cancelReservation}
       onClose={() => { if (!cancelPending) setConfirming(false); }} returnFocusRef={cancelButtonRef} />
   </>;

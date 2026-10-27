@@ -57,7 +57,10 @@ it("marks selected messages read and unread, then clears selection", async () =>
 it("deletes one message without confirmation and confirms bulk deletion", async () => {
   const query = parseInboxQuery({ q: "Court", page: "2" });
   render(<InboxList rows={rows.slice(0, 2)} query={query} search="q=Court&page=2" />);
-  fireEvent.click(screen.getByRole("button", { name: "Delete Booking 1" }));
+  const deleteButton = screen.getByRole("button", { name: "Delete Booking 1" });
+  expect(deleteButton.textContent).toBe("");
+  expect(deleteButton.querySelector("svg.lucide-trash-2")?.getAttribute("aria-hidden")).toBe("true");
+  fireEvent.click(deleteButton);
   await waitFor(() => expect(mocks.deleteOne).toHaveBeenCalledWith(ids[0]));
   expect(screen.queryByRole("dialog")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Select page" }));
@@ -71,16 +74,40 @@ it("deletes one message without confirmation and confirms bulk deletion", async 
   expect(mocks.replace).toHaveBeenCalledWith("/messages?q=Court&page=1");
 });
 
+it("reserves an inert Clear slot for default filters and pagination alone", () => {
+  const { rerender } = render(<InboxFilters query={parseInboxQuery({})} />);
+  const slot = screen.getByRole("search").querySelector("[data-filter-clear-slot]");
+  expect(screen.queryByRole("link", { name: "Clear" })).toBeNull();
+  expect(slot?.children).toHaveLength(0);
+  expect(slot?.parentElement).toBe(screen.getByRole("search"));
+  const controls = [screen.getByRole("searchbox"), ...screen.getAllByRole("combobox")];
+  rerender(<InboxFilters query={parseInboxQuery({ q: "  ", status: "all", category: "all", sort: "newest", page: "3" })} />);
+  expect(screen.queryByRole("link", { name: "Clear" })).toBeNull();
+  rerender(<InboxFilters query={parseInboxQuery({ status: "unread" })} />);
+  expect(screen.getByRole("link", { name: "Clear" }).parentElement).toBe(slot);
+  expect([screen.getByRole("searchbox"), ...screen.getAllByRole("combobox")]).toEqual(controls);
+  rerender(<InboxFilters query={parseInboxQuery({})} />);
+  expect(screen.getByRole("search").querySelector("[data-filter-clear-slot]")).toBe(slot);
+  expect(screen.queryByRole("link", { name: "Clear" })).toBeNull();
+});
+
+it.each([{ q: "Court" }, { status: "read" }, { category: "club" }, { sort: "oldest" }])(
+  "shows Clear for a meaningful non-default filter: %j", (filter) => {
+    render(<InboxFilters query={parseInboxQuery(filter)} />);
+    expect(screen.getByRole("link", { name: "Clear" }).getAttribute("href")).toBe("/messages");
+  },
+);
+
 it("detail controls mark read, mark unread and delete while keeping the inbox return URL", async () => {
   const returnHref = "/messages?q=Court&status=unread&page=2";
-  render(<MessageDetailActions id={ids[0]} returnHref={returnHref} />);
+  render(<MessageDetailActions id={ids[0]} subject="Booking 1" returnHref={returnHref} />);
   fireEvent.click(screen.getByRole("button", { name: "Mark read" }));
   await waitFor(() => expect(mocks.read).toHaveBeenCalledWith(ids[0]));
   expect(mocks.refresh).toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Mark unread" }));
   await waitFor(() => expect(mocks.unread).toHaveBeenCalledWith(ids[0]));
   expect(mocks.push).toHaveBeenLastCalledWith(returnHref);
-  fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+  fireEvent.click(screen.getByRole("button", { name: "Delete Booking 1" }));
   await waitFor(() => expect(mocks.deleteOne).toHaveBeenCalledWith(ids[0]));
   expect(mocks.push).toHaveBeenLastCalledWith(returnHref);
 });

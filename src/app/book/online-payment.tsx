@@ -7,6 +7,7 @@ import { Elements, PaymentElement, useElements, useStripe } from "@stripe/react-
 import { loadStripe } from "@stripe/stripe-js";
 import { AlertCircle, AlertTriangle, CheckCircle2, Clock, Info, Loader2 } from "lucide-react";
 import { Button } from "@/components/button";
+import { LoadingStatus } from "@/components/loading-status";
 import type { CheckoutPaymentStatus, OnlineCheckout } from "@/lib/payments/domain";
 import type { ConfirmedCancellationPolicy } from "@/lib/bookings/confirmation-policy";
 import type { LocationCurrency } from "@/lib/pricing/money";
@@ -73,6 +74,7 @@ function PaymentForm({ checkout, holdExpiresAt, onConfirmed, onPaymentStatus, di
   const [message, setMessage] = useState("");
   const [fieldError, setFieldError] = useState("");
   const [ready, setReady] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const authenticatingRef = useRef(false);
   const processingStarted = useRef<number | null>(null);
   const notification = useRef<string | number | undefined>(undefined);
@@ -246,7 +248,10 @@ function PaymentForm({ checkout, holdExpiresAt, onConfirmed, onPaymentStatus, di
   const status = statusPresentation(paymentStatus, processing);
   return <form onSubmit={pay} className="mt-5 space-y-4" aria-label="Online payment">
     {canPay && <p className="flex items-start gap-2.5 rounded-control border border-border bg-background p-3 text-sm text-foreground"><Clock aria-hidden className="mt-0.5 size-4 shrink-0 text-accent" /><span>Temporary hold deadline: <time dateTime={holdExpiresAt} className="font-semibold tabular-nums">{new Date(holdExpiresAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</time></span></p>}
+    {/* Payment Element stays mounted below while Stripe loads; a load error has its own toast. */}
+    {showPaymentElement && !ready && !loadFailed && paymentStatus === "pending" && <LoadingStatus label="Loading secure payment form…" />}
     {showPaymentElement && <div inert={disabled || busy || paymentStatus !== "pending"} aria-describedby={fieldError ? "payment-field-error" : undefined}><PaymentElement onReady={() => { if (!finished.current) setReady(true); }} onLoadError={() => {
+      setLoadFailed(true);
       if (!finished.current) toast.error("Unable to load payment details. Please try again later.", { id: `payment-element-${checkout.attemptId}` });
     }} /></div>}
     {fieldError && <p id="payment-field-error" role="alert" className="flex items-start gap-2 text-sm font-medium text-danger"><AlertCircle aria-hidden className="mt-0.5 size-4 shrink-0" /><span>{fieldError}</span></p>}

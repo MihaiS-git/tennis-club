@@ -113,14 +113,17 @@ function AvailabilityDialog({ title, open, pending, dialogRef, onClose, children
   </ModalDialog>;
 }
 
-function RemoveButton({ label, message, pending, onConfirm }: { label: string; message: string; pending: boolean; onConfirm: () => void }) {
+// The confirmation stays open, showing progress, until the removal settles; a
+// successful removal also closes the owning dialog.
+function RemoveButton({ label, message, pending, onConfirm }: { label: string; message: string; pending: boolean; onConfirm: () => Promise<void> }) {
   const [confirming, setConfirming] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   return <>
     <Button ref={buttonRef} type="button" variant="destructive" size="small" fullWidth={false} disabled={pending} className="mr-auto"
       onClick={() => setConfirming(true)}>Remove</Button>
-    <ConfirmationDialog open={confirming} title={label} message={message} confirmLabel="Remove" pending={pending}
-      returnFocusRef={buttonRef} onClose={() => setConfirming(false)} onConfirm={() => { setConfirming(false); onConfirm(); }} />
+    <ConfirmationDialog open={confirming} title={label} message={message} confirmLabel="Remove" pendingLabel="Removing…" pending={pending}
+      returnFocusRef={buttonRef} onClose={() => { if (!pending) setConfirming(false); }}
+      onConfirm={() => void onConfirm().finally(() => setConfirming(false))} />
   </>;
 }
 
@@ -346,7 +349,7 @@ export function WeeklyIntervalDialog({ interval, locations, action, open, onOpen
       <DialogFooter>
         {interval && <RemoveButton label="Remove working hours" pending={pending}
           message={`Remove ${availabilityWeekdays[interval.weekday]} ${formatAvailabilityMinute(interval.start_minute)}–${formatAvailabilityMinute(interval.end_minute)}?`}
-          onConfirm={() => void submit({ operation: "remove-weekly", id: interval.id }, "Working hours removed.", close)} />}
+          onConfirm={() => submit({ operation: "remove-weekly", id: interval.id }, "Working hours removed.", close)} />}
         {!readOnly && !ended && <Button type="submit" fullWidth={false} disabled={pending || (options.resolved && !options.starts.length)} aria-busy={pending}>{pending ? "Saving…" : "Save"}</Button>}
       </DialogFooter>
     </form>
@@ -429,7 +432,7 @@ export function ExceptionDialog({ exception, kind: initialKind = "unavailable", 
       </fieldset>
       <DialogFooter>
         {exception && <RemoveButton label={`Remove ${kind === "unavailable" ? "time off" : "extra availability"}`} pending={pending} message={`Remove this period (${exception.date} – ${exception.until_date ?? exception.date})?`}
-          onConfirm={() => void submit({ operation: "remove-exception", id: exception.id }, `${exceptionKindLabels[kind]} removed.`, close)} />}
+          onConfirm={() => submit({ operation: "remove-exception", id: exception.id }, `${exceptionKindLabels[kind]} removed.`, close)} />}
         {!readOnly && <Button type="submit" fullWidth={false} disabled={pending} aria-busy={pending}>{pending ? "Saving…" : "Save"}</Button>}
       </DialogFooter>
     </form>

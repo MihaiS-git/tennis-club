@@ -49,7 +49,8 @@ it("passes only an owner-resolved booking to the existing details dialog, indepe
   const valid = await MyBookingsContent({ searchParams: Promise.resolve({ booking: bookingId, page: "3", type: "court" }) });
   expect(target).toHaveBeenCalledWith(bookingId, account.userId);
   expect(valid.props.children.props.deepLinkedBooking).toBe(selected);
-  expect(valid.props.children.props.listQuery).toMatchObject({ page: "3", type: "booking" });
+  // The selected Type reaches the list unchanged; it is not overwritten for regular users.
+  expect(valid.props.children.props.listQuery).toMatchObject({ page: "3", type: "court" });
   const denied = await MyBookingsContent({ searchParams: Promise.resolve({ booking: bookingId }) });
   expect(denied.props.children.props.deepLinkedBooking).toBeNull();
 });
@@ -61,6 +62,14 @@ it("redirects an owned cancelled booking to History with its selection", async (
   expect(redirect.mock.lastCall![0]).toContain(`/my-activity/history?`);
   expect(redirect.mock.lastCall![0]).toContain(`booking=${bookingId}`);
   expect(redirect.mock.lastCall![0]).toContain(`location=${bookingId}`);
+});
+
+it("folds the regular-user booking type into All, but keeps it distinct for staff", () => {
+  expect(parseActivityQuery({ type: "booking" }, "upcoming", false).type).toBe("all");
+  expect(parseActivityQuery({ type: "reservation" }, "history", false).type).toBe("all");
+  expect(parseActivityQuery({ type: "court" }, "upcoming", false).type).toBe("court");
+  expect(parseActivityQuery({ type: "coaching" }, "history", false).type).toBe("coaching");
+  expect(parseActivityQuery({ type: "booking" }, "upcoming", true).type).toBe("booking");
 });
 
 it("normalizes invalid filters, sort and dates safely with scope defaults", () => {

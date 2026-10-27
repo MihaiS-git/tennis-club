@@ -103,12 +103,11 @@ export function AvailabilityManager({ view, action, readOnly = false }: {
             <p className="text-sm font-semibold text-foreground">{day}</p>
             {intervals.length ? <ul className="flex flex-wrap gap-2" aria-label={`${day} working hours`}>
               {intervals.map((interval) => <li key={interval.id}>
-                <button type="button" onClick={() => setWeeklyEdit({ interval })}
-                  className="rounded-control border border-border bg-background px-3 py-1.5 text-left text-sm transition-colors hover:border-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">
-                  <span className="font-semibold text-foreground">{formatAvailabilityRange(interval.start_minute, interval.end_minute)}</span>
-                  <span className="ml-2 text-muted-foreground">{locationLabel(locations.get(interval.location_id))}</span>
-                  {validityLabel(interval, localToday(interval)) && <span className="ml-2 text-xs text-muted-foreground">{validityLabel(interval, localToday(interval))}</span>}
-                </button>
+                <Button type="button" variant="secondary" size="small" className="text-left" onClick={() => setWeeklyEdit({ interval })}>
+                  <span className="text-foreground">{formatAvailabilityRange(interval.start_minute, interval.end_minute)}</span>
+                  <span className="ml-2 font-normal text-muted-foreground">{locationLabel(locations.get(interval.location_id))}</span>
+                  {validityLabel(interval, localToday(interval)) && <span className="ml-2 text-xs font-normal text-muted-foreground">{validityLabel(interval, localToday(interval))}</span>}
+                </Button>
               </li>)}
             </ul> : <p className="text-sm text-muted-foreground">Not available</p>}
           </li>;
@@ -118,11 +117,12 @@ export function AvailabilityManager({ view, action, readOnly = false }: {
         <summary className="cursor-pointer text-sm font-medium text-primary">Ended working hours ({endedWeekly.length})</summary>
         <ul className="mt-2 flex flex-wrap gap-2" aria-label="Ended working hours">
           {endedWeekly.map((interval) => <li key={interval.id}>
-            <button type="button" onClick={() => setWeeklyEdit({ interval })}
-              className="rounded-control border border-border bg-background px-3 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:border-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">
-              {availabilityWeekdays[interval.weekday]} {formatAvailabilityRange(interval.start_minute, interval.end_minute)} · {locationLabel(locations.get(interval.location_id))}
-              {" "}· {formatDate(interval.valid_from)} – {formatDate(interval.valid_until as string)}
-            </button>
+            <Button type="button" variant="secondary" size="small" className="text-left" onClick={() => setWeeklyEdit({ interval })}>
+              <span className="font-normal text-muted-foreground">
+                {availabilityWeekdays[interval.weekday]} {formatAvailabilityRange(interval.start_minute, interval.end_minute)} · {locationLabel(locations.get(interval.location_id))}
+                {" "}· {formatDate(interval.valid_from)} – {formatDate(interval.valid_until as string)}
+              </span>
+            </Button>
           </li>)}
         </ul>
       </details>}

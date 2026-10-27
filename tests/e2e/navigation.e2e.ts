@@ -61,7 +61,6 @@ test("navigation follows the current account and protected routes enforce access
     // Every user-area destination, with exactly one active link, in the shared sidebar.
     const userNavigation = page.getByRole("navigation", { name: "My account navigation" });
     const userDestinations = [
-      ["Notifications", /\/messages$/],
       ["Bookings", /\/my-activity\/bookings$/], ["Booking history", /\/my-activity\/history$/],
       ["Player identity", /\/profile$/],
       ["Personal information", /\/profile\/personal$/], ["Tennis profile", /\/profile\/tennis$/],
@@ -75,6 +74,10 @@ test("navigation follows the current account and protected routes enforce access
         await expect(userNavigation.locator('a[aria-current="page"]')).toHaveText([label]);
       }
     }
+    await page.getByRole("link", { name: "Notifications", exact: true }).click();
+    await expect(page).toHaveURL(/\/messages$/);
+    await expect(userNavigation).toHaveCount(0);
+    await page.getByRole("link", { name: "Profile", exact: true }).click();
     await visitUserDestinations();
     await page.goto("/my-activity/bookings/history");
     await expect(page).toHaveURL(/\/my-activity\/history$/);
@@ -99,17 +102,17 @@ test("navigation follows the current account and protected routes enforce access
     await navigation.getByRole("link", { name: "Admin" }).click();
     const adminNavigation = page.getByRole("navigation", { name: "Management navigation" });
     await expect(page).toHaveURL(/\/admin\/locations$/);
-    await expect(adminNavigation.getByRole("link")).toHaveText(["Bookings & Reservations", "Transactions", "Users", "Coach availability", "Locations", "Programs", "Coaches", "Prices", "Payment settings", "Club"]);
+    await expect(adminNavigation.getByRole("link")).toHaveText(["Bookings & Reservations", "Transactions", "Users", "Locations", "Programs", "Coaches", "Prices", "Coach availability", "Payment settings", "Club"]);
     await expect(adminNavigation.getByRole("region", { name: "Operations" }).getByRole("link")).toHaveText([
-      "Bookings & Reservations", "Transactions", "Users", "Coach availability",
+      "Bookings & Reservations", "Transactions", "Users",
     ]);
     await expect(adminNavigation.getByRole("region", { name: "Configuration" }).getByRole("link")).toHaveText([
-      "Locations", "Programs", "Coaches", "Prices", "Payment settings", "Club",
+      "Locations", "Programs", "Coaches", "Prices", "Coach availability", "Payment settings", "Club",
     ]);
     await expect(adminNavigation.getByRole("link", { name: "Locations" })).toHaveAttribute("aria-current", "page");
     await adminNavigation.getByRole("link", { name: "Users" }).click();
     await expect(page.getByRole("heading", { name: "Users", exact: true })).toBeVisible();
-    await page.getByRole("row", { name: `Manage user ${accounts[0].email}` }).click();
+    await page.getByRole("link", { name: accounts[0].email, exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/admin/users/${accounts[0].id}`));
     await expect(page.getByRole("navigation", { name: "User management" })).toBeVisible();
     await expect(adminNavigation.getByRole("link", { name: "Users" })).toHaveAttribute("aria-current", "page");
@@ -215,10 +218,10 @@ test("navigation follows the current account and protected routes enforce access
     await navigation.getByRole("link", { name: "Admin", exact: true }).click();
     await expect(page).toHaveURL(/\/admin\/locations$/);
     await expect(adminNavigation.getByRole("region", { name: "Operations" }).getByRole("link")).toHaveText([
-      "Bookings & Reservations", "Transactions", "Users", "Coach availability", "My availability",
+      "Bookings & Reservations", "Transactions", "Users", "My availability",
     ]);
     await expect(adminNavigation.getByRole("region", { name: "Configuration" }).getByRole("link")).toHaveText([
-      "Locations", "Programs", "Coaches", "Prices", "Payment settings", "Club", "My prices",
+      "Locations", "Programs", "Coaches", "Prices", "Coach availability", "Payment settings", "Club", "My prices",
     ]);
     await expect(adminNavigation.getByRole("link", { name: "Bookings & Reservations", exact: true })).toHaveCount(1);
     await expect(adminNavigation.getByRole("link", { name: "Bookings & Reservations", exact: true })).toHaveAttribute("href", "/admin/bookings");

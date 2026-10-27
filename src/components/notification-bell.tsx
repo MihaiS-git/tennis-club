@@ -3,7 +3,7 @@
 import { Bell } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { ProfileDepartureLink } from "./profile-departure-navigation";
+import { NavbarIconAction } from "./navbar-icon-action";
 
 export function NotificationBell({ viewport }: { viewport: "mobile" | "desktop" }) {
   const pathname = usePathname();
@@ -38,9 +38,8 @@ export function NotificationBell({ viewport }: { viewport: "mobile" | "desktop" 
       media.removeEventListener("change", changed);
     };
   }, [pathname, viewport]);
-  return <ProfileDepartureLink href="/messages" aria-label={unread ? "Notifications, unread messages" : "Notifications"}
-    className="relative inline-flex size-10 shrink-0 items-center justify-center rounded-control border border-border-strong text-primary hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-primary">
+  return <NavbarIconAction href="/messages" aria-label={unread ? "Notifications, unread messages" : "Notifications"}>
     <Bell aria-hidden="true" className="size-5" strokeWidth={1.8} />
     {unread && <span aria-hidden="true" className="absolute right-1 top-1 size-2.5 rounded-full bg-green-600 ring-2 ring-surface" />}
-  </ProfileDepartureLink>;
+  </NavbarIconAction>;
 }

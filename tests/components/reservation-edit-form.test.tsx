@@ -267,3 +267,18 @@ it("retains reason changes after availability fails and allows retry", async () 
   expect(screen.getByLabelText("Reason")).toHaveProperty("value", "Training");
   expect(saveButton()).toHaveProperty("disabled", false);
 });
+
+it("shows inline availability loading feedback for a date change and keeps the reason", async () => {
+  let finish!: (value: ReturnType<typeof day>) => void;
+  availability.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+  render(<SharedReservationEditForm reservation={reservation} inProgress={false} loadAvailability={availability} onCancel={callbacks.onCancel}
+    onSave={vi.fn()} initialAvailability={{ reservationId: reservation.id, date: reservation.booking_date, day: day(reservation.booking_date).day }} />);
+  changeReason("Coaching");
+  fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2099-10-16" } });
+  expect(screen.getByRole("status").textContent).toBe("Loading court availability…");
+  expect(saveButton()).toHaveProperty("disabled", true);
+  expect(screen.getByLabelText("Reason")).toHaveProperty("value", "Coaching");
+  await act(async () => { finish(day("2099-10-16")); });
+  expect(screen.queryByText("Loading court availability…", { selector: "p" })).toBeNull();
+  expect(screen.getByRole("rowheader", { name: "Court A" })).toBeTruthy();
+});

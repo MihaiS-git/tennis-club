@@ -80,8 +80,6 @@ test("the Coach List shows own lessons and reservations with Coach links, tabs a
     .toEqual([`/coach/bookings/lessons/${lessonId}?sort=scheduled`, `/coach/bookings/reservations/${reservationId}?sort=scheduled`]);
   expect(within(table).getByText("Ana Player")).toBeDefined();
   expect(screen.queryByText(/Total|RON|No charge|Guest/)).toBeNull();
-  fireEvent.click(within(table).getByRole("row", { name: /Staff reservation cc000000/ }));
-  expect(mocks.push).toHaveBeenCalledWith(`/coach/bookings/reservations/${reservationId}?sort=scheduled`);
 });
 
 test("the Coach toolbar offers only lessons and own reservations, without a Coach filter", () => {

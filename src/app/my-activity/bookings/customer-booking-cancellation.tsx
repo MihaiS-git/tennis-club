@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { cancelledBookingMessage } from "@/lib/payments/refund-message";
 import { useEffect, useRef, useState } from "react";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
+import { Button } from "@/components/button";
 import type { PersonalCustomerBooking } from "@/lib/bookings/personal";
 import { customerCancellationEligibility, customerCancellationNoticeLabel } from "@/lib/bookings/self-cancellation";
 import { cancelOwnCustomerBookingAction } from "./actions";
@@ -61,17 +62,16 @@ export function CustomerBookingCancellation({ booking, staff, onCancelled, onPen
       : "Your booking change is waiting for its refund to be confirmed. The current booking stays unchanged until then."}
   </p>;
   return <>
-    {eligibility === "eligible" && onEdit && !booking.payment_pending && <button type="button" disabled={pending}
-      onClick={onEdit} className="min-h-10 rounded-control border border-border-strong px-4 text-sm font-semibold text-primary">{booking.includes_coaching ? "Reschedule" : "Edit booking"}</button>}
-    {eligibility === "eligible" ? <button ref={triggerRef} type="button" disabled={pending}
-      onClick={() => { setNow(new Date()); setConfirming(true); }}
-      className="min-h-10 rounded-control border border-danger px-4 text-sm font-semibold text-danger">Cancel booking</button>
+    {eligibility === "eligible" && onEdit && !booking.payment_pending && <Button type="button" variant="secondary" disabled={pending}
+      onClick={onEdit}>{booking.includes_coaching ? "Reschedule" : "Edit booking"}</Button>}
+    {eligibility === "eligible" ? <Button ref={triggerRef} type="button" variant="destructive" disabled={pending}
+      onClick={() => { setNow(new Date()); setConfirming(true); }}>Cancel booking</Button>
       : <p className="text-sm text-muted-foreground">{eligibility === "started"
         ? "Cancellation is no longer available because this booking has started."
         : `Cancellation is no longer available. This booking requires ${customerCancellationNoticeLabel(booking.cancellation_notice_minutes)}.`}</p>}
     <ConfirmationDialog open={confirming} title="Cancel booking?"
       message={`${booking.location_name} · ${booking.court_name}\nThis will cancel your booking and free the court.`}
-      confirmLabel="Cancel booking" cancelLabel="Keep booking" pending={pending}
+      confirmLabel="Cancel booking" pendingLabel="Cancelling booking…" cancelLabel="Keep booking" pending={pending}
       onConfirm={cancel} onClose={() => { if (!pendingRef.current) setConfirming(false); }} returnFocusRef={triggerRef} />
   </>;
 }

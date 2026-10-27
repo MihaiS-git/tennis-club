@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { PendingLink } from "@/components/navigation-pending";
 import { Pagination } from "@/components/pagination";
 import { activityHref, type ActivityQuery, type ActivityScope } from "@/lib/bookings/activity-query";
 
@@ -11,6 +11,6 @@ export function ActivityPagination({ scope, query, hasNext, empty }: {
       <Pagination currentPage={query.page} hasNext={hasNext} ariaLabel="Activity pages" scroll
         buildHref={(page) => activityHref(scope, query, page)} />
     </div>}
-    {query.page > 1 && empty && <p className="mt-4 text-center"><Link href={activityHref(scope, query, 1)} className="text-sm font-semibold text-primary underline underline-offset-4">Return to first page</Link></p>}
+    {query.page > 1 && empty && <p className="mt-4 text-center"><PendingLink href={activityHref(scope, query, 1)} className="text-sm font-semibold text-primary underline underline-offset-4">Return to first page</PendingLink></p>}
   </>;
 }

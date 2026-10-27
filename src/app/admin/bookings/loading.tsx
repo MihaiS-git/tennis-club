@@ -1,3 +1,5 @@
+import { LoadingStatus } from "@/components/loading-status";
+
 export default function LoadingBookings() {
-  return <p role="status" className="text-sm text-muted-foreground">Loading bookings…</p>;
+  return <LoadingStatus variant="page" label="Loading bookings…" />;
 }

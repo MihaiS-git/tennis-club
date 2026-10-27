@@ -34,7 +34,7 @@ export default async function MessageDetailsPage({ params, searchParams }: {
     <Link href={returnHref} className="text-sm font-semibold text-primary hover:text-accent">← Back to Messages</Link>
     <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
       <span className="text-xs font-semibold uppercase tracking-[0.12em] text-accent">{messageCategory(message.kind)}</span>
-      <MessageDetailActions id={message.id} returnHref={returnHref} />
+      <MessageDetailActions id={message.id} subject={message.subject} returnHref={returnHref} />
     </div>
     <h1 className="mt-2 font-heading text-2xl font-semibold text-primary md:text-3xl">{message.subject}</h1>
     <time dateTime={message.createdAt.toISOString()} className="mt-2 block text-sm text-muted-foreground">{message.createdAt.toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })}</time>

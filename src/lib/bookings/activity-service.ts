@@ -14,7 +14,7 @@ import { findOwnedBookingRevision } from "@/lib/db/repositories/bookings.reposit
 import { listBookingsWithLivePayment, listBookingsWithPendingChange } from "@/lib/db/repositories/booking-adjustments.repository";
 import { courtActivityType, type CustomerBookingHistoryItem } from "./history";
 import { minorAmountSchema } from "@/lib/pricing/money";
-import { ACTIVITY_PAGE_SIZE, parseActivityQuery, type ActivityQuery, type ActivityScope, type ActivitySearchParams } from "./activity-query";
+import { ACTIVITY_PAGE_SIZE, normalizeActivityType, parseActivityQuery, type ActivityQuery, type ActivityScope, type ActivitySearchParams } from "./activity-query";
 import type { PersonalCustomerBooking } from "./personal";
 import type { PersonalReservation } from "@/lib/reservations/personal";
 
@@ -79,7 +79,7 @@ export async function listOwnCourtActivity(scope: ActivityScope, query: Activity
   const account = await readCurrentAccount(supabase);
   if (account.state !== "active") throw new Error("An active account is required.");
   const staff = account.roles.some((role) => role === "admin" || role === "coach");
-  const type = !staff && query.type === "reservation" ? "all" : query.type;
+  const type = normalizeActivityType(query.type, staff);
   if (!Number.isInteger(query.page) || query.page < 1 || query.page > 1_000_000
     || !Number.isFinite(now.getTime()) || (scope === "upcoming" && (query.status !== "all" || query.sort === "status"))
     || (query.from && query.to && query.from > query.to)) {

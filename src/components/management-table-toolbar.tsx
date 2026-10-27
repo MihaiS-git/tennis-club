@@ -1,10 +1,12 @@
 "use client";
 
 import Link from "next/link";
+
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, useTransition, type ReactNode } from "react";
 import { AdminToolbar } from "@/components/admin-page-controls";
 import { SearchableCombobox } from "@/components/searchable-combobox";
+import { FilterClearSlot } from "@/components/filter-clear-slot";
 
 // Searchable controls suit long option lists; the first option clears the filter.
 export type TableFilterControl = { name: string; label: string; resets?: string[]; searchable?: boolean; options: { value: string; label: string }[] };
@@ -16,6 +18,7 @@ export function ManagementTableToolbar({ searchLabel, placeholder, controls, act
   const prefix = useId();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const [pending, startTransition] = useTransition();
   const queryString = searchParams.toString();
   const value = (key: string) => {
     const values = searchParams.getAll(key);
@@ -49,13 +52,13 @@ export function ManagementTableToolbar({ searchLabel, placeholder, controls, act
     for (const name of controls.find(control => control.name === key)?.resets ?? []) params.delete(name);
     // Keep consecutive immediate changes composed while navigation is pending.
     currentQuery.current = params.toString();
-    router.replace(`${pathname}${params.size ? `?${params}` : ""}`, { scroll: false });
+    startTransition(() => router.replace(`${pathname}${params.size ? `?${params}` : ""}`, { scroll: false }));
   }
 
   const controlClass = "min-h-11 rounded-control border border-border-strong bg-surface px-3 py-2 text-base text-foreground sm:text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus";
   const hasFilters = Boolean(search || controls.some(control => value(control.name)));
   return (
-    <AdminToolbar primary={<label className="flex w-full flex-col gap-1.5 text-sm font-medium text-primary sm:w-64 lg:w-80">
+    <AdminToolbar pending={pending} primary={<label className="flex w-full flex-col gap-1.5 text-sm font-medium text-primary sm:w-64 lg:w-80">
         {searchLabel}
         <input name="q" type="search" value={text} placeholder={placeholder} className={controlClass}
           onChange={(event) => {
@@ -79,7 +82,9 @@ export function ManagementTableToolbar({ searchLabel, placeholder, controls, act
           {control.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
         </select>
       </label>)}
-      {hasFilters && <Link href={pathname} onClick={cancelSearch} className="inline-flex min-h-11 items-center whitespace-nowrap rounded-control px-2 text-sm font-medium text-primary underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">Clear filters</Link>}
+      <FilterClearSlot active={hasFilters} className="min-h-11">
+        <Link scroll={false} href={pathname} onNavigate={event => { event.preventDefault(); currentQuery.current = ""; startTransition(() => router.replace(pathname, { scroll: false })); }} onClick={cancelSearch} className="inline-flex min-h-11 items-center whitespace-nowrap rounded-control px-2 text-sm font-medium text-primary underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">Clear filters</Link>
+      </FilterClearSlot>
     </>} action={action} />
   );
 }

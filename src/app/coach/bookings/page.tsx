@@ -8,6 +8,7 @@ import { AdminPageHeader } from "@/components/admin-page-controls";
 import { coachBookingsHref, parseCoachBookingQuery } from "@/lib/bookings/admin-query";
 import { listCoachBookingFilterOptions, listCoachBookings } from "@/lib/bookings/coach-bookings";
 import { requireActiveCoach } from "@/lib/coaching/authorization";
+import { LoadingStatus } from "@/components/loading-status";
 
 export const metadata: Metadata = { title: "Bookings & Reservations | Tennis Club" };
 export const instant = false;
@@ -22,7 +23,7 @@ export default async function CoachBookingsPage({ searchParams }: {
   if (params.view === "calendar") return <>
     <AdminPageHeader title="Bookings & Reservations" description="Reserve courts and review the day’s bookings by location." />
     <ManagementTabs view="calendar" base="/coach/bookings" />
-    <Suspense fallback={<p role="status" className="mt-4 text-muted-foreground">Loading reservations…</p>}>
+    <Suspense fallback={<LoadingStatus variant="page" label="Loading reservations…" />}>
       <ReservationContent href="/coach/bookings?view=calendar"
         searchParams={Promise.resolve({ location: single(params.location), date: single(params.date) })} />
     </Suspense>

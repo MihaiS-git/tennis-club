@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Button } from "@/components/button";
 import { DetailSection } from "@/components/dialog-layout";
 import { StatusBadge } from "@/components/status-badge";
 import type { OwnBookingPayment } from "@/lib/bookings/personal";
 import { formatMoney } from "@/lib/pricing/money";
 import { loadOwnBookingPaymentAction } from "./bookings/actions";
+import { LoadingStatus } from "@/components/loading-status";
 
 const stateBadges = {
   completed: { tone: "success", label: "Completed" },
@@ -26,12 +28,12 @@ export function BookingPayment({ bookingId }: { bookingId: string }) {
 
   if (!result) return <section aria-label="Payment" aria-busy="true" className="mt-4">
     <h3 className="mb-2 text-sm font-semibold text-primary">Payment</h3>
-    <p className="text-sm text-muted-foreground">Loading payment details…</p>
+    <LoadingStatus label="Loading payment details…" />
   </section>;
   if (!result.ok) return <section aria-label="Payment" className="mt-4">
     <h3 className="mb-2 text-sm font-semibold text-primary">Payment</h3>
     <p className="text-sm text-muted-foreground">{result.message}{" "}
-      <button type="button" onClick={() => { setResult(null); setAttempt((value) => value + 1); }} className="font-semibold text-primary underline">Retry</button></p>
+      <Button type="button" variant="text" onClick={() => { setResult(null); setAttempt((value) => value + 1); }} className="font-semibold underline">Retry</Button></p>
   </section>;
   return <PaymentSummary payment={result.payment} />;
 }

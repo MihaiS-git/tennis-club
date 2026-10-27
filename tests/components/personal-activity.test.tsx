@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { lastToast } from "../helpers/notifications";
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { PersonalActivity } from "@/app/my-activity/bookings/personal-activity";
 import { CustomerBookingCancellation } from "@/app/my-activity/bookings/customer-booking-cancellation";
 import { localMinute, localToday } from "@/lib/courts/local-time";
@@ -48,6 +48,57 @@ beforeEach(() => {
   installDialogMock();
 });
 afterEach(cleanup);
+
+it("keeps inline loading feedback throughout a retry and renders the recovered activity", async () => {
+  let finish!: (value: UpcomingActivity) => void;
+  load.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+  render(<PersonalActivity staff={false} initialActivity={null} initialError="Unable to load your court activity. Try again." />);
+  expect(load).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Retry loading court activity" }));
+  const status = screen.getByRole("status");
+  expect(status.textContent).toBe("Loading your court activity…");
+  expect(status.parentElement?.className).toContain("min-h-20");
+  expect(status.closest('[aria-busy="true"]')).toBeNull();
+  expect(load).toHaveBeenCalledOnce();
+  expect(toast.loading).not.toHaveBeenCalled();
+  await act(async () => { await Promise.resolve(); });
+  expect(screen.getByRole("status")).toBe(status);
+  await act(async () => { finish(activityFixture([])); });
+  expect(screen.queryByText("Loading your court activity…")).toBeNull();
+  expect(screen.getByText("No upcoming bookings or reservations match your filters.")).toBeTruthy();
+});
+
+it("restores the error notification and retry action when loading fails again", async () => {
+  let fail!: (reason: Error) => void;
+  load.mockReturnValue(new Promise((_, reject) => { fail = reject; }));
+  render(<PersonalActivity staff={false} initialActivity={null} initialError="" />);
+  expect(screen.getByRole("status").textContent).toBe("Loading your court activity…");
+  await act(async () => { fail(new Error("offline")); });
+  expect(screen.queryByRole("status")).toBeNull();
+  expect(screen.getByRole("button", { name: "Retry loading court activity" })).toBeTruthy();
+  expect(lastToast()).toBe("Unable to load your court activity. Try again.");
+});
+
+it("keeps activity visible during payment polling and stops polling after settlement", async () => {
+  vi.useFakeTimers();
+  try {
+    let finish!: (value: UpcomingActivity) => void;
+    load.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    render(<PersonalActivity staff={false}
+      initialActivity={activityFixture([bookingItem({ ...cancellableBooking, payment_pending: true })])} initialError="" />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(load).toHaveBeenCalledOnce();
+    expect(screen.getByRole("region", { name: "Upcoming" })).toBeTruthy();
+    expect(screen.getByText("Payment processing")).toBeTruthy();
+    expect(screen.queryByText("Loading your court activity…")).toBeNull();
+    await act(async () => { finish(activityFixture([bookingItem(cancellableBooking)])); });
+    expect(screen.getByText("Confirmed")).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(load).toHaveBeenCalledOnce();
+  } finally {
+    vi.useRealTimers();
+  }
+});
 
 it.each([true])("renders every owned row and opens each detail dialog (staff=%s)", async (staff) => {
   const booking = (id: string, start: number, zone = "UTC"): PersonalCustomerBooking => ({

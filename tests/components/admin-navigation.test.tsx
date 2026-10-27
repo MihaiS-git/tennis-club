@@ -10,7 +10,7 @@ vi.mock("../../src/lib/reservations/authorization", () => ({ requireReservationR
 vi.mock("../../src/lib/supabase/server", () => ({ createClient: vi.fn() }));
 import { AdminNavigation } from "../../src/components/admin-navigation";
 import PaymentsLayout from "../../src/app/admin/payments/layout";
-import AdminPage from "../../src/app/admin/page";
+import { AdminEntryRedirect } from "../../src/app/admin/admin-entry-redirect";
 
 afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
 
@@ -39,8 +39,8 @@ it.each([
   render(<AdminNavigation isAdmin={true} />);
   const nav = screen.getByRole("navigation", { name: "Management navigation" });
   const links = within(nav).getAllByRole("link");
-  expect(links.map((link) => link.textContent)).toEqual(["Bookings & Reservations", "Transactions", "Users", "Coach availability", "Locations", "Programs", "Coaches", "Prices", "Payment settings", "Club"]);
-  expect(links.map((link) => link.getAttribute("href"))).toEqual(["/admin/bookings", "/admin/payments/transactions", "/admin/users", "/admin/coaching/availability", "/admin/locations", "/admin/coaching/programs", "/admin/coaching/coaches", "/admin/coaching/prices", "/admin/payments/settings", "/admin/club"]);
+  expect(links.map((link) => link.textContent)).toEqual(["Bookings & Reservations", "Transactions", "Users", "Locations", "Programs", "Coaches", "Prices", "Coach availability", "Payment settings", "Club"]);
+  expect(links.map((link) => link.getAttribute("href"))).toEqual(["/admin/bookings", "/admin/payments/transactions", "/admin/users", "/admin/locations", "/admin/coaching/programs", "/admin/coaching/coaches", "/admin/coaching/prices", "/admin/coaching/availability", "/admin/payments/settings", "/admin/club"]);
   for (const link of links) {
     expect(link.getAttribute("aria-current")).toBe(link.textContent === label ? "page" : null);
   }
@@ -64,11 +64,11 @@ it.each([
   const configuration = within(nav).getByRole("region", { name: "Configuration" });
   const hrefs = (element: HTMLElement) => within(element).getAllByRole("link").map((link) => link.getAttribute("href"));
   expect(hrefs(operations)).toEqual([
-    ...(isAdmin ? ["/admin/bookings", "/admin/payments/transactions", "/admin/users", "/admin/coaching/availability"] : ["/coach/bookings"]),
+    ...(isAdmin ? ["/admin/bookings", "/admin/payments/transactions", "/admin/users"] : ["/coach/bookings"]),
     ...(isCoach ? ["/coach/availability"] : []),
   ]);
   expect(hrefs(configuration)).toEqual([
-    ...(isAdmin ? ["/admin/locations", "/admin/coaching/programs", "/admin/coaching/coaches", "/admin/coaching/prices", "/admin/payments/settings", "/admin/club"] : []),
+    ...(isAdmin ? ["/admin/locations", "/admin/coaching/programs", "/admin/coaching/coaches", "/admin/coaching/prices", "/admin/coaching/availability", "/admin/payments/settings", "/admin/club"] : []),
     ...(isCoach ? ["/coach/pricing"] : []),
   ]);
   expect(new Set(hrefs(nav)).size).toBe(hrefs(nav).length);
@@ -87,8 +87,9 @@ it.each([
   ["/admin/coaching/prices", true],
   ["/admin/coaching/prices/price-id", true],
   ["/admin/coaching/programs-extra", false],
+  ["/admin/coaching/availability", true],
+  ["/admin/coaching/availability-extra", false],
   ["/admin/coaching", false],
-  ["/admin/coaching/availability", false],
 ])("keeps Coaching expanded and highlights only its configuration destinations on %s", (pathname, active) => {
   navigation.pathname = pathname;
   render(<AdminNavigation isAdmin />);
@@ -96,7 +97,7 @@ it.each([
   const coaching = within(configuration).getByText("Coaching", { exact: true });
   expect(coaching.classList.contains("text-primary")).toBe(active);
   expect(within(configuration).queryByRole("button")).toBeNull();
-  for (const label of ["Programs", "Coaches", "Prices"]) {
+  for (const label of ["Programs", "Coaches", "Prices", "Coach availability"]) {
     expect(within(configuration).getByRole("link", { name: label })).toBeDefined();
   }
 });
@@ -126,7 +127,7 @@ it.each([
 
 it("redirects the Admin entry route to Locations after authorization", async () => {
   navigation.requireReservationRole.mockResolvedValue({ roles: ["admin"] });
-  await AdminPage();
+  await AdminEntryRedirect();
   expect(navigation.requireReservationRole).toHaveBeenCalledOnce();
   expect(navigation.redirect).toHaveBeenCalledExactlyOnceWith("/admin/locations");
   expect(navigation.requireReservationRole.mock.invocationCallOrder[0]).toBeLessThan(navigation.redirect.mock.invocationCallOrder[0]);
@@ -134,7 +135,7 @@ it("redirects the Admin entry route to Locations after authorization", async () 
 
 it("does not redirect when Admin authorization rejects access", async () => {
   navigation.requireReservationRole.mockRejectedValueOnce(new Error("Unauthorized"));
-  await expect(AdminPage()).rejects.toThrow("Unauthorized");
+  await expect(AdminEntryRedirect()).rejects.toThrow("Unauthorized");
   expect(navigation.redirect).not.toHaveBeenCalled();
 });
 
@@ -150,7 +151,7 @@ it("shows Coaches only their own Bookings & Reservations area", () => {
 
 it.each([
   [false, ["Bookings & Reservations", "My availability", "My prices"]],
-  [true, ["Bookings & Reservations", "Transactions", "Users", "Coach availability", "My availability", "Locations", "Programs", "Coaches", "Prices", "Payment settings", "Club", "My prices"]],
+  [true, ["Bookings & Reservations", "Transactions", "Users", "My availability", "Locations", "Programs", "Coaches", "Prices", "Coach availability", "Payment settings", "Club", "My prices"]],
 ] as const)("adds the Coach area for coaches (Admin: %s)", (isAdmin, labels) => {
   navigation.pathname = "/coach/availability";
   render(<AdminNavigation isAdmin={isAdmin} isCoach />);
@@ -181,16 +182,14 @@ it.each([
   expect(document.body.style.overflow).toBe("");
 });
 
-it("closes after navigation and browser route changes", () => {
-  const { rerender } = render(<AdminNavigation isAdmin={true} />);
-  fireEvent.click(screen.getByRole("button", { name: "Management menu" }));
-  fireEvent.click(screen.getByRole("link", { name: "Users" }));
+it("closes on browser history navigation without storing the pathname", () => {
+  render(<AdminNavigation isAdmin />);
+  const trigger = screen.getByRole("button", { name: "Management menu" });
+  fireEvent.click(trigger);
+  fireEvent.popState(window);
   expect(screen.queryByRole("dialog")).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Management menu" }));
-  navigation.pathname = "/admin/payments/settings";
-  rerender(<AdminNavigation isAdmin={true} />);
-  expect(screen.queryByRole("dialog")).toBeNull();
-  expect(screen.getByRole("link", { name: "Payment settings" }).getAttribute("aria-current")).toBe("page");
+  expect(document.body.style.overflow).toBe("");
+  expect(document.activeElement).toBe(trigger);
 });
 
 it.each(["backdrop", "close button"])("closes with the %s and restores focus and scrolling", (control) => {
@@ -222,7 +221,7 @@ it.each([
   fireEvent.click(trigger);
   expect(matchMedia).toHaveBeenCalledWith("(min-width: 1024px)");
   expect(document.activeElement).toBe(screen.getByRole("button", { name: "Close management menu" }));
-  act(() => { desktop.dispatchEvent(Object.assign(new Event("change"), { matches: true })); });
+  act(() => { Object.assign(desktop, { matches: true }); desktop.dispatchEvent(Object.assign(new Event("change"), { matches: true })); });
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(document.activeElement).toBe(screen.getByRole("link", { name: label }));
   expect(trigger.getAttribute("aria-expanded")).toBe("false");
@@ -238,7 +237,7 @@ it("preserves focus on a visible destination when resizing to desktop", () => {
   const destination = screen.getByRole("link", { name: "Bookings & Reservations" });
   destination.focus();
   const focus = vi.spyOn(destination, "focus");
-  act(() => { desktop.dispatchEvent(Object.assign(new Event("change"), { matches: true })); });
+  act(() => { Object.assign(desktop, { matches: true }); desktop.dispatchEvent(Object.assign(new Event("change"), { matches: true })); });
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(document.activeElement).toBe(destination);
   expect(focus).not.toHaveBeenCalled();
@@ -247,6 +246,6 @@ it("preserves focus on a visible destination when resizing to desktop", () => {
 
 it("redirects the Coach entry route to the Coach Bookings & Reservations area after authorization", async () => {
   navigation.requireReservationRole.mockResolvedValue({ roles: ["coach"] });
-  await AdminPage();
+  await AdminEntryRedirect();
   expect(navigation.redirect).toHaveBeenCalledExactlyOnceWith("/coach/bookings");
 });

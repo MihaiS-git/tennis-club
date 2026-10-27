@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import Link from "next/link";
+import { PendingLink } from "@/components/navigation-pending";
 import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 import { activityHref, type ActivityQuery, type ActivityScope } from "@/lib/bookings/activity-query";
 
@@ -31,11 +31,11 @@ export function ActivityTable({ scope, query, children }: {
             : sort === "datetime" && scope === "history" ? "desc" : "asc";
           return <th key={label} scope="col" className={`whitespace-nowrap px-3 py-3 max-md:p-0 ${align === "right" ? "md:text-right" : ""} ${sort ? "" : "max-md:hidden"}`}
             aria-sort={sort ? active ? query.direction === "asc" ? "ascending" : "descending" : "none" : undefined}>
-            {sort ? <Link href={activityHref(scope, { ...query, sort, direction }, 1)} scroll={false}
+            {sort ? <PendingLink href={activityHref(scope, { ...query, sort, direction }, 1)} scroll={false}
               aria-label={sort === "datetime" ? "Date/time" : undefined}
               className={`inline-flex items-center gap-1.5 rounded-control hover:text-primary focus-visible:outline-2 focus-visible:outline-primary max-md:min-h-8 max-md:rounded-full max-md:border max-md:px-2.5 ${active ? "text-primary max-md:border-primary max-md:bg-surface" : "max-md:border-border"}`}>
               {label}<Icon aria-hidden="true" size={14} />
-            </Link> : label}
+            </PendingLink> : label}
           </th>;
         })}</tr>
       </thead>

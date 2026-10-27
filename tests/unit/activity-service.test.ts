@@ -333,6 +333,19 @@ test("upcoming DTO supplies ordered interleaved records, options and pagination 
   expect(second.ordered).toHaveLength(1);
 });
 
+test.each([[[], "court"], [[], "coaching"], [[], "booking"], [[], "reservation"], [["coach"], "court"], [["coach"], "coaching"], [["coach"], "booking"], [["coach"], "reservation"]] as const)(
+  "Upcoming returns only %j activity of type %s", async (roles, type) => {
+    account.mockResolvedValue({ state: "active", userId: owner, roles });
+    const future = { ...interval, booking_date: "2099-10-15" };
+    serve([{ ...booking, reservation: future }, { ...booking, id: id(6), includes_coaching: true, coach_name: "Coach", reservation: future }],
+      [{ ...reservation, ...future }]);
+    const result = await listOwnUpcomingActivity({ type }, userClient);
+    const effectiveType = roles.length === 0 && (type === "booking" || type === "reservation") ? "booking" : type;
+    const expected = { court: [["booking", booking.id]], coaching: [["booking", id(6)]],
+      booking: [["booking", booking.id], ["booking", id(6)]], reservation: [["reservation", reservation.id]] }[effectiveType];
+    expect(result.ordered.map(item => [item.kind, item.row.id]).sort()).toEqual(expected);
+  });
+
 test("carries coaching classification from the owner-scoped contract into Upcoming", async () => {
   serve([{ ...booking, includes_coaching: true, reservation: { ...interval, booking_date: "2099-10-15" } }]);
   expect((await listOwnUpcomingActivity({}, userClient)).bookings[0]).toMatchObject({ id: booking.id, includes_coaching: true });

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
-import { Loader2 } from "lucide-react";
 import { BookingContent } from "./booking-content";
+import { LoadingStatus } from "@/components/loading-status";
 
 export const metadata: Metadata = {
   title: "Book a court | Tennis Club",
@@ -16,9 +16,7 @@ export default function BookPage({ searchParams }: PageProps<"/book">) {
       </p>
       <h1 className="mt-2 font-heading text-[clamp(32px,4vw,44px)] font-semibold leading-tight tracking-[-0.04em] text-primary">Find time on court.</h1>
       <section aria-label="Court availability">
-        <Suspense fallback={<p role="status" className="mt-5 flex items-center gap-2 rounded-card border border-border bg-surface p-5 text-sm text-muted-foreground">
-          <Loader2 aria-hidden className="size-4 motion-safe:animate-spin" />Loading court availability…
-        </p>}>
+        <Suspense fallback={<LoadingStatus variant="page" label="Loading court availability…" className="mt-5" />}>
           <BookingContent searchParams={searchParams} />
         </Suspense>
       </section>

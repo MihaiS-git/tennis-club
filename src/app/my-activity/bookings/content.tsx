@@ -13,9 +13,9 @@ export async function MyBookingsContent({ searchParams = Promise.resolve({}) }: 
   if (account.state === "unauthenticated") redirect("/login");
   if (account.state !== "active") return <p className="text-muted-foreground">Your account cannot access activity right now.</p>;
   const staff = customerBookingNoticeBypass(account.roles);
-  const rawParams = await searchParams;
-  const params = staff ? rawParams : { ...rawParams, type: "booking" };
-  const target = await findOwnBookingActivityTarget(rawParams.booking, account.userId);
+  // Type filtering and role visibility are enforced by the activity query parser and service.
+  const params = await searchParams;
+  const target = await findOwnBookingActivityTarget(params.booking, account.userId);
   if (target?.scope === "history") redirect(activityBookingHref("history", parseActivityQuery(params, "history", staff), target.booking.id));
   let initialActivity = null;
   let initialError = "";
