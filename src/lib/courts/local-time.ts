@@ -1,3 +1,10 @@
+// Minute of a local day (0–1440) as HH:mm. Kept here, free of Zod, so client
+// timetables can label times without loading the validation library.
+export function minuteToTime(minute: number): string {
+  if (!Number.isInteger(minute) || minute < 0 || minute > 1440) throw new RangeError(`Invalid minute of day: ${minute}`);
+  return `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+}
+
 export function localToday(timeZone: string, now: Date): string {
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone, year: "numeric", month: "2-digit", day: "2-digit",

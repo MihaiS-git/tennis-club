@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect, useRef, type CSSProperties, type ReactNode } from "react";
-import { localMinute, localToday } from "@/lib/courts/local-time";
-import { minuteToTime } from "@/lib/admin/opening-hours-validation";
+import { localMinute, localToday, minuteToTime } from "@/lib/courts/local-time";
 import { formatHourlyRate, priceBands } from "@/lib/courts/price-bands";
 
 export type TimelineCellState = "available" | "booked" | "closed" | "unavailable" | "past";

@@ -1,8 +1,10 @@
 import { z } from "zod";
 import { cancellationNoticeMinutesSchema } from "@/lib/bookings/cancellation-policy";
 import { isCountryCode } from "@/lib/profile/countries";
+import { locationCurrencies } from "@/lib/pricing/currency";
 
-export const locationCurrencies = ["EUR", "USD", "GBP", "RON", "CHF"] as const;
+export { locationCurrencies };
+
 const timezones = new Set(typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : []);
 export function isIanaTimezone(value: string) {
   try {

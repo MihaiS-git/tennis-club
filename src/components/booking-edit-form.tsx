@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import dynamic from "next/dynamic";
 import { Button } from "@/components/button";
 import { ReservationEditForm, type ReservationEditDraft, type ReservationEditSaveResult } from "@/components/reservation-edit-form";
 import type { ReservationTimetableDay } from "@/components/reservation-timetable";
@@ -11,12 +12,15 @@ import { BookingTimetable, lessonStartOffers, lessonTimetableDay, lessonTimetabl
 import type { ReservationSelection } from "@/lib/reservations/domain";
 import type { AdminBooking, InternalLocation } from "@/lib/reservations/service";
 import type { BookingEditContext } from "@/lib/bookings/reschedule";
-import { OnlinePayment } from "@/app/book/online-payment";
 import type { BookingRescheduleResult } from "@/lib/bookings/reschedule";
 import { minuteToTime } from "@/lib/admin/opening-hours-validation";
 import { formatMoney } from "@/lib/pricing/money";
 import { loadOwnBookingEditDayAction, quoteOwnBookingAction, rescheduleOwnBookingAction } from "@/app/my-activity/bookings/actions";
 import { LoadingStatus } from "@/components/loading-status";
+
+// Stripe's client libraries load only once a modification requires payment.
+const OnlinePayment = dynamic(() => import("@/app/book/online-payment").then((module) => module.OnlinePayment),
+  { loading: () => <LoadingStatus label="Loading secure payment form…" className="mt-5" /> });
 
 export type BookingEditActions = {
   load: typeof loadOwnBookingEditDayAction;

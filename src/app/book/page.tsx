@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { BookingContent } from "./booking-content";
-import { LoadingStatus } from "@/components/loading-status";
+import { BookingLoading } from "./booking-loading";
 
 export const metadata: Metadata = {
   title: "Book a court | Tennis Club",
@@ -16,7 +16,7 @@ export default function BookPage({ searchParams }: PageProps<"/book">) {
       </p>
       <h1 className="mt-2 font-heading text-[clamp(32px,4vw,44px)] font-semibold leading-tight tracking-[-0.04em] text-primary">Find time on court.</h1>
       <section aria-label="Court availability">
-        <Suspense fallback={<LoadingStatus variant="page" label="Loading court availability…" className="mt-5" />}>
+        <Suspense fallback={<BookingLoading />}>
           <BookingContent searchParams={searchParams} />
         </Suspense>
       </section>

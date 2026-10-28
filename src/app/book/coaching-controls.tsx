@@ -2,7 +2,7 @@
 
 import { useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { formatMoney } from "@/lib/pricing/money";
+import { formatMoney } from "@/lib/pricing/currency";
 import type { ResolvedCoachingPrice } from "@/lib/coaching/pricing";
 import { LoadingStatus } from "@/components/loading-status";
 

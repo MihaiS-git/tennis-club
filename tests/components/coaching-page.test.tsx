@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen, within } from "@testing-library/react";
+import { renderToReadableStream } from "react-dom/server";
 import { afterEach, expect, it, vi } from "vitest";
 import type { PublicCoaching } from "@/lib/coaching/public";
 import { formatMoney } from "@/lib/pricing/money";
@@ -51,6 +52,40 @@ const show = async (component: typeof CoachingPrograms, value: PublicCoaching | 
   render(await component({ coaching: value instanceof Error ? Promise.reject(value) : Promise.resolve(value) }));
 
 afterEach(cleanup);
+
+it("uses native responsive hero sources with mutually exclusive matching head preloads", async () => {
+  listPublicLocationsWithCourts.mockResolvedValue([]);
+  readPublicCoaching.mockResolvedValue(empty);
+  const stream = await renderToReadableStream(<CoachingPage />);
+  await stream.allReady;
+  const html = new DOMParser().parseFromString(await new Response(stream).text(), "text/html");
+  const image = html.querySelector("picture img")!;
+  expect(image.getAttribute("src")).not.toContain("/_next/image");
+  expect(image.getAttribute("loading")).toBe("eager");
+  expect(image.getAttribute("fetchpriority")).toBe("high");
+  expect(image.getAttribute("class")).toContain("object-[60%_center] md:object-center");
+  expect(image.getAttribute("width")).toBe("1536");
+  expect(image.getAttribute("height")).toBe("1024");
+  const sources = [...html.querySelectorAll("picture source")];
+  expect(sources.map((source) => source.getAttribute("type"))).toEqual(["image/avif", "image/webp", "image/avif", "image/webp", "image/avif"]);
+  expect(sources[0].getAttribute("media")).toBe(sources[1].getAttribute("media"));
+  expect(sources[0].getAttribute("srcset")).toContain("/images/coaching/tennis-coaching-session-narrow-");
+  expect(sources[2].getAttribute("srcset")).toContain("/images/coaching/tennis-coaching-session-portrait-");
+  expect(sources[4].getAttribute("media")).toBeNull();
+  expect(image.getAttribute("srcset")).toContain(".webp 1536w");
+  const preloads = [...html.head.querySelectorAll('link[rel="preload"][as="image"]')];
+  expect(preloads).toHaveLength(3);
+  const avif = [sources[0], sources[2], sources[4]];
+  for (const [index, preload] of preloads.entries()) {
+    expect(preload.getAttribute("type")).toBe("image/avif");
+    expect(preload.getAttribute("fetchpriority")).toBe("high");
+    expect(preload.getAttribute("imagesrcset")).toBe(avif[index].getAttribute("srcset"));
+    expect(preload.getAttribute("imagesizes")).toBe(avif[index].getAttribute("sizes"));
+  }
+  expect(preloads[0].getAttribute("media")).toBe(sources[0].getAttribute("media"));
+  expect(preloads[1].getAttribute("media")).toContain(`not (${sources[0].getAttribute("media")})`);
+  expect(preloads[2].getAttribute("media")).toContain(`not (${sources[2].getAttribute("media")})`);
+});
 
 it("composes the public coaching sections from one shared read", async () => {
   listPublicLocationsWithCourts.mockResolvedValue([]);

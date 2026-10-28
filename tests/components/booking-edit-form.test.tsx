@@ -289,7 +289,7 @@ it("shows the surcharge and waits for verified payment before completing a paid 
   expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
   expect(onSaved).not.toHaveBeenCalled();
   expect(save.mock.calls[0][0]).toMatchObject({expectedTotal:10000,priceAcknowledged:true,requestId:expect.any(String)});
-  fireEvent.click(screen.getByRole("button",{name:"Simulate verified modification payment"}));
+  fireEvent.click(await screen.findByRole("button",{name:"Simulate verified modification payment"}));
   await waitFor(()=>expect(onSaved).toHaveBeenCalledOnce());
 });
 
@@ -337,7 +337,7 @@ it("reports the unpaid modification for X and offers no other dismissal or recov
   expect(onAdjustment).toHaveBeenLastCalledWith(booking.id);
   expect(screen.queryByRole("button", { name: /Cancel modification|Recover/ })).toBeNull();
   expect(abandon).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "Simulate verified modification payment" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Simulate verified modification payment" }));
   expect(onAdjustment).toHaveBeenLastCalledWith(null);
 
   // Reopening is always a fresh form, even when the server still reports the earlier modification.

@@ -5,7 +5,7 @@ import { Suspense } from "react";
 
 import { readPublicCoaching } from "@/lib/coaching/public";
 import { listPublicLocationsWithCourts } from "@/lib/courts/public";
-import { EditorialHero } from "../editorial-hero";
+import { EditorialHero, editorialHeroHeight as heroHeight, narrowHeroMedia as narrowHero, narrowHeroSizes, portraitHeroMedia as portraitHero } from "../editorial-hero";
 import styles from "../page.module.css";
 import { PageSectionNav } from "../page-section-nav";
 import { CoachingCoaches, CoachingGroupPrices, CoachingPrices, CoachingPrograms } from "./coaching-sections";
@@ -52,6 +52,17 @@ const headingClassName = "font-heading text-[clamp(34px,4vw,56px)] font-semibold
 const bodyClassName = "font-sans text-base leading-7 md:text-lg md:leading-8";
 const sectionClassName = "scroll-mt-20 px-6 py-14 md:px-8 md:py-20 xl:py-28";
 
+// Match the full-width hero's cover size, including its height on narrow screens.
+// Portrait sources retain the existing 60%-positioned crop. Wider frames reuse
+// the full 3:2 photograph already generated for Courts.
+const narrowHeroSrcSet = (format: string) =>
+  [427, 683].map((width) => `/images/coaching/tennis-coaching-session-narrow-${width}.${format} ${width}w`).join(", ");
+const portraitHeroSrcSet = (format: string) =>
+  [640, 1024].map((width) => `/images/coaching/tennis-coaching-session-portrait-${width}.${format} ${width}w`).join(", ");
+const heroSizes = `max(100vw, calc(${heroHeight} * 3 / 2))`;
+const heroSrcSet = (format: string) =>
+  [768, 1152, 1536].map((width) => `/images/courts/tennis-coaching-session-${width}.${format} ${width}w`).join(", ");
+
 export default function CoachingPage() {
   const coaching = readCoaching();
 
@@ -64,7 +75,18 @@ export default function CoachingPage() {
         titleClassName="max-w-[14ch]"
         intro="Find a coaching program that suits your game, meet the coaches who teach it and see what lessons cost."
         image={{
-          src: "/images/tennis-coaching-session.webp",
+          src: "/images/courts/tennis-coaching-session-768.webp",
+          srcSet: heroSrcSet("webp"),
+          sizes: heroSizes,
+          sources: [
+            { media: narrowHero, type: "image/avif", srcSet: narrowHeroSrcSet("avif"), sizes: narrowHeroSizes },
+            { media: narrowHero, type: "image/webp", srcSet: narrowHeroSrcSet("webp"), sizes: narrowHeroSizes },
+            { media: portraitHero, type: "image/avif", srcSet: portraitHeroSrcSet("avif"), sizes: heroHeight },
+            { media: portraitHero, type: "image/webp", srcSet: portraitHeroSrcSet("webp"), sizes: heroHeight },
+            { type: "image/avif", srcSet: heroSrcSet("avif"), sizes: heroSizes },
+          ],
+          width: 1536,
+          height: 1024,
           alt: "A coach guides a player during a practice session on a clay tennis court",
           className: "object-[60%_center] md:object-center",
         }}
@@ -156,7 +178,7 @@ export default function CoachingPage() {
               <CoachingGroupPrices coaching={coaching} />
             </Suspense>
           </div>
-          <Link href="/club#visit" className={`${styles.editorialLink} mt-6 inline-flex min-h-11 w-fit items-center font-sans text-base font-semibold text-primary transition-colors hover:text-accent focus-visible:rounded-control`}>
+          <Link href="/club#visit" prefetch={false} className={`${styles.editorialLink} mt-6 inline-flex min-h-11 w-fit items-center font-sans text-base font-semibold text-primary transition-colors hover:text-accent focus-visible:rounded-control`}>
             <span className={`${styles.editorialLabel} underline decoration-accent underline-offset-8`}>Contact the club</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
           </Link>
         </div>
@@ -177,7 +199,7 @@ export default function CoachingPage() {
               </li>
             ))}
           </ol>
-          <Link href="/club#visit" className={`${styles.editorialLink} mt-6 inline-flex min-h-11 w-fit items-center font-sans text-base font-semibold text-primary transition-colors hover:text-accent focus-visible:rounded-control`}>
+          <Link href="/club#visit" prefetch={false} className={`${styles.editorialLink} mt-6 inline-flex min-h-11 w-fit items-center font-sans text-base font-semibold text-primary transition-colors hover:text-accent focus-visible:rounded-control`}>
             <span className={`${styles.editorialLabel} underline decoration-accent underline-offset-8`}>Find your location</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
           </Link>
         </div>

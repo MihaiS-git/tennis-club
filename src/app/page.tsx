@@ -1,3 +1,4 @@
+import { preload } from "react-dom";
 import Link from "next/link";
 import { connection } from "next/server";
 import { Suspense } from "react";
@@ -36,6 +37,16 @@ export default function Home({ searchParams }: PageProps<"/">) {
   const locations = readPublicLocations();
   const coaching = readCoaching(locations);
 
+  preload("/images/home/tennis-hero-mobile-480.avif", {
+    as: "image", type: "image/avif", media: "(max-width: 1023px)",
+    imageSrcSet: "/images/home/tennis-hero-mobile-480.avif 480w, /images/home/tennis-hero-mobile-768.avif 768w, /images/home/tennis-hero-mobile-1122.avif 1122w",
+    imageSizes: "(min-width: 768px) 55vw, 100vw", fetchPriority: "high",
+  });
+  preload("/images/home/tennis-hero-desktop-1280.avif", {
+    as: "image", type: "image/avif", media: "(min-width: 1024px)",
+    imageSrcSet: "/images/home/tennis-hero-desktop-1280.avif 1280w, /images/home/tennis-hero-desktop-1600.avif 1600w, /images/home/tennis-hero-desktop-1942.avif 1942w",
+    imageSizes: "(min-width: 1825px) 100vw, (min-width: 1618px) 1825px, (min-width: 1320px) 113vw, 1489px", fetchPriority: "high",
+  });
   return (
     <main className="flex-1">
       <section
@@ -43,15 +54,37 @@ export default function Home({ searchParams }: PageProps<"/">) {
         className="relative lg:h-[clamp(620px,47vw,760px)] lg:overflow-hidden"
       >
         <picture className="block h-[43svh] min-h-[290px] max-h-[390px] overflow-hidden md:absolute md:right-0 md:top-0 md:h-[clamp(500px,54vw,560px)] md:w-[55%] md:min-h-0 md:max-h-none lg:inset-0 lg:h-full lg:w-full">
-          <source media="(min-width: 1024px)" type="image/avif" srcSet="/images/tennis-hero-desktop.avif" />
-          <source media="(min-width: 1024px)" type="image/webp" srcSet="/images/tennis-hero-desktop.webp" />
-          <source type="image/avif" srcSet="/images/tennis-hero-mobile.avif" />
-          <source type="image/webp" srcSet="/images/tennis-hero-mobile.webp" />
+          {/* Desktop sizes include the extra image width needed by object-cover at the hero's clamped height. */}
+          <source
+            media="(min-width: 1024px)"
+            type="image/avif"
+            srcSet="/images/home/tennis-hero-desktop-1280.avif 1280w, /images/home/tennis-hero-desktop-1600.avif 1600w, /images/home/tennis-hero-desktop-1942.avif 1942w"
+            sizes="(min-width: 1825px) 100vw, (min-width: 1618px) 1825px, (min-width: 1320px) 113vw, 1489px"
+          />
+          <source
+            media="(min-width: 1024px)"
+            type="image/webp"
+            srcSet="/images/home/tennis-hero-desktop-1280.webp 1280w, /images/home/tennis-hero-desktop-1600.webp 1600w, /images/home/tennis-hero-desktop-1942.webp 1942w"
+            sizes="(min-width: 1825px) 100vw, (min-width: 1618px) 1825px, (min-width: 1320px) 113vw, 1489px"
+          />
+          <source
+            type="image/avif"
+            srcSet="/images/home/tennis-hero-mobile-480.avif 480w, /images/home/tennis-hero-mobile-768.avif 768w, /images/home/tennis-hero-mobile-1122.avif 1122w"
+            sizes="(min-width: 768px) 55vw, 100vw"
+          />
+          <source
+            type="image/webp"
+            srcSet="/images/home/tennis-hero-mobile-480.webp 480w, /images/home/tennis-hero-mobile-768.webp 768w, /images/home/tennis-hero-mobile-1122.webp 1122w"
+            sizes="(min-width: 768px) 55vw, 100vw"
+          />
           <img
-            src="/images/tennis-hero-mobile.webp"
+            src="/images/home/tennis-hero-mobile-480.webp"
+            srcSet="/images/home/tennis-hero-mobile-480.webp 480w, /images/home/tennis-hero-mobile-768.webp 768w, /images/home/tennis-hero-mobile-1122.webp 1122w"
+            sizes="(min-width: 768px) 55vw, 100vw"
             alt="Tennis players rallying on a clay court at sunset"
             width="1122"
             height="1402"
+            loading="eager"
             fetchPriority="high"
             decoding="async"
             className={`${styles.heroImage} h-full w-full object-cover object-[center_75%] md:object-[center_60%] lg:object-[60%_center]`}
@@ -81,14 +114,14 @@ export default function Home({ searchParams }: PageProps<"/">) {
                 Book a court
               </Link>
               <Link
-                href="/courts"
+                href="/courts" prefetch={false}
                 className="inline-flex min-h-12 w-full items-center justify-center rounded-control border border-border-strong bg-surface px-5 font-sans text-sm font-semibold text-primary transition hover:bg-surface-muted hover:text-accent md:w-auto lg:border-ivory/80 lg:bg-forest-900/20 lg:px-6 lg:text-chalk lg:hover:border-accent-on-dark lg:hover:bg-forest-900/40 lg:hover:text-chalk"
               >
                 Explore courts
               </Link>
             </div>
             <Link
-              href="/coaching"
+              href="/coaching" prefetch={false}
               className={`${styles.editorialLink} mt-2 inline-flex min-h-11 w-fit items-center font-sans text-sm font-semibold text-primary hover:text-accent md:mt-4 lg:mt-3 lg:min-h-10 lg:text-chalk lg:hover:text-chalk xl:mt-4`}
             >
               <span className={`${styles.editorialLabel} underline decoration-accent underline-offset-4 lg:decoration-accent-on-dark`}>Explore coaching</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-1`}>→</span>
@@ -141,7 +174,7 @@ export default function Home({ searchParams }: PageProps<"/">) {
                   <p className="font-semibold text-foreground">Programs, coaches and prices.</p>
                   <p className="mt-1 text-muted-foreground">See what the club offers and book a lesson online.</p>
                 </div>
-                <Link href="/coaching" className={`${styles.editorialLink} mt-2 inline-flex min-h-11 w-fit items-center font-sans text-sm font-semibold text-primary transition-colors hover:text-accent focus-visible:rounded-control`}>
+                <Link href="/coaching" prefetch={false} className={`${styles.editorialLink} mt-2 inline-flex min-h-11 w-fit items-center font-sans text-sm font-semibold text-primary transition-colors hover:text-accent focus-visible:rounded-control`}>
                   <span className={`${styles.editorialLabel} underline decoration-accent underline-offset-8`}>Explore coaching</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
                 </Link>
               </article>
@@ -165,17 +198,27 @@ export default function Home({ searchParams }: PageProps<"/">) {
               <li className="border-t border-ivory/30 py-3">Facilities</li>
               <li className="border-t border-ivory/30 py-3">Community</li>
             </ul>
-            <Link href="/club" className={`${styles.editorialLink} mt-6 inline-flex min-h-11 items-center font-sans text-base font-semibold text-chalk transition-colors hover:text-chalk focus-visible:rounded-control`}>
+            <Link href="/club" prefetch={false} className={`${styles.editorialLink} mt-6 inline-flex min-h-11 items-center font-sans text-base font-semibold text-chalk transition-colors hover:text-chalk focus-visible:rounded-control`}>
               <span className={`${styles.editorialLabel} underline decoration-accent-on-dark underline-offset-8`}>Discover the club</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
             </Link>
           </div>
 
           <div className="px-3 md:px-0">
             <picture className={`${styles.photo} mt-10 block max-w-[960px] overflow-hidden lg:mt-0 lg:max-w-none`}>
-              <source type="image/avif" srcSet="/images/tennis-club-aerial.avif" />
-              <source type="image/webp" srcSet="/images/tennis-club-aerial.webp" />
+              <source
+                type="image/avif"
+                srcSet="/images/home/tennis-club-aerial-480.avif 480w, /images/home/tennis-club-aerial-768.avif 768w, /images/home/tennis-club-aerial-1152.avif 1152w, /images/home/tennis-club-aerial-1536.avif 1536w"
+                sizes="(min-width: 1344px) 709px, (min-width: 1024px) calc((100vw - 128px) * 7 / 12), (min-width: 768px) calc(100vw - 64px), calc(100vw - 24px)"
+              />
+              <source
+                type="image/webp"
+                srcSet="/images/home/tennis-club-aerial-480.webp 480w, /images/home/tennis-club-aerial-768.webp 768w, /images/home/tennis-club-aerial-1152.webp 1152w, /images/home/tennis-club-aerial-1536.webp 1536w"
+                sizes="(min-width: 1344px) 709px, (min-width: 1024px) calc((100vw - 128px) * 7 / 12), (min-width: 768px) calc(100vw - 64px), calc(100vw - 24px)"
+              />
               <img
-                src="/images/tennis-club-aerial.webp"
+                src="/images/home/tennis-club-aerial-480.webp"
+                srcSet="/images/home/tennis-club-aerial-480.webp 480w, /images/home/tennis-club-aerial-768.webp 768w, /images/home/tennis-club-aerial-1152.webp 1152w, /images/home/tennis-club-aerial-1536.webp 1536w"
+                sizes="(min-width: 1344px) 709px, (min-width: 1024px) calc((100vw - 128px) * 7 / 12), (min-width: 768px) calc(100vw - 64px), calc(100vw - 24px)"
                 alt="Aerial view of a clay-court tennis club with clubhouse and surrounding greenery"
                 loading="lazy"
                 decoding="async"
@@ -218,16 +261,26 @@ export default function Home({ searchParams }: PageProps<"/">) {
               </div>
             </div>
 
-            <Link href="/courts" className={`${styles.editorialLink} mt-8 inline-flex min-h-11 w-fit items-center font-sans text-base font-semibold text-primary transition-colors hover:text-accent focus-visible:rounded-control lg:col-start-1 lg:row-start-2 lg:mt-6 lg:self-start`}>
+            <Link href="/courts" prefetch={false} className={`${styles.editorialLink} mt-8 inline-flex min-h-11 w-fit items-center font-sans text-base font-semibold text-primary transition-colors hover:text-accent focus-visible:rounded-control lg:col-start-1 lg:row-start-2 lg:mt-6 lg:self-start`}>
               <span className={`${styles.editorialLabel} underline decoration-accent underline-offset-8`}>Explore the courts</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
             </Link>
           </div>
 
           <picture className={`${styles.photo} ${styles.reveal} mt-12 block overflow-hidden md:mt-16 lg:mt-20`}>
-            <source type="image/avif" srcSet="/images/tennis-courts-facilities.avif" />
-            <source type="image/webp" srcSet="/images/tennis-courts-facilities.webp" />
+            <source
+              type="image/avif"
+              srcSet="/images/home/tennis-courts-facilities-480.avif 480w, /images/home/tennis-courts-facilities-768.avif 768w, /images/home/tennis-courts-facilities-1152.avif 1152w, /images/home/tennis-courts-facilities-1672.avif 1672w"
+              sizes="(min-width: 1344px) 1280px, (min-width: 768px) calc(100vw - 64px), calc(100vw - 48px)"
+            />
+            <source
+              type="image/webp"
+              srcSet="/images/home/tennis-courts-facilities-480.webp 480w, /images/home/tennis-courts-facilities-768.webp 768w, /images/home/tennis-courts-facilities-1152.webp 1152w, /images/home/tennis-courts-facilities-1672.webp 1672w"
+              sizes="(min-width: 1344px) 1280px, (min-width: 768px) calc(100vw - 64px), calc(100vw - 48px)"
+            />
             <img
-              src="/images/tennis-courts-facilities.webp"
+              src="/images/home/tennis-courts-facilities-480.webp"
+              srcSet="/images/home/tennis-courts-facilities-480.webp 480w, /images/home/tennis-courts-facilities-768.webp 768w, /images/home/tennis-courts-facilities-1152.webp 1152w, /images/home/tennis-courts-facilities-1672.webp 1672w"
+              sizes="(min-width: 1344px) 1280px, (min-width: 768px) calc(100vw - 64px), calc(100vw - 48px)"
               alt="Clay tennis court with clubhouse, lighting and player facilities at TennisClub"
               loading="lazy"
               decoding="async"
@@ -251,16 +304,27 @@ export default function Home({ searchParams }: PageProps<"/">) {
             <Suspense fallback={<HomeCoachingFallback />}>
               <HomeCoachingPrograms coaching={coaching} />
             </Suspense>
-            <Link href="/coaching" className={`${styles.editorialLink} mt-6 inline-flex min-h-11 w-fit items-center font-sans text-base font-semibold text-chalk transition-colors hover:text-chalk focus-visible:rounded-control`}>
+            <Link href="/coaching" prefetch={false} className={`${styles.editorialLink} mt-6 inline-flex min-h-11 w-fit items-center font-sans text-base font-semibold text-chalk transition-colors hover:text-chalk focus-visible:rounded-control`}>
               <span className={`${styles.editorialLabel} underline decoration-accent-on-dark underline-offset-8`}>Meet the coaches</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
             </Link>
           </div>
 
+          {/* Home's AVIF uses its own compression; the identical WebP derivatives are shared with Courts. */}
           <picture className={`${styles.photo} -mx-3 mt-12 block w-[calc(100%+1.5rem)] overflow-hidden md:mx-0 md:mt-16 md:w-auto lg:col-start-1 lg:row-start-1 lg:mt-0`}>
-            <source type="image/avif" srcSet="/images/tennis-coaching-session.avif" />
-            <source type="image/webp" srcSet="/images/tennis-coaching-session.webp" />
+            <source
+              type="image/avif"
+              srcSet="/images/home/tennis-coaching-session-480.avif 480w, /images/home/tennis-coaching-session-768.avif 768w, /images/home/tennis-coaching-session-1152.avif 1152w, /images/home/tennis-coaching-session-1536.avif 1536w"
+              sizes="(min-width: 1344px) 700px, (min-width: 1280px) calc((100vw - 144px) * 7 / 12), (min-width: 1024px) calc((100vw - 112px) * 7 / 12), (min-width: 768px) calc(100vw - 64px), calc(100vw - 24px)"
+            />
+            <source
+              type="image/webp"
+              srcSet="/images/courts/tennis-coaching-session-480.webp 480w, /images/courts/tennis-coaching-session-768.webp 768w, /images/courts/tennis-coaching-session-1152.webp 1152w, /images/courts/tennis-coaching-session-1536.webp 1536w"
+              sizes="(min-width: 1344px) 700px, (min-width: 1280px) calc((100vw - 144px) * 7 / 12), (min-width: 1024px) calc((100vw - 112px) * 7 / 12), (min-width: 768px) calc(100vw - 64px), calc(100vw - 24px)"
+            />
             <img
-              src="/images/tennis-coaching-session.webp"
+              src="/images/courts/tennis-coaching-session-480.webp"
+              srcSet="/images/courts/tennis-coaching-session-480.webp 480w, /images/courts/tennis-coaching-session-768.webp 768w, /images/courts/tennis-coaching-session-1152.webp 1152w, /images/courts/tennis-coaching-session-1536.webp 1536w"
+              sizes="(min-width: 1344px) 700px, (min-width: 1280px) calc((100vw - 144px) * 7 / 12), (min-width: 1024px) calc((100vw - 112px) * 7 / 12), (min-width: 768px) calc(100vw - 64px), calc(100vw - 24px)"
               alt="A coach guides a player during a practice session on a clay tennis court"
               loading="lazy"
               decoding="async"
@@ -291,10 +355,20 @@ export default function Home({ searchParams }: PageProps<"/">) {
           </div>
 
           <picture className={`${styles.photo} -mx-3 mt-12 block w-[calc(100%+1.5rem)] overflow-hidden md:mx-0 md:mt-16 md:w-auto lg:mt-0`}>
-            <source type="image/avif" srcSet="/images/tennis-matches-community.avif" />
-            <source type="image/webp" srcSet="/images/tennis-matches-community.webp" />
+            <source
+              type="image/avif"
+              srcSet="/images/home/tennis-matches-community-480.avif 480w, /images/home/tennis-matches-community-768.avif 768w, /images/home/tennis-matches-community-1152.avif 1152w, /images/home/tennis-matches-community-1536.avif 1536w"
+              sizes="(min-width: 1344px) 700px, (min-width: 1280px) calc((100vw - 144px) * 7 / 12), (min-width: 1024px) calc((100vw - 112px) * 7 / 12), (min-width: 768px) calc(100vw - 64px), calc(100vw - 24px)"
+            />
+            <source
+              type="image/webp"
+              srcSet="/images/home/tennis-matches-community-480.webp 480w, /images/home/tennis-matches-community-768.webp 768w, /images/home/tennis-matches-community-1152.webp 1152w, /images/home/tennis-matches-community-1536.webp 1536w"
+              sizes="(min-width: 1344px) 700px, (min-width: 1280px) calc((100vw - 144px) * 7 / 12), (min-width: 1024px) calc((100vw - 112px) * 7 / 12), (min-width: 768px) calc(100vw - 64px), calc(100vw - 24px)"
+            />
             <img
-              src="/images/tennis-matches-community.webp"
+              src="/images/home/tennis-matches-community-480.webp"
+              srcSet="/images/home/tennis-matches-community-480.webp 480w, /images/home/tennis-matches-community-768.webp 768w, /images/home/tennis-matches-community-1152.webp 1152w, /images/home/tennis-matches-community-1536.webp 1536w"
+              sizes="(min-width: 1344px) 700px, (min-width: 1280px) calc((100vw - 144px) * 7 / 12), (min-width: 1024px) calc((100vw - 112px) * 7 / 12), (min-width: 768px) calc(100vw - 64px), calc(100vw - 24px)"
               alt="Four tennis players talking together beside a clay court"
               loading="lazy"
               decoding="async"

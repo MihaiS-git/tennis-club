@@ -144,6 +144,16 @@ test("invalid inbox controls fall back safely, and a new search starts on page o
   expect(parseInboxQuery({ q: "Court", status: "read", category: "bookings", sort: "oldest" }).page).toBe(1);
 });
 
+test("missing, repeated and out-of-range inbox parameters fall back to their defaults", () => {
+  const defaults = { q: "", status: "all", category: "all", sort: "newest", page: 1 };
+  expect(parseInboxQuery({})).toEqual(defaults);
+  expect(parseInboxQuery({ q: ["Court", "Lesson"], status: ["read", "unread"], category: ["club", "payments"], sort: ["oldest", "newest"], page: ["2", "3"] }))
+    .toEqual(defaults);
+  expect(parseInboxQuery({ status: "READ", category: " club", sort: "oldest " })).toEqual(defaults);
+  for (const page of ["", "0", "-1", "1.5", "100001", "Infinity"]) expect(inboxPage(page)).toBe(1);
+  expect(inboxPage("100000")).toBe(100000);
+});
+
 test("inbox toolbar keeps active controls and detail/pagination links retain them", async () => {
   repository.listUserMessages.mockResolvedValue([{ id: messageId, kind: "booking.confirmed", subject: "Court confirmed",
     bodyText: "Court A", readAt: null, createdAt: new Date("2026-10-22T10:00:00Z") }]);

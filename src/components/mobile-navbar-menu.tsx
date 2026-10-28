@@ -18,7 +18,7 @@ import { NotificationBell } from "./notification-bell";
 export function MobileNavbarShell({ children }: { children: ReactNode }) {
   return <header className="sticky top-0 z-30 w-full border-b border-border bg-surface lg:hidden">
     <div className="flex h-16 items-center justify-between gap-2 px-4">
-      <Link pendingPlacement="below" href="/" className="relative font-heading text-base font-semibold tracking-tight text-primary hover:text-accent sm:text-lg">
+      <Link pendingPlacement="below" href="/" prefetch={false} className="relative font-heading text-base font-semibold tracking-tight text-primary hover:text-accent sm:text-lg">
         Tennis Club
       </Link>
       <div className="flex items-center gap-2">
@@ -41,6 +41,11 @@ export function MobileNavbarControls({ isAuthenticated, hasMessageAccess = false
   const drawerRef = useRef<HTMLElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+
+  // The closed drawer sits just off-screen, inside Link's viewport margin, so its hidden
+  // links would prefetch on every page. Prefetch account pages once opened;
+  // public photo pages stay off because their resource hints also fetch heroes.
+  const drawerPrefetch = isOpen ? undefined : false;
 
   function closeMenu() {
     setIsOpen(false);
@@ -166,17 +171,17 @@ export function MobileNavbarControls({ isAuthenticated, hasMessageAccess = false
         </div>
 
         <nav aria-label="Mobile navigation" className="flex-1 overflow-y-auto px-4 py-2">
-          <PrimaryNavigationLink pendingPlacement="end" href="/courts" dismissDrawer={() => setIsOpen(false)} className="flex min-h-12 items-center text-sm font-medium">
+          <PrimaryNavigationLink pendingPlacement="end" href="/courts" prefetch={false} dismissDrawer={() => setIsOpen(false)} className="flex min-h-12 items-center text-sm font-medium">
             Courts
           </PrimaryNavigationLink>
-          <PrimaryNavigationLink pendingPlacement="end" href="/coaching" dismissDrawer={() => setIsOpen(false)} className="flex min-h-12 items-center text-sm font-medium">
+          <PrimaryNavigationLink pendingPlacement="end" href="/coaching" prefetch={false} dismissDrawer={() => setIsOpen(false)} className="flex min-h-12 items-center text-sm font-medium">
             Coaching
           </PrimaryNavigationLink>
-          <PrimaryNavigationLink pendingPlacement="end" href="/club" dismissDrawer={() => setIsOpen(false)} className="flex min-h-12 items-center text-sm font-medium">
+          <PrimaryNavigationLink pendingPlacement="end" href="/club" prefetch={false} dismissDrawer={() => setIsOpen(false)} className="flex min-h-12 items-center text-sm font-medium">
             Club
           </PrimaryNavigationLink>
           {isAuthenticated && canReserve && (
-            <PrimaryNavigationLink pendingPlacement="end" section={["/admin", "/coach"]} href="/admin" dismissDrawer={() => setIsOpen(false)} className="flex min-h-12 items-center text-sm font-medium">
+            <PrimaryNavigationLink pendingPlacement="end" section={["/admin", "/coach"]} href="/admin" prefetch={drawerPrefetch} dismissDrawer={() => setIsOpen(false)} className="flex min-h-12 items-center text-sm font-medium">
               Admin
             </PrimaryNavigationLink>
           )}
@@ -184,7 +189,7 @@ export function MobileNavbarControls({ isAuthenticated, hasMessageAccess = false
           <div className="mt-2 border-t border-border pt-2">
             {isAuthenticated ? (
               <>
-                <Link href="/profile" dismissDrawer={() => setIsOpen(false)} className="flex min-h-12 items-center gap-2 text-sm font-medium text-primary hover:text-accent">
+                <Link href="/profile" prefetch={drawerPrefetch} dismissDrawer={() => setIsOpen(false)} className="flex min-h-12 items-center gap-2 text-sm font-medium text-primary hover:text-accent">
                   <ProfileNavigationAvatar src={avatarUrl} />
                   Profile
                 </Link>
@@ -194,7 +199,7 @@ export function MobileNavbarControls({ isAuthenticated, hasMessageAccess = false
                 </ProfileDepartureForm>
               </>
             ) : (
-              <Link href="/login" dismissDrawer={() => setIsOpen(false)} className="flex min-h-12 items-center text-sm font-medium text-primary hover:text-accent">
+              <Link href="/login" prefetch={drawerPrefetch} dismissDrawer={() => setIsOpen(false)} className="flex min-h-12 items-center text-sm font-medium text-primary hover:text-accent">
                 Sign in
               </Link>
             )}

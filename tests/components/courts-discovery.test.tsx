@@ -69,7 +69,7 @@ it("describes only the playing conditions the published courts actually have", a
   expect(screen.getAllByText("2 courts")).toHaveLength(2);
   expect(screen.getAllByText("1 court")).toHaveLength(2);
   // Only clay is illustrated, with clay photography.
-  expect(screen.getAllByRole("img").map((image) => image.getAttribute("src"))).toEqual(["/images/tennis-hero-desktop.webp"]);
+  expect(screen.getAllByRole("img").map((image) => image.getAttribute("src"))).toEqual(["/images/courts/tennis-clay-slide-768.webp"]);
   expect(screen.queryByText(/rackets and balls/i)).toBeNull();
 });
 

@@ -9,14 +9,21 @@ type Condition = {
   text: string;
   matches: (court: PublicCourt) => boolean;
   // Only photography that genuinely shows the condition; others stay typographic.
-  image?: { name: string; alt: string; width: number; height: number; position: string };
+  // Artwork lives pre-sized under /images/courts as <name>-<width>.<format>.
+  image?: { name: string; widths: number[]; alt: string; width: number; height: number; position: string };
 };
+
+// The 4:3 artwork covers the full-bleed 4:3 phone frame and the 5:4 frame in
+// seven twelfths of the wide grid, where it renders 16/15 of the column width.
+const featuredSizes = "(min-width: 1344px) 757px, (min-width: 1024px) calc((100vw - 128px) * 7 / 12 * 16 / 15), (min-width: 768px) calc(100vw - 64px), 100vw";
+const srcSet = ({ name, widths }: { name: string; widths: number[] }, format: string) =>
+  widths.map((width) => `/images/courts/${name}-${width}.${format} ${width}w`).join(", ");
 
 // General playing character of each configured attribute; which apply comes from the published courts.
 const conditions: Condition[] = [
   { key: "clay", title: "Clay", matches: (court) => court.surface === "clay",
     text: "Slower, with a higher bounce. Rallies run longer, sliding into the ball is part of the game and the surface is kind to knees. Shoes with a clay or all-court sole keep you on your feet.",
-    image: { name: "tennis-hero-desktop", alt: "A player sliding into a forehand on a clay court, kicking up a trail of clay dust", width: 1942, height: 809, position: "object-[78%_center]" } },
+    image: { name: "tennis-clay-slide", widths: [480, 768, 1079], alt: "A player sliding into a forehand on a clay court, kicking up a trail of clay dust", width: 1079, height: 809, position: "object-[78%_center]" } },
   { key: "hard", title: "Hard", matches: (court) => court.surface === "hard",
     text: "Quick and true. The ball comes onto the racket predictably, rewarding first-strike tennis and a solid serve." },
   { key: "grass", title: "Grass", matches: (court) => court.surface === "grass",
@@ -57,10 +64,11 @@ export async function CourtsConditions({ locations }: { locations: Promise<Publi
         {featured?.image && (
           <div className={`${styles.stagger} mt-10 grid gap-8 md:mt-14 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:items-center lg:gap-16`}>
             <picture className={`${styles.photo} -mx-6 block aspect-[4/3] overflow-hidden md:mx-0 lg:aspect-[5/4]`}>
-              <source type="image/avif" srcSet={`/images/${featured.image.name}.avif`} />
-              <source type="image/webp" srcSet={`/images/${featured.image.name}.webp`} />
+              <source type="image/avif" srcSet={srcSet(featured.image, "avif")} sizes={featuredSizes} />
               <img
-                src={`/images/${featured.image.name}.webp`}
+                src={`/images/courts/${featured.image.name}-${featured.image.widths[1]}.webp`}
+                srcSet={srcSet(featured.image, "webp")}
+                sizes={featuredSizes}
                 alt={featured.image.alt}
                 loading="lazy"
                 decoding="async"

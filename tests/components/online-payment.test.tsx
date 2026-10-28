@@ -2,12 +2,13 @@
 import { lastToast } from "../helpers/notifications";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
-import { useEffect, type ReactNode } from "react";
+import { StrictMode, useEffect, type ReactNode } from "react";
 import { toast } from "sonner";
+import { loadStripe } from "@stripe/stripe-js/pure";
 
 const { pay, status, elements, element } = vi.hoisted(() => ({ pay: vi.fn(), status: vi.fn(), elements: {},
   element: { deferred: false, ready: undefined as (() => void) | undefined, failed: undefined as (() => void) | undefined } }));
-vi.mock("@stripe/stripe-js", () => ({ loadStripe: vi.fn() }));
+vi.mock("@stripe/stripe-js/pure", () => ({ loadStripe: vi.fn(() => Promise.resolve(null)) }));
 vi.mock("@stripe/react-stripe-js", () => ({
   Elements: ({ children }: { children: ReactNode }) => children,
   useStripe: () => ({ confirmPayment: pay }), useElements: () => elements,
@@ -26,6 +27,16 @@ const props = { checkout: { attemptId: "c9000000-0000-4000-8000-000000000011", t
   presentation: { kind: "stripe" as const, publishableKey: "pk_test_Fixture", clientSecret: "pi_fixture_secret" } },
   holdExpiresAt: "2099-10-15T10:00:00Z", onConfirmed: vi.fn() };
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.clearAllMocks(); element.deferred = false; });
+
+test("Stripe initializes only at checkout, once across Strict Mode renders and remounts", () => {
+  expect(loadStripe).not.toHaveBeenCalled();
+  const view = render(<StrictMode><OnlinePayment {...props} /></StrictMode>);
+  expect(loadStripe).toHaveBeenCalledExactlyOnceWith(props.checkout.presentation.publishableKey);
+  view.rerender(<StrictMode><OnlinePayment {...props} disabled /></StrictMode>);
+  view.unmount();
+  render(<StrictMode><OnlinePayment {...props} /></StrictMode>);
+  expect(loadStripe).toHaveBeenCalledOnce();
+});
 
 test.each(["non-card error", "rejected confirmation"])("a %s leaves payment uncertain and blocks another submission", async outcome => {
   const onPaymentStatus = vi.fn();
@@ -48,9 +59,10 @@ test.each(["non-card error", "rejected confirmation"])("a %s leaves payment unce
   expect(props.onConfirmed).not.toHaveBeenCalled();
 });
 
-test("a declined card leaves the same payment element available for another attempt", async () => {
+test.each(["card_error", "invalid_request_error"] as const)("a retryable %s leaves the same payment element available for another attempt", async type => {
   status.mockResolvedValue({ ok: true, status: "pending_payment", paymentStatus: "pending" });
-  pay.mockResolvedValueOnce({ error: { type: "card_error", message: "Your card was declined." } }).mockResolvedValueOnce({});
+  pay.mockResolvedValueOnce({ error: { type, code: type === "card_error" ? "card_declined" : "payment_intent_authentication_failure",
+    message: "Your card was declined." } }).mockResolvedValueOnce({});
   render(<OnlinePayment {...props} />);
   const card = screen.getByLabelText("Card");
   fireEvent.change(card, { target: { value: "declined card" } });

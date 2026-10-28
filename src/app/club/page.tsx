@@ -1,12 +1,11 @@
 import type { Metadata } from "next";
-import Image from "next/image";
 import Link from "next/link";
 import { connection } from "next/server";
 import { Suspense } from "react";
 
 import { guestCancellationInstruction } from "@/lib/bookings/self-cancellation";
 import { listPublicVisitorLocations } from "@/lib/courts/public";
-import { EditorialHero } from "../editorial-hero";
+import { EditorialHero, editorialHeroHeight as heroHeight, narrowHeroMedia as narrowHero, narrowHeroSizes, portraitHeroMedia as portraitHero } from "../editorial-hero";
 import styles from "../page.module.css";
 import { PageSectionNav } from "../page-section-nav";
 import { ClubBookingTerms, ClubLocations } from "./club-locations";
@@ -84,6 +83,25 @@ const headingClassName = "font-heading text-[clamp(34px,4vw,56px)] font-semibold
 const bodyClassName = "font-sans text-base leading-7 md:text-lg md:leading-8";
 const sectionClassName = "scroll-mt-20 px-6 py-14 md:px-8 md:py-20 xl:py-28";
 
+// Portrait crops retain the hero's original 18% object position. The full 3:2
+// photo reuses existing Home derivatives.
+const narrowHeroSrcSet = (format: string) =>
+  [427, 683].map((width) => `/images/club/tennis-club-aerial-narrow-${width}.${format} ${width}w`).join(", ");
+const portraitHeroSrcSet = (format: string) =>
+  [640, 896].map((width) => `/images/club/tennis-club-aerial-portrait-${width}.${format} ${width}w`).join(", ");
+const heroSizes = `max(100vw, calc(${heroHeight} * 3 / 2))`;
+const heroSrcSet = (format: string) =>
+  [768, 1152, 1536].map((width) => `/images/home/tennis-club-aerial-${width}.${format} ${width}w`).join(", ");
+const communitySizes = "(min-width: 1344px) 925px, (min-width: 1280px) calc((100vw - 160px) * 25 / 32), calc((100vw - 128px) * 25 / 32)";
+const facilitiesSizes = "(min-width: 1344px) 1280px, (min-width: 768px) calc(100vw - 64px), 100vw";
+const sharedSrcSet = (name: string, widths: number[], format: string) =>
+  widths.map((width) => `/images/home/${name}-${width}.${format} ${width}w`).join(", ");
+const storySrcSet = (format: string) =>
+  [480, 768, 1024, 1255].map((width) => `/images/club/tennis-courts-public-story-${width}.${format} ${width}w`).join(", ");
+// On desktop the story's 4:5 frame covers with a 4:3 source; account for the
+// hidden width as well as the visible grid column when selecting a candidate.
+const storySizes = "(min-width: 1344px) 897px, (min-width: 1280px) calc((100vw - 160px) * 25 / 33), (min-width: 1024px) calc((100vw - 128px) * 25 / 33), (min-width: 768px) calc(100vw - 64px), 100vw";
+
 export default function ClubPage() {
   const locations = readPublicLocations();
 
@@ -96,7 +114,18 @@ export default function ClubPage() {
         titleClassName="max-w-[13ch]"
         intro="Since 1978, two courts on an old olive grove have grown into a club with habits of its own: courts brushed after every match, Sunday doubles that never quite finish on time, and a terrace where the last point is argued over long after it was played."
         image={{
-          src: "/images/tennis-club-aerial.webp",
+          src: "/images/home/tennis-club-aerial-768.webp",
+          srcSet: heroSrcSet("webp"),
+          sizes: heroSizes,
+          sources: [
+            { media: narrowHero, type: "image/avif", srcSet: narrowHeroSrcSet("avif"), sizes: narrowHeroSizes },
+            { media: narrowHero, type: "image/webp", srcSet: narrowHeroSrcSet("webp"), sizes: narrowHeroSizes },
+            { media: portraitHero, type: "image/avif", srcSet: portraitHeroSrcSet("avif"), sizes: heroHeight },
+            { media: portraitHero, type: "image/webp", srcSet: portraitHeroSrcSet("webp"), sizes: heroHeight },
+            { type: "image/avif", srcSet: heroSrcSet("avif"), sizes: heroSizes },
+          ],
+          width: 1536,
+          height: 1024,
           alt: "The stone clubhouse and its terrace above clay courts, surrounded by olive trees and cypresses in late-afternoon light",
           className: "object-[18%_center] md:object-[center_35%]",
         }}
@@ -128,13 +157,20 @@ export default function ClubPage() {
               </figure>
             </div>
             <div className={`${styles.photo} ${styles.reveal} relative -mx-6 aspect-[4/3] overflow-hidden md:mx-0 lg:aspect-[4/5]`}>
-              <Image
-                src="/images/tennis-courts-public.webp"
-                alt="A wooden bench, rackets and a basket of balls beside a clay court as the sun sets behind olive trees"
-                fill
-                sizes="(min-width: 1280px) 520px, (min-width: 1024px) 42vw, 100vw"
-                className="object-cover object-[22%_center]"
-              />
+              <picture>
+                <source type="image/avif" srcSet={storySrcSet("avif")} sizes={storySizes} />
+                <img
+                  src="/images/club/tennis-courts-public-story-768.webp"
+                  srcSet={storySrcSet("webp")}
+                  alt="A wooden bench, rackets and a basket of balls beside a clay court as the sun sets behind olive trees"
+                  width="1255"
+                  height="941"
+                  loading="lazy"
+                  decoding="async"
+                  sizes={storySizes}
+                  className="absolute inset-0 h-full w-full object-cover object-[22%_center]"
+                />
+              </picture>
             </div>
           </div>
 
@@ -164,13 +200,20 @@ export default function ClubPage() {
               </p>
             </aside>
             <div className={`${styles.photo} relative mt-10 hidden aspect-[4/5] overflow-hidden lg:block`}>
-              <Image
-                src="/images/tennis-matches-community.webp"
-                alt="Four players chatting beside a clay court after a game, with the clubhouse terrace behind them"
-                fill
-                sizes="(min-width: 1280px) 460px, 38vw"
-                className="object-cover object-[38%_center]"
-              />
+              <picture>
+                <source type="image/avif" srcSet={sharedSrcSet("tennis-matches-community", [480, 768, 1152, 1536], "avif")} sizes={communitySizes} />
+                <img
+                  src="/images/home/tennis-matches-community-768.webp"
+                srcSet={sharedSrcSet("tennis-matches-community", [480, 768, 1152, 1536], "webp")}
+                sizes={communitySizes}
+                  alt="Four players chatting beside a clay court after a game, with the clubhouse terrace behind them"
+                  width="1536"
+                  height="1024"
+                  loading="lazy"
+                  decoding="async"
+                  className="absolute inset-0 h-full w-full object-cover object-[38%_center]"
+                />
+              </picture>
             </div>
           </div>
 
@@ -240,13 +283,20 @@ export default function ClubPage() {
           </div>
 
           <figure className={`${styles.photo} ${styles.reveal} relative -mx-6 mt-10 aspect-[4/3] overflow-hidden md:mx-0 md:mt-14 md:aspect-[21/9]`}>
-            <Image
-              src="/images/tennis-courts-facilities.webp"
-              alt="The clubhouse terrace with lounge seating and potted olive trees, set above a clay court"
-              fill
-              sizes="(min-width: 1280px) 1216px, 100vw"
-              className="object-cover object-[92%_25%] md:object-[center_30%]"
-            />
+            <picture>
+              <source type="image/avif" srcSet={sharedSrcSet("tennis-courts-facilities", [480, 768, 1152, 1672], "avif")} sizes={facilitiesSizes} />
+              <img
+                src="/images/home/tennis-courts-facilities-768.webp"
+                srcSet={sharedSrcSet("tennis-courts-facilities", [480, 768, 1152, 1672], "webp")}
+                sizes={facilitiesSizes}
+                alt="The clubhouse terrace with lounge seating and potted olive trees, set above a clay court"
+                width="1672"
+                height="941"
+                loading="lazy"
+                decoding="async"
+                className="absolute inset-0 h-full w-full object-cover object-[92%_25%] md:object-[center_30%]"
+              />
+            </picture>
             <figcaption className="absolute bottom-0 left-0 bg-forest-900/80 px-4 py-2 font-sans text-xs font-medium text-chalk md:px-5 md:text-sm">
               The terrace, late afternoon
             </figcaption>

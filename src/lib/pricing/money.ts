@@ -1,7 +1,7 @@
 import { z } from "zod";
-import { locationCurrencies } from "@/lib/admin/locations-validation";
 
-export type LocationCurrency = typeof locationCurrencies[number];
+export { formatMoney, type LocationCurrency } from "./currency";
+
 export const minorAmountSchema = z.number().int().min(1).max(2147483647);
 
 // Parse decimal digits directly: no floating-point multiplication or rounding.
@@ -15,12 +15,4 @@ export const majorAmountSchema = z.string().trim()
 export function minorToMajor(amount: number): string {
   minorAmountSchema.parse(amount);
   return `${Math.floor(amount / 100)}.${String(amount % 100).padStart(2, "0")}`;
-}
-
-// Financial summaries and differences may legitimately be zero. Creation and
-// pricing inputs still use the strictly positive minorAmountSchema above.
-export function formatMoney(amount: number, currency: LocationCurrency): string {
-  z.number().int().min(0).max(2147483647).parse(amount);
-  z.enum(locationCurrencies).parse(currency);
-  return new Intl.NumberFormat("en-GB", { style: "currency", currency, minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount / 100);
 }

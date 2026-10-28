@@ -26,8 +26,9 @@ export function ManagementShellFallback() {
 }
 
 // Shared by the /my-activity and /profile layouts. Each page authorizes its own account.
+// Below lg the fallback reserves the drawer trigger's height, so the content below does not move.
 export function UserAreaShell({ children }: { children: React.ReactNode }) {
-  return <AreaShell navigation={<Suspense fallback={<LoadingStatus label="Loading account navigation…" className="mb-5" />}>
+  return <AreaShell navigation={<Suspense fallback={<LoadingStatus label="Loading account navigation…" className="mb-5 max-lg:min-h-11" />}>
     <UserNavigation />
   </Suspense>}>{children}</AreaShell>;
 }

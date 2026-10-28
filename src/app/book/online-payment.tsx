@@ -1,10 +1,10 @@
 "use client";
 
 
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import { Elements, PaymentElement, useElements, useStripe } from "@stripe/react-stripe-js";
-import { loadStripe } from "@stripe/stripe-js";
+import { loadStripe } from "@stripe/stripe-js/pure";
 import { AlertCircle, AlertTriangle, CheckCircle2, Clock, Info, Loader2 } from "lucide-react";
 import { Button } from "@/components/button";
 import { LoadingStatus } from "@/components/loading-status";
@@ -54,8 +54,22 @@ function statusPresentation(status: CheckoutPaymentStatus, processing: boolean) 
 const processingMessage = "Processing payment and waiting for booking confirmation…";
 const slowAuthenticationMessage = "Still waiting for card authentication. Complete it in your bank's window; do not pay again.";
 
+const stripeClients = new Map<string, ReturnType<typeof loadStripe>>();
+function checkoutStripe(publishableKey: string) {
+  let stripe = stripeClients.get(publishableKey);
+  if (!stripe) {
+    stripe = loadStripe(publishableKey);
+    stripeClients.set(publishableKey, stripe);
+  }
+  return stripe;
+}
+
 export function OnlinePayment(props: Props) {
-  const stripe = useMemo(() => loadStripe(props.checkout.presentation.publishableKey), [props.checkout.presentation.publishableKey]);
+  // The pure entry point has no script-loading side effect. Initialize only
+  // when an online checkout mounts, never while the calendar is loading.
+  // Share the promise across Strict Mode renders and checkout remounts. Calling
+  // the pure loader twice while its script loads can strand the first promise.
+  const stripe = checkoutStripe(props.checkout.presentation.publishableKey);
   return <Elements key={props.checkout.attemptId} stripe={stripe} options={{ clientSecret: props.checkout.presentation.clientSecret,
     appearance: { theme: "stripe", variables: { borderRadius: "8px" } } }}>
     <PaymentForm {...props} />
@@ -220,8 +234,10 @@ function PaymentForm({ checkout, holdExpiresAt, onConfirmed, onPaymentStatus, di
       if (finished.current || uncertain.current || paymentGeneration !== generation.current) return;
       if (result.error) {
         const text = result.error.message ?? "Payment could not be completed. Please check your details.";
-        // Failed or cancelled 3D Secure is a card_error: the same intent accepts another attempt.
-        if (result.error.type === "validation_error" || result.error.type === "card_error") {
+        // Stripe also reports failed 3DS as an invalid_request_error with this
+        // specific code. The unexpired intent can accept another payment method.
+        if (result.error.type === "validation_error" || result.error.type === "card_error"
+          || (result.error.type === "invalid_request_error" && result.error.code === "payment_intent_authentication_failure")) {
           if (result.error.type === "validation_error") { setFieldError(text); toast.dismiss(notification.current); }
           else toast.error(text, { id: notification.current });
           notification.current = undefined;

@@ -1,11 +1,11 @@
 "use client";
 
 import { CourtTimelineGrid, timelineCellLabels, timelineCellStyles, timelineSelectedStyle, type TimelineCellState } from "@/components/court-timeline-grid";
-import { minuteToTime } from "@/lib/admin/opening-hours-validation";
+import { minuteToTime } from "@/lib/courts/local-time";
 import type { PublicLessonStart } from "@/lib/coaching/lesson-availability";
 import type { CalendarSelection } from "@/lib/courts/interval-selection";
 import { formatHourlyRate } from "@/lib/courts/price-bands";
-import { formatMoney, type LocationCurrency } from "@/lib/pricing/money";
+import { formatMoney, type LocationCurrency } from "@/lib/pricing/currency";
 
 export type BookingTimetableRow = {
   court: { id: string; name: string }; cells: TimelineCellState[];

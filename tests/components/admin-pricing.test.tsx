@@ -126,9 +126,12 @@ beforeEach(() => { vi.resetAllMocks(); savePricingRuleAction.mockResolvedValue({
   listAdminLocationOpeningHours.mockResolvedValue(openingHours);
   installDialogMock();
 });
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 it.each(["create", "edit"])("reopens time suggestions after an opening-hours error in %s and preserves the form", async (mode) => {
+  // Keep Monday/Tuesday occurrences within the rule's October validity period.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-01T09:00:00Z"));
   const hours = openingHours.map((interval) => ({ ...interval, closes_at_minute: 1200 }));
   render(<PricingRules schedules={schedules} openingHours={hours} location={location} courts={[...courts]}
     rules={mode === "edit" ? [{ ...rule, court_ids: [...rule.court_ids], weekdays: [...rule.weekdays] }] : []} />);

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen, within } from "@testing-library/react";
+import { renderToReadableStream } from "react-dom/server";
 import { afterEach, expect, it, vi } from "vitest";
 import type { PublicVisitorLocation } from "@/lib/courts/public";
 
@@ -35,6 +36,52 @@ const render$ = async (component: typeof ClubLocations | typeof ClubBookingTerms
   render(await component({ locations: locations instanceof Error ? Promise.reject(locations) : Promise.resolve(locations) }));
 
 afterEach(cleanup);
+
+it("uses native pictures and matching, mutually exclusive hero preloads", async () => {
+  load.mockResolvedValue([]);
+  const stream = await renderToReadableStream(<ClubPage />);
+  await stream.allReady;
+  const html = new DOMParser().parseFromString(await new Response(stream).text(), "text/html");
+  const images = [...html.querySelectorAll("main img")];
+  expect(images).toHaveLength(4);
+  for (const image of images) {
+    expect(image.parentElement!.tagName).toBe("PICTURE");
+    expect(image.getAttribute("src")).not.toContain("/_next/image");
+    expect(image.getAttribute("alt")).toBeTruthy();
+    expect(image.getAttribute("width")).toBeTruthy();
+    expect(image.getAttribute("height")).toBeTruthy();
+    expect(image.getAttribute("decoding")).toBe("async");
+  }
+  const [hero, story, ...lower] = images;
+  expect(hero.getAttribute("loading")).toBe("eager");
+  expect(hero.getAttribute("fetchpriority")).toBe("high");
+  expect(hero.getAttribute("class")).toContain("object-[18%_center] md:object-[center_35%]");
+  for (const image of [story, ...lower]) expect(image.getAttribute("loading")).toBe("lazy");
+  for (const image of lower) {
+    expect(image.getAttribute("srcset")).toContain("/images/home/");
+    expect(image.getAttribute("sizes")).toBeTruthy();
+    expect(image.parentElement!.querySelector("source")!.getAttribute("sizes")).toBe(image.getAttribute("sizes"));
+  }
+  expect(story.getAttribute("srcset")).toContain("/images/club/tennis-courts-public-story-");
+  expect(story.getAttribute("sizes")).toContain("100vw");
+  expect(story.getAttribute("class")).toContain("object-[22%_center]");
+  const sources = [...hero.parentElement!.querySelectorAll("source")];
+  expect(sources.map((source) => source.getAttribute("type"))).toEqual(["image/avif", "image/webp", "image/avif", "image/webp", "image/avif"]);
+  expect(sources[0].getAttribute("media")).toBe(sources[1].getAttribute("media"));
+  expect(sources[4].getAttribute("media")).toBeNull();
+  const preloads = [...html.head.querySelectorAll('link[rel="preload"][as="image"]')];
+  expect(preloads).toHaveLength(3);
+  const avif = [sources[0], sources[2], sources[4]];
+  for (const [index, preload] of preloads.entries()) {
+    expect(preload.getAttribute("type")).toBe("image/avif");
+    expect(preload.getAttribute("fetchpriority")).toBe("high");
+    expect(preload.getAttribute("imagesrcset")).toBe(avif[index].getAttribute("srcset"));
+    expect(preload.getAttribute("imagesizes")).toBe(avif[index].getAttribute("sizes"));
+  }
+  expect(preloads[0].getAttribute("media")).toBe(sources[0].getAttribute("media"));
+  expect(preloads[1].getAttribute("media")).toContain(`not (${sources[0].getAttribute("media")})`);
+  expect(preloads[2].getAttribute("media")).toContain(`not (${sources[2].getAttribute("media")})`);
+});
 
 it("composes the club sections in order with in-page navigation and metadata", async () => {
   load.mockResolvedValue([]);

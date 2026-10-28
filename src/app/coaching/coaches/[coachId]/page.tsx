@@ -52,7 +52,7 @@ const textLinkClassName = `${styles.editorialLink} inline-flex min-h-11 w-fit it
 
 function BackLink({ dark = false }: { dark?: boolean }) {
   return (
-    <Link href="/coaching#coaches" className={`${textLinkClassName} ${dark ? "text-ivory hover:text-chalk" : "text-primary hover:text-accent"}`}>
+    <Link href="/coaching#coaches" prefetch={false} className={`${textLinkClassName} ${dark ? "text-ivory hover:text-chalk" : "text-primary hover:text-accent"}`}>
       <span aria-hidden="true" className="mr-2">←</span><span className={`${styles.editorialLabel} underline underline-offset-8 ${dark ? "decoration-accent-on-dark" : "decoration-accent"}`}>All coaches</span>
     </Link>
   );
@@ -203,10 +203,10 @@ export default async function CoachPage({ params }: CoachPageProps) {
                 <li key={location.id} className="grid gap-x-6 gap-y-2 border-t border-border py-5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
                   <h3 className="font-heading text-2xl font-semibold tracking-[-0.025em] text-primary">{location.name}</h3>
                   <div className="flex flex-wrap gap-x-6">
-                    <Link href={`/courts#location-${location.id}`} aria-label={`Courts at ${location.name}`} className={`${textLinkClassName} text-primary hover:text-accent`}>
+                    <Link href={`/courts#location-${location.id}`} prefetch={false} aria-label={`Courts at ${location.name}`} className={`${textLinkClassName} text-primary hover:text-accent`}>
                       <span className={`${styles.editorialLabel} underline decoration-accent underline-offset-8`}>Courts</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
                     </Link>
-                    <Link href="/club#visit" aria-label={`Opening hours and directions for ${location.name}`} className={`${textLinkClassName} text-primary hover:text-accent`}>
+                    <Link href="/club#visit" prefetch={false} aria-label={`Opening hours and directions for ${location.name}`} className={`${textLinkClassName} text-primary hover:text-accent`}>
                       <span className={`${styles.editorialLabel} underline decoration-accent underline-offset-8`}>Hours &amp; directions</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
                     </Link>
                   </div>

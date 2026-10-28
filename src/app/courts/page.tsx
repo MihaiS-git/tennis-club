@@ -4,7 +4,7 @@ import { connection } from "next/server";
 import { Suspense } from "react";
 
 import { listPublicLocationsToday } from "@/lib/courts/public-calendar";
-import { EditorialHero } from "../editorial-hero";
+import { EditorialHero, editorialHeroHeight as heroHeight, narrowHeroMedia as narrowHero, narrowHeroSizes, portraitHeroMedia as portraitHero } from "../editorial-hero";
 import styles from "../page.module.css";
 import { PageSectionNav, type PageSection } from "../page-section-nav";
 import { CourtsConditions } from "./courts-conditions";
@@ -28,6 +28,23 @@ const sections: PageSection[] = [
   { id: "book", label: "Booking" },
 ];
 
+// The hero covers a full-width frame clamp(540px, 86svh, 860px) tall. Portrait
+// phones get a 2:3 or square slice of the same 30%-positioned crop. Wider
+// frames cover with the full 16:9 photograph.
+const portraitHeroSizes = heroHeight;
+const narrowHeroSrcSet = (format: string) =>
+  [427, 627].map((width) => `/images/courts/tennis-courts-public-narrow-${width}.${format} ${width}w`).join(", ");
+const portraitHeroSrcSet = (format: string) =>
+  `/images/courts/tennis-courts-public-portrait-640.${format} 640w, /images/courts/tennis-courts-public-portrait-941.${format} 941w`;
+const heroSizes = `max(100vw, calc(${heroHeight} * 16 / 9))`;
+const heroSrcSet = (format: string) =>
+  [1024, 1280, 1672].map((width) => `/images/courts/tennis-courts-public-${width}.${format} ${width}w`).join(", ");
+
+// The booking photograph spans the phone width and seven twelfths of the wide grid.
+const bookingSizes = "(min-width: 1344px) 709px, (min-width: 1024px) calc((100vw - 128px) * 7 / 12), (min-width: 768px) calc(100vw - 64px), 100vw";
+const bookingSrcSet = (format: string) =>
+  [480, 768, 1152, 1536].map((width) => `/images/courts/tennis-coaching-session-${width}.${format} ${width}w`).join(", ");
+
 const eyebrowClassName = "font-sans text-xs font-semibold uppercase tracking-[0.16em]";
 
 export default function CourtsPage() {
@@ -42,7 +59,18 @@ export default function CourtsPage() {
         titleClassName="max-w-[12ch]"
         intro="Whether you’re a member or visiting for the first time, come enjoy a game at the club."
         image={{
-          src: "/images/tennis-courts-public.webp",
+          src: "/images/courts/tennis-courts-public-1024.webp",
+          srcSet: heroSrcSet("webp"),
+          sizes: heroSizes,
+          sources: [
+            { media: narrowHero, type: "image/avif", srcSet: narrowHeroSrcSet("avif"), sizes: narrowHeroSizes },
+            { media: narrowHero, type: "image/webp", srcSet: narrowHeroSrcSet("webp"), sizes: narrowHeroSizes },
+            { media: portraitHero, type: "image/avif", srcSet: portraitHeroSrcSet("avif"), sizes: portraitHeroSizes },
+            { media: portraitHero, type: "image/webp", srcSet: portraitHeroSrcSet("webp"), sizes: portraitHeroSizes },
+            { type: "image/avif", srcSet: heroSrcSet("avif"), sizes: heroSizes },
+          ],
+          width: 1672,
+          height: 941,
           alt: "Clay tennis court at sunset, with rackets and balls beside the court",
           className: "object-[30%_center] md:object-[center_60%]",
         }}
@@ -90,16 +118,17 @@ export default function CourtsPage() {
               <Link href="/book" className="inline-flex min-h-12 items-center justify-center rounded-control bg-chalk px-6 font-sans text-sm font-semibold text-primary transition hover:bg-surface-muted">
                 Book a court
               </Link>
-              <Link href="/club#visit" className={`${styles.editorialLink} inline-flex min-h-11 w-fit items-center font-sans text-sm font-semibold text-chalk transition-colors hover:text-chalk focus-visible:rounded-control`}>
+              <Link href="/club#visit" prefetch={false} className={`${styles.editorialLink} inline-flex min-h-11 w-fit items-center font-sans text-sm font-semibold text-chalk transition-colors hover:text-chalk focus-visible:rounded-control`}>
                 <span className={`${styles.editorialLabel} underline decoration-accent-on-dark underline-offset-8`}>Plan your visit</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
               </Link>
             </div>
           </div>
           <picture className={`${styles.photo} -mx-6 block aspect-[3/2] overflow-hidden md:mx-0`}>
-            <source type="image/avif" srcSet="/images/tennis-coaching-session.avif" />
-            <source type="image/webp" srcSet="/images/tennis-coaching-session.webp" />
+            <source type="image/avif" srcSet={bookingSrcSet("avif")} sizes={bookingSizes} />
             <img
-              src="/images/tennis-coaching-session.webp"
+              src="/images/courts/tennis-coaching-session-768.webp"
+              srcSet={bookingSrcSet("webp")}
+              sizes={bookingSizes}
               alt="A player strikes a backhand on a clay court while a coach feeds balls from a basket"
               loading="lazy"
               decoding="async"

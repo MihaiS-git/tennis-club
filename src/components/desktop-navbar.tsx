@@ -49,20 +49,20 @@ export function DesktopNavbar() {
     <header className="sticky top-0 z-30 hidden w-full border-b border-border bg-surface lg:block">
       <div className="mx-auto grid h-18 max-w-7xl grid-cols-[1fr_auto_1fr] items-center gap-3 px-6 xl:gap-8 xl:px-8">
         <NavigationLink pendingPlacement="below"
-          href="/"
+          href="/" prefetch={false}
           className="relative w-fit font-heading text-lg font-semibold tracking-tight text-primary hover:text-accent xl:text-xl"
         >
           Tennis Club
         </NavigationLink>
 
         <nav aria-label="Main navigation" className="flex items-center gap-1 xl:gap-3">
-          <PrimaryNavigationLink className="inline-flex min-h-10 items-center text-sm font-medium" href="/courts">
+          <PrimaryNavigationLink className="inline-flex min-h-10 items-center text-sm font-medium" href="/courts" prefetch={false}>
             Courts
           </PrimaryNavigationLink>
-          <PrimaryNavigationLink className="inline-flex min-h-10 items-center text-sm font-medium" href="/coaching">
+          <PrimaryNavigationLink className="inline-flex min-h-10 items-center text-sm font-medium" href="/coaching" prefetch={false}>
             Coaching
           </PrimaryNavigationLink>
-          <PrimaryNavigationLink className="inline-flex min-h-10 items-center text-sm font-medium" href="/club">
+          <PrimaryNavigationLink className="inline-flex min-h-10 items-center text-sm font-medium" href="/club" prefetch={false}>
             Club
           </PrimaryNavigationLink>
           <Suspense fallback={<span aria-hidden="true" className="h-5 w-10 rounded-control bg-surface-muted" />}>

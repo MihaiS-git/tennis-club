@@ -124,6 +124,27 @@ test.describe("loading feedback", () => {
     });
   }
 
+  // The prerendered Profile layout paints its sidebar and page fallbacks first; the
+  // streamed sidebar and the taller page must not move the content or the footer.
+  for (const [path, probe] of [["/profile", "Player profile"], ["/profile/personal", "First name"]] as const) {
+    test(`initial ${path} load does not shift the page content or footer at 390px`, async ({ page }) => {
+      await page.addInitScript(() => {
+        const contentShifts: number[] = [];
+        Object.assign(window, { contentShifts });
+        new PerformanceObserver(list => {
+          for (const entry of list.getEntries() as (PerformanceEntry & { value: number; sources: { node?: Node }[] })[]) {
+            if (entry.sources.some(({ node }) => node instanceof Element && (node.closest("main") || node.nodeName === "FOOTER"))) contentShifts.push(entry.value);
+          }
+        }).observe({ type: "layout-shift", buffered: true });
+      });
+      await page.goto(path);
+      await expect(page.getByText(probe, { exact: true })).toBeVisible();
+      await expect(page.locator("body > footer")).toBeVisible();
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      expect(await page.evaluate(() => (window as unknown as { contentShifts: number[] }).contentShifts)).toEqual([]);
+    });
+  }
+
   test("homepage requests the latin-ext font only once Locations nears the viewport", async ({ page }) => {
     const latinExtInter = () => page.evaluate(() => [...document.fonts]
       .filter(font => font.family.replaceAll('"', "") === "Inter" && font.unicodeRange.startsWith("U+100-2BA"))

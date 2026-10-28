@@ -10,16 +10,18 @@ vi.mock("../../src/app/profile/actions", () => ({ savePersonalAction: personal, 
 vi.mock("../../src/app/account/actions", () => ({ changePasswordAction: password, signOutAction: signOut }));
 vi.mock("next/navigation", () => ({ usePathname: () => route.pathname, useRouter: () => ({ bfcacheId: "visit", push, replace }) }));
 // Exercise the documented Link.onNavigate contract; real Next routing is covered in E2E.
-vi.mock("next/link", () => ({ useLinkStatus: () => ({ pending: false }), default: ({ onNavigate, href, children, replace: shouldReplace, scroll, transitionTypes, ...props }:
-  Omit<ComponentProps<"a">, "href"> & { href: string; replace?: boolean; scroll?: boolean; transitionTypes?: string[]; onNavigate?: (event: { preventDefault: () => void }) => void }) =>
-  <a {...props} href={href} onClick={(event) => {
+vi.mock("next/link", () => ({ useLinkStatus: () => ({ pending: false }), default: ({ onNavigate, href, children, replace: shouldReplace, scroll, transitionTypes, prefetch, ...props }:
+  Omit<ComponentProps<"a">, "href"> & { href: string; prefetch?: boolean | null; replace?: boolean; scroll?: boolean; transitionTypes?: string[]; onNavigate?: (event: { preventDefault: () => void }) => void }) => {
+  void prefetch;
+  return <a {...props} href={href} onClick={(event) => {
     props.onClick?.(event);
     if (event.defaultPrevented || event.ctrlKey || event.metaKey || props.target === "_blank") return;
     event.preventDefault();
     let blocked = false;
     onNavigate?.({ preventDefault: () => { blocked = true; } });
     if (!blocked) (shouldReplace ? replace : push)(href, { scroll, transitionTypes });
-  }}>{children}</a> }));
+  }}>{children}</a>;
+  } }));
 
 import { ProfileDepartureProvider, ProfileDepartureLink } from "../../src/components/profile-departure-navigation";
 import { UserNavigation } from "../../src/components/user-navigation";

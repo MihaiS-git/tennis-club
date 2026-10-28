@@ -12,7 +12,6 @@ import {
 import {
   decideSignUpResult,
   safeAuthError,
-  weakPasswordMessage,
 } from "@/lib/auth/decisions";
 import { getApplicationUrl } from "@/lib/auth/site-url";
 import { hasRecoverySession } from "@/lib/auth/recovery-session";
@@ -22,6 +21,7 @@ import {
   recoverySchema,
   signInSchema,
   signUpSchema,
+  weakPasswordMessage,
 } from "@/lib/auth/validation";
 import { createClient } from "@/lib/supabase/server";
 import { logger } from "@/lib/logger";

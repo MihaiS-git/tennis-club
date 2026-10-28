@@ -10,10 +10,10 @@ vi.mock("next/navigation", () => ({ usePathname: () => navigation.pathname, useR
 vi.mock("@/app/account/actions", () => ({ signOutAction: vi.fn() }));
 vi.mock("next/link", () => ({
   useLinkStatus: () => ({ pending: false }),
-  default: ({ href, onNavigate, onClick, children, scroll, replace, transitionTypes, ...props }: Omit<ComponentProps<"a">, "href"> & {
-    href: string; scroll?: boolean; replace?: boolean; transitionTypes?: string[]; onNavigate?: (event: { preventDefault: () => void }) => void;
+  default: ({ href, onNavigate, onClick, children, scroll, replace, transitionTypes, prefetch, ...props }: Omit<ComponentProps<"a">, "href"> & {
+    href: string; prefetch?: boolean | null; scroll?: boolean; replace?: boolean; transitionTypes?: string[]; onNavigate?: (event: { preventDefault: () => void }) => void;
   }) => {
-    void scroll; void replace; void transitionTypes;
+    void scroll; void replace; void transitionTypes; void prefetch;
     return <a {...props} href={href} onClick={event => {
     onClick?.(event);
     if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
@@ -83,7 +83,16 @@ for (const kind of ["navbar", "sidebar"] as const) {
   it(`${kind} leaves modified clicks to native navigation`, () => {
     renderNavigation(content);
     fireEvent.click(screen.getByRole("button", { name: triggerName }));
+    // Observe the event after React handlers, then intercept the browser default
+    // action that jsdom cannot implement. The application must leave it unhandled.
+    const nativeNavigation = vi.fn((event: MouseEvent) => {
+      const preventedByApp = event.defaultPrevented;
+      event.preventDefault();
+      return preventedByApp;
+    });
+    window.addEventListener("click", nativeNavigation, { once: true });
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("link", { name: "Admin" }), { ctrlKey: true });
+    expect(nativeNavigation).toHaveReturnedWith(false);
     expect(navigation.push).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog")).toBeTruthy();
   });

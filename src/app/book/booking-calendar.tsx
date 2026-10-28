@@ -6,6 +6,7 @@ import { toast } from "sonner";
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { TimelineLegend } from "@/components/court-timeline-grid";
 import { Button } from "@/components/button";
 import { BookingTimetable, lessonStartOffers, lessonTimetableDay, lessonTimetableLabels, type LessonOffer } from "@/components/booking-timetable";
@@ -14,13 +15,19 @@ import { startAnotherBookingEvent } from "@/components/book-court-link";
 import type { ConfirmedCancellationPolicy } from "@/lib/bookings/confirmation-policy";
 import { CalendarX2, CheckCircle2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { minuteToTime } from "@/lib/admin/opening-hours-validation";
+import { minuteToTime } from "@/lib/courts/local-time";
 import type { PaymentMethod } from "@/lib/payments/domain";
 import type { BookingContact } from "@/lib/bookings/domain";
 import type { CourtDay } from "@/lib/courts/calendar";
 import { selectCalendarCell, type CalendarSelection } from "@/lib/courts/interval-selection";
-import { formatMoney, type LocationCurrency } from "@/lib/pricing/money";
-import { BookingConfirmation, BookingSummary, type BookingSummaryDetails } from "./booking-confirmation";
+import { formatMoney, type LocationCurrency } from "@/lib/pricing/currency";
+import { BookingSummary, type BookingSummaryDetails } from "./booking-summary";
+import { LoadingStatus } from "@/components/loading-status";
+
+// The checkout dialog, its contact validation and payment step load only once
+// a visitor has selected an interval; see the preload below.
+const BookingConfirmation = dynamic(() => import("./booking-confirmation").then((module) => module.BookingConfirmation),
+  { loading: () => <LoadingStatus label="Opening booking confirmation…" className="mt-3" /> });
 
 
 const emptyContact: BookingContact = { customerName: "", customerEmail: "", customerPhone: "" };
@@ -92,6 +99,9 @@ function BookingCalendarContent({ day, date, locationName, currency, initialCont
       observer?.disconnect();
       timetable.style.clipPath = "";
     };
+  }, [hasSelection]);
+  useEffect(() => {
+    if (hasSelection) void import("./booking-confirmation");
   }, [hasSelection]);
   const dateLabel = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })
     .format(new Date(`${date}T00:00:00Z`));

@@ -156,7 +156,7 @@ it("uses the existing surcharge checkout and keeps the original lesson until pay
   expect(screen.getByText("Your original booking remains confirmed until payment and the change are verified.")).toBeTruthy();
   expect(onAdjustment).toHaveBeenLastCalledWith(booking.id);
   expect(onSaved).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "Simulate verified modification payment" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Simulate verified modification payment" }));
   await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
 });
 

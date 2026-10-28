@@ -319,7 +319,7 @@ async function proposeExtension(page: Page, court: string) {
 async function fillCard(page: Page, number: string) {
   // Stripe renders several same-titled frames; use the one holding the card field.
   const frames = page.locator('iframe[title="Secure payment input frame"]');
-  await expect(frames.first()).toBeAttached();
+  await expect(frames.first()).toBeAttached({ timeout: 30_000 });
   let frame = frames.first().contentFrame();
   await expect
     .poll(
@@ -385,7 +385,120 @@ const refunds = (bookingId: string) =>
     [bookingId],
   );
 
+// These cases use Stripe's real 3DS2 challenge, never the Stripe.js fixture.
+async function newCheckout(page: Page, court: string) {
+  page.setDefaultTimeout(15_000);
+  const scripts: string[] = [];
+  page.on("request", request => {
+    if (/https:\/\/js\.stripe\.com\/[^/]+\/stripe\.js/.test(request.url())) scripts.push(request.url());
+  });
+  await page.goto(`/book?location=${locationId}&date=${date}`);
+  await page.getByRole("button", { name: new RegExp(`^${court} ${date} 16:00–16:30,`) }).click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByLabel("Name", { exact: true }).fill("3DS browser guest");
+  await page.getByLabel("Email", { exact: true }).fill(`three-ds-${randomUUID()}@example.test`);
+  await page.getByLabel("Phone", { exact: true }).fill("+40722123456");
+  expect(scripts).toEqual([]);
+  await page.getByRole("button", { name: "Continue to payment", exact: true }).click();
+  await expect.poll(async () => (await q<{ id: string }>(
+    "SELECT b.id FROM public.bookings b JOIN public.court_reservations r ON r.id=b.reservation_id WHERE r.court_id=$1", [courtIds.get(court)]
+  )).length).toBe(1);
+  const [booking] = await q<{ id: string }>(
+    "SELECT b.id FROM public.bookings b JOIN public.court_reservations r ON r.id=b.reservation_id WHERE r.court_id=$1", [courtIds.get(court)]
+  );
+  bookings.push(booking.id);
+  await fillCard(page, "4000000000003220");
+  expect(scripts).toHaveLength(1);
+  const attempts = await q<{ provider_payment_id: string }>("SELECT provider_payment_id FROM public.payment_attempts WHERE booking_id=$1", [booking.id]);
+  expect(attempts).toHaveLength(1);
+  return { bookingId: booking.id, intent: attempts[0].provider_payment_id };
+}
+
+async function challenge(page: Page, intent: string, outcome: "Complete" | "Fail", slow = false) {
+  const element = await page.locator('iframe[title="Secure payment input frame"]').first().elementHandle();
+  expect(element).not.toBeNull();
+  await pay(page);
+  let challengeFrame = page.mainFrame();
+  await expect.poll(async () => {
+    for (const frame of page.frames()) {
+      if (await frame.getByRole("button", { name: "Complete", exact: true }).count()) {
+        challengeFrame = frame;
+        return true;
+      }
+    }
+    return false;
+  }, { timeout: 30_000 }).toBe(true);
+  expect(stripe(["payment_intents", "retrieve", intent])).toMatchObject({ livemode: false, status: "requires_action", capture_method: "manual", amount_received: 0 });
+  await expect(page.getByRole("region", { name: "Booking confirmed", exact: true })).toHaveCount(0);
+  if (slow) {
+    // Stripe's challenge is itself modal, so the underlying payment button is
+    // intentionally absent from the accessibility tree until it closes.
+    await expect(page.locator('form[aria-label="Online payment"] button[type="submit"]'))
+      .toHaveText("Waiting for authentication…", { timeout: 35_000 });
+    await expect(page.locator('[data-sonner-toast][data-type="loading"]')).toHaveCount(0);
+  }
+  expect(await element!.evaluate(node => node.isConnected)).toBe(true);
+  await challengeFrame.getByRole("button", { name: outcome, exact: true }).click();
+  return element!;
+}
+
+async function verifiedCapture(bookingId: string, intent: string, amount: number) {
+  await expect.poll(() => stripe(["payment_intents", "retrieve", intent]).status, { timeout: 30_000 }).toBe("succeeded");
+  const payment = stripe(["payment_intents", "retrieve", intent]);
+  expect(payment).toMatchObject({ livemode: false, capture_method: "manual", amount_received: amount, amount_capturable: 0 });
+  const charge = stripe(["charges", "retrieve", payment.latest_charge]);
+  expect(charge).toMatchObject({ captured: true, amount_captured: amount });
+  expect(charge.payment_method_details.card.three_d_secure).toMatchObject({ result: "authenticated", authentication_flow: "challenge" });
+  expect(charge.payment_method_details.card.three_d_secure.version).toMatch(/^2\./);
+  expect(await q("SELECT p.status,p.amount_minor,c.amount_minor AS captured FROM public.payment_attempts p JOIN public.payment_capture_receipts c ON c.payment_attempt_id=p.id WHERE p.booking_id=$1 AND p.provider_payment_id=$2", [bookingId, intent]))
+    .toEqual([{ status: "succeeded", amount_minor: amount, captured: amount }]);
+  console.log(JSON.stringify({ bookingId, intent, status: payment.status, captured: amount, threeDS: charge.payment_method_details.card.three_d_secure }));
+}
+
 if (process.env.LIVE_LATE !== "1") test.describe("live lifecycle", () => {
+
+  test("3DS2 new booking authenticates then captures and confirms", async ({ page }) => {
+    const { bookingId, intent } = await newCheckout(page, "C3");
+    await challenge(page, intent, "Complete", true);
+    await expect(page.getByRole("region", { name: "Booking confirmed", exact: true })).toBeVisible({ timeout: 30_000 });
+    await verifiedCapture(bookingId, intent, 5000);
+    expect(await contract(bookingId)).toMatchObject({ total: 5000, end: 1020, rescheduled: 0 });
+    expect(await q("SELECT b.status,r.status AS reservation FROM public.bookings b JOIN public.court_reservations r ON r.id=b.reservation_id WHERE b.id=$1", [bookingId]))
+      .toEqual([{ status: "confirmed", reservation: "active" }]);
+    await expect(page.locator('[data-sonner-toast][data-type="loading"]')).toHaveCount(0);
+  });
+
+  test("3DS2 failed authentication preserves the hold and retries the same intent", async ({ page }) => {
+    const { bookingId, intent } = await newCheckout(page, "C4");
+    const element = await challenge(page, intent, "Fail");
+    await expect(page.getByRole("button", { name: "Pay and confirm booking", exact: true })).toBeEnabled({ timeout: 15_000 });
+    expect(await element.evaluate(node => node.isConnected)).toBe(true);
+    expect(stripe(["payment_intents", "retrieve", intent])).toMatchObject({ status: "requires_payment_method", amount_received: 0 });
+    expect(await q("SELECT b.status,r.status AS reservation FROM public.bookings b JOIN public.court_reservations r ON r.id=b.reservation_id WHERE b.id=$1", [bookingId]))
+      .toEqual([{ status: "pending_payment", reservation: "held" }]);
+    expect(await q("SELECT c.id FROM public.payment_capture_receipts c JOIN public.payment_attempts p ON p.id=c.payment_attempt_id WHERE p.booking_id=$1", [bookingId])).toEqual([]);
+    await fillCard(page, "4000000000003220");
+    await challenge(page, intent, "Complete");
+    await expect(page.getByRole("region", { name: "Booking confirmed", exact: true })).toBeVisible({ timeout: 30_000 });
+    await verifiedCapture(bookingId, intent, 5000);
+    expect(await q("SELECT id FROM public.payment_attempts WHERE booking_id=$1", [bookingId])).toHaveLength(1);
+  });
+
+  test("3DS2 surcharge captures only the difference and applies one revision", async ({ page }) => {
+    const { bookingId, court } = await signedInBooking(page, "C5");
+    expect(await page.locator('script[src^="https://js.stripe.com/"]').count()).toBe(0);
+    await proposeExtension(page, court);
+    await fillCard(page, "4000000000003220");
+    const [adjustment] = await adjustments(bookingId);
+    expect(await contract(bookingId)).toMatchObject({ total: 5000, end: 1020, rescheduled: 0 });
+    await challenge(page, adjustment.provider_payment_id!, "Complete");
+    await expect(page.getByRole("dialog", { name: "Booking", exact: true })).toBeVisible({ timeout: 30_000 });
+    await verifiedCapture(bookingId, adjustment.provider_payment_id!, 2500);
+    expect(await contract(bookingId)).toMatchObject({ total: 7500, end: 1050, rescheduled: 1 });
+    expect((await adjustments(bookingId)).map(a => [a.status, a.attempt_status])).toEqual([["applied", "succeeded"]]);
+    expect(await refunds(bookingId)).toEqual([]);
+    await expect(page.locator('[data-sonner-toast][data-type="loading"]')).toHaveCount(0);
+  });
 
   test("abandon: X before paying discards the modification, releases the hold, and Edit reopens fresh", async ({
     page,

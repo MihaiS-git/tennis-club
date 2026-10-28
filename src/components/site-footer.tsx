@@ -10,7 +10,7 @@ export function SiteFooter() {
               Tennis Club
             </p>
             <Link
-              href="/#locations"
+              href="/#locations" prefetch={false}
               className="mt-2 inline-flex min-h-11 w-fit items-center font-sans text-sm font-medium text-ivory hover:text-clay-300"
             >
               Our locations
@@ -28,19 +28,19 @@ export function SiteFooter() {
               Book a court
             </Link>
             <Link
-              href="/coaching"
+              href="/coaching" prefetch={false}
               className="inline-flex min-h-11 w-fit items-center font-sans text-sm font-medium text-ivory hover:text-clay-300"
             >
               Coaching
             </Link>
             <Link
-              href="/courts"
+              href="/courts" prefetch={false}
               className="inline-flex min-h-11 w-fit items-center font-sans text-sm font-medium text-ivory hover:text-clay-300"
             >
               Courts
             </Link>
             <Link
-              href="/club"
+              href="/club" prefetch={false}
               className="inline-flex min-h-11 w-fit items-center font-sans text-sm font-medium text-ivory hover:text-clay-300"
             >
               Club

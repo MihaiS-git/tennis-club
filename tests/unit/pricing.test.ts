@@ -45,4 +45,11 @@ it("formats zero financial balances without accepting zero prices or invalid dis
   expect(minorAmountSchema.safeParse(0).success).toBe(false);
   expect(majorAmountSchema.safeParse("0.00").success).toBe(false);
   for (const amount of [-1, 0.5, NaN, Infinity, 2147483648]) expect(() => formatMoney(amount, "RON")).toThrow();
+  expect(() => formatMoney(100, "XYZ" as never)).toThrow();
+});
+
+it("formats minutes of the day and rejects values outside it", async () => {
+  const { minuteToTime } = await import("@/lib/admin/opening-hours-validation");
+  expect([0, 90, 1439, 1440].map(minuteToTime)).toEqual(["00:00", "01:30", "23:59", "24:00"]);
+  for (const minute of [-1, 1441, 0.5, NaN]) expect(() => minuteToTime(minute)).toThrow();
 });

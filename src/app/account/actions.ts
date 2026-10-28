@@ -4,10 +4,10 @@ import { redirect } from "next/navigation";
 
 import type { AuthActionState } from "@/lib/auth/action-state";
 import { readCurrentAccount } from "@/lib/auth/account";
-import { safeAuthError, weakPasswordMessage } from "@/lib/auth/decisions";
+import { safeAuthError } from "@/lib/auth/decisions";
 import { changePasswordWithVerification } from "@/lib/auth/password-change";
 import { createPasswordVerificationClient } from "@/lib/auth/password-verifier.server";
-import { changePasswordSchema, fieldValidationErrors } from "@/lib/auth/validation";
+import { changePasswordSchema, fieldValidationErrors, weakPasswordMessage } from "@/lib/auth/validation";
 import { createClient } from "@/lib/supabase/server";
 import { logger } from "@/lib/logger";
 

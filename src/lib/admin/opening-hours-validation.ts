@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export { minuteToTime } from "@/lib/courts/local-time";
+
 export const weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
 
 const timeSchema = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$|^24:00$/, "Enter a time as HH:mm (00:00–24:00).");
@@ -8,11 +10,6 @@ export function timeToMinute(time: string): number {
   const value = timeSchema.parse(time);
   const [hour, minute] = value.split(":").map(Number);
   return hour * 60 + minute;
-}
-
-export function minuteToTime(minute: number): string {
-  z.number().int().min(0).max(1440).parse(minute);
-  return `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
 }
 
 export const openingIntervalSchema = z.object({

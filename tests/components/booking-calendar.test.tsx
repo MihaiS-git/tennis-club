@@ -26,6 +26,11 @@ beforeEach(() => {
   installDialogMock();
 });
 afterEach(cleanup);
+// The confirmation dialog is loaded on demand, so it renders after its chunk resolves.
+async function openConfirmation() {
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await screen.findByRole("dialog");
+}
 const courts: CourtDay[] = [1, 2].map((index) => ({
   court: { id: `${index}1111111-1111-4111-8111-111111111111`, name: `Court ${index}`, slug: `court-${index}`,
     surface: "clay", environment: "outdoor", has_lighting: false },
@@ -48,7 +53,7 @@ it("validates required contact fields after submit, retains whitespace values an
   render(<BookingCalendar onlinePaymentAvailable
     day={{ times: [960, 990, 1020, 1050], courts }} date="2026-10-01" locationName="Club" currency="RON" cancellationNoticeMinutes={120} timezone="Europe/Bucharest" />);
   fireEvent.click(screen.getByRole("button", { name: /Court 1 2026-10-01 16:00–16:30/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await openConfirmation();
   const dialog = screen.getByRole("dialog");
   expect(within(dialog).queryAllByRole("alert")).toHaveLength(0);
   const fields = [["Name", "Name is required."], ["Email", "Email address is required."], ["Phone", "Phone number is required."]] as const;
@@ -89,11 +94,11 @@ it("validates required contact fields after submit, retains whitespace values an
   expect(within(dialog).getByLabelText("Name")).toHaveProperty("value", "  Ana  ");
 });
 
-it("shows errors on blur only for touched contact fields", () => {
+it("shows errors on blur only for touched contact fields", async () => {
   render(<BookingCalendar onlinePaymentAvailable day={{ times: [960, 990, 1020, 1050], courts }}
     date="2026-10-01" locationName="Club" currency="RON" cancellationNoticeMinutes={120} timezone="Europe/Bucharest" />);
   fireEvent.click(screen.getByRole("button", { name: /Court 1 2026-10-01 16:00–16:30/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await openConfirmation();
   expect(screen.queryAllByRole("alert")).toHaveLength(0);
   fireEvent.blur(screen.getByLabelText("Name"));
   expect(screen.getByText("Name is required.")).toBeTruthy();
@@ -129,7 +134,7 @@ it("opens guest details, validates without clearing values, and submits only int
   confirm.mockResolvedValue({ ok: true, status: "confirmed", holdExpiresAt: null, totalAmountMinor: 1200, currency: "RON", cancellationPolicy: { noticeMinutes: 60, cutoff: "2026-10-01T12:00:00Z" } });
   render(<BookingCalendar onlinePaymentAvailable allowPayAtClub day={{ times: [960, 990, 1020, 1050], courts }} date="2026-10-01" locationName="Club" currency="RON" cancellationNoticeMinutes={120} timezone="Europe/Bucharest" />);
   fireEvent.click(screen.getByRole("button", { name: /Court 1 2026-10-01 16:00–16:30/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await openConfirmation();
   const dialog = screen.getByRole("dialog");
   expect(within(dialog).getByText("Club")).toBeTruthy();
   expect(within(dialog).getByText("Court 1")).toBeTruthy();
@@ -183,7 +188,7 @@ it.each([
   // A refreshed profile before the first open supplies the latest defaults.
   rerender(<BookingCalendar {...props} initialContact={initialContact} />);
   fireEvent.click(screen.getByRole("button", { name: /Court 1 2026-10-01 16:00–16:30/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await openConfirmation();
   const fields = [["Name", "customerName"], ["Email", "customerEmail"], ["Phone", "customerPhone"]] as const;
   for (const [label, key] of fields)
     expect((screen.getByLabelText(label) as HTMLInputElement).value).toBe(initialContact[key]);
@@ -213,7 +218,7 @@ it.each([
   expect(refresh).toHaveBeenCalledOnce();
   rerender(<BookingCalendar {...props} initialContact={initialContact} />);
   fireEvent.click(screen.getByRole("button", { name: /Court 2 2026-10-01 16:00–16:30/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await openConfirmation();
   expectEdits();
   fireEvent.click(screen.getByRole("button", { name: "Continue to payment" }));
   await screen.findByRole("region", { name: "Booking confirmed" });
@@ -228,7 +233,7 @@ it("disables unconfigured online payment while allowing an explicit Pay at club 
     date="2026-10-01" locationName="Club" currency="RON" cancellationNoticeMinutes={120} timezone="Europe/Bucharest"
     initialContact={{ customerName: "Guest", customerEmail: "guest@example.test", customerPhone: "123" }} />);
   fireEvent.click(screen.getByRole("button", { name: /Court 1 2026-10-01 16:00–16:30/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await openConfirmation();
   expect((screen.getByLabelText("Online payment") as HTMLInputElement).disabled).toBe(true);
   expect((screen.getByRole("button", { name: "Continue to payment" }) as HTMLButtonElement).disabled).toBe(true);
   expect(screen.getByText("Online payment is currently unavailable.")).toBeTruthy();
@@ -247,7 +252,7 @@ async function openCheckout() {
     date="2026-10-01" locationName="Club" currency="RON" cancellationNoticeMinutes={120} timezone="Europe/Bucharest"
     initialContact={{ customerName: "Guest", customerEmail: "guest@example.test", customerPhone: "123" }} />);
   fireEvent.click(screen.getByRole("button", { name: /Court 1 2026-10-01 16:00–16:30/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await openConfirmation();
   fireEvent.click(screen.getByRole("button", { name: "Continue to payment" }));
   await screen.findByRole("region", { name: "Online payment" });
 }
@@ -270,7 +275,7 @@ it("starts a fresh booking from the navbar after verified online payment on the 
   expect(screen.getByRole("table")).toBeTruthy();
   expect(screen.queryByRole("region", { name: "Selected interval" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: /Court 2 2026-10-01 17:00–17:30/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await openConfirmation();
   expect(screen.getByRole("dialog")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Continue to payment" })).toBeTruthy();
   expect(confirm).toHaveBeenCalledOnce();
@@ -355,7 +360,7 @@ it.each([false, true])("shows staff-handled cancellation instructions only for g
   render(<BookingCalendar onlinePaymentAvailable allowPayAtClub authenticated={authenticated} initialContact={{ customerName: "Player", customerEmail: "player@example.test", customerPhone: "+40 123" }}
     day={{ times: [960, 990, 1020, 1050], courts }} date="2026-10-01" locationName="Club" currency="RON" cancellationNoticeMinutes={120} timezone="UTC" />);
   fireEvent.click(screen.getByRole("button", { name: /Court 1 2026-10-01 16:00–16:30/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await openConfirmation();
   const dialogTerms = within(screen.getByRole("dialog")).getByRole("region", { name: "Cancellation terms" });
   expect(within(dialogTerms).getByText(/2 hours' notice/)).toBeTruthy();
   expect(within(dialogTerms).queryByText(instruction) !== null).toBe(!authenticated);
@@ -375,7 +380,7 @@ it("discards completed confirmation when Next.js hides and restores the route, w
     day={{ times: [960, 990, 1020, 1050], courts }} date="2026-10-01" locationName="Club" currency="RON" cancellationNoticeMinutes={120} timezone="UTC" />;
   const { rerender } = render(<Activity mode="visible">{calendar}</Activity>);
   fireEvent.click(screen.getByRole("button", { name: /Court 1 2026-10-01 16:00–16:30/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await openConfirmation();
   fireEvent.click(screen.getByLabelText("Pay at club"));
   fireEvent.click(screen.getByRole("button", { name: "Confirm booking" }));
   await screen.findByRole("region", { name: "Booking confirmed" });
@@ -425,7 +430,7 @@ const coaching = {
 const coachingProps = { day: { times: [960, 990, 1020, 1050], courts }, date: "2099-10-15", locationName: "Club", currency: "RON" as const,
   cancellationNoticeMinutes: 120, timezone: "UTC", onlinePaymentAvailable: true, allowPayAtClub: false, coaching };
 
-it("uses the same timetable for every court but only allows complete server-offered lessons", () => {
+it("uses the same timetable for every court but only allows complete server-offered lessons", async () => {
   const blocked = { ...courts[0], court: { ...courts[0].court, id: "blocked", name: "Court 3" } };
   render(<BookingCalendar {...coachingProps} day={{ ...coachingProps.day, courts: [...courts, blocked] }} />);
   expect(screen.getAllByRole("rowheader")).toHaveLength(3);
@@ -440,7 +445,7 @@ it("uses the same timetable for every court but only allows complete server-offe
   expect(selectedCells).toHaveLength(3);
   fireEvent.click(screen.getByRole("button", { name: /Court 2 .*90 min lesson/ }));
   expect(screen.getByRole("region", { name: "Selected interval" }).textContent).toMatch(/180[.,]00/);
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await openConfirmation();
   const details = screen.getByRole("region", { name: "Booking details" });
   expect(details.textContent).toContain("Private technique");
   expect(details.textContent).toContain("Coach Ana");
@@ -462,7 +467,7 @@ it.each([{ authenticated: false, group: false }, { authenticated: true, group: f
   const view = render(<BookingCalendar {...coachingProps} coaching={selectedCoaching} authenticated={authenticated}
     initialContact={authenticated ? { customerName: "Account", customerEmail: "account@example.test", customerPhone: "123" } : undefined} />);
   fireEvent.click(screen.getByRole("button", { name: /Court 1 .*90 min lesson/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await openConfirmation();
   if (!authenticated) {
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Guest" } });
     fireEvent.change(screen.getByLabelText("Email"), { target: { value: "guest@example.test" } });
@@ -499,23 +504,23 @@ it.each(["price", "availability"])("clears stale coaching %s and retains entered
     : { ok: false, availabilityChanged: true, message: "The coach is no longer available." });
   render(<BookingCalendar {...coachingProps} initialContact={{ customerName: "Guest", customerEmail: "guest@example.test", customerPhone: "123" }} />);
   fireEvent.click(screen.getByRole("button", { name: /Court 1 .*90 min lesson/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await openConfirmation();
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Edited guest" } });
   fireEvent.click(screen.getByRole("button", { name: "Continue to payment" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   expect(screen.queryByRole("region", { name: "Selected interval" })).toBeNull();
   expect(refresh).toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: /Court 2 .*90 min lesson/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await openConfirmation();
   expect(screen.getByLabelText("Name")).toHaveProperty("value", "Edited guest");
 });
 
-it("shows court rental included and uses the supplied lesson total without adding court-only rates", () => {
+it("shows court rental included and uses the supplied lesson total without adding court-only rates", async () => {
   const included = { ...coaching, courtRentalIncluded: true, starts: coaching.starts.map(start => ({ ...start,
     courts: start.courts.map(court => ({ ...court, coachingAmountMinor: 12000, courtAmountMinor: 0, totalAmountMinor: 12000 })) })) };
   render(<BookingCalendar {...coachingProps} coaching={included} />);
   fireEvent.click(screen.getByRole("button", { name: /Court 1 .*90 min lesson/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await openConfirmation();
   expect(screen.getByRole("region", { name: "Booking details" }).textContent).toContain("Included");
   expect(screen.getByRole("region", { name: "Booking details" }).textContent).toMatch(/120[.,]00/);
 });
@@ -525,7 +530,7 @@ it("keeps coaching unconfirmed when checkout initialization fails", async () => 
   coachingConfirm.mockResolvedValue({ ok: false, message: "Online payment is unavailable." });
   render(<BookingCalendar {...coachingProps} initialContact={{ customerName: "Guest", customerEmail: "guest@example.test", customerPhone: "123" }} />);
   fireEvent.click(screen.getByRole("button", { name: /Court 1 .*90 min lesson/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await openConfirmation();
   fireEvent.click(screen.getByRole("button", { name: "Continue to payment" }));
   await waitFor(() => expect(coachingConfirm).toHaveBeenCalledTimes(1));
   expect(screen.queryByRole("region", { name: "Online payment" })).toBeNull();
@@ -535,17 +540,17 @@ it("keeps coaching unconfirmed when checkout initialization fails", async () => 
 });
 
 
-it("switches programs with fresh selections and retains customer contact", () => {
+it("switches programs with fresh selections and retains customer contact", async () => {
   const view = render(<BookingCalendar {...coachingProps} />);
   fireEvent.click(screen.getByRole("button", { name: /Court 1 .*90 min lesson/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await openConfirmation();
   fireEvent.change(screen.getByRole("textbox", { name: /Name/ }), { target: { value: "Returning Guest" } });
   const semi = { ...coaching, programId: "semi", programName: "Semi-private coaching", participantCount: 2 as const };
   view.rerender(<BookingCalendar {...coachingProps} coaching={semi} />);
   expect(screen.queryByRole("region", { name: "Selected interval" })).toBeNull();
   expect(screen.queryByRole("textbox", { name: /Name/ })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: /Court 1 .*90 min lesson/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await openConfirmation();
   expect(screen.getByRole("textbox", { name: /Name/ })).toHaveProperty("value", "Returning Guest");
   const details = screen.getByRole("region", { name: "Booking details" });
   expect(details.textContent).toContain("Semi-private coaching");
@@ -592,7 +597,7 @@ it.each(["review", "submitting", "pending", "processing"])("Clear filters preser
   render(<><CoachingResetControls /><BookingCalendar {...coachingProps} authenticated
     initialContact={{ customerName: "Member", customerEmail: "member@example.test", customerPhone: "123" }} /></>);
   fireEvent.click(screen.getByRole("button", { name: /Court 1 .*90 min lesson/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await openConfirmation();
   if (phase !== "review") fireEvent.click(screen.getByRole("button", { name: "Continue to payment" }));
   if (phase === "pending" || phase === "processing") await screen.findByRole("region", { name: "Online payment" });
   if (phase === "processing") fireEvent.click(screen.getByRole("button", { name: "Simulate processing" }));

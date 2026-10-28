@@ -26,6 +26,21 @@ it("isolates a suspended dynamic pathname to the sidebar while keeping the page 
   expect(screen.getByText("Booking details")).toBeDefined();
 });
 
+it("reserves the mobile drawer trigger's height while the sidebar is suspended", () => {
+  // Content below the sidebar must not move when the trigger replaces the fallback.
+  navigation.suspended = true;
+  const { unmount } = render(<ProfileLayout><p>Profile details</p></ProfileLayout>);
+  const fallback = screen.getByRole("status").className.split(" ");
+  unmount();
+  navigation.suspended = false;
+  render(<ProfileLayout><p>Profile details</p></ProfileLayout>);
+  const trigger = screen.getByRole("button", { name: "My account menu" }).className.split(" ");
+  for (const sizing of ["mb-5", "max-lg:min-h-11"]) {
+    expect(trigger).toContain(sizing);
+    expect(fallback).toContain(sizing);
+  }
+});
+
 it.each([
   ["/my-activity/bookings", "Bookings"],
   ["/my-activity/history", "Booking history"],

@@ -47,3 +47,11 @@ it.each([
   // No per-page skeletons or placeholder data.
   expect(container.querySelector(".animate-pulse, [class*='animate-pulse']")).toBeNull();
 });
+
+it("keeps the footer unpainted while the profile fallback stands in for a taller page", () => {
+  // The /profile layout is prerendered; on a document load this fallback is the first
+  // paint, and a visible footer below it would shift when the page streams in.
+  const { container } = render(<ProfileLoading />);
+  expect(container.querySelectorAll("[data-defers-footer]")).toHaveLength(1);
+  expect(container.querySelector("[data-defers-footer]")?.hasAttribute("hidden")).toBe(true);
+});

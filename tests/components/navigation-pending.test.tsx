@@ -25,8 +25,8 @@ vi.mock("next/link", async () => {
   const { createContext, useContext } = await import("react");
   const Href = createContext("");
   return {
-    default: ({ href, scroll, onNavigate, transitionTypes, children, ...props }: ComponentProps<"a"> & { scroll?: boolean; onNavigate?: (event: { preventDefault: () => void }) => void; transitionTypes?: string[] }) => {
-      void scroll; void transitionTypes;
+    default: ({ href, scroll, onNavigate, transitionTypes, prefetch, children, ...props }: ComponentProps<"a"> & { prefetch?: boolean | null; scroll?: boolean; onNavigate?: (event: { preventDefault: () => void }) => void; transitionTypes?: string[] }) => {
+      void scroll; void transitionTypes; void prefetch;
       return <Href.Provider value={href ?? ""}><a href={href} {...props} onClick={event => {
         props.onClick?.(event);
         if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;

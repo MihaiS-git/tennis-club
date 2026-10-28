@@ -4,7 +4,7 @@ import { NavigationLink as Link } from "./navigation-pending";
 import { Button } from "@/components/button";
 import { usePathname } from "next/navigation";
 import { Menu, X, type LucideIcon } from "lucide-react";
-import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
 
 export type SidebarLink = { label: string; href: string; icon?: LucideIcon; exact?: boolean };
 export type SidebarGroup = { label: string; icon?: LucideIcon; links: readonly SidebarLink[] };
@@ -16,6 +16,17 @@ const unsavedDot = "[:root:has([data-profile-unsaved])_&]:after:ml-auto [:root:h
 const sidebarLinkClass = (active: boolean) =>
   `flex min-h-11 items-center gap-3 rounded-control px-3 py-2 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${active ? `bg-primary text-primary-foreground ${unsavedDot}` : "text-muted-foreground hover:bg-surface-muted hover:text-primary"}`;
 
+// Below lg the sidebar is a drawer. Closed, it is hidden or sits just off-screen inside
+// Link's viewport margin, so its links prefetch only while visible: at lg or when opened.
+const desktopQuery = "(min-width: 1024px)";
+function subscribeToDesktop(onChange: () => void) {
+  const media = window.matchMedia?.(desktopQuery);
+  media?.addEventListener("change", onChange);
+  return () => media?.removeEventListener("change", onChange);
+}
+const isDesktop = () => window.matchMedia?.(desktopQuery).matches ?? false;
+const isServerDesktop = () => false;
+
 // `slideIn` reuses the main mobile menu's slide transition for the mobile drawer.
 type SidebarProps = { title: string; slideIn?: boolean } & (
   | { entries: readonly SidebarEntry[]; sections?: never }
@@ -26,6 +37,7 @@ type SidebarProps = { title: string; slideIn?: boolean } & (
 export function SidebarNavigation({ title, entries, sections, slideIn = false }: SidebarProps) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  const desktop = useSyncExternalStore(subscribeToDesktop, isDesktop, isServerDesktop);
   const [openedAt, setOpenedAt] = useState(pathname);
   // Confirmed draft departures can navigate outside the link's own transition.
   // Close on the committed destination as well as on direct link activation.
@@ -116,6 +128,7 @@ export function SidebarNavigation({ title, entries, sections, slideIn = false }:
         href={link.href}
         aria-current={active ? "page" : undefined}
         className={sidebarLinkClass(active)}
+        prefetch={open || desktop ? undefined : false}
         dismissDrawer={open ? () => setOpen(false) : undefined}
       >
         {Icon && <Icon aria-hidden="true" className="size-4 shrink-0" />}

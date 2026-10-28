@@ -15,7 +15,7 @@ export default function NotFound() {
         </p>
         <div className="mt-9 flex flex-col gap-3 sm:flex-row">
           <Link
-            href="/"
+            href="/" prefetch={false}
             className="inline-flex min-h-12 items-center justify-center rounded-control bg-primary px-6 text-sm font-semibold text-primary-foreground hover:bg-primary-hover"
           >
             Back to home
