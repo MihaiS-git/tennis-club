@@ -1,15 +1,16 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { EntityManager } from "typeorm";
-const mocks = vi.hoisted(() => ({ admin: vi.fn(), fence: vi.fn(), read: vi.fn(), write: vi.fn(), user: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
+const mocks = vi.hoisted(() => ({ admin: vi.fn(), fence: vi.fn(), read: vi.fn(), write: vi.fn(), readContact: vi.fn(), writeContact: vi.fn(), user: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
 vi.mock("@/lib/logger", () => ({ logger: { info: mocks.info, warn: mocks.warn, error: mocks.error } }));
 vi.mock("@/lib/admin/authorization", () => ({ requireActiveAdmin: mocks.admin }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: async () => ({ auth: { getUser: mocks.user } }) }));
 vi.mock("@/lib/db/data-source", () => ({ getDataSource: async () => ({ manager: {} }) }));
 vi.mock("@/lib/db/transaction", () => ({ inTransaction: (work: (manager: EntityManager) => Promise<unknown>) => work({} as EntityManager) }));
 vi.mock("@/lib/db/repositories/accounts.repository", () => ({ lockActiveAdminAccount: mocks.fence }));
-vi.mock("@/lib/db/repositories/club-settings.repository", () => ({ readClubSettings: mocks.read, writeClubSettings: mocks.write }));
-import { readAdminClubSettings, saveClubSettings, sendClubTestEmail } from "@/lib/club/settings";
-import { clubSettingsSchema } from "@/lib/club/schema";
+vi.mock("@/lib/db/repositories/club-settings.repository", () => ({ readClubSettings: mocks.read, writeClubSettings: mocks.write,
+  readClubContact: mocks.readContact, writeClubContact: mocks.writeContact }));
+import { readAdminClubContact, readAdminClubSettings, saveClubContact, saveClubSettings, sendClubTestEmail } from "@/lib/club/settings";
+import { clubContactSchema, clubSettingsSchema, telephoneHref } from "@/lib/club/schema";
 
 const settings = { officialEmail: "official@example.com", senderName: "Club Name", emailsEnabled: true };
 beforeEach(() => {
@@ -87,4 +88,36 @@ test("logs configuration errors without returning their details", async () => {
   expect(await sendClubTestEmail()).toEqual({ ok: false, message: "Unable to send the test email. Check server email configuration." });
   expect(mocks.error).toHaveBeenCalledWith(expect.objectContaining({ error: expect.any(Error) }), expect.any(String));
   expect(fetch).not.toHaveBeenCalled();
+});
+
+const contact = { contactEmail: "hello@example.com", contactPhone: "+40 21 123 4567" };
+
+test("only authorized Admin can read or update public contact details", async () => {
+  mocks.admin.mockRejectedValue(new Error("Denied"));
+  await expect(readAdminClubContact()).rejects.toThrow("Denied");
+  await expect(saveClubContact(contact)).rejects.toThrow("Denied");
+  expect(mocks.readContact).not.toHaveBeenCalled(); expect(mocks.writeContact).not.toHaveBeenCalled();
+});
+
+test("saves normalized contact details alone, never the email sender settings", async () => {
+  expect(await saveClubContact({ contactEmail: " hello@example.com ", contactPhone: " +40 21 123 4567 " }))
+    .toEqual({ ok: true, contact });
+  expect(mocks.writeContact).toHaveBeenCalledWith(expect.anything(), contact);
+  expect(mocks.write).not.toHaveBeenCalled();
+  expect(await saveClubContact({ contactEmail: "", contactPhone: "" })).toEqual({ ok: true, contact: { contactEmail: "", contactPhone: "" } });
+  mocks.fence.mockResolvedValue(false); mocks.writeContact.mockClear();
+  expect((await saveClubContact(contact)).ok).toBe(false); expect(mocks.writeContact).not.toHaveBeenCalled();
+});
+
+test.each([
+  { ...contact, contactEmail: "not-an-email" }, { ...contact, contactPhone: "12345" }, { ...contact, contactPhone: "call us" },
+  { ...contact, contactPhone: "+1 234 567 890 123 456" }, { ...contact, contactPhone: "++40 21 123 4567" }, { ...contact, extra: true },
+])("rejects invalid contact details", async input => {
+  expect((await saveClubContact(input)).ok).toBe(false); expect(mocks.writeContact).not.toHaveBeenCalled();
+});
+
+test("telephone links keep only dialable characters", () => {
+  expect(telephoneHref("+40 (21) 123-4567")).toBe("tel:+40211234567");
+  expect(telephoneHref("021 123 4567")).toBe("tel:0211234567");
+  expect(clubContactSchema.safeParse({ contactEmail: "", contactPhone: "(021) 123.4567" }).success).toBe(true);
 });

@@ -57,11 +57,10 @@ describe("projectPublicCoaching", () => {
     ]);
   });
 
-  it("publishes no Group/Junior prices when the program has no valid player range", () => {
+  it("omits a program when it has no valid player range", () => {
     const incomplete = projectPublicCoaching({ ...facts, programs: facts.programs.map((program) =>
       program.id === ids.group ? { ...program, max_participants: null } : program) }, visible);
-    expect(incomplete.programs[1].prices).toEqual([]);
-    expect(incomplete.programs[1].fromPrices).toEqual([]);
+    expect(incomplete.programs.map(program => program.id)).toEqual([ids.program]);
   });
 
   it("lists coach locations, programs and only their individual rates", () => {
@@ -82,6 +81,59 @@ describe("projectPublicCoaching", () => {
   });
 });
 
+describe("club-price publication prerequisite", () => {
+  const types = ["private", "semi_private", "group", "junior"] as const;
+  const program = (program_type: typeof types[number]) => ({ ...facts.programs[0], program_type,
+    durations: [60, 90], min_participants: 2, max_participants: 4 });
+  const price = { ...facts.prices[0], participant_count: 2 };
+  const project = (program_type: typeof types[number], prices: PublicCoachingFacts["prices"]) =>
+    ({ ...facts, programs: [program(program_type)], prices });
+
+  it.each(types)("hides %s programs without club prices, even with coach-only overrides", (type) => {
+    for (const prices of [[], [{ ...price, coach_user_id: ids.bo }]]) {
+      const input = project(type, prices);
+      const result = projectPublicCoaching(input, visible);
+      expect(result.programs).toEqual([]);
+      expect(result.coaches.every(coach => coach.programs.length === 0 && coach.rates.length === 0)).toBe(true);
+      const profile = projectPublicCoachProfile(input, visible, ids.bo);
+      expect(profile?.programs).toEqual([]);
+      expect(profile?.lessons).toEqual([]);
+      // Public projection does not remove configuration or assignments from Admin facts.
+      expect(input.programs).toHaveLength(1);
+      expect(input.coaches[1].program_ids).toContain(ids.program);
+    }
+  });
+
+  it.each(types)("publishes a partially priced %s program with just one applicable club price", (type) => {
+    const result = projectPublicCoaching(project(type, [price]), visible);
+    expect(result.programs).toMatchObject([{ id: ids.program, durations: [60, 90], minParticipants: 2, maxParticipants: 4,
+      prices: [{ durationMinutes: 60, participantCount: 2, currency: "RON", amountMinor: price.amount_minor }] }]);
+    expect(result.coaches[1].programs).toEqual([{ id: ids.program, name: "Private" }]);
+  });
+
+  it.each([
+    { duration_minutes: 120 }, // Canonical, but not offered by this program.
+    { duration_minutes: 45 },
+    { participant_count: 1 },
+    { participant_count: 5 },
+    { currency: "GBP" }, // No public location charges GBP.
+    { currency: "invalid" },
+  ])("does not publish on an inapplicable club price (%j) or a valid coach override", (change) => {
+    const input = project("semi_private", [{ ...price, ...change }, { ...price, coach_user_id: ids.bo }]);
+    expect(projectPublicCoaching(input, visible).programs).toEqual([]);
+  });
+
+  it("requires a club price in the currencies of the requested public locations", () => {
+    const input = project("semi_private", [price, { ...price, currency: "EUR", coach_user_id: ids.bo }]);
+    expect(projectPublicCoaching(input, [visible[0]]).programs).toHaveLength(1);
+    expect(projectPublicCoaching(input, [visible[1]]).programs).toEqual([]);
+    input.prices.push({ ...price, currency: "EUR", amount_minor: 3500 });
+    expect(projectPublicCoaching(input, [visible[1]]).programs[0].prices)
+      .toEqual([{ durationMinutes: 60, participantCount: 2, currency: "EUR", amountMinor: 3500 }]);
+    expect(projectPublicCoaching(input, []).programs).toEqual([]);
+  });
+});
+
 describe("public From prices", () => {
   const semi = { id: "a1000000-0000-4000-8000-000000000003", name: "Semi-private", description: "", program_type: "semi_private",
     min_participants: 2, max_participants: 4, court_rental_included: true, durations: [60, 90] };
@@ -90,7 +142,7 @@ describe("public From prices", () => {
   const coach = (user_id: string, location_ids: string[]) => ({ user_id, display_name: user_id, bio: "", qualifications: "", specialties: [],
     languages: [], location_ids, program_ids: [semi.id] });
   const from = (prices: PublicCoachingFacts["prices"], coaches = [coach(ids.ana, [ids.east])]) =>
-    projectPublicCoaching({ programs: [semi], coaches, prices }, visible).programs[0].fromPrices;
+    projectPublicCoaching({ programs: [semi], coaches, prices }, visible).programs[0]?.fromPrices ?? [];
 
   it("advertises the lowest configured lesson price of any count and duration, never a derived one", () => {
     // 2 players RON 150, 3 players RON 210, 4 players unconfigured; 90 minutes RON 220 for 2 players.
@@ -106,8 +158,9 @@ describe("public From prices", () => {
     expect(from([lesson(60, 2, 15000), lesson(60, 2, 18000, ids.bo)], coaches)).toEqual([{ currency: "RON", amountMinor: 15000 }]);
     // Every eligible coach charges the override: the club default is not offered.
     expect(from([lesson(60, 2, 15000), lesson(60, 2, 18000, ids.ana), lesson(60, 2, 17000, ids.bo)], coaches)).toEqual([{ currency: "RON", amountMinor: 17000 }]);
-    // An override-only price is offered by that coach.
-    expect(from([lesson(60, 3, 16000, ids.bo)], coaches)).toEqual([{ currency: "RON", amountMinor: 16000 }]);
+    // Overrides cannot publish a program, but can price another combination once a club price exists.
+    expect(from([lesson(60, 3, 16000, ids.bo)], coaches)).toEqual([]);
+    expect(from([lesson(90, 2, 18000), lesson(60, 3, 16000, ids.bo)], coaches)).toEqual([{ currency: "RON", amountMinor: 16000 }]);
   });
 
   it("ignores overrides of coaches who are not assigned or do not teach in that currency, and out-of-range or obsolete prices", () => {

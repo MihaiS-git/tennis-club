@@ -45,9 +45,12 @@ export function CalendarControls({ locations, locationId, date, today, timezone,
     params.set("location", location);
     if (coaching) {
       params.set("mode", "coaching");
-      // A date change keeps lesson choices; a location change resolves fresh defaults,
+      // A date change keeps lesson choices; a location change keeps only the chosen coach (the
+      // server explains if they are not bookable there) and resolves fresh defaults for the rest,
       // including a date chosen while that location change is still pending.
-      if (selectedDate && location === locationId) for (const [key, value] of Object.entries(coaching)) if (value) params.set(key, value);
+      if (selectedDate && location === locationId) {
+        for (const [key, value] of Object.entries(coaching)) if (value) params.set(key, value);
+      } else if (coaching.coach) params.set("coach", coaching.coach);
     }
     if (selectedDate) params.set("date", selectedDate);
     startNavigation(() => {

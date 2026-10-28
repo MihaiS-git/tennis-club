@@ -3,19 +3,16 @@
 import Link from "next/link";
 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useId, useRef, useState, useTransition, type ReactNode } from "react";
+import { useEffect, useRef, useState, useTransition, type ReactNode } from "react";
 import { AdminToolbar } from "@/components/admin-page-controls";
-import { SearchableCombobox } from "@/components/searchable-combobox";
 import { FilterClearSlot } from "@/components/filter-clear-slot";
 
-// Searchable controls suit long option lists; the first option clears the filter.
-export type TableFilterControl = { name: string; label: string; resets?: string[]; searchable?: boolean; options: { value: string; label: string }[] };
+export type TableFilterControl = { name: string; label: string; options: { value: string; label: string }[] };
 
 export function ManagementTableToolbar({ searchLabel, placeholder, controls, action }: {
   searchLabel: string; placeholder: string; controls: TableFilterControl[]; action?: ReactNode;
 }) {
   const router = useRouter();
-  const prefix = useId();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [pending, startTransition] = useTransition();
@@ -49,7 +46,6 @@ export function ManagementTableToolbar({ searchLabel, placeholder, controls, act
     const params = new URLSearchParams(currentQuery.current);
     if (value) params.set(key, value); else params.delete(key);
     params.delete("page");
-    for (const name of controls.find(control => control.name === key)?.resets ?? []) params.delete(name);
     // Keep consecutive immediate changes composed while navigation is pending.
     currentQuery.current = params.toString();
     startTransition(() => router.replace(`${pathname}${params.size ? `?${params}` : ""}`, { scroll: false }));
@@ -71,12 +67,7 @@ export function ManagementTableToolbar({ searchLabel, placeholder, controls, act
             }, 350);
           }} />
       </label>} filters={<>
-      {controls.map(control => control.searchable ? <div key={control.name} className="flex w-full flex-col gap-1.5 text-sm font-medium text-primary sm:w-56">
-        <label htmlFor={`${prefix}-${control.name}`}>{control.label}</label>
-        <SearchableCombobox id={`${prefix}-${control.name}`} options={control.options} value={value(control.name) ?? ""}
-          onValueChange={next => { if (next !== (value(control.name) ?? "")) navigate(control.name, next); }}
-          placeholder={control.options[0]?.label ?? control.label} listLabel={control.label} emptyMessage={`No matching ${control.label.toLowerCase()}`} />
-      </div> : <label key={control.name} className="flex w-full flex-col gap-1.5 text-sm font-medium text-primary sm:w-auto sm:min-w-36">
+      {controls.map(control => <label key={control.name} className="flex w-full flex-col gap-1.5 text-sm font-medium text-primary sm:w-auto sm:min-w-36">
         {control.label}
         <select name={control.name} value={value(control.name) ?? ""} className={`${controlClass} w-full`} onChange={event => navigate(control.name, event.target.value)}>
           {control.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}

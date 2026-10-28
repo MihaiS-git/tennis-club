@@ -25,7 +25,7 @@
    LCP element). The size is a placeholder; `auto` keeps the rendered height. */
 .deferredSection {
   content-visibility: auto;
-  contain-intrinsic-size: auto 1200px;
+  contain-intrinsic-size: auto 600px;
 }
 
 @keyframes heroEnter {

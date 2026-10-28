@@ -30,7 +30,6 @@ it.each([
   ["/admin/users/user-id", "Users"],
   ["/admin/coaching/programs", "Programs"],
   ["/admin/coaching/coaches", "Coaches"],
-  ["/admin/coaching/prices", "Prices"],
   ["/admin/coaching/availability", "Coach availability"],
   ["/admin/users", "Users"],
   ["/admin/club", "Club"],
@@ -39,8 +38,8 @@ it.each([
   render(<AdminNavigation isAdmin={true} />);
   const nav = screen.getByRole("navigation", { name: "Management navigation" });
   const links = within(nav).getAllByRole("link");
-  expect(links.map((link) => link.textContent)).toEqual(["Bookings & Reservations", "Transactions", "Users", "Locations", "Programs", "Coaches", "Prices", "Coach availability", "Payment settings", "Club"]);
-  expect(links.map((link) => link.getAttribute("href"))).toEqual(["/admin/bookings", "/admin/payments/transactions", "/admin/users", "/admin/locations", "/admin/coaching/programs", "/admin/coaching/coaches", "/admin/coaching/prices", "/admin/coaching/availability", "/admin/payments/settings", "/admin/club"]);
+  expect(links.map((link) => link.textContent)).toEqual(["Bookings & Reservations", "Transactions", "Users", "Locations", "Programs", "Coaches", "Coach availability", "Payment settings", "Club"]);
+  expect(links.map((link) => link.getAttribute("href"))).toEqual(["/admin/bookings", "/admin/payments/transactions", "/admin/users", "/admin/locations", "/admin/coaching/programs", "/admin/coaching/coaches", "/admin/coaching/availability", "/admin/payments/settings", "/admin/club"]);
   for (const link of links) {
     expect(link.getAttribute("aria-current")).toBe(link.textContent === label ? "page" : null);
   }
@@ -68,7 +67,7 @@ it.each([
     ...(isCoach ? ["/coach/availability"] : []),
   ]);
   expect(hrefs(configuration)).toEqual([
-    ...(isAdmin ? ["/admin/locations", "/admin/coaching/programs", "/admin/coaching/coaches", "/admin/coaching/prices", "/admin/coaching/availability", "/admin/payments/settings", "/admin/club"] : []),
+    ...(isAdmin ? ["/admin/locations", "/admin/coaching/programs", "/admin/coaching/coaches", "/admin/coaching/availability", "/admin/payments/settings", "/admin/club"] : []),
     ...(isCoach ? ["/coach/pricing"] : []),
   ]);
   expect(new Set(hrefs(nav)).size).toBe(hrefs(nav).length);
@@ -84,8 +83,8 @@ it.each([
   ["/admin/coaching/programs", true],
   ["/admin/coaching/programs/program-id", true],
   ["/admin/coaching/coaches/coach-id", true],
-  ["/admin/coaching/prices", true],
-  ["/admin/coaching/prices/price-id", true],
+  // Club prices are configured in Programs; there is no separate Prices destination.
+  ["/admin/coaching/prices", false],
   ["/admin/coaching/programs-extra", false],
   ["/admin/coaching/availability", true],
   ["/admin/coaching/availability-extra", false],
@@ -97,7 +96,7 @@ it.each([
   const coaching = within(configuration).getByText("Coaching", { exact: true });
   expect(coaching.classList.contains("text-primary")).toBe(active);
   expect(within(configuration).queryByRole("button")).toBeNull();
-  for (const label of ["Programs", "Coaches", "Prices", "Coach availability"]) {
+  for (const label of ["Programs", "Coaches", "Coach availability"]) {
     expect(within(configuration).getByRole("link", { name: label })).toBeDefined();
   }
 });
@@ -151,7 +150,7 @@ it("shows Coaches only their own Bookings & Reservations area", () => {
 
 it.each([
   [false, ["Bookings & Reservations", "My availability", "My prices"]],
-  [true, ["Bookings & Reservations", "Transactions", "Users", "My availability", "Locations", "Programs", "Coaches", "Prices", "Coach availability", "Payment settings", "Club", "My prices"]],
+  [true, ["Bookings & Reservations", "Transactions", "Users", "My availability", "Locations", "Programs", "Coaches", "Coach availability", "Payment settings", "Club", "My prices"]],
 ] as const)("adds the Coach area for coaches (Admin: %s)", (isAdmin, labels) => {
   navigation.pathname = "/coach/availability";
   render(<AdminNavigation isAdmin={isAdmin} isCoach />);

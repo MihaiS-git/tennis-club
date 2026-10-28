@@ -6,6 +6,7 @@ import { BookingLoading } from "./booking-loading";
 export const metadata: Metadata = {
   title: "Book a court | Tennis Club",
   description: "Find available court time for your chosen day.",
+  alternates: { canonical: "/book" },
 };
 
 export default function BookPage({ searchParams }: PageProps<"/book">) {

@@ -5,6 +5,7 @@ import type { PublicCourt } from "@/lib/courts/public";
 import type { PublicLocationToday } from "@/lib/courts/public-calendar";
 import { locationAddressLines, surfaceLabels } from "@/lib/courts/summary";
 import { formatMoney } from "@/lib/pricing/money";
+import styles from "../page.module.css";
 
 const labelClassName = "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 font-sans text-xs font-medium leading-5";
 
@@ -90,7 +91,7 @@ export async function CourtsDiscovery({ locations }: { locations: Promise<Public
                     </dd>
                   </div>
                   <div className="border-l border-border py-4 pl-3 md:pl-4">
-                    <dt className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Hourly rate</dt>
+                    <dt className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Rate today</dt>
                     <dd className="mt-1 text-sm font-semibold leading-6 text-primary md:text-base">
                       {location.startingRateMinor === null
                         ? "See rates when booking"
@@ -98,9 +99,14 @@ export async function CourtsDiscovery({ locations }: { locations: Promise<Public
                     </dd>
                   </div>
                 </dl>
-                <Link href={`/book?location=${location.id}`} className="mt-6 inline-flex min-h-12 w-full items-center justify-center rounded-control bg-primary px-6 font-sans text-sm font-semibold text-primary-foreground transition hover:bg-primary-hover sm:w-auto">
-                  Book at {location.name}
-                </Link>
+                <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-6">
+                  <Link href={`/book?location=${location.id}`} className="inline-flex min-h-12 w-full items-center justify-center rounded-control bg-primary px-6 font-sans text-sm font-semibold text-primary-foreground transition hover:bg-primary-hover sm:w-auto">
+                    Book at {location.name}
+                  </Link>
+                  <Link href="/pricing#courts" prefetch={false} className={`${styles.editorialLink} inline-flex min-h-11 w-fit items-center font-sans text-sm font-semibold text-primary transition-colors hover:text-accent focus-visible:rounded-control`}>
+                    <span className={`${styles.editorialLabel} underline decoration-accent underline-offset-8`}>How court prices work</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
+                  </Link>
+                </div>
               </div>
               <ul aria-label={`Courts at ${location.name}`} className="self-start">
                 {location.courts.map((court) => (

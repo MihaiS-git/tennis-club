@@ -8,12 +8,13 @@ import { listPublicVisitorLocations } from "@/lib/courts/public";
 import { EditorialHero, editorialHeroHeight as heroHeight, narrowHeroMedia as narrowHero, narrowHeroSizes, portraitHeroMedia as portraitHero } from "../editorial-hero";
 import styles from "../page.module.css";
 import { PageSectionNav } from "../page-section-nav";
-import { ClubBookingTerms, ClubLocations } from "./club-locations";
+import { ClubBookingTerms } from "./club-locations";
 import { LoadingStatus } from "@/components/loading-status";
 
 export const metadata: Metadata = {
   title: "The Club | Tennis Club",
   description: "The story of the club since 1978, membership, the people who run it, club rules and booking policies, and how to visit each location.",
+  alternates: { canonical: "/club" },
 };
 
 const sections = [
@@ -72,7 +73,7 @@ const etiquette = [
   { title: "Guests and children", text: "Visitors follow the same rules as members. Children on court should be with an adult unless they are in a coached session." },
 ];
 
-// One public locations read per request, shared by the policies and visit sections.
+// One public locations read per request for the booking terms in the policies section.
 async function readPublicLocations() {
   await connection();
   return listPublicVisitorLocations();
@@ -383,13 +384,16 @@ export default function ClubPage() {
               <h2 id="club-visit-title" className={`${headingClassName} mt-4 max-w-[12ch]`}>Come and see us.</h2>
             </div>
             <p className={`${bodyClassName} max-w-xl text-ivory`}>
-              Opening hours for the coming week, directions and booking for every location. The best way to get to know the club is still to book a court and see for yourself.
+              Every location’s address, opening hours and map, and how to reach the club team, are on the Contact page. The best way to get to know the club is still to book a court and see for yourself.
             </p>
           </div>
-          <div className="mt-10 md:mt-14">
-            <Suspense fallback={<LoadingStatus tone="inverse" label="Loading locations…" className="border-t border-ivory/30 pt-5" />}>
-              <ClubLocations locations={locations} />
-            </Suspense>
+          <div className="mt-10 flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-6 md:mt-12">
+            <Link href="/contact" prefetch={false} className="inline-flex min-h-12 items-center justify-center rounded-control bg-chalk px-6 font-sans text-sm font-semibold text-primary transition hover:bg-surface-muted">
+              Contact &amp; directions
+            </Link>
+            <Link href="/book" className={`${styles.editorialLink} inline-flex min-h-11 w-fit items-center font-sans text-sm font-semibold text-chalk transition-colors hover:text-chalk focus-visible:rounded-control`}>
+              <span className={`${styles.editorialLabel} underline decoration-accent-on-dark underline-offset-8`}>Book a court</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
+            </Link>
           </div>
         </div>
       </section>

@@ -12,7 +12,7 @@ vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn(async () => ({})) 
 vi.mock("@/lib/db/data-source", () => ({ getDataSource }));
 
 import {
-  deleteCoachingProgram, deleteCoachProfile, coachIneligibility, loadAdminCoaching, saveClubCoachingPrices, saveCoachingProgram, saveCoachProfile,
+  deleteCoachingProgram, deleteCoachProfile, coachIneligibility, loadAdminCoaching, saveCoachingProgram, saveCoachProfile,
   setCoachingProgramStatus, setCoachVisibility,
 } from "@/lib/coaching/admin";
 import CoachingLayout from "@/app/admin/coaching/layout";
@@ -22,7 +22,7 @@ beforeEach(() => vi.clearAllMocks());
 const operations = [
   () => deleteCoachingProgram({}), () => deleteCoachProfile({}),
   () => loadAdminCoaching(), () => saveCoachingProgram({}), () => setCoachingProgramStatus({}), () => saveCoachProfile({}),
-  () => setCoachVisibility({}), () => saveClubCoachingPrices({}),
+  () => setCoachVisibility({}),
 ];
 
 it.each([
@@ -40,10 +40,12 @@ it.each([
 it("validates Admin input before opening a transaction", async () => {
   readCurrentAccount.mockResolvedValue({ state: "active", userId: "admin", email: "a@example.test", roles: ["admin"] });
   expect(await saveCoachingProgram({ fields: { name: "" } })).toMatchObject({ ok: false, reason: "invalid-input" });
-  expect(await saveClubCoachingPrices({ prices: [{ participant_count: 1, amount: "-1" }] })).toMatchObject({ ok: false, reason: "invalid-input" });
-  // The club pricing operation cannot address a coach's own override.
-  const key = { program_id: "a1000000-0000-4000-8000-000000000001", duration_minutes: 60, currency: "RON", removed: [] };
-  expect(await saveClubCoachingPrices({ ...key, coach_user_id: "c1000000-0000-4000-8000-00000000000a", prices: [{ participant_count: 1, amount: "10" }] }))
+  // Club prices are saved with the program and cannot address a coach's own override.
+  const fields = { name: "Private", description: "", program_type: "private", durations: [60], min_participants: 1, max_participants: 1,
+    court_rental_included: false, is_active: true };
+  const price = { currency: "RON", duration_minutes: 60, participant_count: 1 };
+  expect(await saveCoachingProgram({ fields, club_prices: [{ ...price, amount: "-1" }] })).toMatchObject({ ok: false, reason: "invalid-input" });
+  expect(await saveCoachingProgram({ fields, club_prices: [{ ...price, amount: "10", coach_user_id: "c1000000-0000-4000-8000-00000000000a" }] }))
     .toMatchObject({ ok: false, reason: "invalid-input" });
   expect(await saveCoachProfile({ user_id: "x", create: true, fields: {} })).toMatchObject({ ok: false, reason: "invalid-input" });
   expect(getDataSource).not.toHaveBeenCalled();

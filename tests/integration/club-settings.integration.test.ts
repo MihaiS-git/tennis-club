@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { expect, test } from "vitest";
 import { getDataSource } from "@/lib/db/data-source";
-import { readClubSettings, writeClubSettings, emailDispatchAllowed } from "@/lib/db/repositories/club-settings.repository";
+import { readClubContact, readClubSettings, writeClubContact, writeClubSettings, emailDispatchAllowed } from "@/lib/db/repositories/club-settings.repository";
 import { claimEmailDeliveries, completeEmailAttempt, insertEmailDelivery } from "@/lib/db/repositories/notifications.repository";
 
 test("club settings round-trip; disable permanently suppresses pending/manual retries and claimed deliveries while preserving acceptance", async () => {
@@ -44,6 +44,28 @@ test("club settings round-trip; disable permanently suppresses pending/manual re
       has_table_privilege('authenticated','public.club_settings','SELECT,INSERT,UPDATE,DELETE') AS authenticated`))
       .toEqual([{ anon: false, authenticated: false }]);
     await expect(manager.query("INSERT INTO public.club_settings (id) VALUES(false)")).rejects.toThrow();
+  } finally {
+    await runner.rollbackTransaction(); await runner.release();
+  }
+});
+
+test("public contact details round-trip without changing sender settings or suppressing deliveries", async () => {
+  const runner = (await getDataSource()).createQueryRunner();
+  await runner.startTransaction();
+  const manager = runner.manager;
+  try {
+    await writeClubSettings(manager, { officialEmail: "official@example.test", senderName: "Integration Club", emailsEnabled: false });
+    const id = randomUUID();
+    await insertEmailDelivery(manager, { id, eventKey: `club-contact:${id}`, recipientEmail: "guest@example.test",
+      subject: "Fixture", bodyText: "Body", bodyHtml: "<p>Body</p>", status: "pending", providerMessageId: null, attempts: 0,
+      lastError: null, nextAttemptAt: new Date(), lockedUntil: null, createdAt: new Date(), updatedAt: new Date() });
+    const contact = { contactEmail: "hello@example.test", contactPhone: "+40 21 123 4567" };
+    await writeClubContact(manager, contact);
+    expect(await readClubContact(manager)).toEqual(contact);
+    expect(await readClubSettings(manager)).toEqual({ officialEmail: "official@example.test", senderName: "Integration Club", emailsEnabled: false });
+    expect(await manager.query("SELECT suppressed_at IS NOT NULL AS suppressed FROM public.email_deliveries WHERE id=$1", [id]))
+      .toEqual([{ suppressed: false }]);
+    await expect(manager.query("UPDATE public.club_settings SET contact_phone=repeat('1', 31)")).rejects.toThrow(/club_settings_contact/);
   } finally {
     await runner.rollbackTransaction(); await runner.release();
   }

@@ -12,9 +12,10 @@ import CourtsPage from "@/app/courts/page";
 afterEach(() => { document.body.replaceChildren(); });
 
 // Resolve the complete Server Component tree before inspecting its HTML. The client
-// renderer cannot resolve async Server Component children beneath Suspense.
+// renderer cannot resolve async Server Component children beneath Suspense, and an
+// unlimited chunk size keeps every resolved boundary inline rather than outlined.
 async function renderPage() {
-  const stream = await renderToReadableStream(<CourtsPage />);
+  const stream = await renderToReadableStream(<CourtsPage />, { progressiveChunkSize: Infinity });
   await stream.allReady;
   const html = new DOMParser().parseFromString(await new Response(stream).text(), "text/html");
   document.body.innerHTML = html.body.innerHTML;

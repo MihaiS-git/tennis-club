@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import {
-  deleteCoachingProgram, deleteCoachProfile, saveClubCoachingPrices, saveCoachingProgram, saveCoachProfile,
+  deleteCoachingProgram, deleteCoachProfile, saveCoachingProgram, saveCoachProfile,
   setCoachingProgramStatus, setCoachVisibility,
 } from "@/lib/coaching/admin";
 import { changeCoachAvailability } from "@/lib/coaching/availability";
@@ -31,10 +31,6 @@ export async function saveCoachProfileAction(input: unknown) {
 
 export async function setCoachVisibilityAction(input: unknown) {
   return revalidated(await setCoachVisibility(input));
-}
-
-export async function saveClubCoachingPricesAction(input: unknown) {
-  return revalidated(await saveClubCoachingPrices(input));
 }
 
 // Availability is not public, so the public Coaching page is not revalidated.

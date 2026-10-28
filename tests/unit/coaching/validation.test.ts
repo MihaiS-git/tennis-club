@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   coachingFieldErrors, coachingPriceMutationSchema, coachingProgramMutationSchema, coachProfileMutationSchema,
-  clubPriceSetMutationSchema, coachingParticipantCounts, formatParticipants, formatPlayers, parseTextList,
+  coachingParticipantCounts, formatParticipants, formatPlayers, parseTextList,
 } from "@/lib/coaching/validation";
 
 const fields = { name: "Private lesson", description: "", program_type: "private", durations: [60, 90],
@@ -89,33 +89,6 @@ describe("coach profile and price validation", () => {
   });
 });
 
-describe("club price set validation", () => {
-  const rates = { program_id: "a1000000-0000-4000-8000-000000000001", currency: "RON", duration_minutes: 60,
-    prices: [{ participant_count: 3, amount: "55.50" }], removed: [4] };
-
-  it("accepts positive lesson prices/person in minor units by player count for one explicit duration", () => {
-    expect(clubPriceSetMutationSchema.parse(rates)).toEqual({ ...rates, prices: [{ participant_count: 3, amount: 5550 }] });
-    expect(clubPriceSetMutationSchema.safeParse({ ...rates, prices: [] }).success).toBe(true);
-    expect(clubPriceSetMutationSchema.safeParse({ ...rates, duration_minutes: 90 }).success).toBe(true);
-  });
-
-  it("rejects missing, zero or malformed amounts, invalid counts, durations, currencies, conflicts and empty submissions", () => {
-    const invalid = [
-      { prices: [{ participant_count: 3, amount: "0" }] }, { prices: [{ participant_count: 3, amount: "-1" }] },
-      { prices: [{ participant_count: 3, amount: "1.234" }] }, { prices: [{ participant_count: 3, amount: "" }] },
-      { prices: [{ participant_count: 0, amount: "10" }] }, { prices: [{ participant_count: 2.5, amount: "10" }] },
-      { prices: [{ participant_count: 101, amount: "10" }] }, { currency: "JPY" }, { currency: "ron" },
-      { prices: [{ participant_count: 3, amount: "10" }, { participant_count: 3, amount: "12" }] },
-      { removed: [3] }, { removed: [4, 4] }, { prices: [], removed: [] }, { duration_minutes: 45 }, { duration_minutes: undefined }, { duration_minutes: null },
-      { prices: [{ participant_count: 3, amount: "10", duration_minutes: 60 }] }, { coach_user_id: null },
-    ];
-    for (const change of invalid) expect(clubPriceSetMutationSchema.safeParse({ ...rates, ...change }).success, JSON.stringify(change)).toBe(false);
-    const result = clubPriceSetMutationSchema.safeParse({ ...rates, prices: [{ participant_count: 5, amount: "10" }, { participant_count: 6, amount: "0" }], removed: [] });
-    expect(result.success).toBe(false);
-    if (!result.success) expect(Object.keys(coachingFieldErrors(result.error.issues))).toEqual(["prices.1"]);
-  });
-});
-
 describe("club prices saved with a program", () => {
   const semi = { ...fields, program_type: "semi_private", durations: [60, 90], min_participants: 2, max_participants: 4 };
   const group = { ...fields, program_type: "group", durations: [60, 90], min_participants: 4, max_participants: 8 };
@@ -155,5 +128,14 @@ describe("club prices saved with a program", () => {
     expect(Object.keys(errors({ fields: semi, removed_club_prices }))).toEqual(["removed_club_prices.0"]);
     expect(Object.keys(errors({ id: "a1000000-0000-4000-8000-000000000001", fields: semi, club_prices: at({}), removed_club_prices }))).toEqual(["removed_club_prices.0"]);
     expect(coachingProgramMutationSchema.safeParse({ id: "a1000000-0000-4000-8000-000000000001", fields: semi, removed_club_prices }).success).toBe(true);
+  });
+
+  it("rejects missing, zero or malformed amounts and unsupported currencies per entry", () => {
+    const at = (change: Record<string, unknown>) => [{ currency: "RON", duration_minutes: 60, participant_count: 2, amount: "150", ...change }];
+    for (const change of [{ amount: "0" }, { amount: "-1" }, { amount: "1.234" }, { amount: "" }, { currency: "JPY" }, { currency: "ron" }]) {
+      expect(Object.keys(errors({ fields: semi, club_prices: at(change) })), JSON.stringify(change)).toEqual(["club_prices.0"]);
+    }
+    expect(Object.keys(errors({ id: "a1000000-0000-4000-8000-000000000001", fields: semi,
+      removed_club_prices: [{ currency: "JPY", duration_minutes: 60, participant_count: 2 }] }))).toEqual(["removed_club_prices.0"]);
   });
 });

@@ -1,7 +1,7 @@
 import "server-only";
 import type { EntityManager } from "typeorm";
 import { ClubSettingEntity } from "../entities/club-setting.entity";
-import type { ClubSettings } from "@/lib/club/schema";
+import type { ClubContact, ClubSettings } from "@/lib/club/schema";
 
 export async function readClubSettings(manager: EntityManager, lock?: "pessimistic_read" | "pessimistic_write"): Promise<ClubSettings> {
   const query = manager.getRepository(ClubSettingEntity).createQueryBuilder("settings").where("settings.id = true");
@@ -17,6 +17,18 @@ export async function writeClubSettings(manager: EntityManager, settings: ClubSe
       WHERE suppressed_at IS NULL AND status IN ('pending','processing','failed')`);
   }
   await manager.getRepository(ClubSettingEntity).update({ id: true }, settings);
+}
+
+export async function readClubContact(manager: EntityManager): Promise<ClubContact> {
+  const settings = await manager.getRepository(ClubSettingEntity).createQueryBuilder("settings")
+    .select(["settings.id", "settings.contactEmail", "settings.contactPhone"]).where("settings.id = true").getOneOrFail();
+  return { contactEmail: settings.contactEmail, contactPhone: settings.contactPhone };
+}
+
+// Contact details are written alone so a save never touches transactional email delivery.
+export async function writeClubContact(manager: EntityManager, contact: ClubContact) {
+  await manager.getRepository(ClubSettingEntity).update({ id: true },
+    { contactEmail: contact.contactEmail, contactPhone: contact.contactPhone });
 }
 
 export async function emailDispatchAllowed(manager: EntityManager, id: string) {

@@ -1,12 +1,13 @@
 import { beforeEach, expect, test, vi } from "vitest";
 
-const { authorize, query, clubs } = vi.hoisted(() => ({ authorize: vi.fn(), query: vi.fn(),
+const { authorize, query, expire, clubs } = vi.hoisted(() => ({ authorize: vi.fn(), query: vi.fn(), expire: vi.fn(),
   clubs: { listAdminLocations: vi.fn(), listAdminCourts: vi.fn() } }));
 vi.mock("@/lib/coaching/authorization", () => ({ requireActiveCoach: authorize }));
 vi.mock("@/lib/admin/authorization", () => ({ requireActiveAdmin: vi.fn(() => { throw new Error("Admin only"); }) }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: async () => ({}) }));
 vi.mock("@/lib/db/data-source", () => ({ getDataSource: async () => ({ manager: { query } }) }));
 vi.mock("@/lib/db/repositories/clubs.repository", () => clubs);
+vi.mock("@/lib/payments/hold-expiry", () => ({ expirePaymentHolds: expire }));
 
 import { coachBookingsHref, coachListStatusOptions, parseCoachBookingQuery, parseCoachBookingReturn } from "@/lib/bookings/admin-query";
 import { getCoachDirectReservation, getCoachLesson, listCoachBookingFilterOptions, listCoachBookings } from "@/lib/bookings/coach-bookings";
@@ -32,7 +33,12 @@ const reservationDetails = { id: reservationId, court_id: courtId, coach_user_id
   court_name: "Court 1", court_active: true, location_id: locationId, location_name: "RIVUS", location_timezone: "UTC",
   location_active: true, archived_at: null, creator_name: "Coach A", creator_email: "coach@example.test", creator_phone: null, canceller_name: null };
 
-beforeEach(() => { vi.clearAllMocks(); authorize.mockResolvedValue({ state: "active", userId: coachId, roles: ["coach"] }); });
+beforeEach(() => {
+  vi.clearAllMocks();
+  query.mockReset();
+  expire.mockReset().mockResolvedValue(0);
+  authorize.mockResolvedValue({ state: "active", userId: coachId, roles: ["coach"] });
+});
 
 test("Coach list URLs offer only lessons and own reservations, with statuses that never expose checkout state", () => {
   expect(parseCoachBookingQuery({ type: "court", status: "pending_payment", coach: otherCoachId }))
@@ -57,6 +63,9 @@ test("the List is scoped in the query to the Coach and drops prices, payments an
   query.mockResolvedValueOnce([{ total: 2 }]).mockResolvedValueOnce([lessonRow, reservationRow]);
   // A forged Coach filter or court-only type cannot widen the scope.
   const result = await listCoachBookings(parseCoachBookingQuery({ type: "court", coach: otherCoachId }));
+  expect(expire).toHaveBeenCalledExactlyOnceWith();
+  expect(authorize.mock.invocationCallOrder[0]).toBeLessThan(expire.mock.invocationCallOrder[0]);
+  expect(expire.mock.invocationCallOrder[0]).toBeLessThan(query.mock.invocationCallOrder[0]);
   const [countSql, countArgs] = query.mock.calls[0], [pageSql, pageArgs] = query.mock.calls[1];
   expect(countArgs).toEqual([null, null, null, null, null, "", "all", null, coachId]);
   expect(pageArgs).toEqual([...countArgs, 0, 20]);
@@ -78,6 +87,7 @@ test("every Coach read authorizes first and fails closed", async () => {
   await expect(getCoachLesson(lessonId)).rejects.toThrow("not found");
   await expect(getCoachDirectReservation(reservationId)).rejects.toThrow("not found");
   expect(query).not.toHaveBeenCalled();
+  expect(expire).not.toHaveBeenCalled();
   expect(clubs.listAdminLocations).not.toHaveBeenCalled();
 });
 

@@ -10,7 +10,7 @@ import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { StatusBadge } from "@/components/status-badge";
-import type { AdminCoach, AdminCoachingLocation, AdminCoachingProgram } from "@/lib/coaching/admin";
+import type { AdminCoach, AdminCoachingLocation, AdminCoachingPrice, AdminCoachingProgram } from "@/lib/coaching/admin";
 import { setCoachVisibilityAction } from "../actions";
 import { coachingFailureMessages } from "../coaching-form";
 import { CoachDialog } from "./coach-dialog";
@@ -77,8 +77,8 @@ function CoachIdentity({ item }: { item: AdminCoachListItem }) {
   </div>;
 }
 
-function CoachRow({ item, locations, programs, mobile }: {
-  item: AdminCoachListItem; locations: AdminCoachingLocation[]; programs: AdminCoachingProgram[]; mobile?: boolean;
+function CoachRow({ item, locations, programs, prices, mobile }: {
+  item: AdminCoachListItem; locations: AdminCoachingLocation[]; programs: AdminCoachingProgram[]; prices?: AdminCoachingPrice[]; mobile?: boolean;
 }) {
   const coach = item.profile;
   const editable = item.profile_status !== "archived";
@@ -97,7 +97,8 @@ function CoachRow({ item, locations, programs, mobile }: {
     },
   };
   const dialog = open && editable && createPortal(<CoachDialog coach={coach ?? undefined}
-    account={coach ? undefined : { id: item.user_id, email: item.email, suggested_name: item.name }} locations={locations} programs={programs} open onOpenChange={(nextOpen) => {
+    account={coach ? undefined : { id: item.user_id, email: item.email, suggested_name: item.name }} locations={locations} programs={programs}
+    prices={prices?.filter((price) => price.coach_user_id === item.user_id)} open onOpenChange={(nextOpen) => {
     setOpen(nextOpen);
     if (!nextOpen) rowRef.current?.focus();
   }} />, document.body);
@@ -136,14 +137,15 @@ function CoachRow({ item, locations, programs, mobile }: {
   </>;
 }
 
-export function CoachesTable({ coaches, locations, programs, sortLinks, filtered = false }: {
+export function CoachesTable({ coaches, locations, programs, prices, sortLinks, filtered = false }: {
   coaches: AdminCoachListItem[]; sortLinks?: Record<string, TableSortLink>; filtered?: boolean; locations: AdminCoachingLocation[]; programs: AdminCoachingProgram[];
+  prices?: AdminCoachingPrice[];
 }) {
   if (!coaches.length) return <p className="rounded-card border border-border bg-surface px-4 py-5 text-sm text-muted-foreground">
     {filtered ? "No coaches match these filters." : "No accounts have the Coach role. Assign the role under Users."}
   </p>;
   return <section aria-label="Coaches">
-    <div className="space-y-3 lg:hidden">{coaches.map((coach) => <CoachRow key={coach.user_id} item={coach} locations={locations} programs={programs} mobile />)}</div>
+    <div className="space-y-3 lg:hidden">{coaches.map((coach) => <CoachRow key={coach.user_id} item={coach} locations={locations} programs={programs} prices={prices} mobile />)}</div>
     <div className="hidden overflow-hidden rounded-card border border-border bg-surface lg:block">
       <table className="w-full table-fixed text-left font-sans text-sm" aria-label="Coaches">
         <thead className="border-b border-border bg-surface-muted text-xs font-semibold text-muted-foreground">
@@ -164,7 +166,7 @@ export function CoachesTable({ coaches, locations, programs, sortLinks, filtered
           </tr>
         </thead>
         <tbody className="divide-y divide-border">
-          {coaches.map((coach) => <CoachRow key={coach.user_id} item={coach} locations={locations} programs={programs} />)}
+          {coaches.map((coach) => <CoachRow key={coach.user_id} item={coach} locations={locations} programs={programs} prices={prices} />)}
         </tbody>
       </table>
     </div>

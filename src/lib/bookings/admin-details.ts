@@ -19,6 +19,7 @@ import { readFinancialHistory, summarizeBookingFacts } from "@/lib/payments/fina
 import { reportedOutstanding } from "@/lib/payments/financials";
 import { ADMIN_BOOKINGS_PAGE_SIZE, parseAdminBookingQuery, type AdminBookingQuery } from "./admin-query";
 import { adminCancellationAvailability, buildBookingHistory, summarizeBookingFinancials } from "./admin-history";
+import { expirePaymentHolds } from "@/lib/payments/hold-expiry";
 
 export type AdminBookingDetails = NonNullable<Awaited<ReturnType<typeof findAdminBookingDetails>>>;
 
@@ -35,6 +36,7 @@ export async function getAdminBookingRecords(input: unknown, options: { historyP
   if (!id.success) return null;
   const historyPage = z.number().int().positive().catch(1).parse(options.historyPage ?? 1);
   try {
+    await expirePaymentHolds();
     return await inReadSnapshot(async manager => {
       const booking = await findAdminBookingDetails(manager, id.data);
       if (!booking) return null;
@@ -91,6 +93,9 @@ export async function readBookingListPage(query: AdminBookingQuery, staffUserId:
     locationId: query.location || null, courtId: query.court || null, from: query.from || null, to: query.to || null,
     sort: query.sort, direction: query.dir, staffUserId };
   try {
+    // Settle overdue local holds before filtering/counting persisted statuses.
+    // No Stripe calls; accepted captures remain protected by the expiry service.
+    await expirePaymentHolds();
     const manager = (await getDataSource()).manager;
     const total = await countAdminBookings(manager, filters);
     const totalPages = Math.max(1, Math.ceil(total / ADMIN_BOOKINGS_PAGE_SIZE));

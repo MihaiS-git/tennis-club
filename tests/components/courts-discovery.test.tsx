@@ -37,6 +37,9 @@ it("renders ordered locations/courts, attributes, split hours, currencies and lo
   expect(screen.getByRole("link", { name: "Book at Riverside" }).getAttribute("href")).toBe(`/book?location=${location.id}`);
   expect(screen.getByRole("link", { name: "Book at West" }).getAttribute("href")).toBe("/book?location=44444444-4444-4444-8444-444444444444");
   expect(screen.queryByText(/available slots|courts available/i)).toBeNull();
+  // The figure is today's lowest hourly rate; Pricing explains how court prices vary.
+  expect(first.getByText("Rate today")).toBeTruthy();
+  expect(first.getByRole("link", { name: /How court prices work/ }).getAttribute("href")).toBe("/pricing#courts");
 });
 
 it.each(["EUR", "GBP"] as const)("formats %s rates", async (currency) => {

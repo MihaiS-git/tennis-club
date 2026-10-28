@@ -76,7 +76,7 @@ it("shows signed-out links and closes after navigation settles or on Escape", as
   expect(document.body.style.overflow).toBe("hidden");
   expect(document.activeElement).toBe(within(drawer).getByRole("button", { name: "Close menu" }));
   expect(within(navigation).getAllByRole("link").map((link) => link.textContent)).toEqual([
-    "Courts", "Coaching", "Club", "Sign in",
+    "Courts", "Coaching", "Pricing", "Club", "Contact", "Sign in",
   ]);
   expect(within(navigation).queryByRole("button", { name: "Sign out" })).toBeNull();
   expect(within(navigation).queryByText("Book a court")).toBeNull();
@@ -154,7 +154,7 @@ it.each([
   const adminLink = within(navigation).queryByRole("link", { name: "Admin" });
   if (showsAdmin) {
     expect(links.map((link) => link.textContent)).toEqual([
-      "Courts", "Coaching", "Club", "Admin", "Profile",
+      "Courts", "Coaching", "Pricing", "Club", "Contact", "Admin", "Profile",
     ]);
     expect(navigation.lastElementChild?.lastElementChild?.textContent).toBe("Sign out");
     expect(within(navigation).getByRole("link", { name: "Profile" }).getAttribute("href")).toBe("/profile");
@@ -179,7 +179,7 @@ it.each([
   ["/admin", "Admin"], ["/admin/payments/transactions", "Admin"], ["/admin/payments/settings", "Admin"], ["/admin/locations/location-id", "Admin"],
   ["/admin/reservations", "Admin"], ["/admin/reservations/day", "Admin"],
   ["/coach", "Admin"], ["/coach/bookings", "Admin"], ["/coach/availability", "Admin"], ["/coach/pricing", "Admin"], ["/coaches", null],
-  ["/courts", "Courts"], ["/coaching/session", "Coaching"], ["/club/about", "Club"],
+  ["/courts", "Courts"], ["/coaching/session", "Coaching"], ["/club/about", "Club"], ["/pricing", "Pricing"], ["/contact", "Contact"],
   ["/matches", null], ["/rankings", null],
   ["/administrator", null], ["/admin/reservations-extra", "Admin"], ["/courts-extra", null],
 ])("highlights a single segment-aware primary section on %s", async (pathname, active) => {
@@ -261,7 +261,7 @@ it("does not render a notification bell for guests", async () => {
   expect(desktop.querySelector('[aria-label^="Notifications"]')).toBeNull();
 });
 
-it.each([null, "/profile/avatar?v=1"])("shares icon geometry and interaction styles across desktop and mobile (avatar %s)", async url => {
+it.each([null, "/profile/avatar?v=1"])("uses matching circular profile avatars across desktop and mobile (avatar %s)", async url => {
   readCurrentAccount.mockResolvedValue({ state: "active", roles: [], userId: "member-1", email: "member@example.com" });
   avatar.url = url;
   const stream = await renderToReadableStream(<DesktopNavbar />);
@@ -270,13 +270,13 @@ it.each([null, "/profile/avatar?v=1"])("shares icon geometry and interaction sty
   const { container } = render(await MobileNavbar());
   const controls = [
     desktop.querySelector('a[aria-label="Notifications"]')!,
-    desktop.querySelector('a[aria-label="Profile"]')!,
     container.querySelector('a[aria-label="Notifications"]')!,
   ];
   expect(container.querySelector('a[aria-label="Profile"]')).toBeNull();
   expect(controls.every(control => control.className === controls[0].className)).toBe(true);
   for (const control of controls) {
-    expect(control.className).toContain("size-10 shrink-0 items-center justify-center");
+    expect(control.className.split(" ")).toContain("size-10");
+    expect(control.className).toContain("shrink-0 items-center justify-center");
     expect(control.className).toContain("p-0");
     expect(control.className).toContain("hover:bg-surface-muted active:bg-surface-muted focus-visible:outline-2");
     const icon = control.querySelector("svg, img")!;
@@ -286,5 +286,29 @@ it.each([null, "/profile/avatar?v=1"])("shares icon geometry and interaction sty
       expect(icon.getAttribute("height")).toBe("20");
     }
   }
-  expect(controls.map(control => control.getAttribute("href"))).toEqual(["/messages", "/profile", "/messages"]);
+  expect(controls.map(control => control.getAttribute("href"))).toEqual(["/messages", "/messages"]);
+  const desktopProfile = desktop.querySelector('a[aria-label="Profile"]')!;
+  expect(desktopProfile.className).toContain("size-12 rounded-full");
+  expect(desktopProfile.className.split(" ")).not.toContain("border");
+  expect(desktopProfile.className).toContain("p-0");
+  expect(desktopProfile.className).toContain("focus-visible:outline-2");
+  fireEvent.click(screen.getByRole("button", { name: "Open menu" }));
+  const mobileProfile = within(screen.getByRole("dialog")).getByRole("link", { name: "Profile" });
+  expect(mobileProfile.getAttribute("href")).toBe("/profile");
+  const frames = [desktopProfile.firstElementChild!, mobileProfile.firstElementChild!];
+  expect(frames[0].className).toBe(frames[1].className);
+  for (const frame of frames) {
+    expect(frame.className).toContain("size-12 shrink-0");
+    expect(frame.className).toContain("rounded-full");
+    if (url) {
+      const image = frame.querySelector("img")!;
+      expect(image.getAttribute("width")).toBe("48");
+      expect(image.getAttribute("height")).toBe("48");
+      expect(image.getAttribute("alt")).toBe("");
+      expect(image.className).toContain("size-12 shrink-0 rounded-full object-cover");
+    } else {
+      expect(frame.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+    }
+  }
+  expect(desktop.querySelector("header > div")?.className).toContain("h-18");
 });

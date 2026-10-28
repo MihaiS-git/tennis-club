@@ -6,7 +6,7 @@ import { getDataSource } from "@/lib/db/data-source";
 import { listLocationCoachBookingAvailability } from "@/lib/db/repositories/coach-availability.repository";
 import { mondayWeekday } from "@/lib/pricing/resolution";
 import { coachingLessonAmount, resolveCoachingPrice, type ResolvedCoachingPrice } from "./pricing";
-import type { PublicCoaching } from "./public";
+import { hasPublishedClubPrice, readPublicCoachingWithFacts, type PublicCoaching } from "./public";
 import {
   coachingParticipantCounts, coachingParticipantRange, isCoachingDuration, isOnlineCoachingProgramType, type OnlineCoachingProgramType,
 } from "./validation";
@@ -34,7 +34,7 @@ type CoachingCoachOption = { id: string; displayName: string; programs: Coaching
 // hours here. Occupancy and date-specific absences remain the timetable's responsibility.
 export async function coachingBookingOptions(data: PublicCoaching, location: Pick<PublicLocation, "id" | "currency" | "timezone">, now = new Date()): Promise<CoachingCoachOption[]> {
   const locationId = location.id.toLowerCase();
-  const programs = new Map(data.programs.map(program => [program.id, program]));
+  const programs = new Map(data.programs.filter(program => hasPublishedClubPrice(program, location.currency)).map(program => [program.id, program]));
   const options = data.coaches.filter(coach => coach.locations.some(item => item.id.toLowerCase() === locationId)).map(coach => ({
     id: coach.id, displayName: coach.displayName,
     // Only Private/Semi-private programs with valid participant limits are bookable online;
@@ -72,4 +72,22 @@ export async function coachingBookingOptions(data: PublicCoaching, location: Pic
     if (row.validUntil === null || occurrence.toISOString().slice(0, 10) <= row.validUntil) eligible.add(row.coachUserId);
   }
   return options.filter(coach => eligible.has(coach.id));
+}
+
+type BookableLocation = Pick<PublicLocation, "id" | "currency" | "timezone">;
+
+// The given public locations, in order, where one coach passes the selector rules above.
+// Like the selector, this never searches lesson slots: a full or absent date is not a reason.
+export async function coachBookableLocations<L extends BookableLocation>(data: PublicCoaching, locations: readonly L[], coachId: string, now = new Date()): Promise<L[]> {
+  const coach = data.coaches.find(item => item.id === coachId.toLowerCase());
+  if (!coach) return [];
+  const assigned = locations.filter(location => coach.locations.some(item => item.id.toLowerCase() === location.id.toLowerCase()));
+  const scoped = { ...data, coaches: [coach] };
+  const bookable = await Promise.all(assigned.map(async location => (await coachingBookingOptions(scoped, location, now)).length > 0));
+  return assigned.filter((_, index) => bookable[index]);
+}
+
+export async function readCoachBookableLocationIds(coachId: string, locations: readonly (BookableLocation & Pick<PublicLocation, "name">)[], now = new Date()) {
+  const { coaching } = await readPublicCoachingWithFacts(locations);
+  return (await coachBookableLocations(coaching, locations, coachId, now)).map(location => location.id);
 }

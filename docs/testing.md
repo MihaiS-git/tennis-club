@@ -381,8 +381,8 @@ three registered migrations are 924–926; no coaching repair migration or autom
 legacy data interpretation runs. Recreate only the disposable test stack using the
 explicit `tests/local` stop/start procedure above to validate an edited baseline.
 
-Focused database tests execute actual Programs/Prices list repositories, program and
-price saves, both pricing scopes, public projection, per-person lesson quotes, payment
+Focused database tests execute actual Programs list repositories, program saves with
+club prices, coach override reads, both pricing scopes, public projection, per-person lesson quotes, payment
 amounts and immutable snapshots:
 
 ```bash

@@ -5,7 +5,10 @@ const { loadDay, loadLocations, loadCoaching, loadLessons } = vi.hoisted(() => (
 const facts = { programs: [], coaches: [], prices: [] };
 const lessonCourtDay = { times: [600], courts: [] };
 const { lessonLoaded } = vi.hoisted(() => ({ lessonLoaded: vi.fn() }));
-vi.mock("@/lib/coaching/public", () => ({ readPublicCoachingWithFacts: async (locations: unknown) => ({ coaching: await loadCoaching(locations), facts }) }));
+vi.mock("@/lib/coaching/public", async (original) => ({
+  ...await original<typeof import("@/lib/coaching/public")>(),
+  readPublicCoachingWithFacts: async (locations: unknown) => ({ coaching: await loadCoaching(locations), facts }),
+}));
 vi.mock("@/lib/coaching/lesson-availability", () => ({ readPublicCoachingLessonAvailability: async (input: unknown, loaded: unknown, now: Date) =>
   (lessonLoaded(loaded), { availability: await loadLessons(input, now), courtDay: lessonCourtDay }) }));
 vi.mock("next/server", () => ({ connection: vi.fn().mockResolvedValue(undefined) }));
@@ -184,7 +187,7 @@ it("blocks checkout for an unpriced duration without loading lesson starts", asy
 
 it("reports invalid URL selections and never substitutes another coach, program or duration", async () => {
   const otherLocation = await coaching({ location: central.id, coach: "dan", program: "private", duration: "60" });
-  expect(otherLocation.alerts).toEqual(["The selected coach is not available at Central Club. Choose a coach."]);
+  expect(otherLocation.alerts).toEqual(["Dan does not offer online-bookable lessons at Central Club. Available at Riverside Club; choose that location or another coach."]);
   expect(otherLocation.controls).toMatchObject({ coachId: "", programId: "", durationMinutes: 0, programs: [] });
   const otherProgram = await coaching({ location: central.id, coach: "sofia", program: "private", duration: "60" });
   expect(otherProgram.alerts).toEqual(["Sofia does not offer the selected program online. Choose a program."]);
@@ -202,7 +205,7 @@ it("never offers a Group lesson online, even with configured limits and a price"
   loadSchedules.mockImplementation(async () => ({ weekly: [{ coachUserId: maria.id, weekday: 0, startMinute: 480, endMinute: 1200, validFrom: "2000-01-01", validUntil: null }], extra: [] }));
   for (const search of [{ coach: "maria" }, { coach: "maria", program: "group", duration: "90", participants: "3" }] as Record<string, string>[]) {
     const page = await coaching({ location: central.id, ...search });
-    expect(page.alerts).toEqual(["The selected coach is not available at Central Club. Choose a coach."]);
+    expect(page.alerts).toEqual(["Maria does not currently offer lessons that can be booked online. Please contact the club, or choose another coach."]);
     expect(page.controls).toMatchObject({ coachId: "", programId: "", participants: null });
   }
   expect(loadLessons).not.toHaveBeenCalled();
@@ -253,6 +256,51 @@ it("keeps a linked coach and selects their first public location when no locatio
   expect((await coaching({ coach: "unknown" })).alerts).toEqual(["The selected coach is not available at Central Club. Choose a coach."]);
 });
 
+// Andrei: assigned to both clubs but working only at Riverside. Maria: working hours at
+// Central but only Group programs, which are never booked online.
+const workingAt = (hours: Record<string, string[]>) => async (_manager: unknown, locationId: string) => ({
+  weekly: (hours[locationId] ?? []).map(coachUserId => ({ coachUserId, weekday: 0, startMinute: 480, endMinute: 1200, validFrom: "2000-01-01", validUntil: null })), extra: [] });
+
+it("opens a coach-profile link at the coach's bookable location, not their first assigned one", async () => {
+  loadSchedules.mockImplementation(workingAt({ [central.id]: ["sofia", "maria"], [riverside.id]: ["andrei", "dan"] }));
+  const page = await coaching({ coach: "andrei" });
+  expect(page.calendar).toMatchObject({ locationId: riverside.id, coaching: { coach: "andrei" } });
+  expect(page.controls).toMatchObject({ coachId: "andrei", programId: "private", durationMinutes: 60 });
+  expect(page.controls?.coaches).toEqual([{ id: "andrei", displayName: "Andrei" }, { id: "dan", displayName: "Dan" }]);
+  expect(page.alerts).toEqual([]);
+  expect(loadLessons).toHaveBeenCalledExactlyOnceWith({ locationId: riverside.id, programId: "private", coachId: "andrei", date: "2099-10-15", participantCount: 1 }, expect.any(Date));
+});
+
+it("keeps the selected coach at an incompatible location and explains where they can be booked", async () => {
+  loadSchedules.mockImplementation(workingAt({ [central.id]: ["sofia", "maria"], [riverside.id]: ["andrei", "dan"] }));
+  const page = await coaching({ location: central.id, coach: "andrei" });
+  expect(page.calendar).toMatchObject({ locationId: central.id, coaching: { coach: "andrei" } });
+  // Never replaced by Sofia, the only eligible coach at Central.
+  expect(page.controls).toMatchObject({ coaches: [{ id: "sofia", displayName: "Sofia" }], coachId: "", programId: "" });
+  expect(page.booking).toMatchObject({ coachId: "", starts: [] });
+  expect(page.alerts).toEqual(["Andrei does not offer online-bookable lessons at Central Club. Available at Riverside Club; choose that location or another coach."]);
+  expect(loadLessons).not.toHaveBeenCalled();
+});
+
+it("explains a linked coach without online-bookable lessons instead of choosing another coach", async () => {
+  loadSchedules.mockImplementation(workingAt({ [central.id]: ["sofia", "maria"], [riverside.id]: ["andrei", "dan"] }));
+  const page = await coaching({ coach: "maria" });
+  expect(page.calendar.locationId).toBe(central.id);
+  expect(page.controls).toMatchObject({ coaches: [{ id: "sofia", displayName: "Sofia" }], coachId: "" });
+  expect(page.alerts).toEqual(["Maria does not currently offer lessons that can be booked online. Please contact the club, or choose another coach."]);
+  expect(loadLessons).not.toHaveBeenCalled();
+});
+
+it("includes every coach with a priced online program and working hours at the location", async () => {
+  const coachIds = async (location: string) => ((await coaching({ location })).controls?.coaches as { id: string }[]).map(coach => coach.id);
+  loadSchedules.mockImplementation(workingAt({ [central.id]: ["andrei", "sofia", "maria", "elena"], [riverside.id]: ["dan"] }));
+  // Maria (Group only) and Elena (no programs) are excluded despite their working hours.
+  expect(await coachIds(central.id)).toEqual(["andrei", "sofia"]);
+  loadSchedules.mockImplementation(workingAt({ [central.id]: ["sofia", "maria"], [riverside.id]: ["andrei", "dan"] }));
+  expect(await coachIds(central.id)).toEqual(["sofia"]);
+  expect(await coachIds(riverside.id)).toEqual(["andrei", "dan"]);
+});
+
 it("honors valid URL selections and defaults only missing dependent choices", async () => {
   const explicit = await coaching({ location: central.id, coach: "andrei", program: "private", duration: "90" });
   expect(explicit.controls).toMatchObject({ coachId: "andrei", programId: "private", durationMinutes: 90 });
@@ -274,8 +322,8 @@ it("chooses the first priced online program and prefers 60 minutes, then the sho
     programs[2],
   ], coaches: [elena, maria, andrei, sofia] });
   const page = await coaching({ location: central.id });
-  expect(page.controls).toMatchObject({ coachId: "andrei", programId: "private", durationMinutes: 60 });
-  // Andrei's override keeps Private priced despite the missing club price.
+  // Andrei's override cannot publish Private without a club price.
+  expect(page.controls).toMatchObject({ coachId: "andrei", programId: "semi", durationMinutes: 90 });
   loadCoaching.mockResolvedValueOnce({ programs: [
     { ...programs[0], prices: [], durations: [90, 120] },
     { ...programs[1], durations: [120, 90], prices: [ron(120, 30000, 2), ron(90, 22000, 2)] },
@@ -323,7 +371,8 @@ it("invalidates an ineligible URL coach and all dependent selections after worki
   const page = await coaching({ location: central.id, coach: "andrei", program: "private", duration: "60" });
   expect(page.controls).toMatchObject({ coaches: [], coachId: "", programId: "", durationMinutes: 0, programs: [], durations: [] });
   expect(page.booking).toMatchObject({ coachId: "", programId: "", durationMinutes: 0, starts: [] });
-  expect(page.alerts).toEqual(["The selected coach is not available at Central Club. Choose a coach."]);
+  // The default schedules give Andrei no working hours at Riverside either.
+  expect(page.alerts).toEqual(["Andrei does not currently offer lessons that can be booked online. Please contact the club, or choose another coach."]);
   expect(loadLessons).not.toHaveBeenCalled();
 });
 

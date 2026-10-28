@@ -18,8 +18,8 @@ import { logger } from "@/lib/logger";
 import type { LocationCurrency } from "@/lib/pricing/money";
 import { createClient } from "@/lib/supabase/server";
 import {
-  clubPriceSetMutationSchema, coachingFieldErrors, coachingProgramMutationSchema, coachingParticipantRange, coachingProgramStatusSchema,
-  coachProfileMutationSchema, coachVisibilitySchema, isOnlineCoachingProgramType, isPermittedParticipantCount, type CoachingMutationResult, type CoachingProgramType,
+  coachingFieldErrors, coachingProgramMutationSchema, coachingParticipantRange, coachingProgramStatusSchema,
+  coachProfileMutationSchema, coachVisibilitySchema, isOnlineCoachingProgramType, type CoachingMutationResult, type CoachingProgramType,
 } from "./validation";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
@@ -82,13 +82,13 @@ export async function loadAdminCoaching(supabase?: Client): Promise<AdminCoachin
   return readAdminCoaching((await getDataSource()).manager);
 }
 
-// Internal projection for already-authorized management reads, including list snapshots.
-export async function readAdminCoaching(manager: EntityManager, includePrices = true): Promise<AdminCoaching> {
+// Internal projection for already-authorized management reads.
+async function readAdminCoaching(manager: EntityManager): Promise<AdminCoaching> {
   try {
     const [programs, coaches, coachAccounts, locations, prices] = await readIndependently(manager, [
       () => coaching.listCoachingPrograms(manager), () => coaching.listCoachProfiles(manager),
       () => coaching.listCoachAccountsWithoutProfile(manager), () => clubs.listAdminLocations(manager, "current"),
-      () => includePrices ? coaching.listCoachingPrices(manager) : Promise.resolve([]),
+      () => coaching.listCoachingPrices(manager),
     ]);
     return {
       programs: programs.map(adminCoachingProgram),
@@ -161,16 +161,22 @@ export async function saveCoachingProgram(input: unknown, supabase?: Client): Pr
   const scope: coaching.ProgramPriceScope = { coachOverrides: isOnlineCoachingProgramType(fields.program_type), durations: fields.durations,
     range: coachingParticipantRange({ minParticipants: fields.min_participants, maxParticipants: fields.max_participants }) };
   return mutate(id ? "admin.coaching_program_updated" : "admin.coaching_program_created", actor.userId, async (manager) => {
-    // Configuration fence → Admin fence → program, the club price-save order.
+    // Configuration fence → Admin fence → program.
     await clubs.lockConfigurationForWrite(manager);
     await requireAdminFence(manager, actor.userId);
+    // New or changed club prices need a currency charged by a current location; prices in a
+    // currency no location uses any more can still be removed. The fence keeps locations stable.
+    if (clubPrices.length) {
+      const charged = new Set((await clubs.listAdminLocations(manager, "current")).map((location) => location.currency));
+      if (clubPrices.some((price) => !charged.has(price.currency))) return { ok: false, reason: "invalid-currency" };
+    }
     if (!id) {
       const created = await coaching.insertCoachingProgram(manager, values, new Date());
       await coaching.addCoachingProgramDurations(manager, created, fields.durations);
       await persistClubPrices(manager, created, clubPrices, removedPrices);
       return { ok: true, id: created };
     }
-    // Price saves hold the program FOR SHARE, so no price outside the saved configuration
+    // Coach price saves hold the program FOR SHARE, so no price outside the saved configuration
     // can be written between this reconciliation and commit.
     const program = await coaching.lockCoachingProgram(manager, id, "pessimistic_write");
     if (!program) return { ok: false, reason: "not-found" };
@@ -268,39 +274,6 @@ export async function setCoachVisibility(input: unknown, supabase?: Client): Pro
     if (isPublic && eligibility) return { ok: false, reason: "not-eligible" };
     if (profile.isPublic !== isPublic) await coaching.updateCoachProfile(manager, profile.userId, { isPublic }, new Date());
     return { ok: true, id: profile.userId };
-  });
-}
-
-// Club lesson prices/person of one offered program duration in one currency, by participant count,
-// saved and removed together, for every program type. A coach's own overrides are managed by that coach (coach-pricing.ts);
-// the input cannot name a coach. Saved counts must lie in the program's current range and the
-// currency must be charged by a current location.
-export async function saveClubCoachingPrices(input: unknown, supabase?: Client): Promise<CoachingMutationResult> {
-  const actor = await requireActiveAdmin(supabase ?? await createClient());
-  const parsed = clubPriceSetMutationSchema.safeParse(input);
-  if (!parsed.success) return { ok: false, reason: "invalid-input", fieldErrors: coachingFieldErrors(parsed.error.issues) };
-  const { currency, prices, removed, duration_minutes: durationMinutes } = parsed.data;
-  const programId = parsed.data.program_id.toLowerCase();
-  return mutate("admin.coaching_club_prices_saved", actor.userId, async (manager) => {
-    // The club price-save order: configuration share fence → Admin fence → program FOR SHARE.
-    await clubs.lockConfigurationForRead(manager);
-    await requireAdminFence(manager, actor.userId);
-    const program = await coaching.lockCoachingProgram(manager, programId, "pessimistic_read");
-    if (!program) return { ok: false, reason: "invalid-program" };
-    if (!program.durations.includes(durationMinutes)) return { ok: false, reason: "invalid-program" };
-    if (prices.length) {
-      const range = coachingParticipantRange(program);
-      if (!range) return { ok: false, reason: "participants-required" };
-      const fieldErrors = Object.fromEntries(prices.flatMap((price, index) => isPermittedParticipantCount(range, price.participant_count) ? []
-        : [[`prices.${index}`, `Use a player count from ${range.min} to ${range.max}.`]]));
-      if (Object.keys(fieldErrors).length) return { ok: false, reason: "invalid-input", fieldErrors };
-      const locations = await clubs.listAdminLocations(manager, "current");
-      if (!locations.some((location) => location.currency === currency)) return { ok: false, reason: "invalid-currency" };
-    }
-    await persistClubPrices(manager, program.id,
-      prices.map((price) => ({ ...price, duration_minutes: durationMinutes, currency })),
-      removed.map((participant_count) => ({ participant_count, duration_minutes: durationMinutes, currency })));
-    return { ok: true, id: program.id };
   });
 }
 

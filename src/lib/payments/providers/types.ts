@@ -27,8 +27,9 @@ export interface OnlinePaymentAdapter {
   capturePayment(attempt: { id: string; providerPaymentId: string }): Promise<{
     status: "succeeded" | "cancelled"; amountMinor: number; currency: string; providerCaptureId: string | null }>;
   // Dismissal never cancels a live payment; anything still awaiting the
-  // customer (including authentication) is cancelled.
-  dismissPayment(attempt: { id: string; providerPaymentId: string }): Promise<"cancelled" | "succeeded" | "live">;
+  // customer (including authentication) is cancelled. Navigation's unusedOnly
+  // mode additionally preserves authentication and uncaptured authorizations.
+  dismissPayment(attempt: { id: string; providerPaymentId: string; unusedOnly?: boolean }): Promise<"cancelled" | "succeeded" | "live">;
   // Authorizes only (manual capture); the server captures after verifying the
   // checkout or modification deadline.
   createPayment(attempt: { id: string; amountMinor: number; currency: string }): Promise<{

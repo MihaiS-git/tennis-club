@@ -101,6 +101,13 @@ test("dismissal cancel race re-reads the intent and takes the live or succeeded 
   await expect(stripeAdapter.dismissPayment(attempt)).rejects.toThrow("Payment service unavailable.");
 });
 
+test.each(["requires_action", "requires_capture", "processing"])("navigation cleanup preserves %s instead of cancelling it", async status => {
+  configure();
+  retrieve.mockResolvedValue({ id: "pi_fixture", status, metadata: { payment_attempt_id: id } });
+  expect(await stripeAdapter.dismissPayment({ id, providerPaymentId: "pi_fixture", unusedOnly: true })).toBe("live");
+  expect(cancel).not.toHaveBeenCalled();
+});
+
 test("a verified processing event is translated only as liveness evidence", () => {
   configure(); const stripe = new Stripe("sk_test_Fixture");
   const body = JSON.stringify({ id: "evt_processing", type: "payment_intent.processing",

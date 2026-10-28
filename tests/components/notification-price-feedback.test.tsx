@@ -3,18 +3,16 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { InboxList } from "@/app/messages/inbox-list";
 import { MessageDetailActions } from "@/app/messages/[messageId]/unread-button";
-import { PriceEditor } from "@/app/admin/coaching/prices/price-editor";
-import { ClubPriceEditor } from "@/app/admin/coaching/prices/club-price-editor";
+import { PriceEditor } from "@/app/coach/pricing/price-editor";
 import { parseInboxQuery } from "@/lib/notifications/inbox-query";
 import type { CoachingMutationResult } from "@/lib/coaching/validation";
 import { installDialogMock } from "../helpers/dialog";
 
 const mocks = vi.hoisted(() => ({ read: vi.fn(), unread: vi.fn(), delete: vi.fn(), selected: vi.fn(),
-  save: vi.fn(), remove: vi.fn(), clubSave: vi.fn(), refresh: vi.fn(), push: vi.fn() }));
+  save: vi.fn(), remove: vi.fn(), refresh: vi.fn(), push: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: mocks.refresh, push: mocks.push }) }));
 vi.mock("@/app/messages/actions", () => ({ markMessageReadAction: mocks.read, markMessageUnreadAction: mocks.unread,
   deleteMessageAction: mocks.delete, updateSelectedMessagesAction: mocks.selected }));
-vi.mock("@/app/admin/coaching/actions", () => ({ saveClubCoachingPricesAction: mocks.clubSave }));
 vi.mock("sonner", () => ({ toast: { loading: vi.fn(), success: vi.fn(), error: vi.fn(), dismiss: vi.fn() } }));
 
 function deferred<T>() {
@@ -82,20 +80,18 @@ it("keeps row deletion icon-only and contextual while blocking duplicate and bul
   expect(mocks.refresh).toHaveBeenCalledTimes(1);
 });
 
-it.each(["coach", "club"] as const)("shows contextual %s price saving feedback and prevents repeated submits", async (scope) => {
+it("shows contextual coach price saving feedback and prevents repeated submits", async () => {
   const request = deferred<CoachingMutationResult>();
-  const action = scope === "coach" ? mocks.save : mocks.clubSave;
+  const action = mocks.save;
   action.mockReturnValueOnce(request.promise);
-  if (scope === "coach") render(<PriceEditor label="My lesson price" target={{ program_id: "program-1", duration_minutes: 60,
+  render(<PriceEditor label="My lesson price" target={{ program_id: "program-1", duration_minutes: 60,
     participant_count: 1, currency: "RON" }} emptyHint="Not set" actions={{ save: mocks.save, remove: mocks.remove }} />);
-  else render(<ClubPriceEditor program={{ id: "program-1", name: "Private", min_participants: 1, max_participants: 1 }}
-    currency="RON" durationMinutes={60} prices={[]} chargeable />);
   const input = screen.getByRole("textbox");
   fireEvent.change(input, { target: { value: "150" } });
-  const button = screen.getByRole("button", { name: scope === "coach" ? "Save" : "Save prices" });
+  const button = screen.getByRole("button", { name: "Save" });
   const form = button.closest("form")!;
   act(() => { fireEvent.submit(form); fireEvent.submit(form); });
-  const saving = screen.getByRole("button", { name: scope === "coach" ? "Saving price…" : "Saving…" });
+  const saving = screen.getByRole("button", { name: "Saving price…" });
   expect(saving.getAttribute("aria-busy")).toBe("true");
   expect(saving.hasAttribute("disabled")).toBe(true);
   expect(input.hasAttribute("disabled")).toBe(true);

@@ -1,10 +1,10 @@
 import { expect, test, vi } from "vitest";
 import type { EntityManager } from "typeorm";
-import { readClubSettings, writeClubSettings, emailDispatchAllowed } from "@/lib/db/repositories/club-settings.repository";
+import { readClubContact, readClubSettings, writeClubContact, writeClubSettings, emailDispatchAllowed } from "@/lib/db/repositories/club-settings.repository";
 
 const settings = { officialEmail: "official@example.com", senderName: "Club", emailsEnabled: false };
 function fixture() {
-  const builder = { where: vi.fn().mockReturnThis(), setLock: vi.fn().mockReturnThis(), getOneOrFail: vi.fn().mockResolvedValue({ id: true, ...settings }) };
+  const builder = { select: vi.fn().mockReturnThis(), where: vi.fn().mockReturnThis(), setLock: vi.fn().mockReturnThis(), getOneOrFail: vi.fn().mockResolvedValue({ id: true, ...settings, contactEmail: "hello@example.com", contactPhone: "+40 21 123 4567" }) };
   const update = vi.fn();
   const query = vi.fn().mockResolvedValue([]);
   const manager = { getRepository: () => ({ createQueryBuilder: () => builder, update }), query } as unknown as EntityManager;
@@ -32,4 +32,13 @@ test("dispatch checks both current switch and durable suppression", async () => 
   expect(query).toHaveBeenCalledWith(expect.stringContaining("suppressed_at IS NULL"), ["delivery"]);
   query.mockResolvedValue([{ id: "delivery" }]);
   expect(await emailDispatchAllowed(manager, "delivery")).toMatchObject({ emailsEnabled: true });
+});
+
+test("public contact reads select only contact columns and writes never touch email delivery", async () => {
+  const { manager, builder, update, query } = fixture();
+  expect(await readClubContact(manager)).toEqual({ contactEmail: "hello@example.com", contactPhone: "+40 21 123 4567" });
+  expect(builder.select).toHaveBeenCalledWith(["settings.id", "settings.contactEmail", "settings.contactPhone"]);
+  await writeClubContact(manager, { contactEmail: "", contactPhone: "+40 21 123 4567" });
+  expect(update).toHaveBeenCalledWith({ id: true }, { contactEmail: "", contactPhone: "+40 21 123 4567" });
+  expect(query).not.toHaveBeenCalled();
 });

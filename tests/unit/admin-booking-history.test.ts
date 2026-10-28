@@ -14,6 +14,7 @@ vi.mock("@/lib/db/repositories/payments.repository", () => ({ loadAdminTransacti
 vi.mock("@/lib/payments/financial-history", async (original) => ({
   ...await original<typeof import("@/lib/payments/financial-history")>(), readFinancialHistory: mocks.history }));
 vi.mock("@/lib/payments/admin", () => ({ toAdminPaymentTransaction: (row: unknown) => row }));
+vi.mock("@/lib/payments/hold-expiry", () => ({ expirePaymentHolds: async () => 0 }));
 
 import { adminBookingEditable, adminCancellationAvailability, buildBookingHistory, hasRecordedChanges, summarizeBookingFinancials } from "@/lib/bookings/admin-history";
 import { getAdminBookingRecords, type AdminBookingDetails } from "@/lib/bookings/admin-details";

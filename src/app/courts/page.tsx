@@ -14,6 +14,7 @@ import { LoadingStatus } from "@/components/loading-status";
 export const metadata: Metadata = {
   title: "Courts | Tennis Club",
   description: "Explore the club’s courts and locations: surfaces, lighting, today’s opening hours and rates. Members and visitors are welcome to play.",
+  alternates: { canonical: "/courts" },
 };
 
 // One public locations read per request, shared by court discovery and playing conditions.
@@ -118,7 +119,7 @@ export default function CourtsPage() {
               <Link href="/book" className="inline-flex min-h-12 items-center justify-center rounded-control bg-chalk px-6 font-sans text-sm font-semibold text-primary transition hover:bg-surface-muted">
                 Book a court
               </Link>
-              <Link href="/club#visit" prefetch={false} className={`${styles.editorialLink} inline-flex min-h-11 w-fit items-center font-sans text-sm font-semibold text-chalk transition-colors hover:text-chalk focus-visible:rounded-control`}>
+              <Link href="/contact" prefetch={false} className={`${styles.editorialLink} inline-flex min-h-11 w-fit items-center font-sans text-sm font-semibold text-chalk transition-colors hover:text-chalk focus-visible:rounded-control`}>
                 <span className={`${styles.editorialLabel} underline decoration-accent-on-dark underline-offset-8`}>Plan your visit</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
               </Link>
             </div>

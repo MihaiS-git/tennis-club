@@ -177,8 +177,14 @@ export function MobileNavbarControls({ isAuthenticated, hasMessageAccess = false
           <PrimaryNavigationLink pendingPlacement="end" href="/coaching" prefetch={false} dismissDrawer={() => setIsOpen(false)} className="flex min-h-12 items-center text-sm font-medium">
             Coaching
           </PrimaryNavigationLink>
+          <PrimaryNavigationLink pendingPlacement="end" href="/pricing" prefetch={false} dismissDrawer={() => setIsOpen(false)} className="flex min-h-12 items-center text-sm font-medium">
+            Pricing
+          </PrimaryNavigationLink>
           <PrimaryNavigationLink pendingPlacement="end" href="/club" prefetch={false} dismissDrawer={() => setIsOpen(false)} className="flex min-h-12 items-center text-sm font-medium">
             Club
+          </PrimaryNavigationLink>
+          <PrimaryNavigationLink pendingPlacement="end" href="/contact" prefetch={false} dismissDrawer={() => setIsOpen(false)} className="flex min-h-12 items-center text-sm font-medium">
+            Contact
           </PrimaryNavigationLink>
           {isAuthenticated && canReserve && (
             <PrimaryNavigationLink pendingPlacement="end" section={["/admin", "/coach"]} href="/admin" prefetch={drawerPrefetch} dismissDrawer={() => setIsOpen(false)} className="flex min-h-12 items-center text-sm font-medium">

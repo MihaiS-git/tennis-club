@@ -11,7 +11,7 @@ export default async function AdminCoachesPage({ searchParams }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const params = await searchParams;
-  const { coaches, locations, programs, filters, total, page, totalPages } = await loadCoachesPage({ ...params, search: params.q });
+  const { coaches, locations, programs, prices, filters, total, page, totalPages } = await loadCoachesPage({ ...params, search: params.q });
   // Sorting is chosen from the column headings; "created" remains a supported URL sort without a column.
   const sortLinks = Object.fromEntries((["name", "email", "status", "profile"] as const).map(value => [value, {
     href: coachingListHref(path, filters, { sort: value, dir: filters.sort === value && filters.dir === "asc" ? "desc" : "asc", page: 1 }),
@@ -26,7 +26,7 @@ export default async function AdminCoachesPage({ searchParams }: {
       { name: "visibility", label: "Visibility", options: [{ value: "", label: "All visibility" }, { value: "public", label: "Public" }, { value: "private", label: "Hidden" }] },
     ]} />
     <p className="mb-3 text-sm text-muted-foreground">{total} {total === 1 ? "coach" : "coaches"}</p>
-    <CoachesTable coaches={coaches} locations={locations} programs={programs} sortLinks={sortLinks}
+    <CoachesTable coaches={coaches} locations={locations} programs={programs} prices={prices} sortLinks={sortLinks}
       filtered={Boolean(filters.search || filters.status || filters.profile || filters.visibility)} />
     <div className="mt-6"><Pagination currentPage={page} totalPages={totalPages} buildHref={next => coachingListHref(path, filters, { page: next })} /></div>
   </>;

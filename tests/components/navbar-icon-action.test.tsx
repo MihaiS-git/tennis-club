@@ -31,7 +31,7 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 function controls() {
   return <><NotificationBell viewport="desktop" />
-    <NavbarIconAction href="/profile" aria-label="Profile"><ProfileNavigationAvatar src={null} compact /></NavbarIconAction>
+    <NavbarIconAction href="/profile" aria-label="Profile" variant="avatar"><ProfileNavigationAvatar src={null} /></NavbarIconAction>
   </>;
 }
 
@@ -39,7 +39,8 @@ it.each(["/messages", "/profile"])("keeps icon controls stable and shows feedbac
   const { rerender } = render(controls());
   const links = screen.getAllByRole("link");
   const classes = links.map(link => link.className);
-  expect(links[0].className).toBe(links[1].className);
+  expect(links[0].className).toContain("size-10");
+  expect(links[1].className).toContain("size-12 rounded-full");
   expect(document.querySelector("svg.motion-safe\\:animate-spin")).toBeNull();
   for (const link of links) {
     link.focus();
@@ -77,11 +78,19 @@ it("preserves the unread dot and label through pending navigation and clears the
 });
 
 it("keeps the profile control geometry when an avatar fails", () => {
-  render(<NavbarIconAction href="/profile" aria-label="Profile"><ProfileNavigationAvatar src="/profile/avatar?v=1" compact /></NavbarIconAction>);
+  render(<NavbarIconAction href="/profile" aria-label="Profile" variant="avatar"><ProfileNavigationAvatar src="/profile/avatar?v=1" /></NavbarIconAction>);
   const link = screen.getByRole("link", { name: "Profile" });
   const classes = link.className;
-  fireEvent.error(link.querySelector("img")!);
+  const image = link.querySelector("img")!;
+  expect(image.getAttribute("width")).toBe("48");
+  expect(image.getAttribute("height")).toBe("48");
+  expect(image.className).toContain("rounded-full object-cover");
+  const frame = image.parentElement!;
+  expect(frame.className).toContain("size-12");
+  fireEvent.error(image);
   expect(link.querySelector("img")).toBeNull();
   expect(link.querySelector("svg")?.getAttribute("class")).toContain("size-5");
   expect(link.className).toBe(classes);
+  expect(frame.className).toContain("size-12");
+  expect(link.querySelector("svg")?.parentElement).toBe(frame);
 });

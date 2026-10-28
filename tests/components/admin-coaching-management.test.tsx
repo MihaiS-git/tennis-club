@@ -5,15 +5,15 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AdminCoach, AdminCoachingCurrency, AdminCoachingLocation, AdminCoachingPrice, AdminCoachingProgram } from "@/lib/coaching/admin";
 import type { AdminCoachListItem } from "@/lib/coaching/admin-lists";
-import { coachFiltersSchema, priceFiltersSchema, programFiltersSchema } from "@/lib/coaching/admin-filters";
+import { coachFiltersSchema, programFiltersSchema } from "@/lib/coaching/admin-filters";
 
 const actions = vi.hoisted(() => ({
   deleteCoachingProgramAction: vi.fn(), deleteCoachProfileAction: vi.fn(),
   saveCoachingProgramAction: vi.fn(), setCoachingProgramStatusAction: vi.fn(), saveCoachProfileAction: vi.fn(),
-  setCoachVisibilityAction: vi.fn(), saveClubCoachingPricesAction: vi.fn(),
+  setCoachVisibilityAction: vi.fn(),
 }));
-const lists = vi.hoisted(() => ({ loadCoachesPage: vi.fn(), loadProgramsPage: vi.fn(), loadPricesPage: vi.fn() }));
-const navigation = vi.hoisted(() => ({ query: "", pathname: "/admin/coaching/prices", replace: vi.fn(), refresh: vi.fn() }));
+const lists = vi.hoisted(() => ({ loadCoachesPage: vi.fn(), loadProgramsPage: vi.fn() }));
+const navigation = vi.hoisted(() => ({ query: "", pathname: "/admin/coaching/programs", replace: vi.fn(), refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: navigation.replace, refresh: navigation.refresh, push: vi.fn() }),
   usePathname: () => navigation.pathname,
@@ -24,7 +24,6 @@ vi.mock("@/lib/coaching/admin-lists", () => lists);
 
 import AdminCoachesPage from "@/app/admin/coaching/coaches/page";
 import AdminCoachingProgramsPage from "@/app/admin/coaching/programs/page";
-import AdminCoachingPricesPage from "@/app/admin/coaching/prices/page";
 import { CoachesTable } from "@/app/admin/coaching/coaches/coaches-table";
 import { ProgramDialog } from "@/app/admin/coaching/programs/program-dialog";
 
@@ -46,7 +45,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   installDialogMock();
   navigation.query = "";
-  navigation.pathname = "/admin/coaching/prices";
+  navigation.pathname = "/admin/coaching/programs";
 });
 afterEach(cleanup);
 
@@ -95,7 +94,7 @@ it("labels a configured private profile Hidden in its inline visibility control"
 });
 
 function coachesPageData(filters: Record<string, string>) {
-  return { coaches: [item()], locations: [central], programs: [program], filters: coachFiltersSchema.parse(filters), total: 21, page: 1, totalPages: 2 };
+  return { coaches: [item()], locations: [central], programs: [program], prices: [], filters: coachFiltersSchema.parse(filters), total: 21, page: 1, totalPages: 2 };
 }
 
 it("sorts coaches only through URL-backed column headings that keep filters", async () => {
@@ -144,49 +143,6 @@ it("keeps one Status column and filters programs by status", async () => {
   expect((within(table).getByRole("combobox", { name: "Status of Private lesson" }) as HTMLSelectElement).value).toBe("true");
   fireEvent.change(screen.getByRole("combobox", { name: "Status" }), { target: { value: "inactive" } });
   expect(navigation.replace).toHaveBeenCalledWith("/admin/coaching/programs?type=private&status=inactive", { scroll: false });
-});
-
-function pricesPageData(filters: Record<string, string>, programs: AdminCoachingProgram[]) {
-  return { programs, coaches: [coach], locations: [central], currencies: [ron], prices: [], total: 18, page: 1, totalPages: 1,
-    filters: priceFiltersSchema.parse(filters), groups: [{ program_id: programs[0].id, currency: "RON" as const, duration_minutes: 60 }] };
-}
-
-it("offers a searchable program filter and numerically ordered durations without sort dropdowns", async () => {
-  navigation.query = "scope=club&sort=amount&dir=desc&page=2";
-  const many = Array.from({ length: 60 }, (_, index) => ({ ...program, id: `a1000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
-    name: `Program ${String(index).padStart(2, "0")}`, durations: [60, 90, 120] }));
-  lists.loadPricesPage.mockResolvedValue(pricesPageData({ scope: "club", sort: "amount", dir: "desc" }, many));
-  render(await AdminCoachingPricesPage({ searchParams: Promise.resolve({ scope: "club", sort: "amount", dir: "desc" }) }));
-  expect(screen.getByText(/^18 pricing groups/)).toBeTruthy();
-  expect(screen.queryByRole("combobox", { name: "Sort by" })).toBeNull();
-  expect(screen.queryByRole("combobox", { name: "Direction" })).toBeNull();
-  expect([...(screen.getByRole("combobox", { name: "Duration" }) as HTMLSelectElement).options].map((option) => option.text))
-    .toEqual(["All durations", "60 min", "90 min", "120 min"]);
-
-  const programFilter = screen.getByRole("combobox", { name: "Program" }) as HTMLInputElement;
-  expect(programFilter.value).toBe("All programs");
-  fireEvent.focus(programFilter);
-  const list = screen.getByRole("listbox", { name: "Program" });
-  expect(within(list).getAllByRole("option")).toHaveLength(61);
-  fireEvent.change(programFilter, { target: { value: "program 4" } });
-  expect(within(list).getAllByRole("option").map((option) => option.textContent)).toEqual(Array.from({ length: 10 }, (_, index) => `Program 4${index}`));
-  fireEvent.keyDown(programFilter, { key: "ArrowDown" });
-  fireEvent.keyDown(programFilter, { key: "Enter" });
-  const url = new URL(navigation.replace.mock.lastCall![0], "http://localhost");
-  expect(url.pathname).toBe("/admin/coaching/prices");
-  // Other filters and the sort are kept; pagination restarts.
-  expect(Object.fromEntries(url.searchParams)).toEqual({ scope: "club", sort: "amount", dir: "desc", program: many[41].id });
-});
-
-it("clears the program filter with All programs by mouse selection", async () => {
-  navigation.query = `program=${program.id}`;
-  lists.loadPricesPage.mockResolvedValue(pricesPageData({ program: program.id }, [program]));
-  render(await AdminCoachingPricesPage({ searchParams: Promise.resolve({ program: program.id }) }));
-  const programFilter = screen.getByRole("combobox", { name: "Program" }) as HTMLInputElement;
-  expect(programFilter.value).toBe("Private lesson");
-  fireEvent.click(programFilter);
-  fireEvent.click(within(screen.getByRole("listbox", { name: "Program" })).getByRole("option", { name: "All programs" }));
-  expect(navigation.replace).toHaveBeenLastCalledWith("/admin/coaching/prices", { scroll: false });
 });
 
 it("shows club-wide price inputs grouped by currency for the selected durations", () => {

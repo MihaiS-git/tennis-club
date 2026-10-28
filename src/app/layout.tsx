@@ -9,6 +9,7 @@ import { MobileNavbarShell } from "@/components/mobile-navbar-menu";
 import { QueryFlashMessages } from "@/components/query-flash-messages";
 import { ProfileDepartureProvider } from "@/components/profile-departure-navigation";
 import { SiteFooter } from "@/components/site-footer";
+import { getApplicationUrl } from "@/lib/auth/site-url";
 
 import "./globals.css";
 
@@ -25,8 +26,10 @@ const archivo = Archivo({
 });
 
 export const metadata: Metadata = {
+  // Canonical and sitemap URLs resolve against the configured public origin.
+  ...(process.env.APP_URL && { metadataBase: new URL(getApplicationUrl("/")) }),
   title: "Tennis Club",
-  description: "Manage your tennis club account.",
+  description: "Book a court, find coaching and visit the club’s locations.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

@@ -6,9 +6,9 @@ import { createClient } from "@/lib/supabase/server";
 import { getDataSource } from "@/lib/db/data-source";
 import { inTransaction } from "@/lib/db/transaction";
 import { lockActiveAdminAccount } from "@/lib/db/repositories/accounts.repository";
-import { readClubSettings, writeClubSettings } from "@/lib/db/repositories/club-settings.repository";
+import { readClubContact, readClubSettings, writeClubContact, writeClubSettings } from "@/lib/db/repositories/club-settings.repository";
 import { brevoConfig, sendBrevoEmail } from "@/lib/notifications/brevo";
-import { clubSettingsSchema, type ClubSettings } from "./schema";
+import { clubContactSchema, clubSettingsSchema, type ClubContact, type ClubSettings } from "./schema";
 
 export async function readAdminClubSettings() {
   await requireActiveAdmin();
@@ -27,6 +27,26 @@ export async function saveClubSettings(input: unknown): Promise<{ ok: true; sett
     return { ok: true, settings: parsed.data };
   } catch {
     return { ok: false, message: "Unable to save Club settings. Try again." };
+  }
+}
+
+export async function readAdminClubContact() {
+  await requireActiveAdmin();
+  return readClubContact((await getDataSource()).manager);
+}
+
+export async function saveClubContact(input: unknown): Promise<{ ok: true; contact: ClubContact } | { ok: false; message: string }> {
+  const actor = await requireActiveAdmin();
+  const parsed = clubContactSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, message: "Enter a valid email address and a telephone number of 6–15 digits, or leave them empty." };
+  try {
+    await inTransaction(async manager => {
+      if (!await lockActiveAdminAccount(manager, actor.userId)) throw new Error("Active Admin access required");
+      await writeClubContact(manager, parsed.data);
+    });
+    return { ok: true, contact: parsed.data };
+  } catch {
+    return { ok: false, message: "Unable to save contact details. Try again." };
   }
 }
 

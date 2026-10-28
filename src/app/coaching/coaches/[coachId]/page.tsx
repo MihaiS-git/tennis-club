@@ -4,8 +4,11 @@ import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { cache } from "react";
 
+import { readCoachBookableLocationIds } from "@/lib/coaching/booking-options";
 import { readPublicCoach, type PublicCoachLesson, type PublicCoachProfile } from "@/lib/coaching/public";
-import { coachingProgramTypeLabels, formatCoachingDuration, formatPlayers, formatParticipants } from "@/lib/coaching/validation";
+import {
+  coachingProgramTypeLabels, coachingProgramTypes, type CoachingProgramType, formatCoachingDuration, formatPlayers, formatParticipants, isOnlineCoachingProgramType,
+} from "@/lib/coaching/validation";
 import { listPublicLocationsWithCourts } from "@/lib/courts/public";
 import { formatMoney } from "@/lib/pricing/money";
 import styles from "../../../page.module.css";
@@ -24,15 +27,57 @@ const sections: PageSection[] = [
   { id: "prices", label: "Prices" },
 ];
 
+// The public locations, in booking-page order, where the coach has online-bookable lessons;
+// null when that could not be determined, so neither booking nor contact is suggested.
+type CoachPageData = PublicCoachProfile & { bookableLocationIds: string[] | null };
+
 // Deduplicates the public read between metadata and the page within one request.
-const readCoach = cache(async (coachId: string): Promise<PublicCoachProfile | null | "unavailable"> => {
+const readCoach = cache(async (coachId: string): Promise<CoachPageData | null | "unavailable"> => {
   await connection();
   try {
-    return await readPublicCoach(coachId, await listPublicLocationsWithCourts());
+    const locations = await listPublicLocationsWithCourts();
+    const coach = await readPublicCoach(coachId, locations);
+    if (!coach) return null;
+    const bookableLocationIds = await readCoachBookableLocationIds(coach.id, locations).catch(() => null);
+    return { ...coach, bookableLocationIds };
   } catch {
     return "unavailable";
   }
 });
+
+// The coaching timetable with the coach preselected at their first online-bookable location.
+function bookingHref(coach: CoachPageData) {
+  const [locationId] = coach.bookableLocationIds ?? [];
+  return locationId ? `/book?${new URLSearchParams({ mode: "coaching", location: locationId, coach: coach.id })}` : null;
+}
+
+function HeroCallToAction({ coach }: { coach: CoachPageData }) {
+  const href = bookingHref(coach);
+  if (href) return (
+    <Link href={href} className="mt-7 inline-flex min-h-12 items-center justify-center rounded-control bg-chalk px-6 font-sans text-sm font-semibold text-primary transition hover:bg-surface-muted">Book a lesson</Link>
+  );
+  if (coach.bookableLocationIds) return (
+    <Link href="/contact" prefetch={false} className="mt-7 inline-flex min-h-12 items-center justify-center rounded-control border border-ivory/80 bg-forest-900/20 px-6 font-sans text-sm font-semibold text-chalk transition hover:border-accent-on-dark hover:bg-forest-900/40">Contact the club</Link>
+  );
+  return null;
+}
+
+function BookingCallToAction({ coach, firstName }: { coach: CoachPageData; firstName: string }) {
+  const href = bookingHref(coach);
+  if (href) return (
+    <p className="mt-4 max-w-xl font-sans text-sm leading-6 text-ivory">
+      <Link href={href} className="inline-flex min-h-11 items-center font-semibold underline underline-offset-4">Book a lesson with {firstName}</Link>
+    </p>
+  );
+  // Group/Junior sessions, or no current working hours: arranged with the club, not booked online.
+  if (coach.bookableLocationIds) return (
+    <p className="mt-4 max-w-xl font-sans text-sm leading-6 text-ivory">
+      Sessions with {firstName} are not booked online.{" "}
+      <Link href="/contact" prefetch={false} className="inline-flex min-h-11 items-center font-semibold underline underline-offset-4">Contact the club</Link> to arrange one.
+    </p>
+  );
+  return null;
+}
 
 export async function generateMetadata({ params }: CoachPageProps): Promise<Metadata> {
   const coach = await readCoach((await params).coachId);
@@ -41,6 +86,7 @@ export async function generateMetadata({ params }: CoachPageProps): Promise<Meta
   return {
     title: `${coach.displayName} | Coaching | Tennis Club`,
     description: coachIntroduction(coach.bio) || `${coach.displayName} coaches at the Tennis Club.`,
+    alternates: { canonical: `/coaching/coaches/${coach.id}` },
   };
 }
 
@@ -48,6 +94,7 @@ const eyebrowClassName = "font-sans text-xs font-semibold uppercase tracking-[0.
 const headingClassName = "font-heading text-[clamp(34px,4vw,56px)] font-semibold leading-[1.08] tracking-[-0.035em]";
 const bodyClassName = "font-sans text-base leading-7 md:text-lg md:leading-8";
 const sectionClassName = "scroll-mt-20 px-6 py-14 md:px-8 md:py-20 xl:py-28";
+const compactSectionClassName = "scroll-mt-20 px-6 py-12 md:px-8 md:py-16";
 const textLinkClassName = `${styles.editorialLink} inline-flex min-h-11 w-fit items-center font-sans text-sm font-semibold transition-colors focus-visible:rounded-control`;
 
 function BackLink({ dark = false }: { dark?: boolean }) {
@@ -72,6 +119,18 @@ function lessonsByCurrency(lessons: readonly PublicCoachLesson[]) {
   return [...currencies.values()];
 }
 
+// The hero's one-sentence lede, omitted when it is the whole biography shown under About.
+function heroIntroduction(bio: string) {
+  const introduction = coachIntroduction(bio);
+  const sentence = introduction.match(/^.+?[.!?](?=\s|$)/)?.[0] ?? introduction;
+  return sentence === bio.trim().replace(/\s+/g, " ") ? "" : sentence;
+}
+
+// Private, Semi-private, Group, Junior; programs of one type keep their published order.
+function programsInDisplayOrder<T extends { type: CoachingProgramType }>(programs: readonly T[]) {
+  return [...programs].sort((a, b) => coachingProgramTypes.indexOf(a.type) - coachingProgramTypes.indexOf(b.type));
+}
+
 export default async function CoachPage({ params }: CoachPageProps) {
   const coach = await readCoach((await params).coachId);
   if (coach === "unavailable") {
@@ -89,7 +148,8 @@ export default async function CoachPage({ params }: CoachPageProps) {
   if (!coach) notFound();
 
   const firstName = coach.displayName.split(/\s+/)[0] || coach.displayName;
-  const introduction = coachIntroduction(coach.bio);
+  const introduction = heroIntroduction(coach.bio);
+  const programs = programsInDisplayOrder(coach.programs);
   const programTypes = new Map(coach.programs.map((program) => [program.id, program]));
   const priceGroups = lessonsByCurrency(coach.lessons);
 
@@ -116,6 +176,7 @@ export default async function CoachPage({ params }: CoachPageProps) {
                 </p>
               )}
               {introduction && <p className="mt-5 max-w-[56ch] text-pretty font-sans text-base leading-7 text-ivory md:text-lg md:leading-8">{introduction}</p>}
+              <HeroCallToAction coach={coach} />
             </div>
           </div>
         </div>
@@ -166,22 +227,35 @@ export default async function CoachPage({ params }: CoachPageProps) {
             </p>
           </div>
           <div className="mt-10 md:mt-14">
-            {coach.programs.length ? (
+            {programs.length ? (
               <ul aria-label={`Programs taught by ${coach.displayName}`} className="grid gap-x-8 md:grid-cols-2">
-                {coach.programs.map((program) => {
+                {programs.map((program, index) => {
                   const participants = formatParticipants(program.minParticipants, program.maxParticipants);
+                  // An odd last program spans both columns, with its details beside the description.
+                  const wide = index === programs.length - 1 && index % 2 === 0;
                   return (
-                    <li key={program.id} className="border-t-2 border-accent py-7">
-                      <p className={`${eyebrowClassName} text-accent`}>{coachingProgramTypeLabels[program.type]}</p>
-                      <h3 className="mt-3 font-heading text-2xl font-semibold tracking-[-0.025em] text-primary md:text-3xl">{program.name}</h3>
-                      {program.description && <p className="mt-3 max-w-xl whitespace-pre-line font-sans text-base leading-7 text-muted-foreground">{program.description}</p>}
-                      <dl className="mt-5 grid grid-cols-[7.5rem_minmax(0,1fr)] gap-x-4 gap-y-2 font-sans text-sm leading-6">
-                        <dt className="text-muted-foreground">Lesson length</dt>
-                        <dd className="font-medium text-foreground">{program.durations.map(formatCoachingDuration).join(" · ")}</dd>
-                        {participants && <><dt className="text-muted-foreground">Group size</dt><dd className="font-medium text-foreground">{participants}</dd></>}
-                        <dt className="text-muted-foreground">Court</dt>
-                        <dd className="font-medium text-foreground">{rentalLabel(program.courtRentalIncluded)}</dd>
-                      </dl>
+                    <li key={program.id} className={`border-t-2 border-accent py-7 ${wide ? "md:col-span-2 md:grid md:grid-cols-2 md:items-start md:gap-x-8" : ""}`}>
+                      <div>
+                        <p className={`${eyebrowClassName} text-accent`}>{coachingProgramTypeLabels[program.type]}</p>
+                        <h3 className="mt-3 font-heading text-2xl font-semibold tracking-[-0.025em] text-primary md:text-3xl">{program.name}</h3>
+                        {program.description && <p className="mt-3 max-w-xl whitespace-pre-line font-sans text-base leading-7 text-muted-foreground">{program.description}</p>}
+                      </div>
+                      <div className={wide ? "md:pt-8" : ""}>
+                        <dl className={`mt-5 grid grid-cols-[7.5rem_minmax(0,1fr)] gap-x-4 gap-y-2 font-sans text-sm leading-6 ${wide ? "md:mt-0" : ""}`}>
+                          <dt className="text-muted-foreground">Lesson length</dt>
+                          <dd className="font-medium text-foreground">{program.durations.map(formatCoachingDuration).join(" · ")}</dd>
+                          {participants && <><dt className="text-muted-foreground">Group size</dt><dd className="font-medium text-foreground">{participants}</dd></>}
+                          <dt className="text-muted-foreground">Court</dt>
+                          <dd className="font-medium text-foreground">{rentalLabel(program.courtRentalIncluded)}</dd>
+                        </dl>
+                        {/* Group/Junior sessions are organized by the coach or club, never booked online. */}
+                        {!isOnlineCoachingProgramType(program.type) && (
+                          <p className="mt-4 max-w-xl font-sans text-sm leading-6 text-muted-foreground">
+                            Arranged through {firstName} or the club, not booked online.{" "}
+                            <Link href="/contact" prefetch={false} aria-label={`Contact the club about ${program.name}`} className="font-semibold text-primary underline decoration-accent underline-offset-4 hover:text-accent">Contact the club</Link>
+                          </p>
+                        )}
+                      </div>
                     </li>
                   );
                 })}
@@ -191,8 +265,8 @@ export default async function CoachPage({ params }: CoachPageProps) {
         </div>
       </section>
 
-      <section id="locations" aria-labelledby="coach-locations-title" className={`${sectionClassName} bg-background`}>
-        <div className="mx-auto grid max-w-7xl gap-10 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:gap-16 xl:gap-24">
+      <section id="locations" aria-labelledby="coach-locations-title" className={`${compactSectionClassName} bg-background`}>
+        <div className="mx-auto grid max-w-7xl gap-6 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:items-end lg:gap-16 xl:gap-24">
           <div className={styles.reveal}>
             <p className={`${eyebrowClassName} text-accent`}>Locations</p>
             <h2 id="coach-locations-title" className={`${headingClassName} mt-4 max-w-[13ch] text-foreground`}>Where {firstName} coaches.</h2>
@@ -206,7 +280,7 @@ export default async function CoachPage({ params }: CoachPageProps) {
                     <Link href={`/courts#location-${location.id}`} prefetch={false} aria-label={`Courts at ${location.name}`} className={`${textLinkClassName} text-primary hover:text-accent`}>
                       <span className={`${styles.editorialLabel} underline decoration-accent underline-offset-8`}>Courts</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
                     </Link>
-                    <Link href="/club#visit" prefetch={false} aria-label={`Opening hours and directions for ${location.name}`} className={`${textLinkClassName} text-primary hover:text-accent`}>
+                    <Link href={`/contact?${new URLSearchParams({ location: location.id })}`} prefetch={false} aria-label={`Opening hours and directions for ${location.name}`} className={`${textLinkClassName} text-primary hover:text-accent`}>
                       <span className={`${styles.editorialLabel} underline decoration-accent underline-offset-8`}>Hours &amp; directions</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
                     </Link>
                   </div>
@@ -225,9 +299,7 @@ export default async function CoachPage({ params }: CoachPageProps) {
             <p className={`${bodyClassName} mt-6 max-w-xl text-ivory`}>
               Prices are lesson prices per person, for each lesson length and number of players, and charged in the location’s currency. Where {firstName} has an individual price, it replaces the club price.
             </p>
-            <p className="mt-4 max-w-xl font-sans text-sm leading-6 text-ivory">
-              <Link href={`/book?mode=coaching&coach=${coach.id}`} className="inline-flex min-h-11 items-center font-semibold underline underline-offset-4">Book a lesson with {firstName}</Link>
-            </p>
+            <BookingCallToAction coach={coach} firstName={firstName} />
           </div>
           {priceGroups.length ? (
             <div className="space-y-12">

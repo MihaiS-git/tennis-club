@@ -10,7 +10,7 @@ vi.mock("@/lib/coaching/public", () => ({ readPublicCoaching }));
 vi.mock("@/app/home-court-availability", () => ({ CourtAvailabilityCard: () => null, CourtAvailabilityCardShell: () => null }));
 vi.mock("@/app/home-court-summary", () => ({ FacilitiesCourtsFallback: () => null, FacilitiesCourtsSummary: () => null,
   HeroCourtSummary: () => null, heroSummaryClassName: "" }));
-vi.mock("@/app/home-locations", () => ({ HomeLocations: () => null, HomeLocationsShell: () => null }));
+vi.mock("@/app/home-locations", () => ({ HomeLocations: () => null }));
 
 import { HomeCoachingPrograms } from "@/app/home-coaching";
 import Home from "@/app/page";

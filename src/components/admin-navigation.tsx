@@ -14,7 +14,6 @@ const adminConfiguration: readonly SidebarEntry[] = [
   { label: "Coaching", icon: GraduationCap, links: [
     { label: "Programs", href: "/admin/coaching/programs" },
     { label: "Coaches", href: "/admin/coaching/coaches" },
-    { label: "Prices", href: "/admin/coaching/prices" },
     { label: "Coach availability", href: "/admin/coaching/availability" },
   ] },
   { label: "Payment settings", href: "/admin/payments/settings", icon: CreditCard },

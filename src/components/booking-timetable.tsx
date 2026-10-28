@@ -16,6 +16,7 @@ export type LessonOffer = { coachingAmountMinor: number; courtAmountMinor: numbe
 type TimetableSelection = Pick<CalendarSelection, "courtId" | "startMinute" | "endMinute" | "startRowIndex" | "endRowIndex">;
 
 export const lessonTimetableLabels = { unavailable: "No lesson start" } as const;
+export const lessonTimetableCellStyles = { ...timelineCellStyles, unavailable: "bg-clay-100 text-foreground" };
 
 // Server-quoted lesson starts whose full length is free on that court, keyed by court and start.
 export function lessonStartOffers(day: BookingTimetableDay, lesson: { durationMinutes: number; starts: PublicLessonStart[] }) {
@@ -45,6 +46,7 @@ export function BookingTimetable<Row extends BookingTimetableRow>({ day, date, t
   day: BookingTimetableDay<Row>; date: string; timezone: string; currency: LocationCurrency; selection: TimetableSelection | null;
   onSelect: (courtDay: Row, rowIndex: number) => void; disabled?: boolean;
 }) {
+  const cellStyles = lesson ? lessonTimetableCellStyles : timelineCellStyles;
   const firstActionableMinute = day.times.find((_, index) => day.courts.some(({ cells }) => cells[index] === "available" && (lesson || cells[index - 1] === "available" || cells[index + 1] === "available")));
   return <CourtTimelineGrid times={day.times} rows={day.courts} date={date} timezone={timezone}
     selectedStartMinute={selection?.startMinute} selectedEndMinute={selection?.endMinute} firstActionableMinute={firstActionableMinute}
@@ -63,8 +65,8 @@ export function BookingTimetable<Row extends BookingTimetableRow>({ day, date, t
       return <div key={minute} role="cell" className={`min-w-0 border-b ${selected ? "border-primary" : "border-border"}`}>
         {selectable ? <button type="button" disabled={disabled} aria-pressed={selected} aria-label={accessibleLabel}
           onClick={() => onSelect(courtDay, rowIndex)}
-          className={`block h-full w-full border-r px-0.5 text-center text-[length:var(--timeline-cell-font-size)] font-medium tabular-nums focus-visible:relative focus-visible:z-10 focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-accent ${selected ? `border-primary ${timelineSelectedStyle}` : `border-border ${timelineCellStyles[state]}`}`}>
-        </button> : <div aria-label={accessibleLabel} className={`flex h-full items-center justify-center border-r border-border px-0.5 text-[length:var(--timeline-cell-font-size)] tabular-nums ${selected ? timelineSelectedStyle : timelineCellStyles[state]}`} />}
+          className={`block h-full w-full border-r px-0.5 text-center text-[length:var(--timeline-cell-font-size)] font-medium tabular-nums focus-visible:relative focus-visible:z-10 focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-accent ${selected ? `border-primary ${timelineSelectedStyle}` : `border-border ${cellStyles[state]}`}`}>
+        </button> : <div aria-label={accessibleLabel} className={`flex h-full items-center justify-center border-r border-border px-0.5 text-[length:var(--timeline-cell-font-size)] tabular-nums ${selected ? timelineSelectedStyle : cellStyles[state]}`} />}
       </div>;
     })} />;
 }

@@ -1,10 +1,10 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PublicCoaching } from "@/lib/coaching/public";
 
 const { schedules, source } = vi.hoisted(() => ({ schedules: vi.fn(), source: vi.fn() }));
 vi.mock("@/lib/db/data-source", () => ({ getDataSource: source }));
 vi.mock("@/lib/db/repositories/coach-availability.repository", () => ({ listLocationCoachBookingAvailability: schedules }));
-import { coachingBookingOptions, coachingDurationPrice } from "@/lib/coaching/booking-options";
+import { coachBookableLocations, coachingBookingOptions, coachingDurationPrice } from "@/lib/coaching/booking-options";
 
 const central = { id: "central", currency: "RON", timezone: "Europe/Bucharest" } as const;
 const riverside = { ...central, id: "riverside" };
@@ -137,13 +137,28 @@ it("requires a priced duration supported by the lesson grid", async () => {
   expect(await options(facts)).toEqual([]);
 });
 
-it("accepts the club default and prefers a coach override, including override-only prices", async () => {
+it("requires a club price in the location currency before offering coach overrides", async () => {
   expect(coachingDurationPrice((await options())[0].programs[0].durations[0], 1)).toEqual({ amountMinor: price.amountMinor, currency: price.currency, source: "club" });
   const facts = data();
   facts.coaches[0].rates = [{ ...price, programId: program.id, programName: program.name, courtRentalIncluded: false, amountMinor: 25000 }];
   expect(coachingDurationPrice((await options(facts))[0].programs[0].durations[0], 1)).toMatchObject({ amountMinor: 25000, source: "coach" });
   facts.programs[0].prices = [];
+  expect(await options(facts)).toEqual([]);
+  facts.programs[0].prices = [{ ...price, currency: "EUR" }];
+  expect(await options(facts)).toEqual([]);
+  // A partial club price grid is sufficient; an override can still price a different duration.
+  facts.programs[0].durations = [60, 90];
+  facts.programs[0].prices = [{ ...price, durationMinutes: 90 }];
   expect(await options(facts)).toHaveLength(1);
+  expect(coachingDurationPrice((await options(facts))[0].programs[0].durations[0], 1)).toMatchObject({ amountMinor: 25000, source: "coach" });
+});
+
+it("omits an unpriced program even when the same coach offers another priced program", async () => {
+  const facts = data();
+  facts.programs.push({ ...program, id: "unpriced", prices: [] });
+  facts.coaches[0].programs = [...coach.programs, { id: "unpriced", name: "Unpriced" }];
+  facts.coaches[0].rates = [{ ...price, programId: "unpriced", programName: "Unpriced", courtRentalIncluded: false }];
+  expect((await options(facts))[0].programs.map(item => item.id)).toEqual([program.id]);
 });
 
 it("does not restore inactive/unassigned programs omitted by the public projection", async () => {
@@ -153,4 +168,37 @@ it("does not restore inactive/unassigned programs omitted by the public projecti
   facts.programs = [program];
   facts.coaches[0].programs = [];
   expect(await options(facts)).toEqual([]);
+});
+
+describe("coachBookableLocations", () => {
+  const group: PublicCoaching["programs"][number] = { ...program, id: "group", name: "Group", type: "group", minParticipants: 3, maxParticipants: 6,
+    prices: [{ ...price, participantCount: 3 }] };
+  // Andrei: assigned to both, working only at Riverside. Maria: working at Central, Group only.
+  const andrei = { ...coach, id: "andrei", displayName: "Andrei" };
+  const maria = { ...coach, id: "maria", displayName: "Maria", locations: [{ id: central.id, name: "Central" }], programs: [{ id: group.id, name: group.name }] };
+  const facts: PublicCoaching = { programs: [program, group], coaches: [andrei, maria] };
+  const hours = (byLocation: Record<string, string[]>) => async (_manager: unknown, locationId: string, coachIds: string[]) => ({
+    weekly: (byLocation[locationId] ?? []).filter(id => coachIds.includes(id)).map(coachUserId => ({ ...weekly, coachUserId })), extra: [] });
+
+  it("returns only the assigned locations where the coach has working hours, in the given order", async () => {
+    schedules.mockImplementation(hours({ [central.id]: ["maria"], [riverside.id]: ["andrei"] }));
+    expect(await coachBookableLocations(facts, [central, riverside], "andrei", now)).toEqual([riverside]);
+    expect(await coachBookableLocations(facts, [riverside, central], "ANDREI", now)).toEqual([riverside]);
+    schedules.mockImplementation(hours({ [central.id]: ["andrei"], [riverside.id]: ["andrei"] }));
+    expect(await coachBookableLocations(facts, [riverside, central], "andrei", now)).toEqual([riverside, central]);
+  });
+
+  it("returns nothing for a coach without online-bookable programs, working hours or a public profile", async () => {
+    schedules.mockImplementation(hours({ [central.id]: ["maria"] }));
+    expect(await coachBookableLocations(facts, [central, riverside], "maria", now)).toEqual([]);
+    schedules.mockImplementation(hours({}));
+    expect(await coachBookableLocations(facts, [central, riverside], "andrei", now)).toEqual([]);
+    expect(await coachBookableLocations(facts, [central, riverside], "unknown", now)).toEqual([]);
+  });
+
+  it("ignores unassigned locations even with working hours there", async () => {
+    schedules.mockImplementation(hours({ [riverside.id]: ["maria"] }));
+    expect(await coachBookableLocations(facts, [central, riverside], "maria", now)).toEqual([]);
+    expect(schedules).not.toHaveBeenCalledWith({}, riverside.id, expect.anything(), expect.anything());
+  });
 });

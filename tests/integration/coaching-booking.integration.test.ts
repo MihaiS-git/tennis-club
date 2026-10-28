@@ -1,4 +1,4 @@
-import { getAdminBookingRecords, listAdminBookingCoachFilterOptions, listAdminBookings } from "@/lib/bookings/admin-details";
+import { getAdminBookingRecords, listAdminBookingCoachFilterOptions, listAdminBookings, readBookingListPage } from "@/lib/bookings/admin-details";
 import { parseAdminBookingQuery } from "@/lib/bookings/admin-query";
 import { ensureIntegrationAdminAnchor } from "./admin-anchor";
 import { parseActivityQuery } from "@/lib/bookings/activity-query";
@@ -7,7 +7,7 @@ import { normalizeDatabaseError } from "@/lib/db/errors";
 import { cleanupBookingEvidence, insertBookingRecords, setAdjustmentExpiryFixture, setPaymentAttemptExpiryFixture } from "../local/booking-fixtures";
 import Stripe from "stripe";
 import { commitCoachingCheckout } from "@/lib/coaching/checkout";
-import { readOnlineCheckout, resolveAuthorizedCheckoutPayment, startOnlineCheckout } from "@/lib/payments/checkout";
+import { abandonOnlineCheckout, readOnlineCheckout, resolveAuthorizedCheckoutPayment, startOnlineCheckout } from "@/lib/payments/checkout";
 import { processOnlinePaymentEvent, settleOnlinePayment } from "@/lib/payments/service";
 import { POST } from "@/app/api/payments/stripe/webhook/route";
 import { readCustomerBookingEditContext } from "@/lib/bookings/commands";
@@ -596,6 +596,56 @@ async function checkoutLesson(startMinute: number, client = guest, overrides: Re
 }
 function access(checkout: { attemptId: string; token: string }) { return { attemptId: checkout.attemptId, token: checkout.token }; }
 function remote(attemptId: string) { return stripeFixture.intents.get(`pi_${attemptId}`)!; }
+
+test.each([false, true])("abandoned coaching checkout releases both resources and keeps its audit (navigation=%s)", async navigation => {
+  setupStripe();
+  const start = navigation ? 660 : 600;
+  const lesson = await checkoutLesson(start, guest, { date: "2099-12-14" });
+  expect(await abandonOnlineCheckout(lesson.checkout, navigation)).toMatchObject({ released: true, paymentStatus: "cancelled" });
+  expect(await aggregate(lesson.bookingId)).toMatchObject({ status: "cancelled", reservation_status: "released",
+    attempt_status: "cancelled", coach_user_id: coach, hold_expires_at: null,
+    revision: { cancellation_cause: "checkout_abandoned" } });
+  const replacement = await checkoutLesson(start, guest, { date: "2099-12-14" });
+  expect(replacement.reservationId).not.toBe(lesson.reservationId);
+  expect(stripeFixture.capture).not.toHaveBeenCalled();
+});
+
+test("Admin read expires abandoned coaching without browser notification and resources can be rebooked", async () => {
+  setupStripe();
+  const lesson = await checkoutLesson(720, guest, { date: "2099-12-14" });
+  await expireHold(lesson.reservationId);
+  const page = await readBookingListPage(parseAdminBookingQuery({ status: "expired", from: "2099-12-14", to: "2099-12-14" }), null);
+  expect(page.rows.find(row => row.id === lesson.bookingId)).toMatchObject({ status: "expired" });
+  expect(await aggregate(lesson.bookingId)).toMatchObject({ status: "expired", attempt_status: "expired",
+    reservation_status: "released", coach_user_id: coach });
+  await checkoutLesson(720, guest, { date: "2099-12-14" });
+  expect(stripeFixture.capture).not.toHaveBeenCalled();
+});
+
+test.each(["requires_action", "requires_capture", "processing"])("navigation leaves submitted coaching %s intact", async status => {
+  setupStripe();
+  const start = 780 + ["requires_action", "requires_capture", "processing"].indexOf(status) * 60;
+  const lesson = await checkoutLesson(start, guest, { date: "2099-12-14" });
+  remote(lesson.paymentAttemptId).status = status;
+  expect(await abandonOnlineCheckout(lesson.checkout, true)).toMatchObject({ released: false });
+  expect(await aggregate(lesson.bookingId)).toMatchObject({ status: "pending_payment", reservation_status: "held", attempt_status: "pending" });
+  expect(stripeFixture.cancel).not.toHaveBeenCalled();
+  expect(stripeFixture.capture).not.toHaveBeenCalled();
+});
+
+test("authentication racing navigation cleanup retains the coaching hold without cancelling Stripe", async () => {
+  setupStripe();
+  const lesson = await checkoutLesson(600, guest, { date: "2099-12-21" });
+  stripeFixture.retrieve.mockImplementationOnce(async () => {
+    const before = { ...remote(lesson.paymentAttemptId) };
+    remote(lesson.paymentAttemptId).status = "requires_action";
+    return before;
+  });
+  expect(await abandonOnlineCheckout(lesson.checkout, true)).toMatchObject({ released: false, paymentStatus: "processing" });
+  expect(await aggregate(lesson.bookingId)).toMatchObject({ status: "cancelled", reservation_status: "held", attempt_status: "pending" });
+  expect(stripeFixture.cancel).not.toHaveBeenCalled();
+  expect(stripeFixture.capture).not.toHaveBeenCalled();
+});
 function coachingWebhook(attemptId: string, type: string, eventId = `evt_${randomUUID()}`) {
   const payload = JSON.stringify({ id: eventId, type, data: { object: remote(attemptId) } });
   return new Request("http://localhost/api/payments/stripe/webhook", { method: "POST", body: payload,
@@ -860,14 +910,15 @@ test.each([
   }
 });
 
-test("an unpriced coaching scope never creates a booking or Stripe payment", async () => {
+test("an unpublished unpriced coaching program never creates a booking or Stripe payment", async () => {
   setupStripe();
   const before = await written();
   // This private program is offered by the coach, but has neither a club default
-  // nor a coach override in RON. A priced court cannot price the lesson.
+  // nor a coach override in RON. It is not publicly offered; a priced court
+  // cannot publish or price the lesson.
   expect(await commitCoachingCheckout({ ...base(), programId: unpricedProgram,
     locationId: locationB, courtId: courtB1, date: "2099-12-28", startMinute: 1080,
-    expectedTotalAmountMinor: 15000 }, guest)).toMatchObject({ ok: false, reason: "unpriced" });
+    expectedTotalAmountMinor: 15000 }, guest)).toMatchObject({ ok: false, reason: "not-offered" });
   expect(await written()).toEqual(before);
   expect(stripeFixture.create).not.toHaveBeenCalled();
 });

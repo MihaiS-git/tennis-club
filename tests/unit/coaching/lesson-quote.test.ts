@@ -189,7 +189,7 @@ describe("coaching lesson quote", () => {
       coachingAmountMinor: 10000, currency: "RON", evidence: { coachingPrice: { source: "club" } } } });
     expect(quoteCoachingLesson(ronWest, lesson({ courtId: ids.court3, startMinute: 900, durationMinutes: 90, participantCount: 1 }))).toMatchObject({ ok: true, quote: {
       coachingAmountMinor: 16000, currency: "RON", evidence: { coachingPrice: { source: "coach" } } } });
-    // Program eligibility needs only the coach's program and location assignments.
+    // The club EUR price and the coach's program/location assignments make this offer eligible.
     const onlyWest = { ...facts, coaches: [{ ...facts.coaches[0], location_ids: [ids.west], program_ids: [ids.private] }] };
     expect(reason(westDay({ coaching: onlyWest }), lesson({ courtId: ids.court3, startMinute: 900 }))).toBe("ok");
   });
@@ -202,6 +202,14 @@ describe("coaching lesson quote", () => {
     expect(reason(eastDay({ coaching: { ...facts, coaches: [] } }))).toBe("not-offered");
     expect(reason(eastDay({ coaching: { ...facts, coaches: [{ ...facts.coaches[0], location_ids: [ids.west] }] } }))).toBe("not-offered");
     expect(reason(eastDay({ coaching: { ...facts, coaches: [{ ...facts.coaches[0], program_ids: [ids.included] }] } }))).toBe("not-offered");
+  });
+
+  it("rejects new lessons and availability when only coach overrides remain", () => {
+    const coaching = { ...facts, prices: facts.prices.filter(price => price.coach_user_id !== null) };
+    const day = eastDay({ coaching });
+    expect(reason(day, lesson({ durationMinutes: 90 }))).toBe("not-offered");
+    expect(listCoachingLessonOffers(day, { programId: ids.private, durationMinutes: 90, participantCount: 1 })).toEqual([]);
+    expect(projectCoachingLessonAvailability(day, ids.private, 1)).toBeNull();
   });
 
   it("offers only Private and Semi-private lessons online, within the configured participant range", () => {

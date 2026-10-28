@@ -121,8 +121,8 @@ test("the fresh baseline defines one coaching price table: lesson price/person p
 });
 
 test("initial schema defines disabled club email settings, suppression evidence and canonical coaching durations", async () => {
-  expect(await database.query("SELECT id,official_email,sender_name,emails_enabled FROM public.club_settings"))
-    .toEqual([{ id: true, official_email: "", sender_name: "", emails_enabled: false }]);
+  expect(await database.query("SELECT id,official_email,sender_name,emails_enabled,contact_email,contact_phone FROM public.club_settings"))
+    .toEqual([{ id: true, official_email: "", sender_name: "", emails_enabled: false, contact_email: "", contact_phone: "" }]);
   expect(await database.query(`SELECT is_nullable,data_type FROM information_schema.columns
     WHERE table_schema='public' AND table_name='email_deliveries' AND column_name='suppressed_at'`))
     .toEqual([{ is_nullable: "YES", data_type: "timestamp with time zone" }]);

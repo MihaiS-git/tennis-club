@@ -245,13 +245,18 @@ waits for the server's verified capture, and an authorization after expiry is ca
 without a charge. The modification dialog uses wording that the original booking is
 unchanged (never "cancelled") when its payment fails, expires or is refunded.
 
-X, Close and Escape dismiss the checkout immediately, including during provider calls or cancellation. Dismissal makes no claim that payment was cancelled, clears loading feedback, and ignores late action/Stripe/polling callbacks. An uncertain outcome is shown without encouraging another payment.
+X, Close and Escape dismiss the checkout immediately, including during provider calls or cancellation. Dismissal makes no claim that payment was cancelled, clears loading feedback, and ignores late action/Stripe/polling callbacks. An uncertain outcome is shown without encouraging another payment. Closing, unmounting or `pagehide` attempts capability-bound cleanup of an unused checkout with a keepalive POST to `/api/payments/checkout/abandon`. A late checkout-creation response after dismissal also requests cleanup. Local submitted/unknown outcomes skip this request; the server independently skips submitted, authenticated or captured payments. React effect replay does not abandon the mounted checkout. If navigation loses the request, the existing hold deadline and Cron sweep remain authoritative.
 
 Cancel payment has a separate confirmation. Confirmation unmounts the active payment form, preventing submissions and late UI confirmation. The capability-authorized command records booking cancellation intent under location → booking → reservation → attempt locks before contacting Stripe. Once a booking is confirmed, this capability cannot cancel it, even within its original hold deadline. Confirmed bookings use normal booking-management authorization and refund-backed cancellation, preserving occupancy until required refunds succeed. No Auth or provider call occurs inside a transaction.
 
-Checkout abandonment records a cancelled revision and releases occupancy before
-contacting Stripe; the attempt may remain pending while the provider outcome is
-uncertain. The adapter uses stable abandonment idempotency and retrieve-after-failure
+Checkout abandonment records a cancelled revision before contacting Stripe, preventing
+new capture acceptance under the existing aggregate locks. Occupancy stays held until
+Stripe confirms cancellation or the ordinary unaccepted hold expires; an accepted capture
+rejects abandonment and remains protected until its financial outcome is known.
+The attempt may remain pending while the provider outcome is uncertain. Navigation
+uses processing-preserving dismissal and also preserves authentication/authorization
+observed by that provider call. Explicit cancellation follows the existing cancellation
+state machine. The adapter uses stable abandonment idempotency and retrieve-after-failure
 recovery. An exact capture racing cancellation preserves that cancelled contract,
 records capture evidence and creates its compensation obligation, whose refund is
 dispatched after commit (see Recovery without a scheduler). Guest requests use the same capability and
@@ -644,7 +649,11 @@ Terminal evidence uses the existing settlement/receipt and late-capture compensa
 services; a racing success is observed rather than cancelled or assumed refunded.
 Failures and processing remain eligible on subsequent runs and visible to Admin.
 No transaction spans Stripe HTTP. The request-driven expiry before occupancy writes
-and during checkout polling remains unchanged.
+and during checkout polling remains unchanged. Authorized Admin booking list/detail
+reads also run the same bounded local expiry before reading persisted statuses, so
+an overdue unpaid court or coaching booking shows Expired without browser polling.
+This does not contact Stripe, invent provider cancellation, or expire accepted captures.
+Cron must still be configured for cleanup on an otherwise idle deployment.
 
 For local Supabase, set `CHECKOUT_EXPIRY_CRON_SECRET` and
 `CHECKOUT_EXPIRY_CRON_URL=http://host.docker.internal:3000/api/payments/holds/expire` in

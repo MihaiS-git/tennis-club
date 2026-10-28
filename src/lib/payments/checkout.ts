@@ -33,9 +33,8 @@ const tokenHash = (token: string) => createHash("sha256").update(token).digest("
 
 class CheckoutParentChanged extends Error {}
 
-// Accept cancellation and release occupancy before contacting Stripe. The
-// attempt remains uncertain until provider evidence arrives; late capture is
-// compensated by the existing settlement service without reclaiming occupancy.
+// Record cancellation intent before contacting Stripe, preventing a new capture
+// acceptance. Keep occupancy until provider cancellation or ordinary hold expiry.
 async function requestCheckoutCancellation(access: z.infer<typeof checkoutAccessSchema>, retry = 0): Promise<void> {
   try {
     await inTransaction(async manager => {
@@ -71,7 +70,6 @@ async function requestCheckoutCancellation(access: z.infer<typeof checkoutAccess
           actorUserId: null, actorScope: "guest", recordedAt: new Date(await reservations.readReservationClockTime(manager)),
           adjustmentId: null, cancellationCause: "checkout_abandoned" }, booking.revision);
         await advanceRevision(manager, { revision, previousId: booking.current_revision_id, status: "cancelled" });
-        await reservations.updateSettlementReservationStatus(manager, reservation.id, "released");
       }
     });
   } catch (error) {
@@ -229,17 +227,23 @@ export async function checkOnlinePayment(attemptId: string, preserveProcessing =
 }
 
 // Validate the capability before contacting the provider, including retries.
-export async function abandonOnlineCheckout(input: unknown) {
+export async function abandonOnlineCheckout(input: unknown, unusedOnly = false) {
   const access = checkoutAccessSchema.parse(input);
   const row = await findCheckoutAttempt((await getDataSource()).manager, access.attemptId, tokenHash(access.token));
   const attempt = attemptSchema.extend({ providerPaymentId: z.string().min(1) }).parse(row);
   // Modifications are dismissed only through owner booking management (X).
   if (attempt.adjustmentId) throw new Error("This checkout is now managed through booking management.");
+  const adapter = await onlinePaymentAdapter(attempt.provider);
+  // Navigation is not a request to interrupt authentication or an authorization.
+  // The locked acceptance check below also protects a concurrent server capture.
+  if (unusedOnly && (await adapter.readPayment({ id: attempt.id, providerPaymentId: attempt.providerPaymentId })).status !== "pending")
+    return { released: false, paymentStatus: "processing" as const };
   await requestCheckoutCancellation(access);
   revalidateCourtActivity("create");
-  const adapter = await onlinePaymentAdapter(attempt.provider);
   const cancelled = attempt.status === "succeeded" ? "succeeded"
+    : unusedOnly ? await adapter.dismissPayment({ id: attempt.id, providerPaymentId: attempt.providerPaymentId, unusedOnly: true })
     : await adapter.cancelPayment({ id: attempt.id, providerPaymentId: attempt.providerPaymentId });
+  if (cancelled === "live") return { released: false, paymentStatus: "processing" as const };
   if (cancelled === "cancelled") {
     await settleOnlinePayment({ attemptId: attempt.id, provider: attempt.provider,
       providerPaymentId: attempt.providerPaymentId, outcome: "cancelled" });

@@ -10,14 +10,12 @@ vi.mock("@/lib/courts/public", () => ({ listPublicVisitorLocations: load }));
 // Async server sections are covered directly below; the page test checks its static composition.
 vi.mock("@/app/club/club-locations", async (original) => ({
   ...(await original<typeof import("@/app/club/club-locations")>()),
-  ClubLocations: () => <p>Locations list</p>,
   ClubBookingTerms: () => <p>Booking terms</p>,
 }));
 
 import ClubPage, { metadata } from "@/app/club/page";
-import { groupOpeningHours } from "@/app/club/club-locations";
 
-const { ClubBookingTerms, ClubLocations } = await vi.importActual<typeof import("@/app/club/club-locations")>("@/app/club/club-locations");
+const { ClubBookingTerms } = await vi.importActual<typeof import("@/app/club/club-locations")>("@/app/club/club-locations");
 
 const open = (opens: number, closes: number) => [{ opens_at_minute: opens, closes_at_minute: closes }];
 const week = (intervals: (weekday: number) => { opens_at_minute: number; closes_at_minute: number }[]) =>
@@ -32,7 +30,7 @@ const west: PublicVisitorLocation = { ...east, id: "44444444-4444-4444-8444-4444
   address_line1: null, city: null, postal_code: null, country_code: null, allow_pay_at_club: false,
   customer_cancellation_notice_minutes: 0, cancellationNoticeMinutes: 0, weekOpeningHours: week((day) => (day === 0 ? [] : open(420, 1380))) };
 
-const render$ = async (component: typeof ClubLocations | typeof ClubBookingTerms, locations: PublicVisitorLocation[] | Error) =>
+const render$ = async (component: typeof ClubBookingTerms, locations: PublicVisitorLocation[] | Error) =>
   render(await component({ locations: locations instanceof Error ? Promise.reject(locations) : Promise.resolve(locations) }));
 
 afterEach(cleanup);
@@ -124,59 +122,10 @@ it("links policy guidance to the authoritative booking surfaces", () => {
   expect(within(rules).getByRole("link", { name: "My bookings" }).getAttribute("href")).toBe("/my-activity/bookings");
   expect(rules.textContent).toContain("To request cancellation, please contact the club before the cancellation deadline.");
   expect(within(rules).getByText("Booking terms")).toBeTruthy();
-  expect(within(document.getElementById("visit")!).getByText("Locations list")).toBeTruthy();
-});
-
-it("groups consecutive weekdays that share opening hours", () => {
-  expect(groupOpeningHours(east.weekOpeningHours)).toEqual([
-    { days: "Monday – Friday", hours: "08:00–22:00" },
-    { days: "Saturday – Sunday", hours: "09:00–20:00" },
-  ]);
-  expect(groupOpeningHours(week((day) => (day === 2 ? [] : day === 4 ? [...open(480, 720), ...open(900, 1200)] : open(480, 720))))).toEqual([
-    { days: "Monday – Tuesday", hours: "08:00–12:00" },
-    { days: "Wednesday", hours: "Closed" },
-    { days: "Thursday", hours: "08:00–12:00" },
-    { days: "Friday", hours: "08:00–12:00, 15:00–20:00" },
-    { days: "Saturday – Sunday", hours: "08:00–12:00" },
-  ]);
-});
-
-it("lists every public location in order with address, weekly hours, directions and booking", async () => {
-  await render$(ClubLocations, [east, west]);
-  const list = screen.getByRole("list", { name: "Club locations" });
-  const [first, second] = within(list).getAllByRole("listitem");
-  expect(within(first).getByRole("heading", { level: 3 }).textContent).toBe("East Club");
-  expect(first.querySelector("address")?.textContent).toBe("1 Court RoadCluj-Napoca, 400000Romania");
-  expect([...first.querySelectorAll("dt")].map((term) => term.textContent)).toEqual(["Monday – Friday", "Saturday – Sunday"]);
-  expect(within(first).getByRole("link", { name: /Get directions/ }).getAttribute("href")).toBe(
-    `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent("1 Court Road, Cluj-Napoca, 400000, Romania").replace(/%20/g, "+")}`,
-  );
-  expect(within(first).getByRole("link", { name: /Book at East Club/ }).getAttribute("href")).toBe(`/book?location=${east.id}`);
-
-  // Missing address details are omitted rather than guessed, so no directions link either.
-  expect(within(second).getByRole("heading", { level: 3 }).textContent).toBe("West Club");
-  expect(second.querySelector("address")).toBeNull();
-  expect(within(second).queryByRole("link", { name: /Get directions/ })).toBeNull();
-  expect(second.textContent).toContain("MondayClosed");
-  expect(within(second).getByRole("link", { name: /Book at West Club/ }).getAttribute("href")).toBe(`/book?location=${west.id}`);
-  // Nothing beyond the configured location facts is presented as contact information.
-  expect(list.textContent).not.toMatch(/@|tel:|phone/i);
-});
-
-it("renders a single location without list numbering", async () => {
-  await render$(ClubLocations, [east]);
-  expect(screen.getAllByRole("heading", { level: 3 })).toHaveLength(1);
-  expect(screen.queryByText("01")).toBeNull();
-});
-
-it("renders empty and failure states without booking links", async () => {
-  await render$(ClubLocations, []);
-  expect(screen.getByText("No club locations are currently open to the public.")).toBeTruthy();
-  expect(screen.queryByRole("link")).toBeNull();
-  cleanup();
-  await render$(ClubLocations, new Error("db"));
-  expect(screen.getByText("Location information is currently unavailable.")).toBeTruthy();
-  expect(screen.queryByRole("link")).toBeNull();
+  // Location details and the map live on the Contact page; the visit anchor still lands here.
+  const visit = document.getElementById("visit")!;
+  expect(within(visit).getByRole("link", { name: "Contact & directions" }).getAttribute("href")).toBe("/contact");
+  expect(within(visit).getByRole("link", { name: /Book a court/ }).getAttribute("href")).toBe("/book");
 });
 
 it("shows each location's configured cancellation notice and pay-at-club option", async () => {

@@ -176,12 +176,13 @@ export async function changeCoachPrograms(manager: EntityManager, coachUserId: s
 
 // ---- Prices ----
 
-export async function listCoachingPrices(manager: EntityManager, filter: { programId?: string; programIds?: readonly string[]; coachUserId?: string } = {}) {
+export async function listCoachingPrices(manager: EntityManager, filter: { programId?: string; programIds?: readonly string[]; coachUserId?: string; coachUserIds?: readonly string[] } = {}) {
   return manager.getRepository(CoachingPriceEntity).find({
     where: {
       ...(filter.programId ? { programId: filter.programId.toLowerCase() } : {}),
       ...(filter.programIds ? { programId: In(filter.programIds.map((id) => id.toLowerCase())) } : {}),
       ...(filter.coachUserId ? { coachUserId: filter.coachUserId.toLowerCase() } : {}),
+      ...(filter.coachUserIds ? { coachUserId: In(filter.coachUserIds.map((id) => id.toLowerCase())) } : {}),
     },
     order: { programId: "ASC", durationMinutes: "ASC", currency: "ASC", participantCount: "ASC", coachUserId: "ASC" },
   });

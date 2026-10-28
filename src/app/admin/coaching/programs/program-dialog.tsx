@@ -45,11 +45,16 @@ const priceKey = ({ currency, duration_minutes: minutes, participant_count: coun
 // What the form currently configures: the selected durations and player range.
 type PriceScope = { durations: readonly number[]; range: { min: number; max: number } | null };
 
-// Every price input of the scope, per currency: one per selected duration and participant count.
-function priceEntries(currencies: readonly AdminCoachingCurrency[], scope: PriceScope): PriceEntry[] {
+// A currency no current location charges keeps its saved prices visible for removal only.
+const isChargeable = (currency: AdminCoachingCurrency) => currency.location_names.length > 0;
+
+// Every price input of the scope, per currency: one per selected duration and participant count,
+// or only the saved ones in a currency no current location charges.
+function priceEntries(currencies: readonly AdminCoachingCurrency[], scope: PriceScope, stored: ReadonlyMap<string, unknown>): PriceEntry[] {
   const counts = coachingParticipantCounts(scope.range);
-  return currencies.flatMap(({ currency }) => scope.durations.flatMap((minutes) =>
-    counts.map((count) => ({ currency, duration_minutes: minutes, participant_count: count }))));
+  return currencies.flatMap((item) => scope.durations.flatMap((minutes) =>
+    counts.map((count) => ({ currency: item.currency, duration_minutes: minutes, participant_count: count }))
+      .filter((entry) => isChargeable(item) || stored.has(priceKey(entry)))));
 }
 
 // Stored prices the saved scope no longer permits; saving removes them (club and coach), as the service does.
@@ -74,11 +79,16 @@ function useClubPrices(program: AdminCoachingProgram | undefined, prices: readon
     if (value === "") return club.has(key) ? "Enter a price, or use Remove to clear it." : undefined;
     return majorAmountSchema.safeParse(value).success ? errors[key] : "Enter a positive amount with at most two decimal places.";
   }
+  // The same amount written differently (60 for 60.00) is not a change.
+  function changed(key: string, value: string) {
+    const amount = majorAmountSchema.safeParse(value);
+    return !amount.success || amount.data !== club.get(key)?.amount_minor;
+  }
   // Only changed entries shown for the current scope are submitted, in a stable order.
   function changes(entries: readonly PriceEntry[]) {
     const keyed = entries.map((entry) => ({ ...entry, key: priceKey(entry) }));
     return {
-      saved: keyed.filter(({ key }) => !removed.has(key) && (values[key] ?? "").trim() !== "" && (values[key] ?? "").trim() !== baseline(key))
+      saved: keyed.filter(({ key }) => !removed.has(key) && (values[key] ?? "").trim() !== "" && changed(key, (values[key] ?? "").trim()))
         .map((entry) => ({ ...entry, amount: (values[entry.key] ?? "").trim() })),
       removed: keyed.filter(({ key }) => removed.has(key) && club.has(key)),
       valid: keyed.every(({ key }) => !error(key)),
@@ -125,7 +135,7 @@ export function ProgramDialog({ program, currencies = [], prices = [], open: con
   const [scope, setScope] = useState<PriceScope>(() => initialScope(durations));
   const [programType, setProgramType] = useState<CoachingProgramType>(program?.program_type ?? "private");
   const clubPrices = useClubPrices(program, prices);
-  const priceChanges = clubPrices.changes(priceEntries(currencies, scope));
+  const priceChanges = clubPrices.changes(priceEntries(currencies, scope, clubPrices.club));
   const priceChanged = priceChanges.saved.length > 0 || priceChanges.removed.length > 0;
   // A changed type, duration or player range deletes the prices it no longer permits on save;
   // state that before saving. Booking contracts keep their own amounts.
@@ -147,7 +157,7 @@ export function ProgramDialog({ program, currencies = [], prices = [], open: con
     setPending(true); setFieldErrors({});
     const saved = submitted(form);
     const notification = toast.loading("Saving program…");
-    const { saved: savedPrices, removed: removedPrices } = clubPrices.changes(priceEntries(currencies, formScope(form)));
+    const { saved: savedPrices, removed: removedPrices } = clubPrices.changes(priceEntries(currencies, formScope(form), clubPrices.club));
     try {
       const result = await saveCoachingProgramAction({ ...(program ? { id: program.id } : {}), fields: programFields(form),
         ...savedPrices.length > 0 && { club_prices: savedPrices.map(({ currency, duration_minutes, participant_count, amount }) =>
@@ -272,6 +282,8 @@ function ClubPrices({ prefix, currencies, scope, programType, prices, dropped }:
   const coach = dropped.length - club;
   const counts = coachingParticipantCounts(scope.range);
   const { durations } = scope;
+  const entries = priceEntries(currencies, scope, prices.club);
+  const shown = currencies.filter(({ currency }) => entries.some((entry) => entry.currency === currency));
   return <fieldset aria-describedby={`${prefix}-club-prices-hint`}>
     <legend className={labelClass}>Club prices</legend>
     <p id={`${prefix}-club-prices-hint`} className="mb-3 text-xs text-muted-foreground">
@@ -283,14 +295,16 @@ function ClubPrices({ prefix, currencies, scope, programType, prices, dropped }:
       Saving removes {[club && count(club, "club price"), coach && count(coach, "coach price")].filter(Boolean).join(" and ")} that
       the selected program type, durations or number of players no longer allow. Existing bookings keep their agreed prices.
     </p>}
-    {!currencies.length ? <p className="text-sm text-muted-foreground">No locations yet. Add a location before setting club prices.</p>
+    {!currencies.some(isChargeable) && !shown.length ? <p className="text-sm text-muted-foreground">No locations yet. Add a location before setting club prices.</p>
       : !scope.range ? <p className="text-sm text-muted-foreground">Enter the minimum and maximum players to set a price for each number of players.</p>
       : !durations.length ? <p className="text-sm text-muted-foreground">Select a duration to set its prices.</p>
       : <div className="grid gap-3 sm:grid-cols-2">
-        {currencies.map(({ currency }) => <section key={currency} aria-label={`Club prices in ${currency}`} className="rounded-control border border-border px-3 py-2.5">
+        {shown.map((item) => { const { currency } = item; const chargeable = isChargeable(item);
+          return <section key={currency} aria-label={`Club prices in ${currency}`} className="rounded-control border border-border px-3 py-2.5">
           <h3 className="mb-2 text-sm font-semibold text-foreground">{currency}</h3>
+          {!chargeable && <p className="mb-2 text-xs text-muted-foreground">No current location charges {currency}. Saved prices can only be removed.</p>}
           <div className="space-y-3">
-            {durations.map((minutes) => <table key={minutes} className="text-sm">
+            {durations.filter((minutes) => entries.some((entry) => entry.currency === currency && entry.duration_minutes === minutes)).map((minutes) => <table key={minutes} className="text-sm">
               <caption className="mb-1 text-left text-xs font-semibold text-muted-foreground">
                 {formatCoachingDuration(minutes)} lesson · Lesson price/person
               </caption>
@@ -298,8 +312,9 @@ function ClubPrices({ prefix, currencies, scope, programType, prices, dropped }:
                 {counts.map((participants) => {
                   const entry = { currency, duration_minutes: minutes, participant_count: participants };
                   const key = priceKey(entry);
-                  const id = `${prefix}-price-${key}`;
                   const stored = prices.club.get(key);
+                  if (!chargeable && !stored) return null;
+                  const id = `${prefix}-price-${key}`;
                   const removed = prices.removed.has(key);
                   const error = prices.error(key);
                   const label = `${currency} ${formatCoachingDuration(minutes)} lesson price/person, ${formatPlayers(participants)}`;
@@ -310,7 +325,7 @@ function ClubPrices({ prefix, currencies, scope, programType, prices, dropped }:
                       <div className="flex items-center gap-2">
                         <div className={`flex min-h-9 w-32 items-center rounded-control border bg-surface pr-2 focus-within:border-primary focus-within:ring-2 focus-within:ring-focus/20 ${error ? "border-danger" : "border-border"}`}>
                           <input id={id} value={removed ? "" : prices.values[key] ?? ""} inputMode="decimal" placeholder={removed ? "Removed" : "Not set"}
-                            disabled={removed} onChange={(event) => prices.setValue(key, event.target.value)}
+                            disabled={removed} readOnly={!chargeable} onChange={(event) => prices.setValue(key, event.target.value)}
                             aria-invalid={Boolean(error)} aria-describedby={error ? `${id}-error` : undefined}
                             className="min-w-0 flex-1 bg-transparent px-2.5 py-1.5 text-sm text-foreground outline-none disabled:opacity-60" />
                           <span className="text-xs font-semibold text-muted-foreground">{currency}</span>
@@ -326,7 +341,7 @@ function ClubPrices({ prefix, currencies, scope, programType, prices, dropped }:
               </tbody>
             </table>)}
           </div>
-        </section>)}
+        </section>; })}
       </div>}
   </fieldset>;
 }

@@ -171,7 +171,8 @@ export const stripeAdapter: OnlinePaymentAdapter = {
       return intent.status;
     };
     const settled = (status: Stripe.PaymentIntent.Status) => status === "canceled" ? "cancelled" as const
-      : status === "succeeded" ? "succeeded" as const : liveIntent(status) ? "live" as const : null;
+      : status === "succeeded" ? "succeeded" as const
+      : liveIntent(status) || (attempt.unusedOnly && (status === "requires_action" || status === "requires_capture")) ? "live" as const : null;
     const current = settled(await read());
     if (current) return current;
     try {

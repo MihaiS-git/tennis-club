@@ -8,8 +8,9 @@ import { DialogHeader } from "@/components/dialog-layout";
 import { Input } from "@/components/input";
 import { ModalDialog } from "@/components/modal-dialog";
 import { useEditableFormBaseline } from "@/components/use-editable-form-baseline";
-import type { AdminCoach, AdminCoachAccount, AdminCoachingLocation, AdminCoachingProgram } from "@/lib/coaching/admin";
-import { coachProfileFieldsSchema, parseTextList } from "@/lib/coaching/validation";
+import type { AdminCoach, AdminCoachAccount, AdminCoachingLocation, AdminCoachingPrice, AdminCoachingProgram } from "@/lib/coaching/admin";
+import { coachProfileFieldsSchema, formatCoachingDuration, formatPlayers, parseTextList } from "@/lib/coaching/validation";
+import { formatMoney } from "@/lib/pricing/money";
 import { saveCoachProfileAction } from "../actions";
 import { coachingFailureMessages, formText, hintClass, labelClass, selectClass, textareaClass, useFieldErrors } from "../coaching-form";
 
@@ -26,8 +27,10 @@ function coachFields(form: HTMLFormElement) {
   };
 }
 
-export function CoachDialog({ coach, account, accounts = [], locations, programs, open: controlledOpen, onOpenChange }: {
+export function CoachDialog({ coach, account, accounts = [], locations, programs, prices = [], open: controlledOpen, onOpenChange }: {
   coach?: AdminCoach; account?: AdminCoachAccount; accounts?: AdminCoachAccount[]; locations: AdminCoachingLocation[]; programs: AdminCoachingProgram[];
+  // This coach's own price overrides, shown read-only: coaches manage them under My prices.
+  prices?: AdminCoachingPrice[];
   open?: boolean; onOpenChange?: (open: boolean) => void;
 }) {
   const router = useRouter();
@@ -45,6 +48,14 @@ export function CoachDialog({ coach, account, accounts = [], locations, programs
   // Archived locations stay listed only while this coach is still assigned to them.
   const locationChoices = [...locations, ...(coach?.location_ids ?? []).filter((id) => !locations.some((location) => location.id === id))
     .map((id) => ({ id, name: "Archived location", currency: "EUR" as const, is_active: false }))];
+  const overrides = coach ? prices.filter((price) => price.coach_user_id === coach.user_id) : [];
+  // Removing a program assignment deletes the coach's overrides for it on save; state that first.
+  const [programIds, setProgramIds] = useState<readonly string[]>(coach?.program_ids ?? []);
+  const dropped = overrides.filter((price) => !programIds.includes(price.program_id));
+  function onFormChange(event: React.FormEvent<HTMLFormElement>) {
+    sync();
+    setProgramIds(coachFields(event.currentTarget).program_ids);
+  }
 
   async function submit(form: HTMLFormElement) {
     if (pendingRef.current) return;
@@ -91,7 +102,7 @@ export function CoachDialog({ coach, account, accounts = [], locations, programs
       {open && <div className="p-5 sm:p-6">
         <div className="mb-5"><DialogHeader titleId={`${prefix}-title`} title={coach ? "Edit coach" : "Add coach"}
           disabled={pending} onClose={() => dialogRef.current?.close()} /></div>
-        <form ref={attach} onInput={sync} onChange={sync} onSubmit={(event) => { event.preventDefault(); void submit(event.currentTarget); }}>
+        <form ref={attach} onInput={onFormChange} onChange={onFormChange} onSubmit={(event) => { event.preventDefault(); void submit(event.currentTarget); }}>
           <fieldset disabled={pending} className="space-y-4">
             {coach || account ? <p className="text-sm text-muted-foreground">Account: <span className="text-foreground">{coach?.email ?? account?.email}</span>. The email is never shown publicly.</p> : <div>
               <label htmlFor={`${prefix}-user_id`} className={labelClass}>Coach account</label>
@@ -152,8 +163,13 @@ export function CoachDialog({ coach, account, accounts = [], locations, programs
                   {program.name}{program.is_active ? "" : " (inactive)"}
                 </label>)}
               </div> : <p className="text-sm text-muted-foreground">No programs yet. Create programs first.</p>}
+              {dropped.length > 0 && <p role="status" className="mt-2 rounded-control border border-warning bg-warning-background px-3 py-2 text-sm text-foreground">
+                Saving removes {dropped.length} individual {dropped.length === 1 ? "price" : "prices"} this coach set for{" "}
+                {programNames([...new Set(dropped.map((price) => price.program_id))], programs)}. Existing bookings keep their agreed prices.
+              </p>}
               {fieldError("program_ids")}
             </fieldset>
+            {coach && <IndividualPrices prefix={prefix} prices={overrides} programs={programs} removedProgramIds={new Set(dropped.map((price) => price.program_id))} />}
             <div>
               <label htmlFor={`${prefix}-is_public`} className={labelClass}>Public visibility</label>
               <select id={`${prefix}-is_public`} name="is_public" className={selectClass} defaultValue={String(coach?.is_public ?? false)} {...errorProps("is_public")}>
@@ -171,4 +187,53 @@ export function CoachDialog({ coach, account, accounts = [], locations, programs
       </div>}
     </ModalDialog>
   </>;
+}
+
+function programNames(ids: readonly string[], programs: readonly AdminCoachingProgram[]) {
+  return ids.map((id) => programs.find((program) => program.id === id)?.name ?? "Unavailable program").join(", ");
+}
+
+// Read-only: grouped by program, then ordered by duration, number of players and currency.
+function IndividualPrices({ prefix, prices, programs, removedProgramIds }: {
+  prefix: string; prices: readonly AdminCoachingPrice[]; programs: readonly AdminCoachingProgram[]; removedProgramIds: ReadonlySet<string>;
+}) {
+  const programIds = [...new Set(prices.map((price) => price.program_id))]
+    .sort((a, b) => programNames([a], programs).localeCompare(programNames([b], programs)) || a.localeCompare(b));
+  return <section aria-labelledby={`${prefix}-individual-prices`}>
+    <h3 id={`${prefix}-individual-prices`} className={labelClass}>Individual prices</h3>
+    <p className="mb-3 text-xs text-muted-foreground">
+      Lesson prices/person this coach set for their own lessons, replacing the club price. Coaches manage them under My prices; they cannot be changed here.
+    </p>
+    {!programIds.length ? <p className="text-sm text-muted-foreground">No individual prices. This coach&rsquo;s lessons use the club prices.</p>
+      : <div className="space-y-3">
+        {programIds.map((programId) => {
+          const name = programNames([programId], programs);
+          const rows = prices.filter((price) => price.program_id === programId).sort((a, b) => a.duration_minutes - b.duration_minutes
+            || a.participant_count - b.participant_count || a.currency.localeCompare(b.currency));
+          return <div key={programId} className="overflow-x-auto rounded-control border border-border">
+            <table className="w-full text-left text-sm" aria-label={`Individual prices for ${name}`}>
+              <caption className="border-b border-border bg-surface-muted px-3 py-2 text-left font-semibold text-foreground">
+                {name}{removedProgramIds.has(programId) && <span className="ml-2 text-xs font-normal text-muted-foreground">Removed when you save</span>}
+              </caption>
+              <thead className="text-xs font-semibold text-muted-foreground">
+                <tr>
+                  <th scope="col" className="px-3 py-2">Duration</th>
+                  <th scope="col" className="px-3 py-2">Players</th>
+                  <th scope="col" className="px-3 py-2">Currency</th>
+                  <th scope="col" className="px-3 py-2 text-right">Lesson price/person</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {rows.map((price) => <tr key={price.id}>
+                  <td className="whitespace-nowrap px-3 py-2">{formatCoachingDuration(price.duration_minutes)}</td>
+                  <td className="whitespace-nowrap px-3 py-2">{formatPlayers(price.participant_count)}</td>
+                  <td className="px-3 py-2">{price.currency}</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">{formatMoney(price.amount_minor, price.currency)}</td>
+                </tr>)}
+              </tbody>
+            </table>
+          </div>;
+        })}
+      </div>}
+  </section>;
 }

@@ -4,12 +4,11 @@ import { requireActiveAdmin } from "@/lib/admin/authorization";
 import { listCoachingPrices, listCoachingPrograms } from "@/lib/db/repositories/coaching.repository";
 import { listAdminLocations } from "@/lib/db/repositories/clubs.repository";
 import { inReadSnapshot, readIndependently } from "@/lib/db/transaction";
-import { listCoachesPage, listPriceGroupsPage, listProgramsPage } from "@/lib/db/repositories/coaching-lists.repository";
+import { listCoachesPage, listProgramsPage } from "@/lib/db/repositories/coaching-lists.repository";
 import {
-  adminCoachingCurrencies, adminCoachingLocation, adminCoachingPrice, adminCoachingProgram, readAdminCoaching, type AdminCoach,
+  adminCoachingCurrencies, adminCoachingLocation, adminCoachingPrice, adminCoachingProgram, type AdminCoach,
 } from "./admin";
-import { coachFiltersSchema, priceFiltersSchema, programFiltersSchema } from "./admin-filters";
-import { isOnlineCoachingProgramType } from "./validation";
+import { coachFiltersSchema, programFiltersSchema } from "./admin-filters";
 
 export async function loadProgramsPage(input: unknown, supabase?: Parameters<typeof requireActiveAdmin>[0]) {
   await requireActiveAdmin(supabase);
@@ -31,19 +30,6 @@ export async function loadProgramsPage(input: unknown, supabase?: Parameters<typ
   return { ...result, programs, filters, prices: adminPrices, currencies: adminCoachingCurrencies(adminLocations, adminPrices) };
 }
 
-export async function loadPricesPage(input: unknown, supabase?: Parameters<typeof requireActiveAdmin>[0]) {
-  await requireActiveAdmin(supabase);
-  const filters = priceFiltersSchema.parse(input);
-  return inReadSnapshot(async manager => {
-    const data = await readAdminCoaching(manager, false);
-    // Only Private/Semi-private programs have Coach price targets.
-    const coachProgramIds = data.programs.filter(program => isOnlineCoachingProgramType(program.program_type)).map(program => program.id);
-    const result = await listPriceGroupsPage(manager, filters, coachProgramIds);
-    const prices = result.prices.map(adminCoachingPrice);
-    return { ...data, ...result, filters, prices, currencies: adminCoachingCurrencies(data.locations, prices) };
-  });
-}
-
 export type AdminCoachListItem = {
   user_id: string; name: string; email: string; account_status: "active" | "suspended";
   profile_status: "configured" | "not-configured" | "archived";
@@ -55,8 +41,11 @@ export async function loadCoachesPage(input: unknown, supabase?: Parameters<type
   const filters = coachFiltersSchema.parse(input);
   return inReadSnapshot(async manager => {
     const result = await listCoachesPage(manager, filters);
-    const [programs, locations] = await readIndependently(manager, [
+    // The Coach dialog shows each listed coach's own price overrides read-only; coaches manage them.
+    const coachUserIds = result.coaches.map(coach => coach.user_id);
+    const [programs, locations, prices] = await readIndependently(manager, [
       () => listCoachingPrograms(manager), () => listAdminLocations(manager, "current"),
+      () => coachUserIds.length ? listCoachingPrices(manager, { coachUserIds }) : Promise.resolve([]),
     ]);
     const coaches: AdminCoachListItem[] = result.coaches.map(row => ({
       user_id: row.user_id, name: row.name, email: row.email, account_status: row.account_status, profile_status: row.profile_status,
@@ -70,6 +59,7 @@ export async function loadCoachesPage(input: unknown, supabase?: Parameters<type
     return { ...result, coaches, filters,
       programs: programs.map(adminCoachingProgram),
       locations: locations.map(adminCoachingLocation),
+      prices: prices.map(adminCoachingPrice),
     };
   });
 }

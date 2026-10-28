@@ -1,22 +1,17 @@
 import { expect, it } from "vitest";
-import { coachFiltersSchema, coachingListHref, priceFiltersSchema, programFiltersSchema } from "@/lib/coaching/admin-filters";
+import { coachFiltersSchema, coachingListHref, programFiltersSchema } from "@/lib/coaching/admin-filters";
 
 it("normalizes repeated/invalid URL filters and trims search", () => {
   expect(programFiltersSchema.parse({ search: "  Lesson  ", page: ["1", "2"], type: "other", status: ["active"], sort: "bad", dir: "bad" }))
     .toEqual({ search: "Lesson", page: 1, type: undefined, status: undefined, sort: "name", dir: "asc" });
-  expect(priceFiltersSchema.parse({ search: ["one", "two"], currency: "XYZ", program: "bad", coach: "bad", duration: "1.5", page: "-1" }))
-    .toMatchObject({ search: undefined, currency: undefined, program: undefined, coach: undefined, duration: undefined, page: 1 });
+  expect(programFiltersSchema.parse({ search: ["one", "two"], page: "-1" })).toMatchObject({ search: undefined, page: 1 });
 });
 
 it("keeps combined filters on pagination and resets page on sort", () => {
-  const filters = priceFiltersSchema.parse({ search: "a+b@example.test", currency: "EUR", duration: "60", scope: "coach", dir: "desc", sort: "amount", page: "4" });
-  const href = coachingListHref("/admin/coaching/prices", filters, { page: 2 });
-  expect(Object.fromEntries(new URL(href, "http://localhost").searchParams)).toMatchObject({ q: "a+b@example.test", currency: "EUR", duration: "60", scope: "coach", page: "2", sort: "amount", dir: "desc" });
-  expect(coachingListHref("/admin/coaching/prices", filters, { sort: "program", page: 1 })).toContain("page=1");
-});
-
-it("ignores a stale coach filter when switching to club-default scope", () => {
-  expect(priceFiltersSchema.parse({ scope: "club", coach: "a1000000-0000-4000-8000-000000000001" }).coach).toBeUndefined();
+  const filters = programFiltersSchema.parse({ search: "a+b", type: "group", status: "inactive", dir: "desc", sort: "type", page: "4" });
+  const href = coachingListHref("/admin/coaching/programs", filters, { page: 2 });
+  expect(Object.fromEntries(new URL(href, "http://localhost").searchParams)).toEqual({ q: "a+b", type: "group", status: "inactive", page: "2", sort: "type", dir: "desc" });
+  expect(coachingListHref("/admin/coaching/programs", filters, { sort: "name", page: 1 })).toContain("page=1");
 });
 
 it("normalizes coach parameters and preserves combined list state", () => {

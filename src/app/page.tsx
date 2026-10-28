@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { preload } from "react-dom";
 import Link from "next/link";
 import { connection } from "next/server";
@@ -9,7 +10,7 @@ import { listPublicLocationsWithCourts, type PublicLocation } from "@/lib/courts
 import { CourtAvailabilityCard, CourtAvailabilityCardShell } from "./home-court-availability";
 import { FacilitiesCourtsFallback, FacilitiesCourtsSummary, HeroCourtSummary, heroSummaryClassName } from "./home-court-summary";
 import { HomeCoachingFallback, HomeCoachingPrograms } from "./home-coaching";
-import { HomeLocations, HomeLocationsShell } from "./home-locations";
+import { HomeLocations } from "./home-locations";
 import styles from "./page.module.css";
 import { PageSectionNav, type PageSection } from "./page-section-nav";
 
@@ -32,6 +33,8 @@ async function readPublicLocations() {
 async function readCoaching(locations: Promise<PublicLocation[]>) {
   return readPublicCoaching(await locations);
 }
+
+export const metadata: Metadata = { alternates: { canonical: "/" } };
 
 export default function Home({ searchParams }: PageProps<"/">) {
   const locations = readPublicLocations();
@@ -380,14 +383,29 @@ export default function Home({ searchParams }: PageProps<"/">) {
         </div>
       </section>
 
-      <section id="locations" aria-labelledby="visit-club-title" className={`${styles.deferredSection} scroll-mt-20 bg-forest-900 px-6 py-16 md:px-8 md:py-20 xl:py-28`}>
-        <Suspense fallback={
-          <HomeLocationsShell map={<div className="h-full w-full border border-ivory/30" />}>
-            <LoadingStatus tone="inverse" label="Loading locations…" className="border-t border-ivory/30 pt-5" />
-          </HomeLocationsShell>
-        }>
-          <HomeLocations locations={locations} searchParams={searchParams} />
-        </Suspense>
+      {/* The full location details and map live on /contact; the anchor keeps older #locations links working. */}
+      <section id="locations" aria-labelledby="visit-club-title" className={`${styles.deferredSection} scroll-mt-20 bg-forest-900 px-6 py-16 md:px-8 md:py-20 xl:py-24`}>
+        <div className={`${styles.stagger} mx-auto grid max-w-7xl gap-10 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:items-center lg:gap-x-12 xl:gap-x-20`}>
+          <div>
+            <h2 id="visit-club-title" className="max-w-[14ch] font-heading text-[clamp(36px,4vw,56px)] font-semibold leading-[1.08] tracking-[-0.035em] text-chalk">
+              Find your place to play.
+            </h2>
+            <p className="mt-6 max-w-xl font-sans text-base leading-7 text-ivory md:text-lg md:leading-8">
+              Addresses, opening hours, directions and a map for every club location, and how to reach the club team.
+            </p>
+            <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-6">
+              <Link href="/contact" prefetch={false} className="inline-flex min-h-12 items-center justify-center rounded-control bg-chalk px-6 font-sans text-sm font-semibold text-primary transition hover:bg-surface-muted">
+                Contact &amp; directions
+              </Link>
+              <Link href="/book" className={`${styles.editorialLink} inline-flex min-h-11 w-fit items-center font-sans text-sm font-semibold text-chalk transition-colors hover:text-chalk focus-visible:rounded-control`}>
+                <span className={`${styles.editorialLabel} underline decoration-accent-on-dark underline-offset-8`}>Book a court</span> <span aria-hidden="true" className={`${styles.editorialArrow} ml-2`}>→</span>
+              </Link>
+            </div>
+          </div>
+          <Suspense fallback={<LoadingStatus tone="inverse" label="Loading locations…" className="min-h-20 border-t border-ivory/30" />}>
+            <HomeLocations locations={locations} />
+          </Suspense>
+        </div>
       </section>
     </main>
   );

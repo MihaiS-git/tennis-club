@@ -6,6 +6,8 @@ import * as captures from "@/lib/db/repositories/payment-capture-receipts.reposi
 import { abandonOnlineCheckout, startOnlineCheckout } from "@/lib/payments/checkout";
 import { finishBookingCancellation, processBookingRefund } from "@/lib/payments/refunds";
 import { processOnlinePaymentEvent } from "@/lib/payments/service";
+import { checkoutCaptureGraceSeconds } from "@/lib/payments/domain";
+import { expirePaymentHolds } from "@/lib/payments/hold-expiry";
 import { cleanupAuthFixtures, localFixtureClient } from "./auth-fixtures";
 import { cleanupBookingFixtures, insertCheckoutFixture } from "./checkout-fixtures";
 import { configureCheckoutPolicyFixture } from "./opening-hours-fixtures";
@@ -98,6 +100,28 @@ test("pending unpaid checkout abandonment still releases its hold without a refu
   expect(refundPayment).not.toHaveBeenCalled();
 });
 
+test("uncertain explicit cancellation retains occupancy until server expiration without browser notification", async () => {
+  const booking = await hold();
+  cancelPayment.mockRejectedValueOnce(new Error("Provider unavailable"));
+  await expect(abandonOnlineCheckout(booking.access)).rejects.toThrow("Provider unavailable");
+  expect(await state(booking)).toMatchObject({ status: "cancelled", reservation_status: "held", payment_status: "pending" });
+  const { manager } = await getDataSource();
+  await manager.query("UPDATE public.court_reservations SET hold_expires_at=clock_timestamp()-interval '1 minute' WHERE id=$1", [booking.reservation_id]);
+  await expirePaymentHolds({ locationId });
+  expect(await state(booking)).toMatchObject({ status: "cancelled", reservation_status: "released", payment_status: "expired" });
+});
+
+test("checkout abandonment cannot release an accepted capture and expiry also preserves it", async () => {
+  const booking = await hold();
+  const { manager } = await getDataSource();
+  await manager.query(`UPDATE public.court_reservations SET hold_expires_at=(SELECT expires_at+make_interval(secs => $2)
+    FROM public.payment_attempts WHERE id=$1) WHERE id=$3`, [booking.payment_attempt_id, checkoutCaptureGraceSeconds, booking.reservation_id]);
+  await expect(abandonOnlineCheckout(booking.access)).rejects.toThrow("being confirmed");
+  await expirePaymentHolds({ locationId });
+  expect(await state(booking)).toMatchObject({ status: "pending_payment", reservation_status: "held", payment_status: "pending" });
+  expect(cancelPayment).not.toHaveBeenCalled();
+});
+
 test.each(["owner", "guest"])("a fresh confirmed %s checkout capability cannot cancel or request a refund", async owner => {
   const booking = await hold(owner === "guest" ? null : users[0]);
   expect(await settle(booking)).toBe("succeeded");
@@ -183,7 +207,7 @@ test("pending abandonment winning before settlement retains late-capture compens
   const abandonment = abandonOnlineCheckout(booking.access);
   try {
     await contacted;
-    expect(await state(booking)).toMatchObject({ status: "cancelled", reservation_status: "released", refunds: 0 });
+    expect(await state(booking)).toMatchObject({ status: "cancelled", reservation_status: "held", refunds: 0 });
     await settle(booking);
     release();
     expect(await abandonment).toMatchObject({ released: true, paymentStatus: "refunded" });

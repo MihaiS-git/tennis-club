@@ -65,10 +65,12 @@ configuration means the lesson is unavailable. Applicable court rental is added 
 Booking revisions snapshot the resolved `pricePerPersonMinor`, `participantCount` and the
 charged `amountMinor`.
 
-The Admin manages club defaults only (`saveClubCoachingPrices` in `src/lib/coaching/admin.ts`:
-one program, currency and one of the program's durations, the
-saved counts and the explicitly removed counts); its input cannot name a coach. Saved counts must
-lie in the program's current range. A coach manages only their own
+The Admin manages club defaults only, in the Program Create/Edit dialog (`saveCoachingProgram` in
+`src/lib/coaching/admin.ts`: `club_prices` and explicit `removed_club_prices`, each naming a
+currency, one of the program's selected durations and a participant count); its input cannot name
+a coach. Saved counts must lie in the program's submitted range, and a saved price's currency must
+be charged by a current location (`invalid-currency`); a price in a currency no current location
+charges can only be removed. Coach overrides are shown read-only in the Admin Coach dialog. A coach manages only their own
 overrides (`saveOwnCoachingPrice` / `removeOwnCoachingPrice` in `src/lib/coaching/coach-pricing.ts`):
 the owner is the verified session's account, never input, and the coach must have an eligible
 profile offering the program.
@@ -97,12 +99,12 @@ the old currency stay stored but no longer apply to that location until prices e
 
 Group and Junior programs have no coach overrides. Their club lesson prices/person have the same
 meaning as for other programs and are tied to an explicit program duration: one price per
-duration × participant count × pricing currency (`saveClubCoachingPrices`, same lock order as
-club prices). Missing prices stay missing: nothing is defaulted, interpolated or tiered. They are
+duration × participant count × pricing currency, saved with the program (`saveCoachingProgram`).
+Missing prices stay missing: nothing is defaulted, interpolated or tiered. They are
 informational (organized and paid at the club, never a checkout price); court rental is never
 included.
-Saved counts must lie in the program's current `min_participants`–`max_participants` range
-(`participants-required` without a valid range) and the currency must be charged by a current
+Saved counts must lie in the program's submitted `min_participants`–`max_participants` range
+(`invalid-input` without a valid range) and the currency must be charged by a current
 location (`invalid-currency`); amounts must be positive. Removal accepts any stored count.
 
 `saveOwnCoachingPrice` returns `club-priced` for these programs.
@@ -121,29 +123,32 @@ unaffected (see [Lesson availability and quotes](#lesson-availability-and-quotes
 
 ## Admin
 
-`/admin/coaching` (Programs, Coaches, Prices) is active-Admin-only at the layout and
+`/admin/coaching` (Programs, Coaches, Coach availability) is active-Admin-only at the layout and
 in every service. Server Actions only delegate to `src/lib/coaching/admin.ts`, which
 validates with Zod, authorizes, and runs short READ COMMITTED transactions:
 
-- programs: exclusive configuration fence → Admin fence → program `FOR UPDATE`; prices outside the new range or durations (club and coach, every currency), and coach prices of a Group/Junior program, are deleted before the program update and duration changes, in the same transaction;
+- programs and their club prices: exclusive configuration fence → Admin fence → (current location
+  currencies, read only when prices are saved) → program `FOR UPDATE`; prices outside the new range
+  or durations (club and coach, every currency), and coach prices of a Group/Junior program, are
+  deleted before the program update and duration changes, then submitted club price removals and
+  upserts (arbitrated by `coaching_prices_club_default`) are applied, all in the same transaction;
 - coaches: configuration share fence → profile `FOR UPDATE` → ordered locations `FOR SHARE`
   → Admin fence → coach account facts `FOR SHARE` → programs `FOR SHARE`; removing a program
   assignment deletes that coach's overrides for that program in the same transaction (club
   defaults, other coaches' overrides and booking snapshots are untouched; this grants the
   Admin no price editing); locations do not affect prices; new assignments need a
   non-archived location;
-- club prices: configuration share fence → Admin fence → program `FOR SHARE`; the upserts are
-  arbitrated by `coaching_prices_club_default`;
 - coach's own prices: configuration share fence → coach profile `FOR SHARE` → coach account
   facts `FOR SHARE` → program `FOR SHARE`; arbitrated by `coaching_prices_coach_override`.
 
 The UI follows the Admin conventions: compact tables, inline program status (deactivation
-confirms), inline coach visibility and inline club prices, and one Create/Edit dialog each
-for programs and coaches. The Prices page shows individual coach prices read-only; the Admin
-cannot edit them. Each program appears once per duration and currency with an editable table of
-club lesson prices/person by player count (create, edit, explicit Remove); Group/Junior rows
-show "Club prices only"; Save is disabled without changes
-or with invalid entries, server errors appear beside the rows and entered values are kept.
+confirms), inline coach visibility, and one Create/Edit dialog each for programs and coaches.
+There is no separate Admin Prices page: club prices are edited only in the Program dialog.
+The Coach dialog has a read-only Individual prices section listing that coach's overrides
+grouped by program and ordered by duration, participant count and currency (or "No individual
+prices"); the Admin cannot edit them, and coaches keep managing them under `/coach/pricing`.
+Unchecking a program assignment shows, before saving, how many of the coach's individual prices
+saving will remove, and marks them in that section.
 
 An active program needs explicit participant limits: saving an active program without both limits
 is `invalid-input` with field errors (the dialog shows them inline and keeps Save disabled), and
@@ -155,11 +160,14 @@ recorded in their revision evidence regardless of later limit changes.
 The Program Create/Edit dialog also edits club prices: one input per permitted participant count
 and pricing currency, for each selected duration, labelled "Lesson price/person" for every program
 type (currencies of current locations, plus any currency that still holds prices,
-labelled with the locations charging in it), on the same `coaching_prices` rows (coach `NULL`)
-as Prices. An empty input means not configured, never zero; removing a saved price is an
+labelled with the locations charging in it), on the `coaching_prices` rows with coach `NULL`.
+A currency no current location charges shows only its saved prices, read-only, with Remove; it
+offers no inputs for new prices. An empty input means not configured, never zero; removing a saved price is an
 explicit Remove action. Program details, durations and submitted club price changes save in one
 transaction (configuration exclusive fence → Admin fence → program `FOR UPDATE`); unsupported
-currencies are rejected as invalid input. Range, duration and type changes reconcile prices as
+currencies are rejected as invalid input, and saved prices in a currency no current location
+charges as `invalid-currency`. Save is disabled without changes or with invalid entries; server
+errors appear beside the prices and entered values are kept. Range, duration and type changes reconcile prices as
 described in [Configuration changes reconcile prices](#configuration-changes-reconcile-prices).
 
 ## Public page
@@ -168,12 +176,14 @@ described in [Configuration changes reconcile prices](#configuration-changes-rec
 (`readPublicCoaching`) uses an explicit SQL projection: active programs, public eligible
 coaches and their prices. It selects no email, contact or account fields. Locations come
 from the existing public location eligibility, so non-public locations and coach assignments
-are omitted. Club prices are listed per currency charged by a public location; a coach's own
-prices are listed in the currencies of that coach's public locations, per duration and number of
-players. Each data section has empty and unavailable states, and nothing is invented.
+are omitted. Each data section has empty and unavailable states, and nothing is invented.
 
-Each program shows a "From" price per currency (`fromPrices`, computed in `public.ts` from the
-database facts, never hardcoded), as "From … per person per lesson" and never mixing currencies:
+The page presents Programs, Coaches, How it works and FAQ. It is not a price catalogue: each
+program shows a single "From" price per currency, coach cards show no prices, and a link leads
+to `/pricing#coaching`. Every lesson price of a coach is on that coach's profile.
+
+Each program's "From" price per currency (`fromPrices`, computed in `public.ts` from the
+database facts, never hardcoded) reads "From … per person per lesson" and never mixes currencies:
 
 - Group/Junior: the lowest club lesson price/person for a current duration and count;
 - Private/Semi-private: the lowest effective price (coach override, else club price) over every
@@ -181,19 +191,21 @@ database facts, never hardcoded), as "From … per person per lesson" and never 
   every count of the current range and every configured duration; when no such coach teaches in a
   currency, the lowest published club price in it.
 
-Prices outside the current configuration are never considered. Price and configuration actions
-revalidate the public pages.
+Every program type requires at least one club/default price for a current duration and participant
+count in a public location's currency before appearing in public discovery, `/pricing` or coach
+offerings. Coach overrides alone cannot publish a program. A partial club price grid is sufficient;
+unconfigured combinations remain unavailable unless an eligible coach override prices them.
+Online booking selectors require a club price in the selected location's currency, matching lesson
+availability and checkout eligibility. Unpriced programs remain visible and editable in Admin.
+Prices outside the current configuration are never considered. Price and configuration actions revalidate the public pages.
+Group/Junior program cards state that sessions are arranged with the coach or club and paid at
+the club; they contain no booking links. Coach profiles list rates and lessons only for Private
+and Semi-private programs.
 
-The "Group and junior sessions" section (`CoachingGroupPrices`, `#group-prices`) lists each
-active Group/Junior program with its description, participant range and durations, and one club
-price table per currency (session length × number of players → club lesson price/person), only
-for current durations, counts inside the current range and currencies of public locations. A
-program without prices shows a short
-"not published yet" state. The section explains that sessions are organized by the coach or club,
-who reserve the court; prices are indicative; court rental and other costs are confirmed by the
-club; participants contact the club or coach and pay at the club; these sessions cannot be booked
-online. It contains no booking links. Coach profiles list rates and lessons only for Private and
-Semi-private programs.
+`/pricing` repeats the same `fromPrices` per program, with the factors behind lesson prices
+(duration, number of players, coach overrides) and whether court rental is included. A starting
+price is never tied to a particular duration, group size or coach, and is never added to a court
+rate. Coaches with their own prices (`PublicCoach.rates`) are linked to their profiles.
 
 The homepage coaching section names the active programs from the same read
 (`readPublicCoaching` on the public locations), with neutral copy when none are published
@@ -210,11 +222,14 @@ identifiers render the not-found page with a real 404 status: the page blocks on
 
 The page shows the hero (initials, name, up to three specialties, the first paragraph or
 sentence of the bio), About (bio, qualifications, languages, specialties), the coach's active
-programs, their public locations with links to `/courts#location-<id>` and `/club#visit`,
+programs, their public locations with links to `/courts#location-<id>` and `/contact?location=<id>`,
 and lesson prices. Every program duration and participant count, in each currency of the coach's public locations, is
 resolved with `resolveCoachingPrice` for that coach: the override ("<name>’s price"), else the club price,
-else "Price not published". Currency rules are those of [Pricing](#pricing). There is no inline availability or lesson-time picker; a booking link opens
-`/book?mode=coaching&coach=<user_id>` with the coach preselected.
+else "Price not published". Currency rules are those of [Pricing](#pricing). There is no inline availability or lesson-time picker. When the coach passes the
+booking selector rules (priced Private/Semi-private program and current/future working hours) at
+one or more public locations, "Book a lesson" opens `/book?mode=coaching&location=<id>&coach=<user_id>`
+at the first of them. Otherwise (e.g. only Group/Junior programs, or no working hours) the coach
+stays discoverable and the page directs visitors to `/contact` instead of online booking.
 
 Coach photographs are deferred: avatars live in the private `profile-avatars` bucket,
 readable only by authenticated active users, and publishing a player avatar publicly
@@ -599,12 +614,22 @@ page, with mode links and shared location/date navigation. Selection order is
 **Location → Coach → Program → Duration → Date/Time**, using URL navigation and server rendering:
 
 - Location: no location is selected until the user chooses one, the URL names a public location,
-  or a coach link (`coach=<user_id>`) names a coach with exactly one public location. A coach
-  link with several locations lists them and carries the coach into the first location choice.
-- Coach: every public eligible coach assigned to the location (`coach_locations`). The list is
-  never filtered by date, working hours, reservations, courts, programs or prices.
-- Program: the selected coach's own `coach_programs` assignments (active programs), of any type.
-  Nothing is derived from the location.
+  or a coach link (`coach=<user_id>`) without a location opens that coach's first public location
+  where they are bookable online (falling back to their first assigned location, which then
+  explains that they cannot currently be booked online). A requested coach who is not bookable at
+  the selected location is never replaced: the alert names the locations where they are bookable.
+- Coach: every public coach (active account, Coach role, public non-archived profile) assigned to
+  the location (`coach_locations`) who passes `coachingBookingOptions` there: at least one assigned
+  active Private/Semi-private program with a valid participant range and a configured price (coach
+  override, else club default) for some duration and count in the location's currency, and current
+  or future working hours at that location (a weekly row with a remaining occurrence in its validity
+  range, or an `available` exception later today or after). The list is not filtered by the selected
+  date, date-specific absences, reservations, courts or lesson slots, so a day without starts never
+  removes a coach. The same rules decide a coach link's initial location and the profile CTA.
+- Program: the selected coach's own `coach_programs` assignments (active programs) that are
+  bookable online: Private or Semi-private with a valid participant range. Group and Junior programs,
+  and programs without valid participant limits, never appear; they are arranged with the coach or
+  club. Nothing is derived from the location.
 - Duration: the program's configured subset of 60, 90 and 120 minutes,
   each labelled with its effective price for the selected number of players (`coachingBookingOptions`
   and `coachingDurationPrice` in `src/lib/coaching/booking-options.ts`): the coach's override, else
@@ -643,7 +668,8 @@ payment only. No provider adapter, lifecycle, pricing rule or backend availabili
 is reimplemented. Coaching success names the coach/court booking without promising an
 email template that does not exist.
 
-Location changes clear coach, program and duration and resolve the new location's current date;
+Location changes keep a chosen coach (never substituting another), clear program and duration,
+and resolve the new location's current date;
 coach changes clear program and duration; program changes clear duration. Date navigation
 retains valid lesson preferences. Location/date key the calendar; program/coach/duration key its selection and review subtree.
 Changing lesson preferences clears the chosen court/interval while retaining edited contact details. Stale availability or
@@ -832,21 +858,16 @@ migration, build, broad suite or commit was performed.
 ## Management lists and time-off ranges
 
 Programs use `q`, `type`, `status`, `sort` (`name`, `type`, `status`), `dir` and `page`.
-Prices use `q` (program name or coach name/email), `currency`, `program`, `duration`,
-`scope` (`club`, `coach`), optional `coach`, `sort` (`program`, `currency`, `duration`,
-`amount`), `dir` and `page`. Both use the extracted shared ManagementTableToolbar,
+Coaches use `q`, `status`, `profile`, `visibility`, `sort`, `dir` and `page`. Both use the extracted shared ManagementTableToolbar,
 shared sortable headings and existing Pagination. Query boundaries normalize invalid/repeated
 parameters. Sorting is changed only through column headings (first click ascending, second
 descending); there are no Sort/Direction controls. Filter/sort changes reset pagination; Clear
-filters resets the list URL. The Prices Program filter is a searchable combobox. In Coaches, the
+filters resets the list URL. In Coaches, the
 Visibility filter treats coaches without a profile or with an archived profile as Hidden.
-Repository SELECTs apply filtering/sorting/counting and 20-group pagination in PostgreSQL;
-counts and page reads share a read snapshot. Prices retain one group per program/duration/currency
-(currencies of non-archived locations plus currencies holding prices), including unset targets
-when no explicit scope is selected, with the inline club editor and read-only coach prices. Scope filters require an entered price of that scope;
-coach filters restrict assigned coach targets. Multiple matching overrides do not duplicate groups.
-Amount sorting uses the lowest matching entered amount within a group, with unset amounts last;
-amounts keep their stored currency. Checkout resolution uses the same resolver.
+Repository SELECTs apply filtering/sorting/counting and 20-row pagination in PostgreSQL;
+counts and page reads share a read snapshot. The Programs page also reads the listed programs'
+prices (for the Program dialog), and the Coaches page the listed coaches' own overrides (for the
+read-only Individual prices section). Checkout resolution uses the same resolver.
 
 Saving time off rejects overlapping active coaching occupancy or unexpired payment holds
 with `booking-conflict`, preserving every booking. Extra availability at a different location

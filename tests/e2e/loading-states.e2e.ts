@@ -150,12 +150,13 @@ test.describe("loading feedback", () => {
       .filter(font => font.family.replaceAll('"', "") === "Inter" && font.unicodeRange.startsWith("U+100-2BA"))
       .map(font => font.status));
     await page.goto("/");
-    const address = page.locator("#locations address").filter({ hasText: "București" });
+    // Each location links to the Contact page with its city, which uses latin-ext glyphs.
+    const address = page.locator("#locations li").filter({ hasText: "București" });
     await expect(address).toHaveCount(1);
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     expect(await latinExtInter()).toEqual(["unloaded"]);
     await address.scrollIntoViewIfNeeded();
-    await expect(address).toContainText("Splaiul Independenței 1");
+    await expect(address.getByRole("link")).toHaveAttribute("href", /^\/contact\?location=/);
     await expect.poll(latinExtInter).toEqual(["loaded"]);
   });
 

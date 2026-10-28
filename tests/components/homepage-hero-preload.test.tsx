@@ -9,7 +9,7 @@ vi.mock("@/app/home-court-availability", () => ({ CourtAvailabilityCard: () => n
 vi.mock("@/app/home-court-summary", () => ({ FacilitiesCourtsFallback: () => null, FacilitiesCourtsSummary: () => null,
   HeroCourtSummary: () => null, heroSummaryClassName: "" }));
 vi.mock("@/app/home-coaching", () => ({ HomeCoachingFallback: () => null, HomeCoachingPrograms: () => null }));
-vi.mock("@/app/home-locations", () => ({ HomeLocations: () => null, HomeLocationsShell: () => null }));
+vi.mock("@/app/home-locations", () => ({ HomeLocations: () => null }));
 
 import Home from "@/app/page";
 

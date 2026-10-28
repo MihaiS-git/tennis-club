@@ -3,14 +3,14 @@ import { createClient } from "@supabase/supabase-js";
 import { afterAll, assert, expect, test, vi } from "vitest";
 import { getDataSource } from "../../../src/lib/db/data-source";
 import * as coachingRepository from "../../../src/lib/db/repositories/coaching.repository";
-import { saveClubCoachingPrices, saveCoachingProgram, saveCoachProfile } from "../../../src/lib/coaching/admin";
+import { saveCoachingProgram, saveCoachProfile } from "../../../src/lib/coaching/admin";
 import { loadOwnCoachPricing, saveOwnCoachingPrice } from "../../../src/lib/coaching/coach-pricing";
 import { readPublicCoaching } from "../../../src/lib/coaching/public";
 import { resolveCoachingPrice } from "../../../src/lib/coaching/pricing";
 import { cleanupAuthFixtures, localFixtureClient } from "../auth-fixtures";
 import { ensureIntegrationAdminAnchor } from "../admin-anchor";
 
-import { loadPricesPage, loadProgramsPage } from "@/lib/coaching/admin-lists";
+import { loadProgramsPage } from "@/lib/coaching/admin-lists";
 
 const service = localFixtureClient();
 const password = "program-prices-password-123";
@@ -62,13 +62,11 @@ test("Private lesson prices/person retain explicit independent Club and Coach am
   expect(await saveCoachProfile({ user_id: coach.id, create: true, fields: { display_name: name, bio: "", qualifications: "",
     specialties: [], languages: [], is_public: true, location_ids: [location], program_ids: [created.id] } }, admin.client)).toMatchObject({ ok: true });
   expect(await saveOwnCoachingPrice({ program_id: created.id, duration_minutes: 60, participant_count: 2, currency: "RON", amount: "80" }, coach.client)).toMatchObject({ ok: true });
-  expect(await saveClubCoachingPrices({ program_id: created.id, duration_minutes: 60, currency: "RON", prices: [{ participant_count: 1, amount: "95" }], removed: [] }, admin.client)).toMatchObject({ ok: true });
+  expect(await saveCoachingProgram({ id: created.id, fields, club_prices: [lesson("RON", 60, 1, "95")] }, admin.client)).toMatchObject({ ok: true });
   const programs = await loadProgramsPage({ search: name }, admin.client);
   expect(programs.programs).toEqual([expect.objectContaining({ id: created.id, program_type: "private" })]);
   expect(programs.programs[0]).not.toHaveProperty("pricing_unit");
-  const page = await loadPricesPage({ program: created.id, currency: "RON" }, admin.client);
-  expect(page.groups).toEqual([{ program_id: created.id, currency: "RON", duration_minutes: 60 }]);
-  expect(page.prices.filter(price => price.coach_user_id === null).map(price => [price.participant_count, price.amount_minor])).toEqual([[1, 9500], [2, 9000]]);
+  expect(programs.prices.filter(price => price.coach_user_id === null).map(price => [price.participant_count, price.amount_minor])).toEqual([[1, 9500], [2, 9000]]);
   const own = await loadOwnCoachPricing(coach.client);
   expect(own?.rows.map(row => [row.participant_count, row.effective?.amountMinor])).toEqual([[1, 9500], [2, 8000]]);
   const published = await readPublicCoaching([{ id: location, name, currency: "RON" }]);
@@ -83,10 +81,10 @@ test("Private lesson prices/person retain explicit independent Club and Coach am
   expect((await coachingRepository.listCoachingPrices(db.manager, { programId: created.id })).map(price => [price.participantCount, price.coachUserId, price.amountMinor])
     .sort((a, b) => Number(a[0]) - Number(b[0]))).toEqual([[1, null, 13000], [2, null, 9000]]);
   expect(await saveOwnCoachingPrice({ program_id: created.id, duration_minutes: 60, participant_count: 1, currency: "RON", amount: "120" }, coach.client)).toMatchObject({ ok: false, reason: "club-priced" });
-  expect((await loadPricesPage({ program: created.id, currency: "RON", scope: "coach" }, admin.client)).total).toBe(0);
+  expect((await loadProgramsPage({ search: name }, admin.client)).prices.some(price => price.coach_user_id !== null)).toBe(false);
 });
 
-test("the Program form saves club-wide prices per participant count with the program atomically, on the same records as Prices", async () => {
+test("the Program form saves club-wide prices per participant count with the program atomically", async () => {
   await ensureIntegrationAdminAnchor(service);
   const name = `Program prices ${randomUUID()}`;
   assert.strictEqual((await service.from("locations").insert([
@@ -199,7 +197,7 @@ test("the Program form saves club-wide prices per participant count with the pro
   expect((await coachingRepository.listCoachingPrograms(db.manager)).find((program) => program.id === created.id))
     .toMatchObject({ name, durations: [60, 90, 120], minParticipants: 2, maxParticipants: 4 });
 
-  // Programs and Prices pages read the same coaching_prices records; archived locations name no currency.
+  // The Programs page reads the coaching_prices records; archived locations name no currency.
   const programsPage = await loadProgramsPage({ search: name }, admin.client);
   const currency = (code: string) => programsPage.currencies.find((item) => item.currency === code);
   expect(currency("RON")?.location_names).toContain(`${name} Central`);
@@ -207,22 +205,17 @@ test("the Program form saves club-wide prices per participant count with the pro
   expect(currency("EUR")?.location_names).toContain(`${name} Riverside`);
   expect(programsPage.prices.filter((price) => price.coach_user_id === null).map((price) => [price.currency, price.duration_minutes, price.participant_count]).sort())
     .toEqual([["EUR", 120, 4], ["EUR", 60, 2], ["RON", 60, 2], ["RON", 60, 3]]);
-  const pricesPage = await loadPricesPage({ search: name, currency: "RON", duration: "60", scope: "club" }, admin.client);
-  expect(pricesPage.total).toBe(1);
-  expect(pricesPage.prices.filter((price) => price.coach_user_id === null).map((price) => [price.participant_count, price.amount_minor]).sort())
-    .toEqual([[2, 15500], [3, 21000]]);
 
-  // The Prices page saves one duration's club prices by count; 4 players gets its own price.
-  expect(await saveClubCoachingPrices({ program_id: created.id, currency: "RON", duration_minutes: 60,
-    prices: [{ participant_count: 4, amount: "280" }], removed: [3] }, admin.client)).toEqual({ ok: true, id: created.id });
-  expect(await saveClubCoachingPrices({ program_id: created.id, currency: "RON", duration_minutes: 60,
-    prices: [{ participant_count: 5, amount: "280" }], removed: [] }, admin.client))
-    .toEqual({ ok: false, reason: "invalid-input", fieldErrors: { "prices.0": "Use a player count from 2 to 4." } });
+  // Saving the program again sets one count's price and removes another; 4 players gets its own price.
+  const current = { ...fields, durations: [60, 90, 120] };
+  expect(await saveCoachingProgram({ id: created.id, fields: current, club_prices: [lesson("RON", 60, 4, "280")],
+    removed_club_prices: [{ currency: "RON", duration_minutes: 60, participant_count: 3 }] }, admin.client)).toEqual({ ok: true, id: created.id });
+  expect(await saveCoachingProgram({ id: created.id, fields: current, club_prices: [lesson("RON", 60, 5, "280")] }, admin.client))
+    .toEqual({ ok: false, reason: "invalid-input", fieldErrors: { "club_prices.0": "Use a player count from 2 to 4." } });
   // Every price names one of the program's explicit durations.
-  expect(await saveClubCoachingPrices({ program_id: created.id, currency: "RON", duration_minutes: null,
-    prices: [{ participant_count: 2, amount: "50" }], removed: [] }, admin.client)).toMatchObject({ ok: false, reason: "invalid-input" });
-  expect(await saveClubCoachingPrices({ program_id: created.id, currency: "RON", duration_minutes: 90,
-    prices: [{ participant_count: 2, amount: "50" }], removed: [] }, admin.client)).toEqual({ ok: true, id: created.id });
+  expect(await saveCoachingProgram({ id: created.id, fields: current, club_prices: [{ ...lesson("RON", 60, 2, "50"), duration_minutes: null }] }, admin.client))
+    .toMatchObject({ ok: false, reason: "invalid-input" });
+  expect(await saveCoachingProgram({ id: created.id, fields: current, club_prices: [lesson("RON", 90, 2, "50")] }, admin.client)).toEqual({ ok: true, id: created.id });
   expect((await prices()).filter(([code, , , scope]) => code === "RON" && scope === "club")).toEqual([
     ["RON", 60, 2, "club", 15500], ["RON", 60, 4, "club", 28000], ["RON", 90, 2, "club", 5000]]);
   // The coach's own 3-player override is unaffected by club price changes.
@@ -324,8 +317,12 @@ test("Group and Junior club lesson prices/person are Admin-only per duration and
   // The 60-minute club lesson prices/person of the Group program.
   const rates = async () => (await coachingRepository.listCoachingPrices(db.manager, { programId: created.id }))
     .filter((price) => price.durationMinutes === 60).map((price) => [price.participantCount, price.amountMinor, price.currency]).sort();
-  const save = (change: Record<string, unknown>, session = admin.client) =>
-    saveClubCoachingPrices({ program_id: created.id, currency: "RON", duration_minutes: 60, prices: [], removed: [], ...change }, session);
+  // Club prices of one duration and currency by player count, saved with the unchanged program as the Program dialog does.
+  type Change = { currency?: string; duration_minutes?: number | null; prices?: { participant_count: number; amount: string }[]; removed?: number[] };
+  const save = ({ currency = "RON", duration_minutes = 60, prices = [], removed = [] }: Change, session = admin.client) =>
+    saveCoachingProgram({ id: created.id, fields,
+      ...prices.length > 0 && { club_prices: prices.map(price => ({ currency, duration_minutes, ...price })) },
+      ...removed.length > 0 && { removed_club_prices: removed.map(participant_count => ({ currency, duration_minutes, participant_count })) } }, session);
 
   // Only Admins may set prices; missing prices stay missing.
   for (const session of [coach.client, publicClient()]) await expect(save({ prices: [{ participant_count: 3, amount: "60" }] }, session)).rejects.toThrow();
@@ -353,16 +350,25 @@ test("Group and Junior club lesson prices/person are Admin-only per duration and
 
   // Invalid amounts, counts outside the range, unused currencies and durations the program does not offer change nothing.
   for (const amount of ["0", "-5", "1.234", "x"])
-    expect(await save({ prices: [{ participant_count: 3, amount }] })).toMatchObject({ ok: false, reason: "invalid-input", fieldErrors: { "prices.0": expect.any(String) } });
+    expect(await save({ prices: [{ participant_count: 3, amount }] })).toMatchObject({ ok: false, reason: "invalid-input", fieldErrors: { "club_prices.0": expect.any(String) } });
   for (const participant_count of [2, 6])
     expect(await save({ prices: [{ participant_count: 4, amount: "55" }, { participant_count, amount: "55" }] }))
-      .toEqual({ ok: false, reason: "invalid-input", fieldErrors: { "prices.1": "Use a player count from 3 to 5." } });
+      .toEqual({ ok: false, reason: "invalid-input", fieldErrors: { "club_prices.1": "Use a player count from 3 to 5." } });
   const used = (await db.query("SELECT DISTINCT currency FROM public.locations WHERE archived_at IS NULL") as { currency: string }[]).map((row) => row.currency);
   const unused = ["EUR", "USD", "GBP", "RON", "CHF"].find((currency) => !used.includes(currency));
-  if (unused) expect(await save({ currency: unused, prices: [{ participant_count: 3, amount: "10" }] })).toEqual({ ok: false, reason: "invalid-currency" });
+  assert.ok(unused);
+  expect(await save({ currency: unused, prices: [{ participant_count: 3, amount: "10" }] })).toEqual({ ok: false, reason: "invalid-currency" });
   expect(await save({ currency: "JPY", prices: [{ participant_count: 3, amount: "10" }] })).toMatchObject({ ok: false, reason: "invalid-input" });
   expect(await save({ duration_minutes: null, prices: [{ participant_count: 3, amount: "100" }] })).toMatchObject({ ok: false, reason: "invalid-input" });
-  expect(await save({ duration_minutes: 120, prices: [{ participant_count: 3, amount: "100" }] })).toEqual({ ok: false, reason: "invalid-program" });
+  expect(await save({ duration_minutes: 120, prices: [{ participant_count: 3, amount: "100" }] }))
+    .toEqual({ ok: false, reason: "invalid-input", fieldErrors: { "club_prices.0": "Select this duration before setting its price." } });
+  // A price saved earlier in a currency no current location charges stays listed and can be removed, but not changed.
+  await db.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,participant_count,amount_minor,currency) VALUES($1,60,5,7000,$2)`, [created.id, unused]);
+  const listed = (await loadProgramsPage({ search: name }, admin.client));
+  expect(listed.currencies.find((item) => item.currency === unused)).toEqual({ currency: unused, location_names: [] });
+  expect(listed.prices.some((price) => price.program_id === created.id && price.currency === unused)).toBe(true);
+  expect(await save({ currency: unused, prices: [{ participant_count: 5, amount: "75" }] })).toEqual({ ok: false, reason: "invalid-currency" });
+  expect(await save({ currency: unused, removed: [5] })).toEqual({ ok: true, id: created.id });
   expect(await rates()).toEqual([[3, 6500, "RON"], [4, 5000, "RON"]]);
 
   // Coaches cannot override Group/Junior prices, and the program is absent from their pricing view.
@@ -385,19 +391,28 @@ test("Group and Junior club lesson prices/person are Admin-only per duration and
   expect(published.programs.find((program) => program.id === created.id)).toMatchObject({ type: "group",
     prices: [{ durationMinutes: 60, participantCount: 3, amountMinor: 6500, currency: "RON" }, { durationMinutes: 60, participantCount: 4, amountMinor: 5000, currency: "RON" }],
     fromPrices: [{ currency: "RON", amountMinor: 5000 }] });
-  expect(published.coaches.find((item) => item.id === coach.id)?.rates.map((rate) => rate.programId)).toEqual([privateProgram.id]);
+  // A coach override alone cannot publish the unpriced Private program.
+  expect(published.programs.some((program) => program.id === privateProgram.id)).toBe(false);
+  expect(published.coaches.find((item) => item.id === coach.id)).toMatchObject({
+    programs: [{ id: created.id, name }], rates: [],
+  });
+  // Once the Club publishes a price, the Private override appears; the stored
+  // Group override remains excluded from coach rates.
+  expect(await saveCoachingProgram({ id: privateProgram.id,
+    fields: { ...fields, name: `${name} private`, program_type: "private", min_participants: 1, max_participants: 1 },
+    club_prices: [lesson("RON", 60, 1, "100")] }, admin.client)).toEqual({ ok: true, id: privateProgram.id });
+  expect((await readPublicCoaching(visible)).coaches.find((item) => item.id === coach.id)?.rates)
+    .toMatchObject([{ programId: privateProgram.id, amountMinor: 15000, currency: "RON" }]);
   expect(await saveCoachingProgram({ id: created.id, fields: { ...fields, max_participants: 3 } }, admin.client)).toEqual({ ok: true, id: created.id });
   expect((await coachingRepository.listCoachingPrices(db.manager, { programId: created.id })).some((price) => price.coachUserId !== null)).toBe(false);
   // The narrowed range deleted the 4-player price; the public From price follows.
   expect(await rates()).toEqual([[3, 6500, "RON"]]);
   expect((await readPublicCoaching(visible)).programs.find((program) => program.id === created.id)?.fromPrices).toEqual([{ currency: "RON", amountMinor: 6500 }]);
 
-  // The Prices page lists the program per duration and currency with its club prices, never coach targets.
-  expect((await loadPricesPage({ search: name, currency: "RON", program: created.id }, admin.client)).total).toBe(2);
-  const page = await loadPricesPage({ search: name, currency: "RON", program: created.id, duration: "60" }, admin.client);
-  expect(page.total).toBe(1);
-  expect(page.prices.map((price) => [price.participant_count, price.amount_minor, price.coach_user_id])).toEqual([[3, 6500, null]]);
-  expect((await loadPricesPage({ search: name, currency: "RON", program: created.id, scope: "coach" }, admin.client)).total).toBe(0);
+  // The Programs page lists the program's club prices, never coach targets.
+  const page = await loadProgramsPage({ search: name }, admin.client);
+  expect(page.prices.filter((price) => price.program_id === created.id).map((price) => [price.duration_minutes, price.participant_count, price.amount_minor, price.coach_user_id]))
+    .toEqual([[60, 3, 6500, null]]);
 }, 60000);
 
 test("the public From price is the lowest applicable configured price per currency, read from the database", async () => {

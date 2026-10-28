@@ -36,6 +36,10 @@ test("homepage, public Coaching and authenticated Admin Prices read the real pri
     }
     const card = page.getByRole("listitem").filter({ has: page.getByRole("heading", { name, exact: true }) }).first();
     await expect(card).toContainText(/From RON\s*90.00 per person per lesson/);
+    expect((await page.goto("/pricing"))?.status()).toBe(200);
+    await expect(page.getByRole("list", { name: "Coaching starting prices" }).getByRole("listitem")
+      .filter({ has: page.getByRole("heading", { name, exact: true }) }).first()).toContainText(/From RON\s*90.00/);
+    await expect(page.getByText("Pricing temporarily unavailable.")).toHaveCount(0);
     await page.goto("/login");
     await page.getByRole("textbox", { name: "Email" }).fill(email);
     await page.getByLabel("Password", { exact: true }).fill(password);
@@ -43,20 +47,24 @@ test("homepage, public Coaching and authenticated Admin Prices read the real pri
     await expect(page).toHaveURL(/\/$/);
     expect((await page.goto(`/admin/coaching/programs?q=${encodeURIComponent(name)}`))?.status()).toBe(200);
     await expect(page.getByRole("heading", { name: "Programs", exact: true })).toBeVisible();
-    await expect(page.getByRole("row", { name: `Edit program ${name}`, exact: true })).toBeVisible();
-    expect((await page.goto(`/admin/coaching/prices?program=${program}&currency=RON`))?.status()).toBe(200);
-    await expect(page.getByRole("heading", { name: "Prices", exact: true })).toBeVisible();
-    await expect(page.getByRole("table", { name: "Coaching prices", exact: true }).getByText(name, { exact: true }).first()).toBeVisible();
     expect((await service.from("coaching_prices").select("participant_count,amount_minor").eq("program_id", program).order("participant_count")).data)
       .toEqual([{ participant_count: 1, amount_minor: 9000 }, { participant_count: 2, amount_minor: 9000 }]);
-    const form = page.getByRole("form", { name: `${name} club prices in RON` });
-    await expect(form).toContainText("Lesson price/person");
-    await form.getByRole("textbox", { name: /^2 players,/ }).fill("95");
-    await form.getByRole("button", { name: "Save prices", exact: true }).click();
+    // Club prices are edited only in the Program dialog; there is no separate Prices page.
+    await page.getByRole("row", { name: `Edit program ${name}`, exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Edit program" });
+    const prices = dialog.getByRole("region", { name: "Club prices in RON" });
+    await expect(prices).toContainText("Lesson price/person");
+    await prices.getByRole("textbox", { name: /^2 players\s*,/ }).fill("95");
+    await dialog.getByRole("button", { name: "Save program", exact: true }).click();
     await expect.poll(async () => (await service.from("coaching_prices").select("participant_count,amount_minor").eq("program_id", program).order("participant_count")).data)
       .toEqual([{ participant_count: 1, amount_minor: 9000 }, { participant_count: 2, amount_minor: 9500 }]);
+    expect((await page.goto("/admin/coaching/prices"))?.status()).toBe(404);
     await page.goto("/coaching");
     await expect(card).toContainText(/From RON\s*90.00 per person per lesson/);
+    expect((await page.goto("/pricing"))?.status()).toBe(200);
+    await expect(page.getByRole("list", { name: "Coaching starting prices" }).getByRole("listitem")
+      .filter({ has: page.getByRole("heading", { name, exact: true }) }).first()).toContainText(/From RON\s*90.00/);
+    await expect(page.getByText("Pricing temporarily unavailable.")).toHaveCount(0);
   } finally {
     await page.close();
     for (const table of ["coaching_prices", "coaching_program_durations"]) {

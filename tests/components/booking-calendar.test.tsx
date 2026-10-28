@@ -5,7 +5,8 @@ import { Activity, type ComponentProps } from "react";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-const { push, refresh, confirm, coachingConfirm, abandon, paymentProps, settled } = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn(), confirm: vi.fn(), coachingConfirm: vi.fn(), abandon: vi.fn(), paymentProps: vi.fn(), settled: { amount: 11000, currency: "EUR" as "EUR" | "RON" } }));
+const { push, refresh, confirm, coachingConfirm, abandon, navigationAbandon, paymentProps, settled } = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn(), confirm: vi.fn(), coachingConfirm: vi.fn(), abandon: vi.fn(), navigationAbandon: vi.fn(), paymentProps: vi.fn(), settled: { amount: 11000, currency: "EUR" as "EUR" | "RON" } }));
+vi.mock("@/app/book/checkout-abandonment", () => ({ abandonUnusedCheckout: navigationAbandon }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push, refresh }) }));
 vi.mock("@/app/book/actions", () => ({ commitCustomerBookingAction: confirm, commitCoachingBookingAction: coachingConfirm, abandonCheckoutAction: abandon }));
 vi.mock("@/app/book/online-payment", () => ({ OnlinePayment: (props: ComponentProps<typeof import("@/app/book/online-payment").OnlinePayment>) => {
@@ -21,6 +22,7 @@ import { BookCourtLink } from "@/components/book-court-link";
 import type { CourtDay } from "@/lib/courts/calendar";
 
 beforeEach(() => {
+  navigationAbandon.mockReset();
   push.mockReset(); refresh.mockReset(); confirm.mockReset(); coachingConfirm.mockReset(); abandon.mockReset(); settled.amount = 11000; settled.currency = "EUR";
   window.history.replaceState(null, "", "/book");
   installDialogMock();
@@ -353,6 +355,25 @@ it("can leave while the cancellation action is unavailable and ignores its late 
   expect(screen.queryByRole("region", { name: "Booking confirmed" })).toBeNull();
 });
 
+it.each(["Close", "escape", "pagehide", "unmount"])("attempts unused checkout cleanup on %s", async trigger => {
+  await openCheckout();
+  if (trigger === "pagehide") fireEvent(window, new Event("pagehide"));
+  else if (trigger === "unmount") cleanup();
+  else if (trigger === "escape") fireEvent(screen.getByRole("dialog"), new Event("cancel", { cancelable: true }));
+  else fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  await waitFor(() => expect(navigationAbandon).toHaveBeenCalledExactlyOnceWith(checkout));
+  expect(abandon).not.toHaveBeenCalled();
+});
+
+it.each(["processing", "unknown", "confirmed"])("does not abandon %s payment on navigation", async state => {
+  await openCheckout();
+  fireEvent.click(screen.getByRole("button", { name: state === "confirmed" ? "Simulate confirmed status" : `Simulate ${state}` }));
+  fireEvent(window, new Event("pagehide"));
+  cleanup();
+  await Promise.resolve();
+  expect(navigationAbandon).not.toHaveBeenCalled();
+});
+
 
 it.each([false, true])("shows staff-handled cancellation instructions only for guest bookings (authenticated=%s)", async (authenticated) => {
   const instruction = "To request cancellation, please contact the club before the cancellation deadline. Club staff will handle your request and any applicable refund.";
@@ -413,9 +434,23 @@ it("labels every unavailable state and lists it in the legend", () => {
     currency="RON" cancellationNoticeMinutes={120} timezone="UTC" />);
   const legend = screen.getByRole("list", { name: "Timetable legend" });
   expect(Array.from(legend.querySelectorAll("li"), (item) => item.textContent)).toEqual(["Available", "Booked", "Past", "Closed", "No pricing", "Selected"]);
-  for (const label of ["Past", "Booked", "Closed", "No pricing"]) expect(screen.getByLabelText(new RegExp(`Court 1 .*, ${label}$`))).toBeDefined();
+  for (const [label, background] of [
+    ["Past", "bg-[color-mix(in_srgb,var(--sand)_55%,var(--chalk))]"],
+    ["Booked", "bg-clay-300"], ["Closed", "bg-sand"],
+    ["No pricing", "bg-[color-mix(in_srgb,var(--earth-700)_35%,var(--chalk))]"],
+  ]) {
+    const cell = screen.getByLabelText(new RegExp(`Court 1 .*, ${label}$`));
+    const swatch = within(legend).getByText(label).querySelector("span")!;
+    expect(cell.classList.contains(background)).toBe(true);
+    expect(swatch.classList.contains(background)).toBe(true);
+  }
+  const available = screen.getByRole("button", { name: /18:00–18:30/ });
+  expect(available.classList.contains("bg-[color-mix(in_srgb,var(--forest-700)_35%,var(--chalk))]")).toBe(true);
+  expect(within(legend).getByText("Available").querySelector("span")!.classList.contains("bg-[color-mix(in_srgb,var(--forest-700)_35%,var(--chalk))]")).toBe(true);
+  expect(screen.getByRole("table").innerHTML + legend.innerHTML).not.toMatch(/gradient|bg-size|bg-\[image:/);
   fireEvent.click(screen.getByRole("button", { name: /18:00–18:30/ }));
-  expect(screen.getByRole("button", { name: /18:00–18:30.*selected/ })).toBeDefined();
+  expect(screen.getByRole("button", { name: /18:00–18:30.*selected/ }).classList.contains("bg-primary")).toBe(true);
+  expect(within(legend).getByText("Selected").querySelector("span")!.classList.contains("bg-primary")).toBe(true);
 });
 
 
@@ -443,6 +478,7 @@ it("uses the same timetable for every court but only allows complete server-offe
   expect(screen.getByRole("region", { name: "Selected interval" }).textContent).toMatch(/170[.,]00/);
   const selectedCells = document.querySelectorAll('[aria-label$=", selected"]');
   expect(selectedCells).toHaveLength(3);
+  for (const cell of selectedCells) expect(cell.classList.contains("bg-primary")).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: /Court 2 .*90 min lesson/ }));
   expect(screen.getByRole("region", { name: "Selected interval" }).textContent).toMatch(/180[.,]00/);
   await openConfirmation();
@@ -457,6 +493,17 @@ it("uses the same timetable for every court but only allows complete server-offe
 it("does not offer lessons across an occupied cell even when advisory offers have become stale", () => {
   render(<BookingCalendar {...coachingProps} day={{ ...coachingProps.day, courts: courts.map(row => ({ ...row, cells: ["available", "booked", "available", "available"] })) }} />);
   expect(screen.queryByRole("button", { name: /90 min lesson/ })).toBeNull();
+  const legend = screen.getByRole("list", { name: "Timetable legend" });
+  for (const [label, background] of [["Booked", "bg-clay-300"], ["No lesson start", "bg-clay-100"]]) {
+    const swatch = within(legend).getByText(label).querySelector("span")!;
+    expect(swatch.classList.contains(background)).toBe(true);
+    for (const cell of screen.getAllByLabelText(new RegExp(`Court .*?, ${label}$`))) {
+      expect(cell.classList.contains(background)).toBe(true);
+      expect(cell.tagName).toBe("DIV");
+    }
+  }
+  expect(screen.getByRole("table").innerHTML + legend.innerHTML).not.toMatch(/gradient|bg-size|bg-\[image:/);
+  expect(screen.queryByText(/Dotted cells/)).toBeNull();
 });
 
 it.each([{ authenticated: false, group: false }, { authenticated: true, group: false }, { authenticated: false, group: true }, { authenticated: true, group: true }])("reuses coaching contact and verified confirmation (authenticated=$authenticated, group=$group)", async ({ authenticated, group }) => {

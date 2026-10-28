@@ -233,11 +233,15 @@ Current server-only environment variables:
 SUPABASE_URL=
 SUPABASE_PUBLISHABLE_KEY=
 APP_URL=
+GOOGLE_MAPS_EMBED_API_KEY=
 ```
 
 These variables are intentionally not prefixed with `NEXT_PUBLIC_` because the browser does not currently need direct Supabase access.
 
 `APP_URL` is the canonical server-side application origin used for authentication email redirects. Signup requires email confirmation and returns through `${APP_URL}/auth/callback`; password recovery returns through `${APP_URL}/auth/callback?next=/reset-password`. Production must set `APP_URL` explicitly.
+It is also the origin of canonical URLs, `/sitemap.xml` and the sitemap reference in `/robots.txt`.
+
+`GOOGLE_MAPS_EMBED_API_KEY` is optional. When it is set, the Contact page offers an embedded Google map of each location, loaded only after the visitor asks for it; without it, the page shows addresses and directions links only.
 
 Local development uses the Supabase stack at `http://127.0.0.1:54321`, the Next.js app at `http://localhost:3000`, and Mailpit at `http://127.0.0.1:54324`. Mailpit is local-only; production email delivery is configured in the hosted Supabase project. See [auth architecture](docs/architecture.md), [security configuration](docs/security.md), and [auth testing](docs/testing.md).
 

@@ -6,7 +6,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { CoachPricingRow } from "@/lib/coaching/coach-pricing";
 
 const actions = vi.hoisted(() => ({ saveOwnCoachingPriceAction: vi.fn(), removeOwnCoachingPriceAction: vi.fn() }));
-const clubActions = vi.hoisted(() => ({ saveClubCoachingPricesAction: vi.fn() }));
+// Admin program saves (the only club price writes) are never used by a coach.
+const clubActions = vi.hoisted(() => ({ saveCoachingProgramAction: vi.fn() }));
 const router = vi.hoisted(() => ({ refresh: vi.fn(), push: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => router, usePathname: () => "/coach/pricing" }));
 vi.mock("@/app/coach/pricing/actions", () => actions);
@@ -64,7 +65,7 @@ it("saves the coach's own price without naming a coach and keeps the value after
   await waitFor(() => expect(actions.saveOwnCoachingPriceAction).toHaveBeenLastCalledWith({ ...target, amount: "150" }));
   await expectToast("Price saved.", "success");
   expect(router.refresh).toHaveBeenCalled();
-  expect(clubActions.saveClubCoachingPricesAction).not.toHaveBeenCalled();
+  expect(clubActions.saveCoachingProgramAction).not.toHaveBeenCalled();
 });
 
 it("removes the coach's own price without a confirmation dialog", async () => {
@@ -75,7 +76,7 @@ it("removes the coach's own price without a confirmation dialog", async () => {
   await waitFor(() => expect(actions.removeOwnCoachingPriceAction).toHaveBeenCalledWith(target));
   await expectToast("Price removed.", "success");
   expect((screen.getByLabelText("My lesson price/person for Private lesson, 60 min, 1 player, RON") as HTMLInputElement).value).toBe("");
-  expect(clubActions.saveClubCoachingPricesAction).not.toHaveBeenCalled();
+  expect(clubActions.saveCoachingProgramAction).not.toHaveBeenCalled();
 });
 
 it("lists and saves an independent price for each permitted number of players", async () => {

@@ -1,8 +1,8 @@
-import { PriceEditor } from "@/app/admin/coaching/prices/price-editor";
 import type { CoachPricingView } from "@/lib/coaching/coach-pricing";
 import { formatCoachingDuration, formatPlayers } from "@/lib/coaching/validation";
 import { formatMoney } from "@/lib/pricing/money";
 import { removeOwnCoachingPriceAction, saveOwnCoachingPriceAction } from "./actions";
+import { PriceEditor } from "./price-editor";
 
 const ownActions = { save: saveOwnCoachingPriceAction, remove: removeOwnCoachingPriceAction };
 

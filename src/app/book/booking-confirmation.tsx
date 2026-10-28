@@ -25,6 +25,7 @@ import { ModalDialog } from "@/components/modal-dialog";
 import { LoadingStatus } from "@/components/loading-status";
 import { abandonCheckoutAction, commitCustomerBookingAction, commitCoachingBookingAction } from "./actions";
 import { paymentHoldDurationSeconds, type OnlineCheckout } from "@/lib/payments/domain";
+import { abandonUnusedCheckout } from "./checkout-abandonment";
 
 // Stripe's client libraries load only once the server has started a checkout.
 const OnlinePayment = dynamic(() => import("./online-payment").then((module) => module.OnlinePayment),
@@ -59,10 +60,23 @@ export function BookingConfirmation({ selection, details, contact, onContactChan
   const dismissed = useRef(false);
   const cancellationStarted = useRef(false);
   const cancellationNotification = useRef<string | number | undefined>(undefined);
+  const navigationCheckout = useRef<OnlineCheckout | null>(null);
+  useEffect(() => {
+    navigationCheckout.current = checkout && paymentState === "pending" && !cancellationStarted.current ? checkout.payment : null;
+  }, [checkout, paymentState]);
   useEffect(() => {
     dismissed.current = false;
+    function cleanup() {
+      const payment = navigationCheckout.current;
+      navigationCheckout.current = null;
+      if (payment && !cancellationStarted.current) abandonUnusedCheckout(payment);
+    }
+    window.addEventListener("pagehide", cleanup);
     return () => {
       dismissed.current = true;
+      window.removeEventListener("pagehide", cleanup);
+      // React Strict Mode replays effects without abandoning the real checkout.
+      queueMicrotask(() => { if (dismissed.current) cleanup(); });
       if (cancellationNotification.current !== undefined) toast.dismiss(cancellationNotification.current);
     };
   }, []);
@@ -133,7 +147,10 @@ export function BookingConfirmation({ selection, details, contact, onContactChan
         customerName: parsed.data.customerName, customerEmail: parsed.data.customerEmail, customerPhone: parsed.data.customerPhone,
         expectedTotalAmountMinor: parsed.data.expectedTotalAmountMinor, expectedCurrency: parsed.data.expectedCurrency })
         : await commitCustomerBookingAction(parsed.data);
-      if (dismissed.current) return;
+      if (dismissed.current) {
+        if (result.ok && result.status === "pending_payment") abandonUnusedCheckout(result.checkout);
+        return;
+      }
       if (result.ok) {
         if (result.status === "pending_payment") {
           toast.info("Court held. Complete payment to confirm your booking.", { id: notification });
@@ -198,6 +215,7 @@ export function BookingConfirmation({ selection, details, contact, onContactChan
       {!checkoutStopped && <OnlinePayment checkout={checkout.payment} holdExpiresAt={checkout.expiresAt} disabled={confirmAbandonment || pending}
         onPaymentStatus={setPaymentState}
         onConfirmed={(amount, currency, policy) => {
+          navigationCheckout.current = null;
           if (!dismissed.current && !cancellationStarted.current) onCommitted(amount, currency, policy, "online");
         }} />}
       {cancellationMessage && <p role="status" className="mt-4 flex gap-2 rounded-control border border-border-strong bg-warning-background px-3 py-2.5 text-sm font-semibold text-foreground"><Clock aria-hidden className="mt-0.5 size-4 shrink-0 text-accent" /><span>{cancellationMessage}</span></p>}

@@ -37,6 +37,12 @@ export type PublicCoach = {
 };
 export type PublicCoaching = { programs: PublicCoachingProgram[]; coaches: PublicCoach[] };
 
+// The projection supplies only club prices for current durations/counts and public
+// location currencies. One is sufficient; coach overrides cannot publish a program.
+export function hasPublishedClubPrice(program: Pick<PublicCoachingProgram, "prices">, currency?: LocationCurrency) {
+  return program.prices.some((price) => currency === undefined || price.currency === currency);
+}
+
 type VisibleLocation = Pick<PublicLocation, "id" | "name" | "currency">;
 type FactsProgram = PublicCoachingFacts["programs"][number];
 
@@ -102,6 +108,7 @@ export function projectPublicCoaching(facts: PublicCoachingFacts, visibleLocatio
       })),
       fromPrices: [],
     };
+    if (!hasPublishedClubPrice(projected)) return [];
     const offering = facts.coaches.filter((coach) => coach.program_ids.includes(program.id))
       .map((coach) => ({ id: coach.user_id, currencies: currenciesOf(coachLocations.get(coach.user_id) ?? []) }));
     projected.fromPrices = fromPrices(projected, prices, grid, offering, currencies);

@@ -2,11 +2,9 @@ import "server-only";
 
 import { In, type EntityManager } from "typeorm";
 import { z } from "zod";
-import { locationCurrencies } from "@/lib/admin/locations-validation";
-import type { CoachFilters, PriceFilters, ProgramFilters } from "@/lib/coaching/admin-filters";
+import type { CoachFilters, ProgramFilters } from "@/lib/coaching/admin-filters";
 import { CoachingProgramEntity } from "../entities/coaching-program.entity";
 import { CoachingProgramDurationEntity } from "../entities/coaching-program-duration.entity";
-import { CoachingPriceEntity } from "../entities/coaching-price.entity";
 
 const pageSize = 20;
 function pagination(total: number, requested: number) {
@@ -29,63 +27,6 @@ export async function listProgramsPage(manager: EntityManager, filters: ProgramF
   }) : [];
   return { ...paging, programs: programs.map(program => ({ ...program,
     durations: durations.filter(duration => duration.programId === program.id).map(duration => duration.durationMinutes) })) };
-}
-
-const priceGroupSchema = z.object({ program_id: z.uuid(), currency: z.enum(locationCurrencies), duration_minutes: z.number().int() });
-
-// The service supplies the program IDs permitting Coach targets. SQL only applies
-// filtering, grouping, counting, sorting and pagination. The read-only count grid
-// retains unconfigured targets; it never inserts prices or invents amounts.
-export async function listPriceGroupsPage(manager: EntityManager, filters: PriceFilters, coachProgramIds: readonly string[]) {
-  const parameters: (string | number | readonly string[])[] = [];
-  const where: string[] = [];
-  function parameter(value: string | number | readonly string[]) { parameters.push(value); return `$${parameters.length}`; }
-  if (filters.currency) where.push(`currency=${parameter(filters.currency)}`);
-  if (filters.program) where.push(`program_id=${parameter(filters.program)}::uuid`);
-  if (filters.duration) where.push(`duration_minutes=${parameter(filters.duration)}`);
-  if (filters.scope === "club") where.push("coach_user_id IS NULL AND amount_minor IS NOT NULL");
-  if (filters.scope === "coach") where.push("coach_user_id IS NOT NULL AND amount_minor IS NOT NULL");
-  if (filters.coach) where.push(`coach_user_id=${parameter(filters.coach)}::uuid`);
-  if (filters.search) {
-    const search = parameter(filters.search);
-    where.push(`(strpos(lower(program_name),lower(${search}))>0 OR strpos(lower(coalesce(coach_name,'')),lower(${search}))>0 OR strpos(lower(coalesce(email,'')),lower(${search}))>0)`);
-  }
-  const coachPrograms = parameter(coachProgramIds);
-  const cte = `WITH currencies AS (
-    SELECT currency FROM public.locations WHERE archived_at IS NULL
-    UNION SELECT currency FROM public.coaching_prices
-  ), targets AS (
-    SELECT p.id AS program_id,p.name AS program_name,k.currency,d.duration_minutes,
-      c.user_id AS coach_user_id,c.display_name AS coach_name,u.email,x.amount_minor
-    FROM public.coaching_programs p
-    JOIN public.coaching_program_durations d ON d.program_id=p.id
-    CROSS JOIN currencies k
-    LEFT JOIN LATERAL generate_series(p.min_participants,p.max_participants) n(participant_count) ON TRUE
-    CROSS JOIN LATERAL (
-      SELECT NULL::uuid AS user_id,NULL::text AS display_name
-      UNION ALL SELECT cp.user_id,cp.display_name FROM public.coach_profiles cp
-      JOIN public.coach_programs ap ON ap.coach_user_id=cp.user_id AND ap.program_id=p.id
-      WHERE cp.archived_at IS NULL AND p.id=ANY(${coachPrograms}::uuid[])
-    ) c
-    LEFT JOIN public.users u ON u.id=c.user_id
-    LEFT JOIN public.coaching_prices x ON x.program_id=p.id AND x.duration_minutes=d.duration_minutes
-      AND x.participant_count=n.participant_count AND x.currency=k.currency AND x.coach_user_id IS NOT DISTINCT FROM c.user_id
-  ), groups AS (
-    SELECT program_id,currency,duration_minutes,program_name,min(amount_minor) AS amount
-    FROM targets ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
-    GROUP BY program_id,currency,duration_minutes,program_name
-  )`;
-  const counts: unknown = await manager.query(`${cte} SELECT count(*)::int AS total FROM groups`, parameters);
-  const paging = pagination(z.array(z.object({ total: z.number().int() })).parse(counts)[0].total, filters.page);
-  const column = { program: "program_name", currency: "currency", duration: "duration_minutes", amount: "amount" }[filters.sort];
-  const rows: unknown = await manager.query(`${cte} SELECT program_id,currency,duration_minutes FROM groups
-    ORDER BY ${column} ${filters.dir === "asc" ? "ASC" : "DESC"} NULLS LAST,program_id,currency,duration_minutes
-    LIMIT ${pageSize} OFFSET ${(paging.page - 1) * pageSize}`, parameters);
-  const groups = z.array(priceGroupSchema).parse(rows);
-  const prices = groups.length ? await manager.getRepository(CoachingPriceEntity).find({ where: groups.map(group => ({
-    programId: group.program_id, currency: group.currency, durationMinutes: group.duration_minutes,
-  })), order: { participantCount: "ASC" } }) : [];
-  return { ...paging, groups, prices };
 }
 
 const coachManagementRowSchema = z.object({

@@ -153,25 +153,6 @@ export const coachingPriceMutationSchema = z.strictObject({
 });
 export const coachingPriceRemovalSchema = coachingPriceMutationSchema.omit({ amount: true });
 
-// Club lesson prices/person of one program duration in one currency, by participant count.
-// Omitted counts are unchanged; an empty amount is never sent and removal is explicit.
-export const clubPriceSetMutationSchema = z.strictObject({
-  program_id: z.uuid(), currency: coachingCurrencySchema, duration_minutes: coachingDurationSchema,
-  prices: z.array(z.strictObject({ participant_count: participantCountSchema, amount: majorAmountSchema })).max(100),
-  removed: z.array(participantCountSchema).max(100),
-}).superRefine((value, context) => {
-  const saved = new Set<number>();
-  value.prices.forEach((price, index) => {
-    if (saved.has(price.participant_count)) context.addIssue({ code: "custom", path: ["prices", index, "amount"], message: "Enter each player count once." });
-    saved.add(price.participant_count);
-  });
-  value.removed.forEach((count, index) => {
-    if (saved.has(count)) context.addIssue({ code: "custom", path: ["removed", index], message: "A price cannot be both saved and removed." });
-  });
-  if (new Set(value.removed).size !== value.removed.length) context.addIssue({ code: "custom", path: ["removed"], message: "Remove each player count once." });
-  if (!value.prices.length && !value.removed.length) context.addIssue({ code: "custom", path: ["form"], message: "There are no changes to save." });
-});
-
 export type CoachingMutationResult =
   | { ok: true; id: string; archived?: boolean }
   | { ok: false; reason: "invalid-input"; fieldErrors: Record<string, string> }
@@ -180,8 +161,8 @@ export type CoachingMutationResult =
 export function coachingFieldErrors(issues: readonly z.core.$ZodIssue[]) {
   const fieldErrors: Record<string, string> = {};
   for (const issue of issues) {
-    // Submitted price entries are reported per entry, e.g. "club_prices.2" or "prices.0".
-    if (["club_prices", "removed_club_prices", "prices", "removed"].includes(String(issue.path[0])) && typeof issue.path[1] === "number") {
+    // Submitted price entries are reported per entry, e.g. "club_prices.2".
+    if (["club_prices", "removed_club_prices"].includes(String(issue.path[0])) && typeof issue.path[1] === "number") {
       fieldErrors[`${String(issue.path[0])}.${issue.path[1]}`] ??= issue.message;
       continue;
     }

@@ -9,7 +9,7 @@ import Link from "next/link";
 import dynamic from "next/dynamic";
 import { TimelineLegend } from "@/components/court-timeline-grid";
 import { Button } from "@/components/button";
-import { BookingTimetable, lessonStartOffers, lessonTimetableDay, lessonTimetableLabels, type LessonOffer } from "@/components/booking-timetable";
+import { BookingTimetable, lessonStartOffers, lessonTimetableDay, lessonTimetableLabels, lessonTimetableCellStyles, type LessonOffer } from "@/components/booking-timetable";
 import { BookingCancellationTerms } from "@/components/booking-cancellation-terms";
 import { startAnotherBookingEvent } from "@/components/book-court-link";
 import type { ConfirmedCancellationPolicy } from "@/lib/bookings/confirmation-policy";
@@ -134,9 +134,9 @@ function BookingCalendarContent({ day, date, locationName, currency, initialCont
     {day.times.length === 0 ? <div className="mt-4 flex items-center gap-3 rounded-card border border-border bg-surface p-5 text-muted-foreground">
       <CalendarX2 aria-hidden className="size-5 shrink-0 text-accent" /><p>{locationName} is closed on {dateLabel}.</p>
     </div> : <>
-      <TimelineLegend cells={visibleDay.courts.flatMap((courtDay) => courtDay.cells)} labels={coaching ? lessonTimetableLabels : undefined}>
+      <TimelineLegend cells={visibleDay.courts.flatMap((courtDay) => courtDay.cells)} labels={coaching ? lessonTimetableLabels : undefined} cellStyles={coaching ? lessonTimetableCellStyles : undefined}>
         {coaching ? coaching.durationMinutes
-          ? `Select a lesson start for the full ${coaching.durationMinutes} minutes. Dotted cells cannot start a full lesson; solid cells are occupied courts. Your coach and court are reserved only when checkout starts.`
+          ? `Select a lesson start for the full ${coaching.durationMinutes} minutes. Pale terracotta cells cannot start a full lesson; darker terracotta cells are occupied courts. Your coach and court are reserved only when checkout starts.`
           : "Choose your lesson details above to see available lesson starts."
           : "Select a half-hour cell to start a one-hour interval, then click adjacent cells to adjust. This does not reserve a court."}
       </TimelineLegend>

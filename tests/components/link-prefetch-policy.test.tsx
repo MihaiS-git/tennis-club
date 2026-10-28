@@ -35,14 +35,14 @@ it("prefetches account destinations after the drawer opens while photo routes st
   render(<MobileNavbarControls isAuthenticated hasMessageAccess={false} canReserve />);
   const menu = screen.getByRole("navigation", { name: "Mobile navigation", hidden: true });
   const links = within(menu).getAllByRole("link", { hidden: true });
-  expect(links.map(link => link.getAttribute("href"))).toEqual(["/courts", "/coaching", "/club", "/admin", "/profile"]);
-  expect(links.map(prefetchOf)).toEqual(["false", "false", "false", "false", "false"]);
+  expect(links.map(link => link.getAttribute("href"))).toEqual(["/courts", "/coaching", "/pricing", "/club", "/contact", "/admin", "/profile"]);
+  expect(links.map(prefetchOf)).toEqual(["false", "false", "false", "false", "false", "false", "false"]);
 
   fireEvent.click(screen.getByRole("button", { name: "Open menu" }));
-  expect(within(menu).getAllByRole("link").map(prefetchOf)).toEqual(["false", "false", "false", "default", "default"]);
+  expect(within(menu).getAllByRole("link").map(prefetchOf)).toEqual(["false", "false", "false", "false", "false", "default", "default"]);
 
   fireEvent.click(within(screen.getByRole("dialog", { name: "Mobile navigation menu" })).getByRole("button", { name: "Close menu" }));
-  expect(within(menu).getAllByRole("link", { hidden: true }).map(prefetchOf)).toEqual(["false", "false", "false", "false", "false"]);
+  expect(within(menu).getAllByRole("link", { hidden: true }).map(prefetchOf)).toEqual(["false", "false", "false", "false", "false", "false", "false"]);
 });
 
 it("keeps the visible signed-out Sign in link off until the drawer opens", () => {

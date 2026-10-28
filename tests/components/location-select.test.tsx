@@ -161,12 +161,13 @@ it.each([
   await arrive();
 });
 
-it("book drops the prior location's lesson choices when the date changes during a pending location change", async () => {
+it("book keeps the explicitly selected coach and clears dependent lesson choices during a pending location change", async () => {
   const { Router, start, arrive } = pendingNavigation();
   render(<Router><CalendarControls locations={locations} locationId="rivus" date="2026-10-02" today="2026-10-02"
     coaching={{ program: "private", coach: "ana", duration: "90" }} /></Router>);
   await start(() => fireEvent.change(screen.getByRole("combobox", { name: "Location" }), { target: { value: "second" } }));
+  expect(push).toHaveBeenLastCalledWith("/book?location=second&mode=coaching&coach=ana");
   await start(() => fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2026-10-05" } }));
-  expect(push).toHaveBeenLastCalledWith("/book?location=second&mode=coaching&date=2026-10-05");
+  expect(push).toHaveBeenLastCalledWith("/book?location=second&mode=coaching&coach=ana&date=2026-10-05");
   await arrive();
 });

@@ -1,11 +1,12 @@
 import { beforeEach, expect, test, vi } from "vitest";
 
-const { authorize, query, clubs } = vi.hoisted(() => ({ authorize: vi.fn(), query: vi.fn(),
+const { authorize, query, expire, clubs } = vi.hoisted(() => ({ authorize: vi.fn(), query: vi.fn(), expire: vi.fn(),
   clubs: { listAdminLocations: vi.fn(), listAdminCourts: vi.fn() } }));
 vi.mock("@/lib/admin/authorization", () => ({ requireActiveAdmin: authorize }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: async () => ({}) }));
 vi.mock("@/lib/db/data-source", () => ({ getDataSource: async () => ({ manager: { query } }) }));
 vi.mock("@/lib/db/repositories/clubs.repository", () => clubs);
+vi.mock("@/lib/payments/hold-expiry", () => ({ expirePaymentHolds: expire }));
 
 import { listAdminBookingCoachFilterOptions, listAdminBookingFilterOptions, listAdminBookings } from "@/lib/bookings/admin-details";
 import { adminBookingHref, adminBookingsHref, parseAdminBookingQuery } from "@/lib/bookings/admin-query";
@@ -40,10 +41,12 @@ test("authorizes before any read and propagates authorization failures", async (
   await expect(listAdminBookingCoachFilterOptions()).rejects.toThrow("Forbidden");
   await expect(listAdminBookingFilterOptions()).rejects.toThrow("Forbidden");
   expect(query).not.toHaveBeenCalled();
+  expect(expire).not.toHaveBeenCalled();
   expect(clubs.listAdminLocations).not.toHaveBeenCalled();
 });
 
 test("filters, searches and paginates in the database on the current booking snapshot", async () => {
+  expire.mockImplementationOnce(async () => { expect(query).not.toHaveBeenCalled(); return 1; });
   query.mockResolvedValueOnce([{ total: 45 }]).mockResolvedValueOnce([row(1), row(2, "ab000000-0000-4000-8000-0000000000aa")]);
   const result = await listAdminBookings(parseAdminBookingQuery({ q: "Ana", status: "cancelled", location: locationId, court: courtId,
     from: "2024-01-01", to: "2024-12-31", page: "2" }));

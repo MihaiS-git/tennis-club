@@ -34,8 +34,8 @@ async function AccountControls({ authenticated }: { authenticated: boolean }) {
 
   return <>
     {(account.state === "active" || account.state === "suspended") && <NotificationBell viewport="desktop" />}
-    <NavbarIconAction href="/profile" aria-label="Profile">
-      <ProfileNavigationAvatar src={avatarUrl} compact />
+    <NavbarIconAction href="/profile" aria-label="Profile" variant="avatar">
+      <ProfileNavigationAvatar src={avatarUrl} />
     </NavbarIconAction>
     {/* The departure guard protects unsaved Profile drafts before the unchanged action runs. */}
     <ProfileDepartureForm action={signOutAction}>
@@ -62,8 +62,14 @@ export function DesktopNavbar() {
           <PrimaryNavigationLink className="inline-flex min-h-10 items-center text-sm font-medium" href="/coaching" prefetch={false}>
             Coaching
           </PrimaryNavigationLink>
+          <PrimaryNavigationLink className="inline-flex min-h-10 items-center text-sm font-medium" href="/pricing" prefetch={false}>
+            Pricing
+          </PrimaryNavigationLink>
           <PrimaryNavigationLink className="inline-flex min-h-10 items-center text-sm font-medium" href="/club" prefetch={false}>
             Club
+          </PrimaryNavigationLink>
+          <PrimaryNavigationLink className="inline-flex min-h-10 items-center text-sm font-medium" href="/contact" prefetch={false}>
+            Contact
           </PrimaryNavigationLink>
           <Suspense fallback={<span aria-hidden="true" className="h-5 w-10 rounded-control bg-surface-muted" />}>
             <AdminNavigationLink />

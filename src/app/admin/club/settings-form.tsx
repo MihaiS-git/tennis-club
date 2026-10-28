@@ -36,8 +36,9 @@ export function ClubSettingsForm({ settings }: { settings: ClubSettings }) {
     } finally { busy.current = false; setOperation(null); }
   }
 
-  return <section className="max-w-3xl rounded-card border border-border bg-surface p-4 sm:p-5">
-    <form className="space-y-5" onSubmit={event => { event.preventDefault(); void perform(false); }}>
+  return <section aria-labelledby={`${id}-heading`} className="max-w-3xl rounded-card border border-border bg-surface p-4 sm:p-5">
+    <h2 id={`${id}-heading`} className="font-heading text-xl font-semibold text-primary">Transactional email</h2>
+    <form className="mt-5 space-y-5" onSubmit={event => { event.preventDefault(); void perform(false); }}>
       <FormField label="Official email address" htmlFor={`${id}-email`} errorId={`${id}-email-error`}>
         <Input id={`${id}-email`} type="email" required maxLength={254} disabled={pending} value={values.officialEmail}
           onChange={event => setValues({ ...values, officialEmail: event.target.value })} />

@@ -15,7 +15,7 @@ const controls = (props: Partial<Parameters<typeof CoachingControls>[0]> = {}) =
   courtRentalIncluded={false} {...props} />);
 const lastPush = () => Object.fromEntries(new URL(push.mock.calls.at(-1)![0], "http://localhost").searchParams);
 
-it("keeps lesson choices on date changes and clears them on location changes", () => {
+it("keeps lesson choices on date changes and only the chosen coach on location changes", () => {
   render(<CalendarControls locations={[{ id: "one", name: "One" }, { id: "two", name: "Two" }]} locationId="one"
     date="2099-10-15" today="2099-10-15" coaching={{ program: "private", coach: "ana", duration: "90" }} />);
   expect(screen.getByRole("link", { name: "Court booking" }).getAttribute("href")).toBe("/book");
@@ -23,17 +23,25 @@ it("keeps lesson choices on date changes and clears them on location changes", (
   fireEvent.click(screen.getByRole("button", { name: "Next day" }));
   expect(lastPush()).toEqual({ location: "one", mode: "coaching", program: "private", coach: "ana", duration: "90", date: "2099-10-16" });
   fireEvent.change(screen.getByRole("combobox", { name: "Location" }), { target: { value: "two" } });
+  // The coach is never silently replaced; the server explains an incompatible location.
+  expect(lastPush()).toEqual({ location: "two", mode: "coaching", coach: "ana" });
+});
+
+it("resolves fresh defaults on location changes when no coach was chosen", () => {
+  render(<CalendarControls locations={[{ id: "one", name: "One" }, { id: "two", name: "Two" }]} locationId="one"
+    date="2099-10-15" today="2099-10-15" coaching={{}} />);
+  fireEvent.change(screen.getByRole("combobox", { name: "Location" }), { target: { value: "two" } });
   expect(lastPush()).toEqual({ location: "two", mode: "coaching" });
 });
 
-it("clears lesson choices when recovering from an invalid location", () => {
+it("keeps the chosen coach when recovering from an invalid location", () => {
   render(<CalendarControls locations={[{ id: "one", name: "One" }, { id: "two", name: "Two" }]} date={null} today="" coaching={{ coach: "ana" }} />);
   const location = screen.getByRole("combobox", { name: "Location" }) as HTMLSelectElement;
   expect(location.value).toBe("");
   expect([...location.options].map(option => option.text)).toEqual(["Choose a location", "One", "Two"]);
   expect(screen.queryByRole("button", { name: "Next day" })).toBeNull();
   fireEvent.change(location, { target: { value: "two" } });
-  expect(lastPush()).toEqual({ location: "two", mode: "coaching" });
+  expect(lastPush()).toEqual({ location: "two", mode: "coaching", coach: "ana" });
 });
 
 it.each([

@@ -8,7 +8,7 @@ import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import type { AdminCoachingPrice } from "@/lib/coaching/admin";
 import type { CoachingMutationResult } from "@/lib/coaching/validation";
 import { majorAmountSchema, minorToMajor, type LocationCurrency } from "@/lib/pricing/money";
-import { coachingFailureMessages } from "../coaching-form";
+import { coachingFailureMessages } from "@/app/admin/coaching/coaching-form";
 
 type PriceTarget = { program_id: string; duration_minutes: number; participant_count: number; currency: LocationCurrency };
 type PriceActions = {

@@ -1,6 +1,6 @@
 import { readPublicCoachingWithFacts } from "@/lib/coaching/public";
 import { readPublicCoachingLessonAvailability, type PublicCoachingLessonRead } from "@/lib/coaching/lesson-availability";
-import { coachingBookingOptions, coachingDurationPrice } from "@/lib/coaching/booking-options";
+import { coachBookableLocations, coachingBookingOptions, coachingDurationPrice } from "@/lib/coaching/booking-options";
 import { isPermittedParticipantCount } from "@/lib/coaching/validation";
 import { CoachingControls } from "./coaching-controls";
 import type { CoachingSelection } from "./coaching-selection";
@@ -55,17 +55,23 @@ async function CoachingContent({ locations, params }: { locations: BookLocation[
   try { loaded = await readPublicCoachingWithFacts(locations); }
   catch { /* Rendered as the unavailable state below. */ }
   const coaching = loaded?.coaching;
+  const now = new Date();
   const linkedCoach = !params.location ? coaching?.coaches.find(coach => coach.id === params.coach) : undefined;
-  const linkedLocations = linkedCoach ? locations.filter(item => linkedCoach.locations.some(loc => loc.id === item.id)) : [];
+  // A linked coach opens at their first location with online-bookable lessons; without one,
+  // at their first assigned location, where CoachingDay explains why they cannot be booked.
+  let bookableLocations: BookLocation[] = [];
+  if (linkedCoach && coaching) {
+    try { bookableLocations = await coachBookableLocations(coaching, locations, linkedCoach.id, now); }
+    catch { /* CoachingDay reports the unavailable selector data. */ }
+  }
   const location = params.location ? locations.find(item => item.id === params.location)
-    : linkedLocations[0] ?? locations[0];
+    : bookableLocations[0] ?? locations.find(item => linkedCoach?.locations.some(loc => loc.id === item.id)) ?? locations[0];
   if (!location) return <>
     <CalendarControls locations={locations} date={null} today="" coaching={{}} />
     {params.location && <Alert>The selected location is not available for booking. Choose a location.</Alert>}
     {!coaching ? <Alert>Coaching information is temporarily unavailable. Please try again.</Alert>
       : <p role="status" className={statusClass}>Choose a location to see its coaches.</p>}
   </>;
-  const now = new Date();
   const today = localToday(location.timezone, now);
   const validDate = z.iso.date().safeParse(params.date).success && params.date! >= today;
   const date = !params.date ? today : validDate ? params.date! : null;
@@ -126,6 +132,17 @@ async function CoachingDay({ locations, location, date, today, now, data, params
   const duration = program && (params.duration ? durations.find(item => String(item.durationMinutes) === params.duration)
     : durations.find(item => item.durationMinutes === 60 && item.price)
       ?? durations.filter(item => item.price).sort((a, b) => a.durationMinutes - b.durationMinutes)[0]);
+  // A public coach requested where they cannot be booked: name their bookable locations, if any.
+  const requested = params.coach && !coach ? data.coaching.coaches.find(item => item.id === params.coach) : undefined;
+  let elsewhere: BookLocation[] | null = null;
+  if (requested) {
+    try { elsewhere = await coachBookableLocations(data.coaching, locations.filter(item => item.id !== location.id), requested.id, now); }
+    catch { /* Falls back to the generic coach alert. */ }
+  }
+  const coachAlert = !requested || !elsewhere ? `The selected coach is not available at ${location.name}. Choose a coach.`
+    : elsewhere.length ? `${requested.displayName} does not offer online-bookable lessons at ${location.name}. Available at ${
+      new Intl.ListFormat("en-GB", { type: "disjunction" }).format(elsewhere.map(item => item.name))}; choose that location or another coach.`
+    : `${requested.displayName} does not currently offer lessons that can be booked online. Please contact the club, or choose another coach.`;
   let lesson: PublicCoachingLessonRead | null = null;
   let unavailable = false;
   try {
@@ -153,7 +170,7 @@ async function CoachingDay({ locations, location, date, today, now, data, params
       participants={program?.participants ?? null}
       coachId={coach?.id ?? ""} programId={program?.id ?? ""} durationMinutes={duration?.durationMinutes ?? 0} participantCount={participantCount}
       courtRentalIncluded={program?.courtRentalIncluded ?? false} />
-    {params.coach && !coach && <Alert>The selected coach is not available at {location.name}. Choose a coach.</Alert>}
+    {params.coach && !coach && <Alert>{coachAlert}</Alert>}
     {coach && params.program && !program && <Alert>{coach.displayName} does not offer the selected program online. Choose a program.</Alert>}
     {program && params.duration && !duration && <Alert>The selected lesson length is not offered for {program.name}. Choose a lesson length.</Alert>}
     {program && params.participants !== undefined && !participantCount && <Alert>The selected number of players is not offered for {program.name}. Choose the number of players.</Alert>}
