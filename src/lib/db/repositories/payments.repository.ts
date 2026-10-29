@@ -1,7 +1,7 @@
 import "server-only";
 
 import { In, type EntityManager } from "typeorm";
-import { acceptedCaptureOccupancy } from "./reservations.repository";
+import { protectedPaymentOccupancy } from "./reservations.repository";
 import { z } from "zod";
 import { paymentProviderSchema, checkoutCaptureGraceSeconds, unconfirmedRefundMinutes } from "@/lib/payments/domain";
 import type { PaymentProvider } from "@/lib/payments/domain";
@@ -225,7 +225,7 @@ export async function listAdminTransactionProjection(manager: EntityManager, que
     union all
     select 'booking', b.id, b.id, null, null, null, initial.total_amount_minor, initial.currency,
       initial.payment_method, null, null, null, b.created_at, b.created_at, initial.id, null, null, null
-    from public.bookings b
+    from public.checkout_records b
     join public.booking_revisions initial on initial.booking_id=b.id and initial.revision_number=1
     where not exists(select 1 from public.payment_attempts p where p.booking_id=b.id)
   ), candidates as (
@@ -237,7 +237,7 @@ export async function listAdminTransactionProjection(manager: EntityManager, que
         or ($11::boolean and exists(select 1 from public.payment_provider_events ev
           where ev.attempt_id=op.attempt_id and ev.reconciliation_required))) as matches_attention
     from operations op
-    join public.bookings b on b.id=op.booking_id
+    join public.checkout_records b on b.id=op.booking_id
     join public.booking_revisions context on context.id=op.context_revision_id and context.booking_id=b.id
     join public.court_reservations r on r.id=b.reservation_id
     left join public.payment_attempts p on p.id=op.attempt_id
@@ -291,7 +291,7 @@ export async function listAdminTransactionProjection(manager: EntityManager, que
             and re.status='succeeded' and re.terminal_result='succeeded' and re.provider_refund_id is not null
             and re.provider=rf.provider and re.provider_payment_id=rf.provider_payment_id
             and re.amount_minor=rf.amount_minor and re.currency=rf.currency)),0) as refunded_minor,
-      b.id as booking_id, b.reservation_id, b.account_user_id, context.customer_name, context.customer_email, op.amount_minor,
+      b.id as booking_id, exists(select 1 from public.bookings actual where actual.id=b.id) as is_actual_booking, b.reservation_id, b.account_user_id, context.customer_name, context.customer_email, op.amount_minor,
       op.currency, op.method, op.provider, p.status as payment_status,
       op.provider_payment_id, op.created_at, op.updated_at,
       b.status::text as booking_status,r.status::text as reservation_status,
@@ -302,7 +302,7 @@ export async function listAdminTransactionProjection(manager: EntityManager, que
       coalesce(e.reconciliation, '[]'::jsonb) as reconciliation,
       op.payment_check_required
     from page_operations op
-    join public.bookings b on b.id=op.booking_id
+    join public.checkout_records b on b.id=op.booking_id
     join public.booking_revisions context on context.id=op.context_revision_id and context.booking_id=b.id
     join public.court_reservations r on r.id=b.reservation_id
     left join public.payment_attempts p on p.id=op.attempt_id
@@ -343,7 +343,7 @@ export async function listAdminTransactionProjection(manager: EntityManager, que
 // Use only the current revision: rescheduling keeps the location, but Admins can move courts.
 export async function locationHasUnresolvedFinancialOperations(manager: EntityManager, locationId: string) {
   const rows: unknown = await manager.query(`WITH located AS (
-      SELECT b.id AS booking_id FROM public.bookings b
+      SELECT b.id AS booking_id FROM public.checkout_records b
       JOIN public.booking_revisions v ON v.id=b.current_revision_id WHERE v.location_id=$1)
     SELECT EXISTS(SELECT 1 FROM public.payment_attempts p JOIN located l ON l.booking_id=p.booking_id
         WHERE p.status='pending' OR (p.provider='stripe' AND p.provider_payment_id IS NOT NULL AND p.status IN ('expired','failed')))
@@ -384,9 +384,9 @@ export async function listOverdueStripeCheckouts(manager: EntityManager, limit: 
 
 export async function discoverExpiredHoldLocations(manager: EntityManager, scope: HoldExpiryScope, limit: number) {
   const rows: unknown = await manager.query(`SELECT DISTINCT c.location_id
-    FROM public.bookings b LEFT JOIN public.booking_revisions v ON v.id=b.current_revision_id JOIN public.court_reservations r ON r.id=b.reservation_id
+    FROM public.checkout_records b LEFT JOIN public.booking_revisions v ON v.id=b.current_revision_id JOIN public.court_reservations r ON r.id=b.reservation_id
     JOIN public.courts c ON c.id=r.court_id
-    WHERE ((b.status IN ('pending_payment','cancelled') AND r.status='held' AND r.hold_expires_at<=clock_timestamp() AND NOT ${acceptedCaptureOccupancy}) OR EXISTS (SELECT 1 FROM public.booking_adjustments ba WHERE ba.booking_id=b.id AND ba.status IN ('pending','cancelled') AND ba.capture_accepted_at IS NULL AND ba.expires_at<=clock_timestamp() AND EXISTS(SELECT 1 FROM public.payment_attempts pa WHERE pa.adjustment_id=ba.id AND pa.status='pending') AND NOT EXISTS(SELECT 1 FROM public.court_reservations lr WHERE lr.adjustment_id=ba.id AND lr.status='held' AND lr.hold_expires_at>clock_timestamp())))
+    WHERE ((b.status IN ('pending_payment','cancelled','failed') AND r.status='held' AND r.hold_expires_at<=clock_timestamp() AND NOT ${protectedPaymentOccupancy}) OR EXISTS (SELECT 1 FROM public.booking_adjustments ba WHERE ba.booking_id=b.id AND ba.status IN ('pending','cancelled') AND ba.capture_accepted_at IS NULL AND ba.expires_at<=clock_timestamp() AND EXISTS(SELECT 1 FROM public.payment_attempts pa WHERE pa.adjustment_id=ba.id AND pa.status='pending') AND NOT EXISTS(SELECT 1 FROM public.court_reservations lr WHERE lr.adjustment_id=ba.id AND lr.status='held' AND lr.hold_expires_at>clock_timestamp())))
       AND ($1::uuid IS NULL OR r.court_id=$1) AND ($2::uuid IS NULL OR c.location_id=$2)
     ORDER BY c.location_id LIMIT $3`, [scope.courtId ?? null,scope.locationId ?? null,limit]);
   return z.array(z.object({ location_id: z.uuid() })).parse(rows);
@@ -400,10 +400,10 @@ export async function lockHoldExpiryLocation(manager: EntityManager, id: string)
 export async function lockExpiredHoldBookings(manager: EntityManager, locationId: string, input: {
   courtId?: string; excludeReservationId?: string; skipLocked: boolean; limit?: number;
 }) {
-  const rows: unknown = await manager.query(`SELECT b.id,b.reservation_id FROM public.bookings b LEFT JOIN public.booking_revisions v ON v.id=b.current_revision_id
+  const rows: unknown = await manager.query(`SELECT b.id,b.reservation_id FROM public.checkout_records b LEFT JOIN public.booking_revisions v ON v.id=b.current_revision_id
     JOIN public.court_reservations r ON r.id=b.reservation_id JOIN public.courts c ON c.id=r.court_id
-    WHERE c.location_id=$1 AND b.status IN ('pending_payment','cancelled') AND r.status='held'
-      AND r.hold_expires_at<=clock_timestamp() AND NOT ${acceptedCaptureOccupancy} AND ($2::uuid IS NULL OR r.court_id=$2)
+    WHERE c.location_id=$1 AND b.status IN ('pending_payment','cancelled','failed') AND r.status='held'
+      AND r.hold_expires_at<=clock_timestamp() AND NOT ${protectedPaymentOccupancy} AND ($2::uuid IS NULL OR r.court_id=$2)
       AND ($3::uuid IS NULL OR r.id<>$3)
     ORDER BY b.id LIMIT $4 FOR UPDATE OF b${input.skipLocked ? " SKIP LOCKED" : ""}`,
     [locationId,input.courtId ?? null,input.excludeReservationId ?? null,input.limit ?? null]);
@@ -425,7 +425,7 @@ export async function expirePendingAttempt(manager: EntityManager, id: string) {
 
 export async function discoverSettlementParent(manager: EntityManager, attemptId: string) {
   const rows: unknown = await manager.query(`SELECT p.booking_id,b.reservation_id,c.location_id
-    FROM public.payment_attempts p JOIN public.bookings b LEFT JOIN public.booking_revisions v ON v.id=b.current_revision_id ON b.id=p.booking_id
+    FROM public.payment_attempts p JOIN public.checkout_records b LEFT JOIN public.booking_revisions v ON v.id=b.current_revision_id ON b.id=p.booking_id
     JOIN public.court_reservations r ON r.id=b.reservation_id JOIN public.courts c ON c.id=r.court_id
     WHERE p.id=$1`, [attemptId]);
   return z.array(z.object({ booking_id: z.uuid(), reservation_id: z.uuid(), location_id: z.uuid() })).max(1).parse(rows)[0] ?? null;

@@ -13,7 +13,7 @@ import { EmailDeliveryEntity } from "./entities/email-delivery.entity";
 
 import { LocationEntity } from "./entities/location.entity";
 import { BookingRevisionEntity } from "./entities/booking-revision.entity";
-import { BookingEntity } from "./entities/booking.entity";
+import { CheckoutRecordEntity } from "./entities/checkout-record.entity";
 import { PaymentAttemptEntity } from "./entities/payment-attempt.entity";
 import { PaymentCaptureReceiptEntity } from "./entities/payment-capture-receipt.entity";
 import { PaymentProviderChangeEntity } from "./entities/payment-provider-change.entity";
@@ -43,14 +43,17 @@ import { CoachingProgramEntity } from "./entities/coaching-program.entity";
 
 import { ClubSettingEntity } from "./entities/club-setting.entity";
 
+import { BookingEntity } from "./entities/booking.entity";
+
 const entities = {
+  BookingEntity,
   ClubSettingEntity,
   AuthUserEntity,
   RefundExecutionEntity,
   BookingRevisionEntity,
   BookingAdjustmentEntity,
   OpeningHoursScheduleEntity,
-  BookingEntity, PaymentAttemptEntity, PaymentCaptureReceiptEntity, PaymentProviderChangeEntity, PaymentProviderEventEntity,
+  CheckoutRecordEntity, PaymentAttemptEntity, PaymentCaptureReceiptEntity, PaymentProviderChangeEntity, PaymentProviderEventEntity,
   PaymentProviderSettingEntity, PaymentRefundEntity, CourtReservationEntity,
   UserEntity, UserMessageEntity, EmailDeliveryEntity, RoleEntity, UserRoleEntity, PlayerProfileEntity, LocationEntity, CourtEntity,
   CourtCoveragePeriodEntity, LocationOpeningHoursEntity, LocationPricingRuleEntity, PricingRuleSetEntity,

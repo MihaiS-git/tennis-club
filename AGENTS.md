@@ -529,7 +529,7 @@ and a required trimmed reason of at most 255 characters. TypeORM create transact
 recheck locked resources and staff facts; browser roles have no reservation INSERT grants
 and the GiST exclusion constraint rejects concurrent active/held overlaps. Public `/book`
 continues to read occupancy alone and never reads reservation reasons.
-Customer booking identity in `public.bookings` has one unique reference to its physical
+Internal checkout identity in `public.checkout_records` has one unique reference to its physical
 `court_reservations` row and a required same-booking `current_revision_id`. Immutable
 `booking_revisions` hold historical contact, server-calculated price/currency, required
 payment method and policy snapshots. The server-only `createCustomerBooking` operation
@@ -647,7 +647,7 @@ Edits use transaction `now()` for database lifecycle decisions and PostgreSQL
 `greatest(clock_timestamp(), updated_at + interval '1 microsecond')` for tokens.
 Owner cancellation stores transaction `now()`; Admin cancellation checks database
 `clock_timestamp()` after locking against the DST-compatible local start instant.
-All trusted direct commands explicitly reject a linked `bookings` row. Keep customer
+All trusted direct commands explicitly reject a linked `checkout_records` row. Keep customer
 commands, TypeScript hold expiry, GiST, grant restrictions, advisory fencing and
 direct-reservation database invariants unchanged. No Auth/network calls occur in transactions.
 
@@ -1252,7 +1252,7 @@ or the selected provider’s configuration is absent, online payment is unavaila
 Pay at club remains independently controlled per location. Never rewrite stored
 attempt providers when settings change; focused TypeScript persistence preserves this.
 
-`bookings.current_revision_id` is required and references a revision of that booking.
+`checkout_records.current_revision_id` is required and references a revision of that booking.
 Commercial terms live in immutable `booking_revisions`; `booking_revisions.payment_method`
 is required and accepts only `online` or `pay_at_club`. Never introduce a NULL/unknown
 method or mutable payment terms on booking identity. `payment_attempts.method` is also
@@ -1274,9 +1274,10 @@ attempt, and never trusts browser status or totals. Provider retrieval validates
 stored PaymentIntent identity/metadata and sends terminal observations through the
 same settlement service with stable receipt IDs; webhook delivery remains idempotent.
 Status polling uses the capability-bound POST Route Handler `/api/payments/checkout/status` with abortable requests, outside the sequential Server Action dispatcher; cancellation stays a Server Action. X/Close/Escape dismiss without claiming cancellation. Explicit checkout cancellation
-records booking cancellation intent under location-first aggregate locks before Stripe.
-Checkout cancellation appends its final intent revision and releases occupancy
-atomically before provider calls; uncertain captures are compensated through existing settlement. Confirmation ends checkout-abandonment authority,
+records internal checkout cancellation intent under location-first aggregate locks before Stripe.
+Checkout cancellation changes only internal checkout state; it creates no cancelled booking revision.
+Occupancy releases only after definitive provider cancellation or safe unaccepted expiry;
+accepted capture uncertainty retains protection and invalid captures use existing compensation. Confirmation ends checkout-abandonment authority,
 even within the original checkout deadline. Confirmed bookings use normal owner/Admin
 cancellation authorization and refund-backed cancellation. Captures after cancellation cannot confirm the booking and
 use the existing unique full-refund request, with a nullable requester for guests.
@@ -1423,3 +1424,25 @@ The three pre-production baseline migrations directly create this final schema.
 Do not add coaching repair migrations or conditional legacy schema changes. Rebuild the
 local development database from the baseline instead of patching it. See
 `docs/coaching.md` and `docs/testing.md`.
+
+
+Checkout attempts and actual bookings are separate persisted concepts. `checkout_records`
+owns the temporary allocation, immutable quote revisions and payment audit references.
+`bookings` contains only permanent confirmed-booking identities and their original
+confirmation-revision proof. Online settlement inserts that identity atomically with
+confirmation; pay-at-club does so at creation. Failed, expired and abandoned checkouts
+have no booking identity or booking cancellation revision. All business booking reads
+require that identity; payment audit and staff occupancy guards retain all checkout
+records. The focused, data-preserving TypeORM migration
+`SeparateCheckoutBookings1791462257927` follows the three original baseline migrations.
+No earlier migration is rewritten and no development data is discarded. See
+[checkout lifecycle correction](docs/checkout-lifecycle-correction.md).
+
+
+Browser-abandoned initial checkout: the ten-minute deadline ends payment eligibility;
+registered unresolved provider intents retain occupancy until definitive cancellation or
+capture through existing Cron/check/settlement services. Do not release those rows on
+clock expiry alone. Unregistered holds retain lazy expiry. Keep the shared occupancy
+predicate consistent across court/coach/public/internal/edit reads and expiry writes.
+Admin holds are technical allocations with deadlines; ledger booking links require an
+actual `bookings` identity. See docs/browser-abandoned-checkout.md.

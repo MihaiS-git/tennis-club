@@ -91,7 +91,7 @@ async function assertCancellation(booking: BookingFixture, status: string) {
   expect(revisions).toHaveLength(2);
   expect(revisions[0]).toMatchObject({ kind: "created", booking_state: "confirmed", total_amount_minor: 5000 });
   expect(revisions[1]).toMatchObject({ kind: "cancelled", booking_state: "cancelled", total_amount_minor: 5000, currency: "RON", actor_user_id: userId, cancellation_cause: "owner_cancelled" });
-  expect(await db.query("SELECT status,current_revision_id FROM public.bookings WHERE id=$1", [bookingId])).toEqual([{ status: "cancelled", current_revision_id: revisions[1].id }]);
+  expect(await db.query("SELECT status,current_revision_id FROM public.checkout_records WHERE id=$1", [bookingId])).toEqual([{ status: "cancelled", current_revision_id: revisions[1].id }]);
   expect(await db.query("SELECT status FROM public.court_reservations WHERE id=$1", [reservationId])).toEqual([{ status: "cancelled" }]);
   expect(await db.query("SELECT id FROM public.court_reservations WHERE id=$1 AND status IN ('active','held')", [reservationId])).toEqual([]);
   const refunds = await db.query("SELECT * FROM public.payment_refunds WHERE booking_id=$1", [bookingId]);
@@ -128,7 +128,7 @@ test("Definitive refund failure keeps the booking confirmed; a fresh customer ca
   await page.getByRole("dialog",{name:"Cancel booking?",exact:true}).getByRole("button",{name:"Cancel booking",exact:true}).click();
   await expect(page.getByText("The refund could not be processed, so your booking was not cancelled. It remains confirmed.",{exact:true})).toBeVisible();
   await expect(row).toHaveCount(1);
-  expect(await booking.db.query("SELECT status FROM public.bookings WHERE id=$1",[booking.bookingId])).toEqual([{status:"confirmed"}]);
+  expect(await booking.db.query("SELECT status FROM public.checkout_records WHERE id=$1",[booking.bookingId])).toEqual([{status:"confirmed"}]);
   expect(await booking.db.query("SELECT status FROM public.court_reservations WHERE id=$1",[booking.reservationId])).toEqual([{status:"active"}]);
   expect(await booking.db.query("SELECT kind FROM public.booking_revisions WHERE booking_id=$1",[booking.bookingId])).toEqual([{kind:"created"}]);
   expect(await booking.db.query("SELECT status FROM public.payment_refunds WHERE booking_id=$1",[booking.bookingId])).toEqual([{status:"voided"}]);
@@ -163,5 +163,5 @@ test("Definitive refund failure keeps the booking confirmed; a fresh customer ca
   expect(evidence.refunds).toHaveLength(2);
   expect(new Set(evidence.dispatches.map(d=>d.idempotencyKey)).size).toBe(2);
   expect(await booking.db.query("SELECT status FROM public.payment_refunds WHERE booking_id=$1 ORDER BY created_at",[booking.bookingId])).toEqual([{status:"voided"},{status:"succeeded"}]);
-  expect(await booking.db.query("SELECT status FROM public.bookings WHERE id=$1",[booking.bookingId])).toEqual([{status:"cancelled"}]);
+  expect(await booking.db.query("SELECT status FROM public.checkout_records WHERE id=$1",[booking.bookingId])).toEqual([{status:"cancelled"}]);
 });

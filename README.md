@@ -1059,14 +1059,16 @@ structurally ready locations, including unpublished locations.
 The Server Action checks the account, resources, location-local time, opening hours,
 duration and required trimmed reason before a TypeORM transaction rechecks locked facts and inserts. The GiST
 constraint resolves concurrent overlaps; the UI shows a contextual conflict error.
-Customer booking persistence is available through `/book`. `bookings` stores one unique reservation reference, an optional
-application account ID, required contact snapshot, payment-method snapshot, booking lifecycle status, and
-an integer price/currency snapshot. Guests have no account link; active authenticated
+Customer booking persistence is available through `/book`. `checkout_records` stores one unique reservation reference, an optional
+application account ID, checkout lifecycle status and a required current immutable revision.
+Contact, payment method, policy and integer price/currency snapshots live in that revision.
+`bookings` stores only genuinely confirmed identities and their confirmation-revision proof. Guests have no account link; active authenticated
 users are resolved server-side, including Admins and Coaches. The service reuses the
 publication and calendar pricing helpers using transaction-authoritative facts. TypeORM Transaction A locks
 the shared configuration advisory fence, then location FOR UPDATE, active account when linked, and online provider settings FOR SHARE.
-It inserts the physical reservation, booking, payment attempt atomically, then sends Pay-at-club confirmation email after commit: online creates a temporary hold/pending booking; allowed Pay at club
-confirms immediately. GiST overlap errors roll back the complete creation write set and
+It inserts the physical reservation, checkout record and payment attempt atomically.
+Online creates a temporary hold with no business booking identity; allowed Pay at club
+confirms immediately and inserts its booking identity with the confirmation notification. GiST overlap errors roll back the complete creation write set and
 return a safe availability message. Browser roles have no booking table read/write
 grants; public occupancy remains limited to court and interval fields.
 See [payment lifecycle foundation](docs/payments-memberships.md) for the centralized
@@ -1568,3 +1570,25 @@ record, with single-day partial absences and separate extra availability. Existi
 coaching bookings/live holds block conflicting changes. The final-state initial migration
 now requires `coach_availability_exceptions.until_date`; applied local schemas require an
 explicitly authorized rebuild before using these changes. See [coaching](docs/coaching.md).
+
+
+Checkout attempts and actual bookings are separate persisted concepts. `checkout_records`
+owns the temporary allocation, immutable quote revisions and payment audit references.
+`bookings` contains only permanent confirmed-booking identities and their original
+confirmation-revision proof. Online settlement inserts that identity atomically with
+confirmation; pay-at-club does so at creation. Failed, expired and abandoned checkouts
+have no booking identity or booking cancellation revision. All business booking reads
+require that identity; payment audit and staff occupancy guards retain all checkout
+records. The focused, data-preserving TypeORM migration
+`SeparateCheckoutBookings1791462257927` follows the three original baseline migrations.
+No earlier migration is rewritten and no development data is discarded. See
+[checkout lifecycle correction](docs/checkout-lifecycle-correction.md).
+
+
+Browser abandonment uses the existing five-minute checkout expiry Cron and ten-minute
+payment deadline. Unregistered holds expire locally; registered initial payments keep
+occupancy until Stripe confirms cancellation or capture. Cancellation failure leaves a
+visible, retryable Admin payment exception. Safe release updates the physical reservation
+under existing locks, so GiST permits a replacement. Calendar identifies temporary holds;
+Transactions distinguishes checkout references from actual booking identities. See
+[abandonment investigation and validation](docs/browser-abandoned-checkout.md).

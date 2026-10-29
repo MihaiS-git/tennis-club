@@ -196,29 +196,29 @@ export function TransactionDetail({ transaction: t, listHref = "/admin/payments/
               <span className="block text-muted-foreground">{t.customer_email} · {t.customer_phone}</span>
               {t.account_user_id
                 ? <Link href={`/admin/users/${t.account_user_id}`} className="text-primary underline focus-visible:outline-2 focus-visible:outline-focus">View user account</Link>
-                : <span className="block text-xs text-muted-foreground">Guest booking · no user account</span>}</span>],
-            ["Booking", <Link key="b" href={bookingDetailsHref} title={t.booking_id}
+                : <span className="block text-xs text-muted-foreground">Guest · no user account</span>}</span>],
+            [t.is_actual_booking ? "Booking" : "Checkout", t.is_actual_booking ? <Link key="b" href={bookingDetailsHref} title={t.booking_id}
               className="font-mono text-xs text-primary underline focus-visible:outline-2 focus-visible:outline-focus">
-              <span aria-hidden="true">#{t.booking_id.slice(0, 8)}</span><span className="sr-only">Booking {t.booking_id}</span></Link>],
+              <span aria-hidden="true">#{t.booking_id.slice(0, 8)}</span><span className="sr-only">Booking {t.booking_id}</span></Link> : <span key="checkout" className="font-mono text-xs">Checkout #{t.booking_id.slice(0, 8)}</span>],
             ["Payment", `${t.method ? paymentMethodLabels[t.method] : "Unknown"}${t.provider ? ` · ${paymentProviderLabels[t.provider]}` : ""}`],
             ...resolvedEvents.slice(-1).map((event) => ["Reconciled", transactionTimestamp(event.resolved_at ?? event.received_at, t.location_timezone)] satisfies [string, ReactNode]),
           ]} />
         </dl>
         {!change && <div className="mt-4 border-t border-border pt-4">
-          <h4 className="mb-2 text-sm font-semibold">Historical booking context</h4>
+          <h4 className="mb-2 text-sm font-semibold">{t.is_actual_booking ? "Historical booking context" : "Checkout quote"}</h4>
           <p className="mb-3 text-xs text-muted-foreground">Recorded schedule and price associated with this transaction.</p>
           <dl className="grid grid-cols-[5.5rem_minmax(0,1fr)] sm:grid-cols-[7.5rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm">
             <Fields entries={[
               ["Location", `${t.context.locationName} · ${t.context.courtName}`],
               ["Schedule", schedule({ date: t.context.bookingDate, start: t.context.startMinute, end: t.context.endMinute, timezone: t.context.timezone }, t.location_timezone)],
-              ["Booking price", formatMoney(t.context.totalAmountMinor, t.context.currency)],
+              [t.is_actual_booking ? "Booking price" : "Quoted price", formatMoney(t.context.totalAmountMinor, t.context.currency)],
             ]} />
           </dl>
         </div>}
         <dl className="mt-4 grid grid-cols-[5.5rem_minmax(0,1fr)] sm:grid-cols-[7.5rem_minmax(0,1fr)] gap-x-3 gap-y-2 border-t border-border pt-4 text-sm">
-          <Fields entries={[["Current booking status", bookingStatusLabels[t.current_booking.status] ?? t.current_booking.status]]} />
+          <Fields entries={[[t.is_actual_booking ? "Current booking status" : "Current checkout status", bookingStatusLabels[t.current_booking.status] ?? t.current_booking.status]]} />
         </dl>
-        <Link href={bookingHref} className="mt-4 inline-block text-sm text-primary underline">All transactions for this booking</Link>
+        <Link href={bookingHref} className="mt-4 inline-block text-sm text-primary underline">All transactions for this {t.is_actual_booking ? "booking" : "checkout"}</Link>
         {providerReference && <p className="mt-4 break-all text-xs text-muted-foreground">
           {t.provider ? paymentProviderLabels[t.provider] : "Provider"} reference: <span className="font-mono">{providerReference}</span>
         </p>}

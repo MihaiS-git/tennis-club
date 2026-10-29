@@ -25,7 +25,7 @@ export async function expirePaymentHoldsAtLocation(manager: EntityManager, locat
     const booking = await bookings.findBookingForUpdate(manager, candidate.id);
     const reservation = await reservations.findReservationForUpdate(manager, candidate.reservation_id, undefined, skipLocked);
     if (!booking || !reservation || booking.reservation_id !== reservation.id
-      || !["pending_payment", "cancelled"].includes(booking.status) || reservation.status !== "held" || !reservation.hold_expires_at) continue;
+      || !["pending_payment", "cancelled", "failed"].includes(booking.status) || reservation.status !== "held" || !reservation.hold_expires_at) continue;
     const resource = await reservations.findReservationResourceFacts(manager, reservation.court_id);
     if (resource?.location_id !== locationId) continue;
     const attempts = await payments.lockHoldExpiryAttempts(manager, booking.id, skipLocked);
@@ -39,7 +39,7 @@ export async function expirePaymentHoldsAtLocation(manager: EntityManager, locat
     }
     const now = await reservations.readReservationClockTime(manager);
     if (timestampToEpochMicroseconds(reservation.hold_expires_at) > timestampToEpochMicroseconds(now)) continue;
-    if (booking.status !== "cancelled") await bookings.updateSettlementBookingStatus(manager, booking.id, "expired");
+    if (booking.status === "pending_payment") await bookings.updateSettlementBookingStatus(manager, booking.id, "expired");
     for (const attempt of attempts) if (attempt.status === "pending") await payments.expirePendingAttempt(manager, attempt.id);
     await reservations.updateSettlementReservationStatus(manager, reservation.id, "released");
     expired++;

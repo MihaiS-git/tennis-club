@@ -21,7 +21,7 @@ type AdminListType = "all" | keyof typeof adminListTypeLabels;
 // Status options valid for the selected Type; "Cancelled" is shared by both lifecycles.
 export function adminListStatusOptions(type: AdminListType): [string, string][] {
   if (type === "reservation") return Object.entries(reservationStatusLabels);
-  const bookings = Object.entries(bookingStatusLabels);
+  const bookings = Object.entries(bookingStatusLabels).filter(([status]) => status === "confirmed" || status === "cancelled");
   return type === "all" ? [bookings[0], ["active", reservationStatusLabels.active], ...bookings.slice(1)] : bookings;
 }
 export const ADMIN_BOOKINGS_PAGE_SIZE = 20;

@@ -68,7 +68,7 @@ export async function cleanupBookingEvidence(manager: EntityManager, selection: 
     : "reservationIds" in selection ? "b.reservation_id = ANY($1::uuid[])"
       : "b.reservation_id IN (SELECT id FROM public.court_reservations WHERE court_id = ANY($1::uuid[]))";
   const values = "bookingIds" in selection ? selection.bookingIds : "reservationIds" in selection ? selection.reservationIds : selection.courtIds;
-  const ids = z.array(z.object({ id: z.uuid() })).parse(await manager.query(`SELECT b.id FROM public.bookings b WHERE ${predicate}`, [values])).map(row => row.id);
+  const ids = z.array(z.object({ id: z.uuid() })).parse(await manager.query(`SELECT b.id FROM public.checkout_records b WHERE ${predicate}`, [values])).map(row => row.id);
   await manager.query("ALTER TABLE public.booking_financial_exceptions DISABLE TRIGGER booking_financial_exceptions_immutable");
   await manager.query("DELETE FROM public.booking_financial_exceptions WHERE booking_id=ANY($1::uuid[])", [ids]);
   await manager.query("ALTER TABLE public.booking_financial_exceptions ENABLE TRIGGER booking_financial_exceptions_immutable");
@@ -79,8 +79,9 @@ export async function cleanupBookingEvidence(manager: EntityManager, selection: 
   await manager.query("DELETE FROM public.payment_attempts WHERE booking_id=ANY($1::uuid[])", [ids]);
   await manager.query("DELETE FROM public.court_reservations WHERE adjustment_id IN (SELECT id FROM public.booking_adjustments WHERE booking_id=ANY($1::uuid[]))", [ids]);
   await manager.query("DELETE FROM public.booking_adjustments WHERE booking_id=ANY($1::uuid[])", [ids]);
-  await manager.query("DELETE FROM public.booking_revisions WHERE booking_id=ANY($1::uuid[])", [ids]);
   await manager.query("DELETE FROM public.bookings WHERE id=ANY($1::uuid[])", [ids]);
+  await manager.query("DELETE FROM public.booking_revisions WHERE booking_id=ANY($1::uuid[])", [ids]);
+  await manager.query("DELETE FROM public.checkout_records WHERE id=ANY($1::uuid[])", [ids]);
   await manager.query("SET CONSTRAINTS ALL IMMEDIATE");
   await manager.query("ALTER TABLE public.booking_revisions ENABLE TRIGGER booking_revisions_immutable");
   await manager.query("ALTER TABLE public.refund_executions ENABLE TRIGGER refund_executions_immutable");
@@ -111,7 +112,7 @@ export async function insertBookingRecords(manager: EntityManager, input: unknow
         FROM public.court_reservations r JOIN public.courts c ON c.id=r.court_id JOIN public.locations l ON l.id=c.location_id WHERE r.id=$1`, [value.reservation_id]));
     if (!resource) throw new Error("Booking fixture reservation missing");
     const state = value.status === "pending_payment" || value.status === "failed" || value.status === "expired" ? "pending_payment" : "confirmed";
-    await manager.query(`INSERT INTO public.bookings(id,reservation_id,account_user_id,status,current_revision_id,created_at,updated_at)
+    await manager.query(`INSERT INTO public.checkout_records(id,reservation_id,account_user_id,status,current_revision_id,created_at,updated_at)
       VALUES($1,$2,$3,$4,$5,coalesce($6::timestamptz,now()),coalesce($7::timestamptz,now()))`,
       [id,value.reservation_id,value.account_user_id ?? null,value.status ?? "confirmed",revisionId,value.created_at ?? null,value.updated_at ?? null]);
     const times = Array.from({length:(resource.ends_at_minute-resource.starts_at_minute)/30},(_,i)=>resource.starts_at_minute+i*30);
@@ -126,6 +127,7 @@ export async function insertBookingRecords(manager: EntityManager, input: unknow
         resource.starts_at_minute,resource.ends_at_minute,value.customer_name,value.customer_email,value.customer_phone,value.total_amount_minor,value.currency,
         value.payment_method ?? "pay_at_club",value.cancellation_notice_minutes,value.account_user_id ?? null,value.account_user_id ? "customer":"guest",value.created_at ?? null,JSON.stringify(evidence),
         value.coaching?.coach_user_id ?? null,value.coaching?.coaching_program_id ?? null,value.coaching?.coach_name ?? null,value.coaching?.coaching_program_name ?? null]);
+    if (state === "confirmed") await manager.query("INSERT INTO public.bookings(id,confirmation_revision_id) VALUES($1,$2)", [id,revisionId]);
     if (value.status === "cancelled") {
       const finalId = randomUUID();
       await manager.query(`INSERT INTO public.booking_revisions SELECT $1,booking_id,2,id,'cancellation','fixture','cancelled',
@@ -133,7 +135,7 @@ export async function insertBookingRecords(manager: EntityManager, input: unknow
         customer_name,customer_email,customer_phone,total_amount_minor,currency,payment_method,cancellation_notice_minutes,
         $3,'admin',now(),NULL,'admin_cancelled',pricing_evidence,coach_user_id,coaching_program_id,coach_name,coaching_program_name
         FROM public.booking_revisions WHERE id=$2`, [finalId,revisionId,resource.cancelled_by_user_id]);
-      await manager.query("UPDATE public.bookings SET current_revision_id=$1 WHERE id=$2",[finalId,id]);
+      await manager.query("UPDATE public.checkout_records SET current_revision_id=$1 WHERE id=$2",[finalId,id]);
     }
   }
 }

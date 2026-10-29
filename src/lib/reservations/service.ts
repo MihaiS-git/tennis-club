@@ -42,6 +42,7 @@ const adminOccupancyFields = occupancySchema.extend({ id: z.uuid(),
   refund_facts: z.array(z.object({ id: z.uuid(), provider: paymentProviderSchema,
     status: z.enum(["pending", "pending_retry", "succeeded", "failed", "voided"]), created_at: z.string() })) });
 const adminOccupancyRowSchema = z.discriminatedUnion("kind", [
+  adminOccupancyFields.extend({ kind: z.literal("hold"), hold_expires_at: z.string(), payment_method: z.enum(["online", "pay_at_club"]) }),
   adminOccupancyFields.extend({ kind: z.literal("reservation"), payment_method: z.null() }),
   adminOccupancyFields.extend({ kind: z.literal("booking"), payment_method: z.enum(["online", "pay_at_club"]) }),
 ]);
@@ -59,7 +60,8 @@ export type AdminBooking = Pick<z.infer<typeof adminOccupancyRowSchema>,
 type CoachLessonOccupancy = Pick<AdminBooking, "id" | "court_id" | "booking_date" | "starts_at_minute" | "ends_at_minute"
   | "coach_name" | "coaching_program_name" | "customer_name" | "customer_email" | "customer_phone"> & { kind: "lesson"; coach_user_id: string };
 type RestrictedOccupancy = Pick<AdminBooking, "court_id" | "booking_date" | "starts_at_minute" | "ends_at_minute"> & { kind: "occupied"; id: string };
-export type AdminOperationalOccupancy = AdminReservation | AdminBooking | CoachLessonOccupancy | RestrictedOccupancy;
+type AdminCheckoutHold = Pick<AdminBooking, "id" | "court_id" | "booking_date" | "starts_at_minute" | "ends_at_minute"> & { kind: "hold"; hold_expires_at: string; customer_name: string | null; customer_email: string | null };
+export type AdminOperationalOccupancy = AdminCheckoutHold | AdminReservation | AdminBooking | CoachLessonOccupancy | RestrictedOccupancy;
 export type InternalLocation = { id: string; name: string; timezone: string; courts: { id: string; name: string }[] };
 export type ReservationResult = { ok: true } | { ok: false; message: string };
 
@@ -135,7 +137,11 @@ export async function getReservationDay(location: InternalLocation, date: string
     throw new Error("Unable to load reservation details.");
   }
   for (const row of parsed.data) {
-    if (row.kind === "reservation") {
+    if (row.kind === "hold") {
+      adminOccupancy.push({ kind: "hold", id: row.id, court_id: row.court_id, booking_date: row.booking_date,
+        starts_at_minute: row.starts_at_minute, ends_at_minute: row.ends_at_minute, hold_expires_at: row.hold_expires_at,
+        customer_name: row.customer_name, customer_email: row.customer_email });
+    } else if (row.kind === "reservation") {
       adminOccupancy.push({ kind: "reservation", payment_method: row.payment_method, id: row.id, court_id: row.court_id, booking_date: row.booking_date,
         starts_at_minute: row.starts_at_minute, ends_at_minute: row.ends_at_minute,
         reason: row.reason, created_by_user_id: row.created_by_user_id, creator_name: row.creator_name, creator_email: row.creator_email, creator_phone: row.creator_phone });
@@ -168,6 +174,8 @@ function operationFact<T extends { created_at: string }>({ created_at, ...fact }
 
 // Non-Admin staff never receive another customer's identity, payments or prices.
 function projectStaffOccupancy(item: AdminOperationalOccupancy, actorUserId: string): AdminOperationalOccupancy {
+  if (item.kind === "hold") return { kind: "occupied", id: item.id, court_id: item.court_id, booking_date: item.booking_date,
+    starts_at_minute: item.starts_at_minute, ends_at_minute: item.ends_at_minute };
   if (item.kind !== "booking" || item.account_user_id === actorUserId) return item;
   const interval = { court_id: item.court_id, booking_date: item.booking_date, starts_at_minute: item.starts_at_minute, ends_at_minute: item.ends_at_minute };
   if (bookingType(item) === "coaching" && item.coach_user_id === actorUserId) return { kind: "lesson", id: item.id, ...interval,

@@ -8,13 +8,15 @@ import { openingIntervalSchema } from "@/lib/admin/opening-hours-validation";
 import { mondayWeekday } from "@/lib/pricing/resolution";
 import { CourtReservationEntity } from "../entities/court-reservation.entity";
 
-// Static SQL alias r is used by occupancy and expiry reads. Accepted capture
-// owns occupancy until a definitive provider outcome, independently of grace.
-// Initial checkout retains its existing exact hold-extension acceptance marker.
-export const acceptedCaptureOccupancy = `(
-  EXISTS (SELECT 1 FROM public.bookings cb JOIN public.payment_attempts cp ON cp.booking_id=cb.id
+// Static SQL alias r is used by occupancy and expiry reads. Registered initial
+// payments retain occupancy until Stripe confirms cancellation or capture. A clock
+// deadline alone cannot prove that an in-flight provider request was unpaid.
+// Unregistered attempts can still expire locally; adjustment acceptance is unchanged.
+export const protectedPaymentOccupancy = `(
+  EXISTS (SELECT 1 FROM public.checkout_records cb JOIN public.payment_attempts cp ON cp.booking_id=cb.id
     WHERE cb.reservation_id=r.id AND cp.adjustment_id IS NULL AND cp.status='pending'
-      AND r.hold_expires_at=cp.expires_at+make_interval(secs => ${checkoutCaptureGraceSeconds}))
+      AND (cp.provider_payment_id IS NOT NULL
+        OR r.hold_expires_at=cp.expires_at+make_interval(secs => ${checkoutCaptureGraceSeconds})))
   OR EXISTS (SELECT 1 FROM public.booking_adjustments ca JOIN public.payment_attempts cp ON cp.adjustment_id=ca.id
     WHERE ca.id=r.adjustment_id AND ca.status='pending' AND ca.capture_accepted_at IS NOT NULL AND cp.status='pending')
 )`;
@@ -50,7 +52,7 @@ const resources = `c.id AS court_id, c.name AS court_name, c.is_active AS court_
 // never a coaching or adjustment hold fragment (those belong to customer bookings).
 export const directReservationPredicate = `r.created_by_user_id IS NOT NULL AND r.adjustment_id IS NULL
   AND r.coach_user_id IS NULL AND r.status IN ('active','cancelled')
-  AND NOT EXISTS(SELECT 1 FROM public.bookings db WHERE db.reservation_id=r.id)`;
+  AND NOT EXISTS(SELECT 1 FROM public.checkout_records db WHERE db.reservation_id=r.id)`;
 // The staff display name the Calendar shows: account name, then profile display name, then email.
 export function staffNameSql(user: string, profile: string) {
   return `coalesce(nullif(btrim(concat_ws(' ', nullif(btrim(${user}.first_name), ''), nullif(btrim(${user}.last_name), ''))), ''),
@@ -101,7 +103,7 @@ export async function findReservationResourceFacts(manager: EntityManager, court
 
 export async function hasCustomerBookingLink(manager: EntityManager, id: string): Promise<boolean> {
   const rows: unknown = await manager.query(
-    "SELECT EXISTS(SELECT 1 FROM public.bookings WHERE reservation_id = $1) AS linked", [id],
+    "SELECT EXISTS(SELECT 1 FROM public.checkout_records WHERE reservation_id = $1) AS linked", [id],
   );
   return z.array(z.object({ linked: z.boolean() })).length(1).parse(rows)[0].linked;
 }
@@ -168,12 +170,14 @@ export async function readReservationClockTime(manager: EntityManager): Promise<
   return z.array(z.object({ instant })).length(1).parse(rows)[0].instant;
 }
 
+// capture_accepted is the existing internal safety projection: it also protects
+// registered initial payments whose cancellation has not yet been verified.
 export async function findReservationOccupancy(manager: EntityManager, scope: { courtIds: string[] } | { locationId: string },
   date: string, offset: number, limit: number, excludeReservationId?: string) {
   if ("courtIds" in scope && !scope.courtIds.length) return [];
   const rows: unknown = await manager.query(
     `SELECT r.court_id, r.starts_at_minute, r.ends_at_minute, r.status,
-     ${timestamp("r.hold_expires_at")} AS hold_expires_at, ${acceptedCaptureOccupancy} AS capture_accepted FROM public.court_reservations r
+     ${timestamp("r.hold_expires_at")} AS hold_expires_at, ${protectedPaymentOccupancy} AS capture_accepted FROM public.court_reservations r
      JOIN public.courts c ON c.id = r.court_id AND c.is_active
      JOIN public.locations l ON l.id = c.location_id AND l.is_active AND l.archived_at IS NULL
      WHERE r.booking_date = $1 AND r.status IN ('active', 'held')
@@ -193,7 +197,7 @@ export async function findReservationEditContext(manager: EntityManager, id: str
      JOIN public.locations l ON l.id = c.location_id AND l.is_active AND l.archived_at IS NULL
      WHERE r.id = $1 AND r.status = 'active'
        AND ($2::uuid IS NULL OR r.created_by_user_id = $2)
-       AND NOT EXISTS(SELECT 1 FROM public.bookings b LEFT JOIN public.booking_revisions v ON v.id=b.current_revision_id WHERE b.reservation_id = r.id)`, [id, ownerId ?? null],
+       AND NOT EXISTS(SELECT 1 FROM public.checkout_records b LEFT JOIN public.booking_revisions v ON v.id=b.current_revision_id WHERE b.reservation_id = r.id)`, [id, ownerId ?? null],
   );
   return z.array(reservationSchema.extend(resourceSchema.shape)).max(1).parse(rows)[0] ?? null;
 }
@@ -255,7 +259,7 @@ export async function listExpiredCoachHoldCourts(manager: EntityManager, coachUs
   const rows: unknown = await manager.query(`SELECT DISTINCT c.location_id,r.court_id
     FROM public.court_reservations r JOIN public.courts c ON c.id=r.court_id
     WHERE r.coach_user_id=$1 AND r.booking_date=$2::date AND r.status='held'
-      AND r.hold_expires_at<=clock_timestamp() AND NOT ${acceptedCaptureOccupancy}
+      AND r.hold_expires_at<=clock_timestamp() AND NOT ${protectedPaymentOccupancy}
     ORDER BY c.location_id,r.court_id`, [coachUserId.toLowerCase(), date]);
   return z.array(z.object({ location_id: z.uuid(), court_id: z.uuid() })).parse(rows);
 }
@@ -264,7 +268,7 @@ export async function findCheckoutOccupancy(manager: EntityManager, courtId: str
   const rows: unknown = await manager.query(
     `SELECT court_id,booking_date::text,starts_at_minute,ends_at_minute
      FROM public.court_reservations r WHERE court_id=$1 AND booking_date=$2
-       AND (status='active' OR (status='held' AND (hold_expires_at > coalesce($4::timestamptz,statement_timestamp()) OR ${acceptedCaptureOccupancy})))
+       AND (status='active' OR (status='held' AND (hold_expires_at > coalesce($4::timestamptz,statement_timestamp()) OR ${protectedPaymentOccupancy})))
        AND ($3::uuid IS NULL OR id<>$3)`, [courtId, date, excludeId ?? null, checkedAt ?? null],
   );
   return z.array(z.object({ court_id: z.uuid(), booking_date: z.iso.date(),
@@ -303,7 +307,7 @@ export async function listCustomerEditOccupancy(manager: EntityManager, location
     `SELECT r.court_id,r.starts_at_minute,r.ends_at_minute FROM public.court_reservations r
      JOIN public.courts c ON c.id=r.court_id AND c.is_active
      WHERE c.location_id=$1 AND r.booking_date=$2 AND r.id<>$3
-       AND (r.status='active' OR (r.status='held' AND (r.hold_expires_at>clock_timestamp() OR ${acceptedCaptureOccupancy})))
+       AND (r.status='active' OR (r.status='held' AND (r.hold_expires_at>clock_timestamp() OR ${protectedPaymentOccupancy})))
      ORDER BY r.court_id,r.starts_at_minute,r.id`, [locationId,date,excludeId]);
   return z.array(z.object({ court_id:z.uuid(),starts_at_minute:z.number().int(),ends_at_minute:z.number().int() })).parse(rows);
 }
@@ -338,7 +342,7 @@ export async function listPublicDayOccupancy(manager: EntityManager, locationId:
     FROM public.court_reservations r JOIN public.courts c ON c.id=r.court_id AND c.is_active
     JOIN public.locations l ON l.id=c.location_id AND l.is_active AND l.archived_at IS NULL AND l.is_public
     WHERE l.id=$1 AND r.court_id=ANY($2::uuid[]) AND r.booking_date=$3::date AND ($4::uuid IS NULL OR r.id<>$4)
-      AND (r.status='active' OR (r.status='held' AND (r.hold_expires_at>statement_timestamp() OR ${acceptedCaptureOccupancy})))`,
+      AND (r.status='active' OR (r.status='held' AND (r.hold_expires_at>statement_timestamp() OR ${protectedPaymentOccupancy})))`,
     [locationId,courtIds,date,excludeReservationId ?? null]);
 }
 
@@ -349,14 +353,15 @@ export async function listPublicDayOccupancy(manager: EntityManager, locationId:
 export async function listCoachDayOccupancy(manager: EntityManager, coachUserId: string, date: string, excludeReservationId?: string) {
   const rows: unknown = await manager.query(`SELECT r.booking_date::text,r.starts_at_minute,r.ends_at_minute
     FROM public.court_reservations r WHERE r.coach_user_id=$1 AND r.booking_date=$2::date AND ($3::uuid IS NULL OR r.id<>$3)
-      AND (r.status='active' OR (r.status='held' AND (r.hold_expires_at>statement_timestamp() OR ${acceptedCaptureOccupancy})))
+      AND (r.status='active' OR (r.status='held' AND (r.hold_expires_at>statement_timestamp() OR ${protectedPaymentOccupancy})))
     ORDER BY r.starts_at_minute,r.ends_at_minute`, [coachUserId.toLowerCase(), date, excludeReservationId ?? null]);
   return z.array(z.object({ booking_date: z.iso.date(), starts_at_minute: z.number().int(), ends_at_minute: z.number().int() })).parse(rows);
 }
 
 // Application service authorizes active Admins/Coaches before this private projection.
 export async function listAdminOperationalProjection(manager: EntityManager, courtIds: string[], date: string): Promise<unknown> {
-  return manager.query(`select case when b.id is null then 'reservation' else 'booking' end AS kind,
+  return manager.query(`select case when r.status='held' then 'hold' when b.id is null then 'reservation' else 'booking' end AS kind,
+      r.hold_expires_at::text AS hold_expires_at,
       coalesce(b.id, r.id) AS id, r.court_id, r.booking_date::text AS booking_date,
       r.starts_at_minute, r.ends_at_minute,
       case when b.id is null then r.reason else null end AS reason,
@@ -375,9 +380,10 @@ export async function listAdminOperationalProjection(manager: EntityManager, cou
     from public.court_reservations r
     join public.courts c on c.id = r.court_id and c.is_active
     join public.locations l on l.id = c.location_id and l.is_active and l.archived_at is null
-    left join public.bookings b on b.reservation_id = r.id left join public.booking_revisions v on v.id=b.current_revision_id
+    left join public.checkout_records b on b.reservation_id = r.id left join public.booking_revisions v on v.id=b.current_revision_id
     left join public.users u on u.id = r.created_by_user_id and b.id is null
     left join public.player_profiles p on p.user_id = u.id
     where r.court_id = any($1::uuid[]) and r.booking_date = $2::date
-      and r.status = 'active' and (b.id is null or b.status = 'confirmed');`, [courtIds,date]);
+      and ((r.status = 'active' and (b.id is null or b.status = 'confirmed'))
+        or (r.status='held' and b.id is not null and (r.hold_expires_at>clock_timestamp() OR ${protectedPaymentOccupancy})));`, [courtIds,date]);
 }

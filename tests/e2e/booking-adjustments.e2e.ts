@@ -55,7 +55,7 @@ test("My Activity paid edit collects only the difference, X discards an unpaid m
     await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect.poll(async () => (await db.query("SELECT status FROM public.booking_adjustments WHERE booking_id=$1",[bookingId]))[0].status).toBe('cancelled');
     expect(await db.query("SELECT r.status FROM public.court_reservations r JOIN public.booking_adjustments a ON a.id=r.adjustment_id WHERE a.booking_id=$1",[bookingId])).toEqual([{status:'released'}]);
-    expect((await db.query("SELECT v.total_amount_minor FROM public.bookings b JOIN public.booking_revisions v ON v.id=b.current_revision_id WHERE b.id=$1",[bookingId]))[0].total_amount_minor).toBe(5000);
+    expect((await db.query("SELECT v.total_amount_minor FROM public.checkout_records b JOIN public.booking_revisions v ON v.id=b.current_revision_id WHERE b.id=$1",[bookingId]))[0].total_amount_minor).toBe(5000);
     // The next Edit opens a fresh form, never the old modification or its payment.
     await page.reload(); await open();
     await expect(page.getByRole('region',{name:'Booking modification'})).toHaveCount(0);

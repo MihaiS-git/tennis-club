@@ -91,7 +91,7 @@ test("mixed history is owner scoped, time zone aware, globally ordered and paged
     expect((await listOwnCourtHistory(3, admin.client, now)).rows).toEqual([]);
     expect((await listOwnCourtHistory(1, coach.client, now)).rows.map((row) => row.id)).toEqual([coachReservation]);
     expect((await listOwnCourtHistory(1, other.client, now)).rows.map((row) => row.id)).toEqual([otherBooking]);
-    expect((await member.client.from("bookings").select("id")).error?.code).toBe("42501");
+    expect((await member.client.from("checkout_records").select("id")).error?.code).toBe("42501");
     await expect(listOwnCourtHistory(0, member.client, now)).rejects.toThrow("Unable to load your court activity. Try again.");
     // Continue beyond PostgREST's former 1000-row cap with bounded TypeORM batches.
     const batchIds = Array.from({ length: 1001 }, () => randomUUID());
@@ -106,9 +106,9 @@ test("mixed history is owner scoped, time zone aware, globally ordered and paged
     expect(beforeTail.rows).toHaveLength(20); expect(beforeTail.hasNext).toBe(true);
     // Lossless cancelled-history tokens remain PostgreSQL strings.
     const precise = "2026-10-01T12:00:00.123456+00:00";
-    assert.strictEqual((await service.from("bookings").update({ updated_at: precise }).eq("id", memberCancelled)).error, null);
+    assert.strictEqual((await service.from("checkout_records").update({ updated_at: precise }).eq("id", memberCancelled)).error, null);
     // Database timestamp triggers may replace explicit tokens; compare against DB.
-    const stored = await service.from("bookings").select("updated_at").eq("id", memberCancelled).single();
+    const stored = await service.from("checkout_records").select("updated_at").eq("id", memberCancelled).single();
     expect((await listOwnCourtHistory(1, member.client, now)).rows.find((row) => row.id === memberCancelled)?.history_at).toBe(stored.data!.updated_at);
 
   } finally {

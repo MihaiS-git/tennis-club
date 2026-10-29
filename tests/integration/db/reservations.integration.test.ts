@@ -337,7 +337,7 @@ test.each(["schedule"])("direct %s preserves live-hold exclusion and explicit ap
   expect(await save()).toEqual({ ok: true });
   const held = await inTransaction((manager) => repository.findReservationForUpdate(manager, heldId));
   expect(held).toMatchObject({ status: "released", hold_expires_at: null });
-  const rows: unknown = await database.query("SELECT b.status,p.status AS payment_status FROM public.bookings b JOIN public.payment_attempts p ON p.booking_id=b.id WHERE b.reservation_id=$1", [heldId]);
+  const rows: unknown = await database.query("SELECT b.status,p.status AS payment_status FROM public.checkout_records b JOIN public.payment_attempts p ON p.booking_id=b.id WHERE b.reservation_id=$1", [heldId]);
   expect(rows).toEqual([{ status: "expired", payment_status: "expired" }]);
 });
 
@@ -375,5 +375,5 @@ test.each(["customer", "guest"])("Coach cannot cancel a %s booking through owner
   expect(await cancelOwnDirectReservation(row.id, coach)).toMatchObject({ ok: false });
   expect(await reservation()).toEqual(row);
   expect(await readInternalOccupancy({ courtIds: [courtId] }, date, now)).toHaveLength(1);
-  expect(await database.query("SELECT status FROM public.bookings WHERE reservation_id=$1", [row.id])).toEqual([{ status: "confirmed" }]);
+  expect(await database.query("SELECT status FROM public.checkout_records WHERE reservation_id=$1", [row.id])).toEqual([{ status: "confirmed" }]);
 });

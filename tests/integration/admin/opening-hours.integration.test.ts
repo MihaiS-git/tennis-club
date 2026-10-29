@@ -563,7 +563,7 @@ test("future schedule grandfathers a confirmed booking outside its hours, reconc
     const contracts = () => database.query(`SELECT to_jsonb(b) AS booking,to_jsonb(r) AS reservation,
       coalesce((SELECT jsonb_agg(to_jsonb(p) ORDER BY p.id) FROM public.payment_attempts p WHERE p.booking_id=b.id),'[]'::jsonb) AS payments,
       coalesce((SELECT jsonb_agg(to_jsonb(f) ORDER BY f.id) FROM public.payment_refunds f WHERE f.booking_id=b.id),'[]'::jsonb) AS refunds
-      FROM public.bookings b
+      FROM public.checkout_records b
       JOIN public.court_reservations r ON r.id=b.reservation_id WHERE b.id=$1`,[original.bookingId]);
     const before = await contracts();
     const [baseline] = await clubs.listOpeningHoursSchedules(database.manager,location_id);
@@ -665,7 +665,7 @@ test.each(["hours","price","cancellation","publication"] as const)("pending capt
     if (policy === "publication") expect((await service.from("locations").update({ is_public: false }).eq("id",location_id)).error).toBeNull();
     expect(await processOnlinePaymentEvent({ attemptId: held.payment_attempt_id,provider: "stripe",providerPaymentId: "pi_policy_test",eventId: `evt_${held.payment_attempt_id}`,
       amountMinor: 5017,currency: "RON",outcome: "succeeded" })).toBe("expired");
-    expect(await database.query("SELECT b.status::text,v.total_amount_minor,v.cancellation_notice_minutes FROM public.bookings b JOIN public.booking_revisions v ON v.id=b.current_revision_id WHERE b.id=$1",[held.booking_id]))
+    expect(await database.query("SELECT b.status::text,v.total_amount_minor,v.cancellation_notice_minutes FROM public.checkout_records b JOIN public.booking_revisions v ON v.id=b.current_revision_id WHERE b.id=$1",[held.booking_id]))
       .toEqual([{ status: "expired",total_amount_minor: 5017,cancellation_notice_minutes: 1440 }]);
     expect(await database.query("SELECT status::text FROM public.court_reservations WHERE id=$1",[held.reservation_id])).toEqual([{ status: "released" }]);
     expect(await database.query("SELECT reconciliation_required FROM public.payment_provider_events WHERE attempt_id=$1",[held.payment_attempt_id])).toEqual([{ reconciliation_required: true }]);
@@ -744,7 +744,7 @@ test("pending holds use their playing-date policy after future schedule creation
       const event = { attemptId:hold.payment_attempt_id,provider:"stripe",providerPaymentId,eventId:`evt_effective_${hold.payment_attempt_id}`,amountMinor:5017,currency:"RON",outcome:"succeeded" } as const;
       expect(await processOnlinePaymentEvent(event)).toBe(index === 0 ? "succeeded" : "expired");
       expect(await processOnlinePaymentEvent(event)).toBe(index === 0 ? "succeeded" : "expired");
-      expect(await database.query("SELECT b.status::text,v.total_amount_minor FROM public.bookings b JOIN public.booking_revisions v ON v.id=b.current_revision_id WHERE b.id=$1",[hold.booking_id]))
+      expect(await database.query("SELECT b.status::text,v.total_amount_minor FROM public.checkout_records b JOIN public.booking_revisions v ON v.id=b.current_revision_id WHERE b.id=$1",[hold.booking_id]))
         .toEqual([{ status:index === 0 ? "confirmed" : "expired",total_amount_minor:5017 }]);
       expect(await database.query("SELECT status::text FROM public.court_reservations WHERE id=$1",[hold.reservation_id]))
         .toEqual([{ status:index === 0 ? "active" : "released" }]);

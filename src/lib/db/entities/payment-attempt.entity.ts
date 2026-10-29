@@ -5,7 +5,7 @@ import type { LocationCurrency } from "@/lib/pricing/money";
 import type { PaymentMethod, PaymentProvider } from "@/lib/payments/domain";
 
 import { BookingAdjustmentEntity } from "./booking-adjustment.entity";
-import { BookingEntity } from "./booking.entity";
+import { CheckoutRecordEntity } from "./checkout-record.entity";
 
 @Entity({ schema: "public", name: "payment_attempts" })
 @Index("payment_attempts_one_adjustment", ["adjustmentId"], { unique: true, where: "adjustment_id IS NOT NULL" })
@@ -21,7 +21,7 @@ import { BookingEntity } from "./booking.entity";
 @Check("payment_attempts_provider_check", "(provider = ANY (ARRAY['stripe'::text, 'netopia'::text]))")
 @Check("payment_attempts_provider_payment_id_check", "((char_length(provider_payment_id) >= 1) AND (char_length(provider_payment_id) <= 255))")
 @Check("payment_attempts_status_check", "(status = ANY (ARRAY['pending'::text, 'succeeded'::text, 'failed'::text, 'cancelled'::text, 'expired'::text, 'due'::text]))")
-@ForeignKey(() => BookingEntity, ["bookingId"], ["id"], { name: "payment_attempts_booking_id_fkey", onDelete: "RESTRICT" })
+@ForeignKey(() => CheckoutRecordEntity, ["bookingId"], ["id"], { name: "payment_attempts_booking_id_fkey", onDelete: "RESTRICT" })
 @ForeignKey(() => BookingAdjustmentEntity, ["adjustmentId"], ["id"], { name: "payment_attempts_adjustment_id_fkey", onDelete: "RESTRICT" })
 export class PaymentAttemptEntity {
   @Column({ name: "adjustment_id", type: "uuid", nullable: true })

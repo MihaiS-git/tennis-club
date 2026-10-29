@@ -204,7 +204,7 @@ test("coaching references and historical snapshots are structurally complete", (
   await insertBookingRecords(runner.manager, { id: booking, reservation_id: reservation, account_user_id: member, customer_name: "Customer",
     customer_email: "lesson@example.test", customer_phone: "123", total_amount_minor: 9000, currency: "EUR",
     payment_method: "online", cancellation_notice_minutes: 1440 });
-  const [{ current_revision_id: head }] = await runner.query("SELECT current_revision_id FROM public.bookings WHERE id=$1", [booking]);
+  const [{ current_revision_id: head }] = await runner.query("SELECT current_revision_id FROM public.checkout_records WHERE id=$1", [booking]);
   // Append a successor revision carrying the coaching terms (the head stays valid only after the pointer moves).
   const append = (values: { coachId: string | null; programId: string | null; coachName: string | null; programName: string | null }) => {
     const id = randomUUID();
@@ -227,7 +227,7 @@ test("coaching references and historical snapshots are structurally complete", (
   await rejects(runner, () => append({ ...complete, programId: randomUUID() }), "23503", "booking_revisions_coaching_program_fkey");
 
   const revision = await append(complete);
-  await runner.query("UPDATE public.bookings SET current_revision_id=$1 WHERE id=$2", [revision, booking]);
+  await runner.query("UPDATE public.checkout_records SET current_revision_id=$1 WHERE id=$2", [revision, booking]);
   await runner.query("SET CONSTRAINTS ALL IMMEDIATE");
   expect(await runner.query(`SELECT coach_user_id,coaching_program_id,coach_name,coaching_program_name
     FROM public.booking_revisions WHERE id=$1`, [revision]))
@@ -249,7 +249,7 @@ async function proposal(runner: QueryRunner, target: Target, expiresAt = new Dat
     customer_email: "lesson@example.test", customer_phone: "123", total_amount_minor: 9000, currency: "EUR",
     payment_method: "online", cancellation_notice_minutes: 1440, coaching: { coach_user_id: coach, coaching_program_id: program,
       coach_name: "Occupancy Coach", coaching_program_name: "Private lesson" } });
-  const [{ current_revision_id: revision }] = await runner.query("SELECT current_revision_id FROM public.bookings WHERE id=$1", [booking]);
+  const [{ current_revision_id: revision }] = await runner.query("SELECT current_revision_id FROM public.checkout_records WHERE id=$1", [booking]);
   const edit = { courtId: target.court, date: target.day ?? date, startMinute: target.start, endMinute: target.end };
   const adjustment = await adjustments.insertAdjustment(runner.manager, { bookingId: booking, baseRevisionId: revision, actorId: member,
     scope: "owner", requestKey: randomUUID(), target: { ...edit, expectedUpdatedAt: new Date().toISOString(), courtName: "Target",

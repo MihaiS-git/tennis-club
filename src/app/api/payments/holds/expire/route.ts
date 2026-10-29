@@ -5,9 +5,9 @@ import { logger } from "@/lib/logger";
 
 export const maxDuration = 25;
 
-// Supabase Cron sweep for abandoned checkout holds. Availability already ignores
-// expired holds by database time; settle local aggregates and reconcile a bounded
-// sample of unresolved Stripe checkouts through the existing services.
+// Supabase Cron sweep for abandoned checkout holds. Expire safe unregistered
+// holds locally, then resolve registered Stripe attempts without browser activity.
+// Uncertain provider outcomes retain occupancy through the shared safety predicate.
 export async function POST(request: Request) {
   if (!authorizedBearer(request.headers.get("authorization"), process.env.CHECKOUT_EXPIRY_CRON_SECRET)) {
     return new Response(null, { status: 401 });

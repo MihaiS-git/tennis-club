@@ -63,7 +63,7 @@ test("filters, searches and paginates in the database on the current booking sna
     expect(sql).not.toMatch(/is_active|archived_at|is_public|UPDATE|INSERT|DELETE/);
     // Staff reservations are a separate table read alongside, never a booking row.
     expect(sql).toContain("FROM public.court_reservations r");
-    expect(sql).toContain("NOT EXISTS(SELECT 1 FROM public.bookings db WHERE db.reservation_id=r.id)");
+    expect(sql).toContain("NOT EXISTS(SELECT 1 FROM public.checkout_records db WHERE db.reservation_id=r.id)");
     expect(sql).toMatch(/r\.created_by_user_id IS NOT NULL AND r\.adjustment_id IS NULL\s+AND r\.coach_user_id IS NULL/);
   }
   expect(pageSql).toContain("UNION ALL");
@@ -147,7 +147,7 @@ test("status filters stay within the selected Type's lifecycle", () => {
   expect(parseAdminBookingQuery({ type: "reservation", status: "confirmed" }).status).toBe("all");
   expect(parseAdminBookingQuery({ type: "court", status: "active" }).status).toBe("all");
   expect(parseAdminBookingQuery({ status: "active" }).status).toBe("active");
-  expect(parseAdminBookingQuery({ status: "pending_payment" }).status).toBe("pending_payment");
+  expect(parseAdminBookingQuery({ status: "pending_payment" }).status).toBe("all");
   const query = parseAdminBookingQuery({ type: "reservation", status: "cancelled", q: "court", page: "2" });
   expect(parseAdminBookingQuery(Object.fromEntries(new URL(adminBookingsHref(query), "http://x").searchParams))).toEqual(query);
 });

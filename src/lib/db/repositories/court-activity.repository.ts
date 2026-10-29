@@ -29,7 +29,7 @@ export async function listOwnerActivityBatch(manager: EntityManager, input: {
     'creator',CASE WHEN creator.id IS NULL THEN NULL ELSE jsonb_build_object('first_name',creator.first_name,'last_name',creator.last_name) END,
     'canceller',CASE WHEN canceller.id IS NULL THEN NULL ELSE jsonb_build_object('first_name',canceller.first_name,'last_name',canceller.last_name) END)`;
   const rows: unknown = await manager.query(`SELECT ${projection} AS row
-    FROM ${booking ? "public.bookings b JOIN public.booking_revisions v ON v.id=b.current_revision_id JOIN public.court_reservations r ON r.id=b.reservation_id" : "public.court_reservations r"}
+    FROM ${booking ? "public.checkout_records b JOIN public.bookings confirmed ON confirmed.id=b.id JOIN public.booking_revisions v ON v.id=b.current_revision_id JOIN public.court_reservations r ON r.id=b.reservation_id" : "public.court_reservations r"}
     JOIN public.courts c ON c.id=r.court_id JOIN public.locations l ON l.id=c.location_id
     ${booking ? "" : "LEFT JOIN public.users creator ON creator.id=r.created_by_user_id LEFT JOIN public.users canceller ON canceller.id=r.cancelled_by_user_id"}
     WHERE ${booking ? "b.account_user_id" : "r.created_by_user_id"}=$1::uuid

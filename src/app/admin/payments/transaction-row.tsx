@@ -33,9 +33,9 @@ function TransactionListRow({ transaction: t, listHref, showTimezone }: { transa
             {t.customer_email}
           </span>
         </td>
-        <td><Link href={adminBookingLinkFrom(t.booking_id, listHref)} title={t.booking_id}
+        <td>{t.is_actual_booking ? <Link href={adminBookingLinkFrom(t.booking_id, listHref)} title={t.booking_id}
           className="relative z-10 font-mono text-xs text-primary underline focus-visible:outline-2 focus-visible:outline-focus">
-          <span aria-hidden="true">#{t.booking_id.slice(0, 8)}</span><span className="sr-only">Booking {t.booking_id}</span></Link></td>
+          <span aria-hidden="true">#{t.booking_id.slice(0, 8)}</span><span className="sr-only">Booking {t.booking_id}</span></Link> : <span className="font-mono text-xs">Checkout #{t.booking_id.slice(0, 8)}</span>}</td>
         <td><RowLink href={href} className="text-primary underline">{t.operation_label}</RowLink>
           {t.proposal && !t.proposal.acceptedRevisionId && <span className="block text-xs text-muted-foreground">
             {t.proposal.kind === "cancellation" ? "Cancellation request" : "Proposed modification"} · {t.proposal.status === "pending" ? "Pending" : "Not applied"}

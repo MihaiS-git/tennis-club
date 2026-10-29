@@ -1,7 +1,7 @@
 import "server-only";
 import { Check, Column, Entity, ForeignKey, Index, PrimaryColumn, Unique } from "typeorm";
 import type { RevisionSnapshot } from "@/lib/bookings/revision";
-import { BookingEntity } from "./booking.entity";
+import { CheckoutRecordEntity } from "./checkout-record.entity";
 import { BookingAdjustmentEntity } from "./booking-adjustment.entity";
 import { UserEntity } from "./user.entity";
 import { LocationEntity } from "./location.entity";
@@ -15,7 +15,7 @@ import { CoachingProgramEntity } from "./coaching-program.entity";
 @Unique("booking_revisions_predecessor", ["bookingId", "previousRevisionId"])
 @Unique("booking_revisions_operation", ["bookingId", "operationKey"])
 @Index("booking_revisions_adjustment", ["adjustmentId"], { unique: true, where: "adjustment_id IS NOT NULL" })
-@ForeignKey(() => BookingEntity, ["bookingId"], ["id"], { name: "booking_revisions_booking_fkey", onDelete: "RESTRICT" })
+@ForeignKey(() => CheckoutRecordEntity, ["bookingId"], ["id"], { name: "booking_revisions_booking_fkey", onDelete: "RESTRICT" })
 @ForeignKey(() => BookingRevisionEntity, ["bookingId", "previousRevisionId"], ["bookingId", "id"], { name: "booking_revisions_previous_fkey", onDelete: "RESTRICT" })
 @ForeignKey(() => BookingAdjustmentEntity, ["bookingId", "adjustmentId"], ["bookingId", "id"], { name: "booking_revisions_adjustment_fkey", onDelete: "NO ACTION", deferrable: "INITIALLY DEFERRED" })
 @ForeignKey(() => UserEntity, ["actorUserId"], ["id"], { name: "booking_revisions_actor_fkey", onDelete: "RESTRICT" })

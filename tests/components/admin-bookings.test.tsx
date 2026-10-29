@@ -412,7 +412,7 @@ test("the Type filter offers staff reservations and each Type offers only its ow
   expect(lastParams()).toEqual({ q: "Ana", type: "court" });
   cleanup(); mocks.query = "status=cancelled";
   render(<BookingsToolbar locations={locations} />);
-  expect(status()).toEqual(["All", "Confirmed", "Active", "Payment pending", "Cancelled", "Failed", "Expired"]);
+  expect(status()).toEqual(["All", "Confirmed", "Active", "Cancelled"]);
   fireEvent.change(screen.getByRole("combobox", { name: "Type" }), { target: { value: "reservation" } });
   expect(lastParams()).toEqual({ status: "cancelled", type: "reservation" });
 });

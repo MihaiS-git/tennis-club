@@ -648,3 +648,19 @@ it("links a Coach only to their own reservation and own lesson details, returnin
   expect(within(dialog).queryByText(/Customer|Coach|Payment|Total|@/)).toBeNull();
   expect(within(dialog).getByText("11:30–12:00 (UTC)")).toBeTruthy();
 });
+
+it("identifies a temporary checkout hold and its deadline without booking management", () => {
+  const courtId = "22222222-2222-4222-8222-222222222222";
+  const location = { id: "11111111-1111-4111-8111-111111111111", name: "Club", timezone: "UTC", courts: [{ id: courtId, name: "Court 2" }] };
+  render(<ReservationCalendar canManage date="2099-10-15" location={location}
+    day={{ times: [600, 630], courts: [{ court: location.courts[0], cells: ["booked", "booked"] }] }}
+    adminOccupancy={[{ kind: "hold", id: "33333333-3333-4333-8333-333333333333", court_id: courtId,
+      booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660,
+      hold_expires_at: "2099-10-14T10:10:00Z", customer_name: "Ana", customer_email: "ana@example.test" }]} />);
+  fireEvent.click(screen.getByRole("button", { name: /Temporary checkout hold/ }));
+  expect(screen.getByRole("dialog", { name: "Temporary checkout hold" })).toBeTruthy();
+  expect(screen.getByText("Deadline")).toBeTruthy();
+  expect(screen.getByText(/No booking has been confirmed/)).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Review checkout payment" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Cancel booking" })).toBeNull();
+});

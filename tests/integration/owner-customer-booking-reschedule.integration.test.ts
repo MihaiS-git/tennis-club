@@ -177,7 +177,7 @@ test("Owner rescheduling preserves rows, enforces notice/ownership and shares pr
     // Snapshot cutoff is enforced by the command even if the client opened earlier.
     const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
     await appendBookingContractFixture(bookingId, { booking_date: tomorrow, cancellation_notice_minutes: 43200 });
-    const currentBooking = (await service.from("bookings").select("current_revision_id").eq("id", bookingId).single()).data!;
+    const currentBooking = (await service.from("checkout_records").select("current_revision_id").eq("id", bookingId).single()).data!;
     const currentReservation = (await service.from("court_reservations").select("updated_at").eq("id", reservationId).single()).data!;
     const cutoffInput = { ...input, expectedUpdatedAt: currentReservation.updated_at,
       expectedRevisionId: currentBooking.current_revision_id, save: false };
@@ -194,7 +194,7 @@ test("Owner rescheduling preserves rows, enforces notice/ownership and shares pr
     assert.strictEqual((await service.from("user_roles").insert({ user_id: owner.id, role_code: "coach" })).error, null);
     const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
     await appendBookingContractFixture(bookingId, { booking_date: yesterday });
-    const startedBooking = (await service.from("bookings").select("current_revision_id").eq("id", bookingId).single()).data!;
+    const startedBooking = (await service.from("checkout_records").select("current_revision_id").eq("id", bookingId).single()).data!;
     const started = (await service.from("court_reservations").select("updated_at").eq("id", reservationId).single()).data!;
     expect(await rescheduleOwnCustomerBooking({ ...cutoffInput, expectedUpdatedAt: started.updated_at,
       expectedRevisionId: startedBooking.current_revision_id }, owner.client))
@@ -211,7 +211,7 @@ test("Owner rescheduling preserves rows, enforces notice/ownership and shares pr
     expect(await cancelOwnCustomerBooking(bookingId, owner.client)).toEqual({ ok: true, outcome: "cancelled" });
     const cancelledDay = await getReservationDay(location, date, now, owner.client);
     expect(cancelledDay.occupancy).toEqual([{ court_id: courtId, starts_at_minute: 660, ends_at_minute: 720 }]);
-    expect((await service.from("bookings").select("status,account_user_id").eq("id", bookingId).single()).data)
+    expect((await service.from("checkout_records").select("status,account_user_id").eq("id", bookingId).single()).data)
       .toEqual({ status: "cancelled", account_user_id: owner.id });
   } finally {
     await cleanupBookingFixtures({ bookingIds: [bookingId, guestBookingId] });

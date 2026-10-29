@@ -30,26 +30,28 @@ test("Late-capture compensation preserves payment identity, idempotency and occu
   };
   const occupancy = async (reservationId:string) => (await db.from("court_reservations").select("status,hold_expires_at,court_id,booking_date,starts_at_minute,ends_at_minute").eq("id",reservationId).single()).data;
   const event = async (eventId:string) => (await db.from("payment_provider_events").select("reconciliation_required,resolved_at,resolved_by_user_id").eq("provider","stripe").eq("event_id",eventId).single()).data!;
-  async function book(start:number) {
+  async function book(start:number, register = true) {
     const row = await insertCheckoutFixture({ courtId,bookingDate:"2099-10-15",startMinute:start,endMinute:start+60,
       accountUserId:null,customerName:"Reconciliation guest",customerEmail:"refund@example.test",customerPhone:"123",
       totalAmountMinor:5000,currency:"RON",paymentMethod:"online",provider:"stripe",holdSeconds:600 });
     cancelledRows.push(row);
-    expect((await db.from("payment_attempts").update({ provider_payment_id:`original-${row.payment_attempt_id}` }).eq("id",row.payment_attempt_id)).error).toBeNull();
+    if (register) expect((await db.from("payment_attempts").update({ provider_payment_id:`original-${row.payment_attempt_id}` }).eq("id",row.payment_attempt_id)).error).toBeNull();
     return row;
   }
   async function late(start:number, mismatch = false, expired = false) {
-    const row = await book(start);
+    const row = await book(start, !expired);
     if (expired) {
       expect((await db.from("court_reservations").update({ hold_expires_at:"2020-01-01T00:00:00Z" }).eq("id",row.reservation_id)).error).toBeNull();
       await expirePaymentHolds({ courtId });
+      // Provider registration can finish after safe local expiry, without reopening occupancy.
+      expect((await db.from("payment_attempts").update({ provider_payment_id:`original-${row.payment_attempt_id}` }).eq("id",row.payment_attempt_id)).error).toBeNull();
     } else {
       expect((await settleOnlinePayment({ attemptId:row.payment_attempt_id,provider:"stripe",providerPaymentId:`original-${row.payment_attempt_id}`,outcome:"cancelled" }))).toBe("cancelled");
     }
     const eventId = `late-${randomUUID()}`;
     expect((await processOnlinePaymentEvent({ provider:"stripe",eventId:eventId,attemptId:row.payment_attempt_id,
       providerPaymentId:`original-${row.payment_attempt_id}`,outcome:"succeeded",amountMinor:mismatch ? 1 : 5000,currency:"RON" }))).toBe(mismatch ? "amount_mismatch" : expired ? "expired" : "cancelled");
-    expect((await db.from("bookings").select("status").eq("id",row.booking_id).single()).data)
+    expect((await db.from("checkout_records").select("status").eq("id",row.booking_id).single()).data)
       .toEqual({ status:"expired" });
     expect((await db.from("booking_revisions").select("kind,booking_state").eq("booking_id",row.booking_id)).data)
       .toEqual([{ kind:"created",booking_state:"pending_payment" }]);

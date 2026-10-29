@@ -53,6 +53,15 @@ function BookingCalendarContent({ day, date, locationName, currency, initialCont
   const [selection, setSelection] = useState<(CalendarSelection & { coachingQuote?: BookingSummaryDetails["coaching"] }) | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [committed, setCommitted] = useState<(BookingSummaryDetails & { paymentMethod: PaymentMethod; cancellationPolicy: ConfirmedCancellationPolicy | null }) | null>(null);
+
+  // A server-rendered timetable can outlive another customer's checkout hold.
+  // Refresh visible availability and revisit it when returning to this tab.
+  useEffect(() => {
+    const refresh = () => { if (!document.hidden && !confirming) router.refresh(); };
+    const timer = window.setInterval(refresh, 15_000);
+    window.addEventListener("focus", refresh);
+    return () => { window.clearInterval(timer); window.removeEventListener("focus", refresh); };
+  }, [router, confirming]);
   // Next.js preserves route state in React Activity when navigating away.
   // Activity disconnects effects while hidden, so discard only the completed
   // workflow on departure. Refreshing this active checkout keeps confirmation.

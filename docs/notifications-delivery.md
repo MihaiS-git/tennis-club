@@ -34,6 +34,15 @@ permission to view another account's booking; linked pages enforce their own aut
 
 Set server-only `BREVO_API_KEY`, `NOTIFICATION_EMAIL_MODE=live`, `NOTIFICATION_CRON_SECRET`, and `BREVO_WEBHOOK_SECRET` for manual local development and production. Use independent random values of at least 32 characters for the two Bearer secrets. The isolated automated test runners force sandbox mode even when `.env.local` selects live; live delivery is rejected in test processes and Vercel deployments without `VERCEL_ENV=production`. Sandbox requests include `X-Sib-Sandbox: drop` in the Brevo JSON `headers` object and send no real email. Configure the official email address and sender display name in Admin → Club (`/admin/club`) and enable transactional emails. No environment-defined sender is used. The sender must be authorized in Brevo; saving it validates syntax only. Configuration errors stop processing before any claim is taken. A separate `sandbox_accepted` status is never treated as live acceptance or replayed automatically.
 
+For deliberate live local delivery, use `npm run dev`. A local production build
+(`npm run build` followed by `npm run start`) sets `NODE_ENV=production`; live delivery
+with a loopback `APP_URL` (`localhost` or `127.0.0.1`) is intentionally rejected with
+`Live Brevo delivery is not permitted in this environment`. Use sandbox mode for
+local production-build checks, and the real canonical HTTPS `APP_URL` in production.
+Preflight configuration failures return HTTP 503 before claiming deliveries, so they
+do not create per-delivery Admin failure alerts. The invocation log records the
+exception message and stack under `err` with event `notifications.delivery_failed`.
+
 The delivery endpoint is `POST /api/notifications/deliver` with `Authorization: Bearer <NOTIFICATION_CRON_SECRET>`. It takes at most 20 due/expired deliveries per call. Run it every five minutes. A lost response, timeout, malformed acceptance response or expired processing lease can mean Brevo accepted an email. These unresolved outcomes are never reclaimed for sending. Explicit HTTP rejections retain the existing bounded automatic retry schedule for transient errors (429/5xx); HTTP 408 is treated as unresolved. Delivery status is acceptance, not inbox receipt.
 
 ## Supabase Cron and pg_net

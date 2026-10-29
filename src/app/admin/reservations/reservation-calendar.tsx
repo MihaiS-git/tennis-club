@@ -66,6 +66,7 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
   const selectedGenericOccupancy = !adminOccupancy.length
     ? occupancy.find((item) => `${item.court_id}:${item.starts_at_minute}` === selectedOccupancyId)
     : selectedOccupancy?.kind === "occupied" ? selectedOccupancy : undefined;
+  const selectedHold = selectedOccupancy?.kind === "hold" ? selectedOccupancy : null;
   const selectedLesson = selectedOccupancy?.kind === "lesson" ? selectedOccupancy : null;
   const selectedReservation = selectedOccupancy?.kind === "reservation"
     ? updatedReservation?.id === selectedOccupancy.id ? updatedReservation : selectedOccupancy : null;
@@ -134,7 +135,7 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
           occupiedIntervals={adminOccupancy.length ? adminOccupancy.map((item) => ({ id: item.id, courtId: item.court_id,
             startsAtMinute: item.starts_at_minute, endsAtMinute: item.ends_at_minute, kind: item.kind === "reservation" ? item.kind : "booking",
             includesCoaching: item.kind === "lesson" || item.kind === "booking" && bookingType(item) === "coaching",
-            label: item.kind === "occupied" ? "Booked" : item.kind === "lesson" ? `Coaching · ${item.customer_name}`
+            label: item.kind === "hold" ? "Temporary checkout hold" : item.kind === "occupied" ? "Booked" : item.kind === "lesson" ? `Coaching · ${item.customer_name}`
               : item.kind === "booking" ? `${bookingType(item) === "coaching" ? "Coaching" : "Booking"} · ${item.customer_name}` : `Reservation · ${item.creator_name || "Unknown creator"}` }))
             : occupancy.map((item) => ({ id: `${item.court_id}:${item.starts_at_minute}`, courtId: item.court_id,
               startsAtMinute: item.starts_at_minute, endsAtMinute: item.ends_at_minute, label: "Booked" }))}
@@ -162,8 +163,19 @@ export function ReservationCalendar({ day, date, location, occupancy = [], admin
           if (dialogRef.current?.querySelector("[data-booking-modification]")) router.refresh();
           setUpdatedReservation(null); setConfirming(false); returnFocusRef.current?.focus(); }}
         className={`fixed inset-0 m-auto max-h-[calc(100dvh-2rem)] overflow-y-auto w-[calc(100%-2rem)] rounded-card border border-border bg-surface p-5 text-foreground shadow-floating backdrop:bg-foreground/50 has-[[data-booking-modification]]:max-w-lg ${editing && !editInProgress ? "max-w-6xl" : "max-w-md"}`}>
-        <DialogHeader titleId={titleId} title={selectedGenericOccupancy ? "Occupied court details" : selectedLesson ? "Lesson details" : selectedBooking ? editing ? "Edit booking" : "Booking details" : editing ? "Edit reservation" : "Reservation details"} status={editing || selectedGenericOccupancy ? undefined : selectedBooking || selectedLesson ? "Confirmed" : "Active"} disabled={cancelPending} onClose={() => dialogRef.current?.close()} />
-        {selectedLesson ? <>
+        <DialogHeader titleId={titleId} title={selectedHold ? "Temporary checkout hold" : selectedGenericOccupancy ? "Occupied court details" : selectedLesson ? "Lesson details" : selectedBooking ? editing ? "Edit booking" : "Booking details" : editing ? "Edit reservation" : "Reservation details"} status={selectedHold ? "Payment pending" : editing || selectedGenericOccupancy ? undefined : selectedBooking || selectedLesson ? "Confirmed" : "Active"} disabled={cancelPending} onClose={() => dialogRef.current?.close()} />
+        {selectedHold ? <>
+          <p className="text-sm">This temporary checkout allocation is awaiting payment. No booking has been confirmed.</p>
+          <DetailSection title="Court and time"><ReservationScheduleFieldsView reservation={{ ...selectedHold,
+            location_name: location.name, location_timezone: location.timezone, court_name: selectedCourtName }} /></DetailSection>
+          <DetailSection title="Checkout">
+            <dt>Deadline</dt><dd>{new Date(selectedHold.hold_expires_at).toLocaleString("en-GB", { timeZone: location.timezone })} ({location.timezone})</dd>
+            <dt>Customer</dt><dd>{selectedHold.customer_name} · {selectedHold.customer_email}</dd>
+          </DetailSection>
+          <p className="text-sm">After the deadline, server reconciliation checks Stripe and releases unpaid holds. An unresolved payment keeps the court protected.</p>
+          <Link className="mt-4 block text-sm text-primary underline" href={`/admin/payments/transactions?q=${selectedHold.id}`}>Review checkout payment</Link>
+          <DialogFooter><Button type="button" variant="secondary" onClick={() => dialogRef.current?.close()}>Close</Button></DialogFooter>
+        </> : selectedLesson ? <>
           <DetailSection title="Lesson">
             <dt className="text-muted-foreground">Coach</dt><dd>{selectedLesson.coach_name}</dd>
             <dt className="text-muted-foreground">Program</dt><dd>{selectedLesson.coaching_program_name}</dd>

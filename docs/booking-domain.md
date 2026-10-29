@@ -271,8 +271,8 @@ and transactional cleanup, with the same reservation GiST constraint.
 
 ## Implemented immutable booking contracts
 
-A booking is a permanent identity linked to its account owner and one mutable
-court-reservation occupancy row. `bookings.current_revision_id` points to the
+A checkout aggregate is linked permanently to its account owner and one mutable
+court-reservation occupancy row; a business booking identity exists only after confirmation. `checkout_records.current_revision_id` points to the
 sole authoritative commercial snapshot in `booking_revisions`; price, contact,
 currency, method and cancellation notice are not duplicated on `bookings`.
 Operational checkout/hold status and processing timestamps remain on the identity.
@@ -326,3 +326,10 @@ one transaction. Unique numbering, predecessor and operation keys protect identi
 Native integrity triggers reject non-linear appends, orphan/rewound heads and any
 revision UPDATE/DELETE/TRUNCATE and ownership changes. They validate structure only, never pricing,
 eligibility, refunds or application workflows. Revisions never cascade away.
+
+
+Checkout persistence now lives in `checkout_records`. The separate `bookings` table
+contains only identities promoted on genuine confirmation, with the original
+confirmation revision retained as proof. Financial `booking_id` references keep the
+shared aggregate UUID, including unsuccessful checkout evidence. See
+[checkout lifecycle correction](checkout-lifecycle-correction.md).

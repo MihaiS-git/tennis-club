@@ -2,7 +2,7 @@ import { verifyStripeEvent } from "@/lib/payments/providers/stripe/adapter";
 import { processOnlinePaymentEvent } from "@/lib/payments/service";
 import { processBookingRefund } from "@/lib/payments/refunds";
 import { extendLiveAdjustmentHold } from "@/lib/payments/hold-expiry";
-import { resolveAuthorizedCheckoutPayment } from "@/lib/payments/checkout";
+import { resolveAuthorizedCheckoutPayment, resolveFailedCheckoutPayment } from "@/lib/payments/checkout";
 import { revalidateCourtActivity } from "@/lib/reservations/revalidation";
 
 export async function POST(request: Request) {
@@ -35,6 +35,7 @@ export async function POST(request: Request) {
       return Response.json({ received: true });
     }
     await processOnlinePaymentEvent(event, { strict: true });
+    if (event.outcome === "retryable_failed") await resolveFailedCheckoutPayment(event);
     revalidateCourtActivity("create");
     return Response.json({ received: true });
   } catch {

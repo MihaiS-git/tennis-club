@@ -140,7 +140,7 @@ test("upcoming customer booking reads are owner scoped for members and staff", a
       expect(reads.mock.calls.filter(([sql]) => typeof sql === "string" && sql.includes("FROM public.payment_attempts"))).toHaveLength(1);
     } finally { reads.mockRestore(); }
     expect((await listOwnUpcomingActivity({}, member.client)).upcoming).toEqual([]);
-    expect((await member.client.from("bookings").select("id")).error?.code).toBe("42501");
+    expect((await member.client.from("checkout_records").select("id")).error?.code).toBe("42501");
   } finally {
     await cleanupBookingFixtures({ reservationIds });
     if (reservationIds.length) assert.strictEqual((await service.from("court_reservations").delete().in("id", reservationIds)).error, null);

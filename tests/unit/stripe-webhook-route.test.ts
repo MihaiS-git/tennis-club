@@ -1,7 +1,7 @@
 import { beforeEach, expect, test, vi } from "vitest";
 
 const { verify, settle, refund, extend, authorize } = vi.hoisted(() => ({ verify: vi.fn(), settle: vi.fn(), refund: vi.fn(), extend: vi.fn(), authorize: vi.fn() }));
-vi.mock("@/lib/payments/checkout", () => ({ resolveAuthorizedCheckoutPayment: authorize }));
+vi.mock("@/lib/payments/checkout", () => ({ resolveAuthorizedCheckoutPayment: authorize, resolveFailedCheckoutPayment: vi.fn() }));
 vi.mock("@/lib/payments/providers/stripe/adapter", () => ({ verifyStripeEvent: verify }));
 vi.mock("@/lib/payments/service", () => ({ processOnlinePaymentEvent: settle }));
 vi.mock("@/lib/payments/hold-expiry", () => ({ extendLiveAdjustmentHold: extend }));

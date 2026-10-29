@@ -54,7 +54,7 @@ test.each(["coach"])("own availability authorizes %s, scopes target to owner and
   const result = await getOwnReservationEditDay(editInput, client, now);
   expect(query.mock.calls[0][1]).toEqual([row.id, owner]);
   expect(query.mock.calls[0][0]).toContain("r.created_by_user_id = $2");
-  expect(query.mock.calls[0][0]).toContain("NOT EXISTS(SELECT 1 FROM public.bookings");
+  expect(query.mock.calls[0][0]).toContain("NOT EXISTS(SELECT 1 FROM public.checkout_records");
   expect(query.mock.calls[1][1]).toEqual([row.booking_date, locationId, row.id, 0, 1000]);
   expect(result).toMatchObject({ date: row.booking_date, location: { id: locationId, name: "Club", timezone: "Europe/Bucharest" } });
   expect(result.reservation).toEqual({ id: row.id, updated_at: token, court_id: row.court_id,

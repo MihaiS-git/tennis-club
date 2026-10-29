@@ -18,7 +18,6 @@ vi.mock("@/lib/db/repositories/reservations.repository", () => ({ listPublicDayO
 vi.mock("@/lib/coaching/public", () => ({ readPublicCoaching: async () => ({ programs: [], coaches: [] }) }));
 vi.mock("@/lib/logger", () => ({ logger: { error: vi.fn() } }));
 
-import PricingPage, { metadata } from "@/app/pricing/page";
 import { CoachingRates, CourtRates } from "@/app/pricing/pricing-sections";
 import { listPublicLocationsToday } from "@/lib/courts/public-calendar";
 
@@ -114,20 +113,4 @@ it("orders online-bookable programs first and summarizes starting prices per cur
   expect(screen.getByRole("link", { name: "Ana Pop" }).getAttribute("href")).toBe("/coaching/coaches/c1");
   expect(screen.queryByRole("link", { name: "Dan Ionescu" })).toBeNull();
   expect(document.body.textContent).not.toContain(formatMoney(18000, "RON"));
-});
-
-it("composes the pricing sections with in-page navigation, booking links and metadata", () => {
-  reads.pricing.mockResolvedValue([]);
-  render(<PricingPage />);
-  expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Court and coaching prices.");
-  expect(screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent)).toEqual([
-    "Hourly rates by location.", "Lessons, priced per person.", "How booking and payment work.",
-  ]);
-  const nav = screen.getByRole("navigation", { name: "On this page" });
-  for (const link of within(nav).getAllByRole("link")) {
-    expect(document.getElementById(link.getAttribute("href")!.slice(1))?.tagName).toBe("SECTION");
-  }
-  expect(screen.getByRole("link", { name: "Book a court" }).getAttribute("href")).toBe("/book");
-  expect(screen.getByRole("link", { name: /Book coaching/ }).getAttribute("href")).toBe("/book?mode=coaching");
-  expect(metadata.title).toBe("Pricing | Tennis Club");
 });

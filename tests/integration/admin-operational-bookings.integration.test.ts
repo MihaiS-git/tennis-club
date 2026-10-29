@@ -100,7 +100,7 @@ test("Admin and Coach share direct, customer and guest details while mutations r
       payment_status: { operation: "payment", status: "succeeded", provider: "stripe" } });
     expect(coachDay.courts[0].cells).toEqual(["booked", "booked", "booked", "booked", "booked", "available"]);
     expect((await admin.client.from("booking_revisions").select("customer_email")).error?.code).toBe("42501");
-    expect((await service.from("bookings").update({ status: "cancelled" }).eq("id", guestBookingId)).error).toBeNull();
+    expect((await service.from("checkout_records").update({ status: "cancelled" }).eq("id", guestBookingId)).error).toBeNull();
     expect((await getReservationDay(location, date, now, admin.client)).adminOccupancy.map((item) => item.id)).toEqual([directId]);
   } finally {
     await cleanupBookingFixtures({ bookingIds: [bookingId, guestBookingId] });
@@ -144,7 +144,7 @@ test("Admin booking financial status reads persisted payment and refund records"
     await insertBookingFixture(Object.values(bookings).map(({ reservationId, bookingId }) => ({ id: bookingId, reservation_id: reservationId,
       account_user_id: null, payment_method: "online", customer_name: "Ana Pop", customer_email: "ana@example.test",
       customer_phone: "+40 123", cancellation_notice_minutes: 120, total_amount_minor: 7500, currency: "RON" })));
-    const revisions = await service.from("bookings").select("id,current_revision_id").in("id", bookingIds);
+    const revisions = await service.from("checkout_records").select("id,current_revision_id").in("id", bookingIds);
     assert.strictEqual(revisions.error, null);
     const revisionIds = new Map(revisions.data!.map((row) => [row.id, row.current_revision_id]));
 

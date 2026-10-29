@@ -67,7 +67,7 @@ async function bookingFixture(email: string, method: "online" | "pay_at_club") {
     guest, new Date("2099-10-14T12:00:00Z"));
     expect(result.ok).toBe(true);
     const rows: { id: string; current_revision_id: string }[] = await (await getDataSource()).query(
-      "SELECT id,current_revision_id FROM public.bookings WHERE reservation_id IN (SELECT id FROM public.court_reservations WHERE court_id=$1)", [courtId]);
+      "SELECT id,current_revision_id FROM public.checkout_records WHERE reservation_id IN (SELECT id FROM public.court_reservations WHERE court_id=$1)", [courtId]);
     return { bookingId: rows[0].id, revisionId: rows[0].current_revision_id, attemptId: null, cleanup };
   }
   const held = await insertCheckoutFixture({ courtId, bookingDate: "2099-10-15",
@@ -76,7 +76,7 @@ async function bookingFixture(email: string, method: "online" | "pay_at_club") {
     totalAmountMinor: 5000, currency: "RON", paymentMethod: "online", provider: "stripe", holdSeconds: 600 });
   const bookingId = held.booking_id;
   const rows: { current_revision_id: string }[] = await (await getDataSource()).query(
-    "SELECT current_revision_id FROM public.bookings WHERE id=$1", [bookingId]);
+    "SELECT current_revision_id FROM public.checkout_records WHERE id=$1", [bookingId]);
   return { bookingId, revisionId: rows[0].current_revision_id, attemptId: held.payment_attempt_id, cleanup };
 }
 
@@ -449,7 +449,7 @@ test("manual and Cron share one claim, preserve booking/payment state and dedupl
       (SELECT jsonb_agg(v ORDER BY v.id) FROM public.booking_revisions v WHERE v.booking_id=b.id) AS revisions,
       (SELECT jsonb_agg(p ORDER BY p.id) FROM public.payment_attempts p WHERE p.booking_id=b.id) AS payments,
       (SELECT jsonb_agg(f ORDER BY f.id) FROM public.payment_refunds f WHERE f.booking_id=b.id) AS refunds
-    FROM public.bookings b JOIN public.court_reservations r ON r.id=b.reservation_id WHERE b.id=$1`, [fixture.bookingId]);
+    FROM public.checkout_records b JOIN public.court_reservations r ON r.id=b.reservation_id WHERE b.id=$1`, [fixture.bookingId]);
   try {
     await source.query("UPDATE public.email_deliveries SET status='failed',attempts=1,last_error='Brevo HTTP 401',next_attempt_at=$2,created_at=$3 WHERE id=$1", [delivery.id, firstDue, cutoff]);
     await inTransaction(manager => recordEmailFailureAlerts(manager, [delivery.id], new Date()));

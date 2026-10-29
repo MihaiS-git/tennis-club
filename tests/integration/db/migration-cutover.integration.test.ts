@@ -56,7 +56,7 @@ afterAll(async () => {
 
 test("registered migrations match application metadata without schema changes", async () => {
   expect((await database.query("SELECT name FROM public.migrations ORDER BY timestamp")).map((row: { name: string }) => row.name))
-    .toEqual(["InitialApplicationSchema1791462257924", "ApplicationNativeIntegrity1791462257925", "SupabaseAuthStorage1791462257926"]);
+    .toEqual(["InitialApplicationSchema1791462257924", "ApplicationNativeIntegrity1791462257925", "SupabaseAuthStorage1791462257926", "SeparateCheckoutBookings1791462257927"]);
   expect(await database.query("SELECT to_regclass('public.job_leases') AS job_leases")).toEqual([{ job_leases: null }]);
   expect(await database.query(`SELECT table_name,column_name FROM information_schema.columns WHERE table_schema='public'
     AND column_name='recovery_version'`)).toEqual([]);
@@ -66,7 +66,7 @@ test("registered migrations match application metadata without schema changes", 
   expect(database.getMetadata("auth.users").synchronize).toBe(false);
   expect(database.getMetadata("public.payment_refunds").findColumnWithPropertyName("capturedAmountMinor"))
     .toMatchObject({ databaseName: "captured_amount_minor", isNullable: false });
-  const booking = database.getMetadata("public.bookings");
+  const booking = database.getMetadata("public.checkout_records");
   expect(booking.findColumnWithPropertyName("accountUserId")).toMatchObject({ databaseName: "account_user_id", isNullable: true });
   expect(booking.foreignKeys.find(key => key.name === "bookings_account_user_id_fkey"))
     .toMatchObject({ onDelete: "RESTRICT" });
@@ -175,7 +175,7 @@ test("booking ownership is permanent for guests and accounts, without blocking a
     await runner.query("SET CONSTRAINTS ALL IMMEDIATE");
     await runner.query("SET CONSTRAINTS ALL DEFERRED");
     const snapshot = async () => ({
-      bookings: await runner.query("SELECT * FROM public.bookings WHERE id=ANY($1::uuid[]) ORDER BY id", [[guest, member]]),
+      bookings: await runner.query("SELECT * FROM public.checkout_records WHERE id=ANY($1::uuid[]) ORDER BY id", [[guest, member]]),
       revisions: await runner.query("SELECT * FROM public.booking_revisions WHERE booking_id=ANY($1::uuid[]) ORDER BY booking_id,revision_number", [[guest, member]]),
       occupancy: await runner.query("SELECT * FROM public.court_reservations WHERE id=ANY($1::uuid[]) ORDER BY id", [[guestReservation, memberReservation]]),
     });
@@ -190,7 +190,7 @@ test("booking ownership is permanent for guests and accounts, without blocking a
         await appendBookingContractFixture(id, { booking_date: "2099-10-16", total_amount_minor: 6000 }, runner.manager);
         expect(await runner.query("SELECT booking_date::text FROM public.court_reservations WHERE id=$1", [reservationId]))
           .toEqual([{ booking_date: "2099-10-16" }]);
-        await expect(runner.query("UPDATE public.bookings SET account_user_id=$2,status='cancelled',updated_at=clock_timestamp() WHERE id=$1", [id, replacement]))
+        await expect(runner.query("UPDATE public.checkout_records SET account_user_id=$2,status='cancelled',updated_at=clock_timestamp() WHERE id=$1", [id, replacement]))
           .rejects.toMatchObject({ driverError: { code: "23514", message: "Booking ownership is immutable" } });
       } finally { await runner.query("ROLLBACK TO SAVEPOINT ownership_change"); }
       expect(await snapshot()).toEqual(before);
@@ -199,11 +199,11 @@ test("booking ownership is permanent for guests and accounts, without blocking a
     // immutable revision-head and occupancy changes in the same transaction.
     for (const [id, reservationId, owner] of [[guest, guestReservation, null], [member, memberReservation, owners[0]]] as const) {
       await appendBookingContractFixture(id, { booking_date: "2099-10-16" }, runner.manager);
-      await runner.query("UPDATE public.bookings SET account_user_id=$2,status='cancelled',updated_at=clock_timestamp() WHERE id=$1", [id, owner]);
+      await runner.query("UPDATE public.checkout_records SET account_user_id=$2,status='cancelled',updated_at=clock_timestamp() WHERE id=$1", [id, owner]);
       await runner.query("UPDATE public.court_reservations SET status='cancelled',cancelled_at=clock_timestamp(),cancelled_by_user_id=$2 WHERE id=$1", [reservationId, owners[1]]);
-      expect(await runner.query("SELECT account_user_id,status FROM public.bookings WHERE id=$1", [id]))
+      expect(await runner.query("SELECT account_user_id,status FROM public.checkout_records WHERE id=$1", [id]))
         .toEqual([{ account_user_id: owner, status: "cancelled" }]);
-      expect(await runner.query("SELECT revision_number,booking_date::text FROM public.booking_revisions WHERE id=(SELECT current_revision_id FROM public.bookings WHERE id=$1)", [id]))
+      expect(await runner.query("SELECT revision_number,booking_date::text FROM public.booking_revisions WHERE id=(SELECT current_revision_id FROM public.checkout_records WHERE id=$1)", [id]))
         .toEqual([{ revision_number: 2, booking_date: "2099-10-16" }]);
     }
     await runner.query("SET CONSTRAINTS ALL IMMEDIATE");
@@ -433,7 +433,7 @@ smoke("native overlap, partial payment uniqueness and refund constraints reject 
     await rejects("DELETE FROM public.payment_capture_receipts WHERE id=$1", [captureId], "23514");
     await rejects("TRUNCATE public.payment_capture_receipts CASCADE", [], "23514");
     const refund = `INSERT INTO public.payment_refunds(booking_id,payment_attempt_id,provider,provider_payment_id,amount_minor,captured_amount_minor,currency,reason,context_revision_id)
-      VALUES($1,$2,'stripe',$4,$3,5000,'EUR','late_capture_compensation',(SELECT current_revision_id FROM public.bookings WHERE id=$1))`;
+      VALUES($1,$2,'stripe',$4,$3,5000,'EUR','late_capture_compensation',(SELECT current_revision_id FROM public.checkout_records WHERE id=$1))`;
     await rejects(refund.replace("$3,5000,'EUR'", "$3,NULL,'EUR'"), [bookingId, attemptId, 5000, providerPaymentId], "23502");
     await rejects(refund.replace("amount_minor,captured_amount_minor,", "amount_minor,")
       .replace("$3,5000,'EUR'", "$3,'EUR'"), [bookingId, attemptId, 5000, providerPaymentId], "23502");
@@ -443,7 +443,7 @@ smoke("native overlap, partial payment uniqueness and refund constraints reject 
     await rejects(refund, [bookingId, randomUUID(), 5000, providerPaymentId], "23503");
     await runner.query(refund, [bookingId, attemptId, 5000, providerPaymentId]);
     await rejects(refund, [bookingId, attemptId, 5000, providerPaymentId], "23505");
-    await rejects("DELETE FROM public.bookings WHERE id=$1", [bookingId], "23503");
+    await rejects("DELETE FROM public.checkout_records WHERE id=$1", [bookingId], "23503");
     await rejects("DELETE FROM public.payment_attempts WHERE id=$1", [attemptId], "23514");
     await rejects("UPDATE public.payment_refunds SET captured_amount_minor=4999 WHERE payment_attempt_id=$1", [attemptId], "23514");
     await rejects("UPDATE public.payment_refunds SET provider_generation=-1 WHERE payment_attempt_id=$1", [attemptId], "42703");
@@ -457,7 +457,7 @@ smoke("native overlap, partial payment uniqueness and refund constraints reject 
     await rejects(schedule, [locationId, "2100-12-31", "2100-01-01"], "23514");
     const adjustmentId = randomUUID();
     const adjustment = `INSERT INTO public.booking_adjustments(id,booking_id,base_revision_id,actor_id,scope,request_key,target,original_total,new_total,currency,status,expires_at)
-      VALUES($1,$2,(SELECT current_revision_id FROM public.bookings WHERE id=$2),$3,'owner',$4,'{"courtName":"Court","locationName":"Location","timezone":"UTC"}',5000,6000,'EUR','pending',clock_timestamp()+interval '10 minutes')`;
+      VALUES($1,$2,(SELECT current_revision_id FROM public.checkout_records WHERE id=$2),$3,'owner',$4,'{"courtName":"Court","locationName":"Location","timezone":"UTC"}',5000,6000,'EUR','pending',clock_timestamp()+interval '10 minutes')`;
     await runner.query(adjustment, [adjustmentId, bookingId, userIds[0], "first"]);
     await rejects(adjustment, [randomUUID(), bookingId, userIds[0], "first"], "23505");
     await rejects(adjustment, [randomUUID(), bookingId, userIds[0], "second"], "23505");
@@ -478,7 +478,7 @@ smoke("native overlap, partial payment uniqueness and refund constraints reject 
     await rejects("DELETE FROM public.booking_adjustments WHERE id=$1", [adjustmentId], "23503");
     await rejects("UPDATE public.payment_refunds SET adjustment_id=$1,captured_amount_minor=5000 WHERE payment_attempt_id=$2", [adjustmentId, attemptId], "23514");
     await runner.query(`INSERT INTO public.payment_refunds(booking_id,payment_attempt_id,adjustment_id,operation_key,provider,provider_payment_id,amount_minor,captured_amount_minor,currency,reason,context_revision_id)
-      VALUES($1,$2,$3,'adjustment','stripe',$4,1000,5000,'EUR','failed_adjustment_compensation',(SELECT current_revision_id FROM public.bookings WHERE id=$1))`, [bookingId, attemptId, adjustmentId, providerPaymentId]);
+      VALUES($1,$2,$3,'adjustment','stripe',$4,1000,5000,'EUR','failed_adjustment_compensation',(SELECT current_revision_id FROM public.checkout_records WHERE id=$1))`, [bookingId, attemptId, adjustmentId, providerPaymentId]);
     await runner.query("UPDATE public.court_reservations SET status='released',hold_expires_at=NULL WHERE id=$1", [fragmentId]);
 
   } finally { await runner.rollbackTransaction(); await runner.release(); }
@@ -500,10 +500,10 @@ test("revision history rejects cross-booking pointers, non-linear appends, orpha
     for(const [id,reservation_id] of [[first,r1],[second,r2]]) await insertBookingRecords(runner.manager,{id,reservation_id,
       customer_name:"Customer",customer_email:"revision@example.test",customer_phone:"123",total_amount_minor:5000,currency:"EUR",payment_method:"pay_at_club",cancellation_notice_minutes:1440});
     await runner.query("SET CONSTRAINTS ALL IMMEDIATE");await runner.query("SET CONSTRAINTS ALL DEFERRED");
-    const rows:{id:string;current_revision_id:string}[]=await runner.query("SELECT id,current_revision_id FROM public.bookings WHERE id=ANY($1::uuid[])",[[first,second]]);
+    const rows:{id:string;current_revision_id:string}[]=await runner.query("SELECT id,current_revision_id FROM public.checkout_records WHERE id=ANY($1::uuid[])",[[first,second]]);
     const head=rows.find(b=>b.id===first)!.current_revision_id,other=rows.find(b=>b.id===second)!.current_revision_id;
     await rejects(async()=>{
-      await runner.query("UPDATE public.bookings SET current_revision_id=$1 WHERE id=$2",[other,first]);
+      await runner.query("UPDATE public.checkout_records SET current_revision_id=$1 WHERE id=$2",[other,first]);
       await runner.query("SET CONSTRAINTS bookings_current_revision_fkey IMMEDIATE");
     },"23503");
     for(const sql of ["UPDATE public.booking_revisions SET total_amount_minor=1 WHERE id=$1",
@@ -520,13 +520,13 @@ test("revision history rejects cross-booking pointers, non-linear appends, orpha
       await runner.query("SET CONSTRAINTS ALL IMMEDIATE");
     },"23514");
     const next=randomUUID();await runner.query(append,[next,head,2,head]);
-    await runner.query("UPDATE public.bookings SET current_revision_id=$1 WHERE id=$2",[next,first]);
+    await runner.query("UPDATE public.checkout_records SET current_revision_id=$1 WHERE id=$2",[next,first]);
     await runner.query("SET CONSTRAINTS ALL IMMEDIATE");await runner.query("SET CONSTRAINTS ALL DEFERRED");
     await rejects(async()=>{
-      await runner.query("UPDATE public.bookings SET current_revision_id=$1 WHERE id=$2",[head,first]);
+      await runner.query("UPDATE public.checkout_records SET current_revision_id=$1 WHERE id=$2",[head,first]);
       await runner.query("SET CONSTRAINTS ALL IMMEDIATE");
     },"23514");
-    await rejects(()=>runner.query("DELETE FROM public.bookings WHERE id=$1",[first]),"23503");
+    await rejects(()=>runner.query("DELETE FROM public.checkout_records WHERE id=$1",[first]),"23503");
     expect(await runner.query("SELECT revision_number FROM public.booking_revisions WHERE booking_id=$1 ORDER BY revision_number",[first]))
       .toEqual([{revision_number:1},{revision_number:2}]);
   } finally {await runner.rollbackTransaction();await runner.release();}

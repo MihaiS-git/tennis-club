@@ -7,7 +7,7 @@ import { normalizeDatabaseError } from "@/lib/db/errors";
 import { cleanupBookingEvidence, insertBookingRecords, setAdjustmentExpiryFixture, setPaymentAttemptExpiryFixture } from "../local/booking-fixtures";
 import Stripe from "stripe";
 import { commitCoachingCheckout } from "@/lib/coaching/checkout";
-import { abandonOnlineCheckout, readOnlineCheckout, resolveAuthorizedCheckoutPayment, startOnlineCheckout } from "@/lib/payments/checkout";
+import { abandonOnlineCheckout, checkOnlinePayment, readOnlineCheckout, resolveAuthorizedCheckoutPayment, startOnlineCheckout } from "@/lib/payments/checkout";
 import { processOnlinePaymentEvent, settleOnlinePayment } from "@/lib/payments/service";
 import { POST } from "@/app/api/payments/stripe/webhook/route";
 import { readCustomerBookingEditContext } from "@/lib/bookings/commands";
@@ -115,9 +115,9 @@ const book = (overrides: Record<string, unknown> = {}, client = guest) => create
 async function written() {
   const [row] = await database.query(`SELECT
       (SELECT count(*)::int FROM public.court_reservations WHERE court_id=ANY($1::uuid[])) AS reservations,
-      (SELECT count(*)::int FROM public.bookings b JOIN public.court_reservations r ON r.id=b.reservation_id WHERE r.court_id=ANY($1::uuid[])) AS bookings,
+      (SELECT count(*)::int FROM public.checkout_records b JOIN public.court_reservations r ON r.id=b.reservation_id WHERE r.court_id=ANY($1::uuid[])) AS bookings,
       (SELECT count(*)::int FROM public.booking_revisions v WHERE v.court_id=ANY($1::uuid[])) AS revisions,
-      (SELECT count(*)::int FROM public.payment_attempts p JOIN public.bookings b ON b.id=p.booking_id
+      (SELECT count(*)::int FROM public.payment_attempts p JOIN public.checkout_records b ON b.id=p.booking_id
         JOIN public.court_reservations r ON r.id=b.reservation_id WHERE r.court_id=ANY($1::uuid[])) AS attempts`, [courts]);
   return row as { reservations: number; bookings: number; revisions: number; attempts: number };
 }
@@ -126,7 +126,7 @@ async function aggregate(bookingId: string) {
   const [row] = await database.query(`SELECT b.status,b.account_user_id,r.id AS reservation_id,r.court_id,r.coach_user_id,
       r.booking_date::text,r.starts_at_minute,r.ends_at_minute,r.status AS reservation_status,r.hold_expires_at,
       to_jsonb(v) AS revision,p.method,p.provider,p.amount_minor,p.currency,p.status AS attempt_status,p.expires_at AS attempt_expires_at
-    FROM public.bookings b JOIN public.court_reservations r ON r.id=b.reservation_id
+    FROM public.checkout_records b JOIN public.court_reservations r ON r.id=b.reservation_id
     JOIN public.booking_revisions v ON v.id=b.current_revision_id JOIN public.payment_attempts p ON p.booking_id=b.id
     WHERE b.id=$1`, [bookingId]);
   return row;
@@ -138,7 +138,7 @@ async function windowRows(courtIds: readonly string[], coachIds: readonly string
   const [row] = await database.query(`WITH r AS (
       SELECT id FROM public.court_reservations WHERE booking_date=$1 AND starts_at_minute<$5 AND ends_at_minute>$4
         AND (court_id=ANY($2::uuid[]) OR coach_user_id=ANY($3::uuid[]))
-    ), b AS (SELECT id FROM public.bookings WHERE reservation_id IN (SELECT id FROM r))
+    ), b AS (SELECT id FROM public.checkout_records WHERE reservation_id IN (SELECT id FROM r))
     SELECT ARRAY(SELECT id::text FROM r) AS reservations, ARRAY(SELECT id::text FROM b) AS bookings,
       ARRAY(SELECT v.booking_id::text FROM public.booking_revisions v WHERE v.booking_date=$1
         AND v.starts_at_minute<$5 AND v.ends_at_minute>$4 AND (v.court_id=ANY($2::uuid[]) OR v.coach_user_id=ANY($3::uuid[]))) AS revisions,
@@ -604,19 +604,21 @@ test.each([false, true])("abandoned coaching checkout releases both resources an
   expect(await abandonOnlineCheckout(lesson.checkout, navigation)).toMatchObject({ released: true, paymentStatus: "cancelled" });
   expect(await aggregate(lesson.bookingId)).toMatchObject({ status: "cancelled", reservation_status: "released",
     attempt_status: "cancelled", coach_user_id: coach, hold_expires_at: null,
-    revision: { cancellation_cause: "checkout_abandoned" } });
+    revision: { kind: "created", cancellation_cause: null } });
   const replacement = await checkoutLesson(start, guest, { date: "2099-12-14" });
   expect(replacement.reservationId).not.toBe(lesson.reservationId);
   expect(stripeFixture.capture).not.toHaveBeenCalled();
 });
 
-test("Admin read expires abandoned coaching without browser notification and resources can be rebooked", async () => {
+test("Admin read preserves abandoned registered coaching until provider resolution releases both resources", async () => {
   setupStripe();
   const lesson = await checkoutLesson(720, guest, { date: "2099-12-14" });
   await expireHold(lesson.reservationId);
   const page = await readBookingListPage(parseAdminBookingQuery({ status: "expired", from: "2099-12-14", to: "2099-12-14" }), null);
-  expect(page.rows.find(row => row.id === lesson.bookingId)).toMatchObject({ status: "expired" });
-  expect(await aggregate(lesson.bookingId)).toMatchObject({ status: "expired", attempt_status: "expired",
+  expect(page.rows.find(row => row.id === lesson.bookingId)).toBeUndefined();
+  expect(await aggregate(lesson.bookingId)).toMatchObject({ status: "pending_payment", attempt_status: "pending", reservation_status: "held" });
+  expect(await checkOnlinePayment(lesson.paymentAttemptId)).toBe("cancelled");
+  expect(await aggregate(lesson.bookingId)).toMatchObject({ status: "expired", attempt_status: "cancelled",
     reservation_status: "released", coach_user_id: coach });
   await checkoutLesson(720, guest, { date: "2099-12-14" });
   expect(stripeFixture.capture).not.toHaveBeenCalled();
@@ -951,8 +953,8 @@ test("Admin coaching records preserve included rental, participants and duration
   await database.query("INSERT INTO public.user_roles(user_id,role_code) VALUES($1,'admin')", [adminAccount.id]);
   const admin = reader();
   assert.strictEqual((await admin.auth.signInWithPassword({ email: adminAccount.email, password: adminAccount.password })).error, null);
-  const lesson = await book({ date: "2100-02-22", programId: semiIncludedProgram, participantCount: 2, expectedTotalAmountMinor: 15000 }, member);
-  assert.ok(lesson.ok);
+  setupStripe();
+  const lesson = await confirmedLesson(600, "2100-02-22", { programId: semiIncludedProgram, participantCount: 2, expectedTotalAmountMinor: 15000 });
   const contract = (await aggregate(lesson.bookingId)).revision;
   const [configuration] = await database.query("SELECT name,court_rental_included FROM public.coaching_programs WHERE id=$1", [semiIncludedProgram]);
   try {
@@ -1143,19 +1145,19 @@ test("Admin coach filters use historical IDs and names including archived coache
   await database.query("INSERT INTO public.user_roles(user_id,role_code) VALUES($1,'admin')", [adminAccount.id]);
   const admin = reader();
   assert.strictEqual((await admin.auth.signInWithPassword({ email: adminAccount.email, password: adminAccount.password })).error, null);
+  setupStripe();
   const ids: string[] = [];
   const dates = Array.from({ length: 21 }, (_, index) => new Date(Date.UTC(2100, 2, 1 + index * 7)).toISOString().slice(0, 10));
   try {
     await database.query("UPDATE public.coach_profiles SET display_name='Earlier historical coach' WHERE user_id=$1", [coach]);
     for (const [index, date] of dates.entries()) {
-      const lesson = await book({ date, startMinute: 600 }, member);
-      assert.ok(lesson.ok); ids.push(lesson.bookingId);
+      const lesson = await confirmedLesson(600, date);
+      ids.push(lesson.bookingId);
       if (index === 0) await database.query("UPDATE public.coach_profiles SET display_name='Booking Coach' WHERE user_id=$1", [coach]);
     }
     // Matching historical names must remain two options, with distinct stored IDs.
     await database.query("UPDATE public.coach_profiles SET display_name='Booking Coach' WHERE user_id=$1", [coach2]);
-    const other = await book({ date: dates[0], startMinute: 600, coachId: coach2, courtId: courtA2, expectedTotalAmountMinor: 17000 });
-    assert.ok(other.ok);
+    const other = await confirmedLesson(600, dates[0], { coachId: coach2, courtId: courtA2, expectedTotalAmountMinor: 17000 });
     await inTransaction(async manager => {
       const reservation = randomUUID();
       await manager.query(`INSERT INTO public.court_reservations(id,court_id,booking_date,starts_at_minute,ends_at_minute)
@@ -1180,7 +1182,7 @@ test("Admin coach filters use historical IDs and names including archived coache
     expect((await read({ coach: "" })).total).toBe(22);
     expect((await read({ type: "court" })).total).toBe(1); // A hidden Coach filter cannot affect Court.
     expect((await read({ coach: randomUUID() })).total).toBe(0);
-    expect((await read({ q: ids[0], court: courtA3, status: "pending_payment", to: dates[0] })).rows.map(row => row.id)).toEqual([ids[0]]);
+    expect((await read({ q: ids[0], court: courtA3, status: "confirmed", to: dates[0] })).rows.map(row => row.id)).toEqual([ids[0]]);
     expect((await read({ q: other.bookingId })).total).toBe(0);
     await expect(listAdminBookingCoachFilterOptions(member)).rejects.toThrow();
   } finally {
@@ -1216,11 +1218,11 @@ async function removalFixture() {
 // and historical archival must leave every reservation and financial row unchanged.
 async function removalBookingSnapshot(coachId: string) {
   const reservationIds = "SELECT id FROM public.court_reservations WHERE coach_user_id=$1";
-  const bookingIds = `SELECT id FROM public.bookings WHERE reservation_id IN (${reservationIds})`;
+  const bookingIds = `SELECT id FROM public.checkout_records WHERE reservation_id IN (${reservationIds})`;
   const attemptIds = `SELECT id FROM public.payment_attempts WHERE booking_id IN (${bookingIds})`;
   const refundIds = `SELECT id FROM public.payment_refunds WHERE booking_id IN (${bookingIds})`;
   const scopes = [
-    ["court_reservations", "coach_user_id=$1"], ["bookings", `id IN (${bookingIds})`],
+    ["court_reservations", "coach_user_id=$1"], ["checkout_records", `id IN (${bookingIds})`], ["bookings", `id IN (${bookingIds})`],
     ["booking_revisions", `booking_id IN (${bookingIds})`], ["payment_attempts", `booking_id IN (${bookingIds})`],
     ["payment_capture_receipts", `payment_attempt_id IN (${attemptIds})`],
     ["payment_refunds", `booking_id IN (${bookingIds})`], ["refund_executions", `refund_id IN (${refundIds})`],

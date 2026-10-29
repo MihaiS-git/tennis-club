@@ -51,7 +51,7 @@ test("a transaction-scoped manager is accepted and the bypassed triggers are res
       await cleanupBookingEvidence(manager, { bookingIds: [bookingId] });
       expect(await triggerStates(manager)).toEqual(allEnabled);
     });
-    expect(await database.query("SELECT count(*)::int AS count FROM public.bookings WHERE id=$1", [bookingId])).toEqual([{ count: 0 }]);
+    expect(await database.query("SELECT count(*)::int AS count FROM public.checkout_records WHERE id=$1", [bookingId])).toEqual([{ count: 0 }]);
   } finally {
     await database.transaction(async manager => {
       await cleanupBookingEvidence(manager, { bookingIds: [bookingId] });

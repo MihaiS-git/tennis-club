@@ -59,10 +59,11 @@ export function BookingConfirmation({ selection, details, contact, onContactChan
   const [cancellationMessage, setCancellationMessage] = useState("");
   const dismissed = useRef(false);
   const cancellationStarted = useRef(false);
+  const paymentCompleted = useRef(false);
   const cancellationNotification = useRef<string | number | undefined>(undefined);
   const navigationCheckout = useRef<OnlineCheckout | null>(null);
   useEffect(() => {
-    navigationCheckout.current = checkout && paymentState === "pending" && !cancellationStarted.current ? checkout.payment : null;
+    navigationCheckout.current = checkout && paymentState === "pending" && !cancellationStarted.current && !paymentCompleted.current ? checkout.payment : null;
   }, [checkout, paymentState]);
   useEffect(() => {
     dismissed.current = false;
@@ -103,9 +104,9 @@ export function BookingConfirmation({ selection, details, contact, onContactChan
       const result = await abandonCheckoutAction({ attemptId: checkout.payment.attemptId, token: checkout.payment.token });
       if (dismissed.current) return;
       if (result.ok) {
-        const text = result.paymentStatus === "refund_failed" ? "Booking cancelled, but the refund failed. Contact the club; do not pay again yet."
-          : result.paymentStatus === "refunded" ? "Payment refunded. Booking cancelled."
-          : result.paymentStatus === "refund_pending" ? "Booking cancelled. The captured payment refund is pending."
+        const text = result.paymentStatus === "refund_failed" ? "Checkout ended, but the refund failed. Contact the club; do not pay again yet."
+          : result.paymentStatus === "refunded" ? "Payment refunded. No booking was confirmed."
+          : result.paymentStatus === "refund_pending" ? "No booking was confirmed. The captured payment refund is pending."
           : "Payment cancelled. Court hold released.";
         if (result.paymentStatus === "refund_failed") toast.error(text, { id: notification });
         else if (result.paymentStatus === "refund_pending") toast.info(text, { id: notification });
@@ -215,6 +216,7 @@ export function BookingConfirmation({ selection, details, contact, onContactChan
       {!checkoutStopped && <OnlinePayment checkout={checkout.payment} holdExpiresAt={checkout.expiresAt} disabled={confirmAbandonment || pending}
         onPaymentStatus={setPaymentState}
         onConfirmed={(amount, currency, policy) => {
+          paymentCompleted.current = true;
           navigationCheckout.current = null;
           if (!dismissed.current && !cancellationStarted.current) onCommitted(amount, currency, policy, "online");
         }} />}

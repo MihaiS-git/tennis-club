@@ -101,10 +101,10 @@ export function paymentTransition(input: {
   if (input.attemptStatus !== "pending") return { result: input.attemptStatus, targets: null, deadline: null };
   // Booking cancellation intent is durable even while Stripe is uncertain.
   // Never turn a later capture into a booking confirmation.
-  if (input.bookingStatus === "cancelled" && ["held", "released"].includes(input.reservationStatus)) {
+  if (["cancelled", "failed"].includes(input.bookingStatus) && ["held", "released"].includes(input.reservationStatus)) {
     if (input.outcome === "retryable_failed") return { result: "pending", targets: null, deadline: null };
     return { result: input.outcome, deadline: null, targets: {
-      attempt: input.outcome, booking: "cancelled", reservation: "released",
+      attempt: input.outcome, booking: input.bookingStatus, reservation: "released",
     } };
   }
   if (input.bookingStatus !== "pending_payment" || input.reservationStatus !== "held")

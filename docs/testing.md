@@ -25,7 +25,7 @@ npm run test:e2e
 ```
 
 The initializer verifies the test stack endpoints and database identity before
-applying pending migrations from the three registered TypeORM migrations (924–926), atomically. It is
+applying pending migrations from the four registered TypeORM migrations (924–927), atomically. It is
 idempotent and checks for pending migrations. It never drops data or runs the
 100-user development seed. Supabase application SQL migrations/seeding are disabled;
 Auth and Storage infrastructure still comes from native Supabase startup.
@@ -49,7 +49,7 @@ project config and exact local API/database/Mailpit endpoints before connections
 Both npm runners override inherited connection values; neither loads `.env.local`.
 The Vitest setup and privileged fixture helpers reject development ports, remote
 hosts, missing test identity, mismatched database aliases and URL query overrides.
-There is no fallback to development credentials or default database URLs. Use the
+There is no fallback to development credentials or default database URLs. Before launching tests, the shared environment setup checks Auth health, Mailpit readiness/message API, its SMTP greeting on host port 55325, and a shared Docker network between Auth and Mailpit. Auth sends to `supabase_inbucket_tennis-club-tests:1025` inside Docker; 55324 is the host HTTP API, not SMTP. A detached Mailpit container may still report healthy and appear in CLI status while neither mail path works. Readiness failures name the dependency and recommend a data-preserving stop/start of only `tests/local`; they never skip tests or disable confirmation. Use the
 npm integration runner for focused tests too:
 
 ```bash
@@ -63,7 +63,7 @@ The build and server inherit the verified test connections and `APP_URL` explici
 so Next.js cannot replace them with `.env.local` values. Real payment-provider
 environment credentials are explicitly blanked; tests opt into
 mocked provider settings where needed. Auth confirmation/recovery mail uses the test
-Mailpit URL. Build or startup failures fail the suite.
+Mailpit URL. The test Auth redirect allowlist includes callback URLs for both integration port 3000 and E2E port 3100; restart the test stack after configuration changes. Build or startup failures fail the suite.
 
 For a data-preserving stop/restart:
 
@@ -137,8 +137,8 @@ persistence to verify the court overlap exclusions (reservations, coverage, open
 hours, schedule validity and pricing), valid adjacent intervals, partial payment uniqueness, positive
 payment/capture/refund amounts, capture identity/deduplication, immutable payment-request/provider-event/capture
 facts, refund/adjustment foreign keys, operation/request uniqueness, adjustment hold-fragment
-duration/state and restrictive financial deletes. It also requires the three registered
-migrations (924–926) and an empty TypeORM schema-builder diff. The consolidated migrations
+duration/state and restrictive financial deletes. It also requires the four registered
+migrations (924–927) and an empty TypeORM schema-builder diff. The consolidated migrations
 now create `user_messages` and `email_deliveries` with ownership/deduplication constraints,
 delivery-state checks, and inbox/due-delivery indexes. Security coverage includes
 browser-role table/column and future-table privileges, real denied reads, Auth signup
@@ -213,6 +213,12 @@ covered by `tests/integration/db/booking-mutations.integration.test.ts`.
 
 ## Consolidated schema generation
 
+The first three migrations remain the original baseline; the focused checkout/booking
+identity separation is migration 927. Do not regenerate the initial migration from
+current final metadata while retaining 927: that would duplicate its new tables.
+The baseline-generation recipe below documents the original baseline workflow;
+this lifecycle change preserves those files and applies all four migrations.
+
 Regenerate the editable initial migration with the existing shared DataSource and
 loader, against a positively verified empty disposable local database (never an
 arbitrary inherited `DATABASE_URL`):
@@ -238,7 +244,7 @@ nonempty bucket. Runtime Storage access and policies are unchanged.
 
 ## Booking revision validation
 
-The migration-cutover suite checks the three-migration history (924–926), zero schema diff,
+The migration-cutover suite checks the four-migration history (924–927), zero schema diff,
 non-synchronized Auth reference, composite current/predecessor relationships,
 strict linear numbering, atomic head advancement and revision UPDATE/DELETE/TRUNCATE
 rejection. Ownership checks reject guest/account reassignment in every direction,
@@ -269,7 +275,7 @@ The affected Stripe refunds, Admin reconciliation, booking-mutations and financi
 history suites retain cancellation idempotency, atomic receipt resolution, failed
 adjustment compensation and RON 50 → 75 → 100 → 75 → cancellation coverage.
 Regenerate the existing initial migration only against verified empty isolated
-infrastructure; apply all three registered migrations (924–926) and verify zero metadata drift.
+infrastructure; apply all four registered migrations (924–927) and verify zero metadata drift.
 No provider calls occur inside transactions, and no real Stripe calls or
 normal development reset are part of these checks.
 
@@ -377,7 +383,7 @@ The initial baseline directly creates `coaching_prices` as the only coaching pri
 (lesson price/person per program × duration × `participant_count` × currency × Club/Coach
 scope) with its two scope indexes; there is no `pricing_unit` column and no
 `coaching_participant_prices` table. The
-three registered migrations are 924–926; no coaching repair migration or automatic
+four registered migrations are 924–927; no coaching repair migration or automatic
 legacy data interpretation runs. Recreate only the disposable test stack using the
 explicit `tests/local` stop/start procedure above to validate an edited baseline.
 
@@ -393,4 +399,29 @@ Development is separate and disposable. After baseline edits, rebuild the local
 development database from the corrected baseline (`npm run db:dev:rebuild`, which refuses
 non-local targets) and reseed it (`npm run db:dev:seed`, `npm run db:dev:seed:coaching`)
 instead of patching it in place. The rebuilt schema must have zero TypeORM metadata diff
-and exactly baseline entries 924–926.
+and baseline entries 924–926 plus checkout separation 927.
+
+
+Browser-abandoned initial checkout regression (fake Stripe, isolated production server):
+
+```bash
+npm run test:e2e -- tests/e2e/initial-checkout.e2e.ts
+npm run test:integration -- tests/integration/checkout-abandonment.integration.test.ts tests/integration/db/checkout.integration.test.ts tests/integration/stripe-payment.integration.test.ts tests/integration/admin-payment-transactions.integration.test.ts tests/integration/admin-operational-bookings.integration.test.ts
+```
+
+The browser-close acceptance case launches a separate authenticated customer browser,
+opens Payment Element and closes that browser without Pay or Cancel. It verifies the
+hold before expiry, waits across the real 600-second database deadline, then invokes
+the existing secret-protected expiry endpoint as the scheduler would. Expect about
+11 minutes for the browser file. No deadline override or database timestamp mutation
+is used by that browser case. Stripe requests stay on the loopback fixture. Integration
+cases use the existing guarded deadline fixture for fast race and failure coverage.
+
+
+### Deterministic browser-abandoned checkout coverage
+
+`tests/e2e/initial-checkout.e2e.ts` closes the authenticated customer's browser before authorization, verifies the original ten-minute deadline and valid hold, then uses the existing guarded `setPaymentAttemptExpiryFixture` inside an isolated database transaction. The reservation deadline is moved to the same past instant. Only fixture deadlines change; checkout, payment and occupancy states remain unresolved until the production `/api/payments/holds/expire` endpoint reconciles with the fake Stripe provider. The test verifies cancellation, expired checkout, released occupancy, absence of a booking identity, and another customer's successful booking of that interval. No real-time expiry wait or production deadline override is used. Run it independently with:
+
+```bash
+npm run test:e2e -- tests/e2e/initial-checkout.e2e.ts --grep 'browser closes'
+```

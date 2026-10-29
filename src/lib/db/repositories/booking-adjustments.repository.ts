@@ -7,7 +7,7 @@ import { BookingAdjustmentEntity, type AdjustmentKind, type AdjustmentTarget } f
 import { PaymentAttemptEntity } from "../entities/payment-attempt.entity";
 import { PaymentRefundEntity } from "../entities/payment-refund.entity";
 import { CourtReservationEntity } from "../entities/court-reservation.entity";
-import { BookingEntity } from "../entities/booking.entity";
+import { CheckoutRecordEntity } from "../entities/checkout-record.entity";
 import { CourtEntity } from "../entities/court.entity";
 
 export async function findAdjustment(manager: EntityManager, id: string) {
@@ -105,7 +105,7 @@ export async function releaseAdjustmentHolds(manager: EntityManager, adjustmentI
 export async function listExpiredAdjustmentCandidates(manager: EntityManager, locationId: string) {
   const rows: unknown = await manager.getRepository(BookingAdjustmentEntity).createQueryBuilder("adjustment")
     .select("adjustment.id", "id").addSelect("adjustment.bookingId", "booking_id")
-    .innerJoin(BookingEntity, "booking", "booking.id=adjustment.bookingId")
+    .innerJoin(CheckoutRecordEntity, "booking", "booking.id=adjustment.bookingId")
     .innerJoin(CourtReservationEntity, "reservation", "reservation.id=booking.reservationId")
     .innerJoin(CourtEntity, "court", "court.id=reservation.courtId")
     .where("court.locationId=:locationId", { locationId })

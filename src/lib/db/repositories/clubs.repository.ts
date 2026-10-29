@@ -72,7 +72,7 @@ export async function listLocationLiveOccupancy(manager: EntityManager, location
   const rows: unknown = await manager.query(`SELECT r.status::text AS status, r.booking_date::text AS date,
       r.ends_at_minute AS end_minute, b.id IS NOT NULL AS booked, r.coach_user_id IS NOT NULL AS coaching
     FROM public.court_reservations r JOIN public.courts c ON c.id=r.court_id
-    LEFT JOIN public.bookings b ON b.reservation_id=r.id
+    LEFT JOIN public.checkout_records b ON b.reservation_id=r.id
     WHERE c.location_id=$1 AND (r.status='held' OR (r.status='active' AND r.booking_date>=$2::date))`, [locationId, fromDate]);
   return z.array(z.object({ status: z.enum(["active", "held"]), date: z.iso.date(), end_minute: z.number().int(),
     booked: z.boolean(), coaching: z.boolean() })).parse(rows);

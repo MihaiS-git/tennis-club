@@ -33,7 +33,7 @@ test("Admin opening-hours, pricing and reservation lifecycle survives competing 
   const contracts = async (): Promise<unknown> => database.query(`SELECT to_jsonb(r) AS reservation, to_jsonb(b) AS booking,
     (SELECT jsonb_agg(to_jsonb(p) ORDER BY p.id) FROM public.payment_attempts p WHERE p.booking_id=b.id) AS payments,
     (SELECT jsonb_agg(to_jsonb(f) ORDER BY f.id) FROM public.payment_refunds f WHERE f.booking_id=b.id) AS refunds
-    FROM public.court_reservations r LEFT JOIN public.bookings b ON b.reservation_id=r.id
+    FROM public.court_reservations r LEFT JOIN public.checkout_records b ON b.reservation_id=r.id
     WHERE r.court_id=ANY($1::uuid[]) ORDER BY r.id`,[[court1,court2]]);
   async function times(form: Locator, index: number, start: string, end: string) {
     await form.getByLabel("Opening time",{ exact: true }).nth(index).fill(start);

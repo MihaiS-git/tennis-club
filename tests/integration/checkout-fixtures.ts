@@ -50,7 +50,7 @@ export async function insertBookingFixture(input: unknown) {
 
 // Current-contract assertion projection, never another persistence representation.
 export async function readBookingContracts(client: SupabaseClient, input: { ids?: string[]; reservationIds?: string[] } = {}) {
-  const { data, error } = await client.from("bookings").select("*,revision:booking_revisions!bookings_current_revision_fkey(*)")
+  const { data, error } = await client.from("checkout_records").select("*,revision:booking_revisions!bookings_current_revision_fkey(*)")
     .in(input.ids ? "id" : "reservation_id", input.ids ?? input.reservationIds ?? []);
   if (error) throw error;
   return (data ?? []).map(row => { const { revision, ...booking } = row; return { ...revision, ...booking }; });

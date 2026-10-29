@@ -2,7 +2,7 @@ import "server-only";
 import { Check, Column, Entity, ForeignKey, Index, PrimaryColumn, Unique } from "typeorm";
 import type { PricingEvidence } from "@/lib/bookings/revision";
 import { BookingRevisionEntity } from "./booking-revision.entity";
-import { BookingEntity } from "./booking.entity";
+import { CheckoutRecordEntity } from "./checkout-record.entity";
 import { UserEntity } from "./user.entity";
 
 export type AdjustmentState = "pending" | "applied" | "cancelled" | "expired" | "unsuccessful";
@@ -20,7 +20,7 @@ export type AdjustmentTarget = { courtId: string; date: string; startMinute: num
 @Unique("booking_adjustments_identity", ["bookingId", "id"])
 @Unique("booking_adjustments_request", ["bookingId", "requestKey"])
 @Index("booking_adjustments_pending", ["bookingId"], { unique: true, where: "status='pending'" })
-@ForeignKey(() => BookingEntity, ["bookingId"], ["id"], { name: "booking_adjustments_booking_id_fkey", onDelete: "RESTRICT" })
+@ForeignKey(() => CheckoutRecordEntity, ["bookingId"], ["id"], { name: "booking_adjustments_booking_id_fkey", onDelete: "RESTRICT" })
 @ForeignKey(() => UserEntity, ["actorId"], ["id"], { name: "booking_adjustments_actor_id_fkey", onDelete: "RESTRICT" })
 @Check("booking_adjustments_scope_check", "scope IN ('owner', 'admin')")
 @Check("booking_adjustments_kind_check", "kind IN ('reschedule', 'cancellation')")

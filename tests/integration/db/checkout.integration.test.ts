@@ -15,7 +15,7 @@ import * as clubs from "@/lib/db/repositories/clubs.repository";
 import { createDirectReservationCommand } from "@/lib/reservations/commands";
 import { runBookingReschedule } from "@/lib/bookings/reschedule";
 import { readCustomerBookingEditContext } from "@/lib/bookings/commands";
-import { processOnlinePaymentEvent } from "@/lib/payments/service";
+import { processOnlinePaymentEvent, settleOnlinePayment } from "@/lib/payments/service";
 import { createCustomerBooking } from "@/lib/bookings/service";
 import { commitCustomerCheckout } from "@/lib/bookings/checkout";
 import { startOnlineCheckout, readOnlineCheckout } from "@/lib/payments/checkout";
@@ -97,15 +97,15 @@ afterAll(async () => {
 async function counts() {
   const rows: unknown = await database.query(`SELECT
     (SELECT count(*)::integer FROM public.court_reservations WHERE court_id=$1) AS reservations,
-    (SELECT count(*)::integer FROM public.bookings b JOIN public.booking_revisions v ON v.id=b.current_revision_id JOIN public.court_reservations r ON r.id=b.reservation_id WHERE r.court_id=$1) AS bookings,
-    (SELECT count(*)::integer FROM public.payment_attempts p JOIN public.bookings b JOIN public.booking_revisions v ON v.id=b.current_revision_id ON b.id=p.booking_id JOIN public.court_reservations r ON r.id=b.reservation_id WHERE r.court_id=$1) AS attempts`, [courtId]);
+    (SELECT count(*)::integer FROM public.checkout_records b JOIN public.booking_revisions v ON v.id=b.current_revision_id JOIN public.court_reservations r ON r.id=b.reservation_id WHERE r.court_id=$1) AS bookings,
+    (SELECT count(*)::integer FROM public.payment_attempts p JOIN public.checkout_records b JOIN public.booking_revisions v ON v.id=b.current_revision_id ON b.id=p.booking_id JOIN public.court_reservations r ON r.id=b.reservation_id WHERE r.court_id=$1) AS attempts`, [courtId]);
   return z.array(z.object({ reservations: z.number(), bookings: z.number(), attempts: z.number() })).length(1).parse(rows)[0];
 }
 async function stored() {
   return database.query(`SELECT b.id,b.account_user_id,v.customer_name,v.customer_email,v.customer_phone,b.status AS booking_status,
     v.total_amount_minor,v.currency,v.payment_method,r.id AS reservation_id,r.status AS reservation_status,r.reason,r.created_by_user_id,
     r.hold_expires_at::text,p.id AS attempt_id,p.status AS attempt_status,p.provider,p.provider_payment_id,p.checkout_token_hash,
-    p.expires_at::text,p.completed_at,p.amount_minor FROM public.bookings b JOIN public.booking_revisions v ON v.id=b.current_revision_id JOIN public.court_reservations r ON r.id=b.reservation_id
+    p.expires_at::text,p.completed_at,p.amount_minor FROM public.checkout_records b JOIN public.booking_revisions v ON v.id=b.current_revision_id JOIN public.court_reservations r ON r.id=b.reservation_id
     JOIN public.payment_attempts p ON p.booking_id=b.id WHERE r.court_id=$1 ORDER BY r.starts_at_minute,b.created_at`, [courtId]);
 }
 async function pid(manager: EntityManager) {
@@ -166,7 +166,7 @@ test("online creation shares the full-precision DB deadline and initialization a
     provider: "stripe", provider_payment_id: null, checkout_token_hash: null, amount_minor: 5000, completed_at: null }]);
   const rows: unknown = await database.query(`SELECT r.hold_expires_at=p.expires_at AS same,
     extract(epoch FROM (r.hold_expires_at - r.created_at)) AS duration
-    FROM public.court_reservations r JOIN public.bookings b JOIN public.booking_revisions v ON v.id=b.current_revision_id ON b.reservation_id=r.id JOIN public.payment_attempts p ON p.booking_id=b.id WHERE r.court_id=$1`, [courtId]);
+    FROM public.court_reservations r JOIN public.checkout_records b JOIN public.booking_revisions v ON v.id=b.current_revision_id ON b.reservation_id=r.id JOIN public.payment_attempts p ON p.booking_id=b.id WHERE r.court_id=$1`, [courtId]);
   const clock = z.array(z.object({ same: z.boolean(), duration: z.string() })).parse(rows)[0];
   expect(clock.same).toBe(true); expect(Number(clock.duration)).toBeGreaterThanOrEqual(600); expect(Number(clock.duration)).toBeLessThan(605);
   createPayment.mockImplementation(async () => {
@@ -292,7 +292,7 @@ test("provider success and attachment rollback withholds presentation and create
   expect(await stored()).toMatchObject([{ reservation_status: "held", booking_status: "pending_payment", attempt_status: "pending",
     provider_payment_id: null, checkout_token_hash: null }]);
   expect(await counts()).toEqual({ reservations: 1, bookings: 1, attempts: 1 });
-  const rows: unknown = await database.query("SELECT id FROM public.payment_attempts WHERE booking_id IN (SELECT b.id FROM public.bookings b JOIN public.booking_revisions v ON v.id=b.current_revision_id JOIN public.court_reservations r ON r.id=b.reservation_id WHERE r.court_id=$1)", [courtId]);
+  const rows: unknown = await database.query("SELECT id FROM public.payment_attempts WHERE booking_id IN (SELECT b.id FROM public.checkout_records b JOIN public.booking_revisions v ON v.id=b.current_revision_id JOIN public.court_reservations r ON r.id=b.reservation_id WHERE r.court_id=$1)", [courtId]);
   const attemptId = z.array(z.object({ id: z.uuid() })).length(1).parse(rows)[0].id;
   expect(createPayment).toHaveBeenCalledTimes(1);
   expect(createPayment.mock.calls[0][1]).toEqual({ idempotencyKey: `court-payment-${attemptId}` });
@@ -355,7 +355,7 @@ test("attachment locks booking before attempt and an existing capability cannot 
   try {
     await bookings.lockCheckoutBooking(blocker.manager, held.bookingId); lockBooking.mockClear();
     start = startOnlineCheckout(held.paymentAttemptId);
-    expect((await waitForBlock(await pid(blocker.manager)))[0].query).toContain("bookings");
+    expect((await waitForBlock(await pid(blocker.manager)))[0].query).toContain("checkout_records");
     expect(lockAttempt).not.toHaveBeenCalled();
     await blocker.commitTransaction(); const checkout = await start;
     expect(lockBooking.mock.invocationCallOrder[0]).toBeLessThan(lockAttempt.mock.invocationCallOrder[0]);
@@ -486,21 +486,21 @@ test("settlement fenced before expiry commits after expiry while replacement wai
   expect(settledAs).toBe("succeeded"); expect(replaced).toMatchObject({ok:false,availabilityChanged:true});
   expect(insert).not.toHaveBeenCalled(); expect(await stored()).toMatchObject([{booking_status:"confirmed",reservation_status:"active",attempt_status:"succeeded"}]);
 },15000);
-test("expiry versus real insertion serializes cleanup, then late success is reconciled without reopening occupancy", async () => {
+test("definitive provider cancellation versus insertion serializes release, then late success cannot reopen occupancy", async () => {
   const created=await attachedOnline();await expireDeadline(created);
   const acquired=deferred<number>(),release=deferred<void>(),write=bookings.updateSettlementBookingStatus;
   vi.spyOn(bookings,"updateSettlementBookingStatus").mockImplementationOnce(async (...args)=>{
     await write(...args); acquired.resolve(await pid(args[0])); await release.promise;
   });
-  const expiry=expirePaymentHolds({locationId}); let replacement:ReturnType<typeof createCustomerBooking>|undefined;
+  const expiry=settleOnlinePayment({attemptId:created.paymentAttemptId,provider:"stripe",providerPaymentId:`pi_${created.paymentAttemptId}`,outcome:"cancelled"}); let replacement:ReturnType<typeof createCustomerBooking>|undefined;
   try {
     const blocker=await reached(acquired.promise,expiry,"expiry to update the booking");
     replacement=createCustomerBooking(input,guest,now);
     expect((await waitForBlock(blocker))[0].query).toContain("locations");
   } finally {release.resolve(); await Promise.allSettled([expiry,replacement]);}
   const [expired,replaced]=await settled([expiry,replacement!]);
-  expect(expired).toBe(1);expect(replaced).toMatchObject({ok:true});
-  expect(await processOnlinePaymentEvent(successEvent(created))).toBe("expired");
+  expect(expired).toBe("expired");expect(replaced).toMatchObject({ok:true});
+  expect(await processOnlinePaymentEvent(successEvent(created))).toBe("cancelled");
   expect(await database.query("SELECT reconciliation_required FROM public.payment_provider_events WHERE attempt_id=$1",[created.paymentAttemptId]))
     .toEqual([{reconciliation_required:true}]);
   expect(await stored()).toMatchObject([{booking_status:"expired",reservation_status:"released"},{booking_status:"confirmed",reservation_status:"active"}]);
@@ -517,7 +517,7 @@ test("initial online pending revision confirms exactly once across duplicate and
   expect(await processOnlinePaymentEvent({...event,eventId:randomUUID()})).toBe("succeeded");
   const confirmed=await history();expect(confirmed).toHaveLength(2);expect(confirmed[0]).toEqual(initial[0]);
   expect(confirmed[1]).toMatchObject({revision_number:2,previous_revision_id:initial[0].id,kind:"confirmed",booking_state:"confirmed",total_amount_minor:5000});
-  expect(await database.query("SELECT current_revision_id FROM public.bookings WHERE id=$1",[held.bookingId])).toEqual([{current_revision_id:confirmed[1].id}]);
+  expect(await database.query("SELECT current_revision_id FROM public.checkout_records WHERE id=$1",[held.bookingId])).toEqual([{current_revision_id:confirmed[1].id}]);
   expect(await database.query("SELECT status FROM public.court_reservations WHERE id=$1",[held.reservationId])).toEqual([{status:"active"}]);
 });
 

@@ -14,6 +14,7 @@ const contract = {
   currency: "RON" as const, paymentMethod: "online" as const,
 };
 const transaction: AdminPaymentTransaction = {
+  is_actual_booking: true,
   context: { ...contract, source: "refund_context", confirmationRevisionId: null },
   previous_context: null, proposal: null, current_booking: { ...contract, status: "cancelled" },
   financials: { outstanding: 0,
@@ -99,7 +100,7 @@ test("details link to the booking and, only for account bookings, to the authori
   expect(new URL(booking.getAttribute("href")!, "http://x").searchParams.get("back"))
     .toBe(`/admin/payments/transactions/refund/${transaction.transaction_id}?status=all&q=Ana&page=2`);
   expect(screen.queryByRole("link", { name: "View user account" })).toBeNull();
-  expect(screen.getByText("Guest booking · no user account")).toBeDefined();
+  expect(screen.getByText("Guest · no user account")).toBeDefined();
   const userId = "cd000000-0000-4000-8000-0000000000f1";
   rerender(<TransactionRow detail transaction={{ ...transaction, account_user_id: userId }} listHref={listHref} />);
   expect(screen.getByRole("link", { name: "View user account" }).getAttribute("href")).toBe(`/admin/users/${userId}`);
@@ -188,4 +189,20 @@ test("an overdue payment is visible with an explicit evidence-only Stripe check"
   fireEvent.click(attention.getByRole("button", { name: "Check with Stripe" }));
   await vi.waitFor(() => expect(refresh).toHaveBeenCalledOnce());
   expect(check).toHaveBeenCalledWith({ attemptId: transaction.payment_attempt_id });
+});
+
+
+test("technical checkout references never link to booking details or claim a booking status", () => {
+  const checkout: AdminPaymentTransaction = { ...transaction, is_actual_booking: false, transaction_kind: "payment",
+    operation_label: "Initial payment", transaction_status: "pending", refund: null,
+    current_booking: { ...transaction.current_booking, status: "pending_payment" } };
+  const { unmount } = render(<table><tbody><TransactionRow transaction={checkout} /></tbody></table>);
+  expect(screen.getByText(`Checkout #${checkout.booking_id.slice(0, 8)}`)).toBeTruthy();
+  expect(screen.queryByRole("link", { name: `Booking ${checkout.booking_id}` })).toBeNull();
+  unmount();
+  render(<TransactionRow transaction={checkout} detail />);
+  expect(screen.getByText("Current checkout status")).toBeTruthy();
+  expect(screen.getByText("Checkout quote")).toBeTruthy();
+  expect(screen.queryByText("Current booking status")).toBeNull();
+  expect(screen.queryByRole("link", { name: `Booking ${checkout.booking_id}` })).toBeNull();
 });

@@ -1,9 +1,9 @@
 import "server-only";
 import type { EntityManager } from "typeorm";
-import { BookingEntity } from "../entities/booking.entity";
+import { CheckoutRecordEntity } from "../entities/checkout-record.entity";
 import { CourtReservationEntity } from "../entities/court-reservation.entity";
 import { CourtEntity } from "../entities/court.entity";
-import { findRevision, insertRevision } from "./booking-revisions.repository";
+import { findRevision, insertRevision, confirmBookingRecord } from "./booking-revisions.repository";
 import { pricingEvidenceSchema, type RevisionSnapshot } from "@/lib/bookings/revision";
 import { z } from "zod";
 import { locationCurrencies } from "@/lib/admin/locations-validation";
@@ -22,7 +22,7 @@ export async function findAdminBookingDetails(manager: EntityManager, id: string
     v.total_amount_minor,v.currency,v.payment_method,b.account_user_id,
     (v.coach_user_id IS NOT NULL) AS includes_coaching,v.coach_name,v.coaching_program_name,
     v.pricing_evidence->'coaching' AS coaching,v.coach_user_id,${createdAt}
-    FROM public.bookings b JOIN public.booking_revisions v ON v.id=b.current_revision_id AND v.booking_id=b.id
+    FROM public.checkout_records b JOIN public.bookings confirmed ON confirmed.id=b.id JOIN public.booking_revisions v ON v.id=b.current_revision_id AND v.booking_id=b.id
     WHERE b.id=$1`, [id]);
   return z.array(z.object({
     id: z.uuid(), status: z.enum(["confirmed", "cancelled", "pending_payment", "failed", "expired"]),
@@ -39,7 +39,7 @@ export async function findAdminBookingDetails(manager: EntityManager, id: string
 
 export type AdminBookingListFilters = {
   coachId: string | null; type: "all" | "court" | "coaching" | "reservation"; search: string;
-  status: BookingEntity["status"] | "active" | null; locationId: string | null; courtId: string | null;
+  status: CheckoutRecordEntity["status"] | "active" | null; locationId: string | null; courtId: string | null;
   from: string | null; to: string | null; sort: "created" | "scheduled"; direction: "asc" | "desc";
   // Set for a Coach: only their own confirmed or cancelled lessons and their own staff reservations.
   staffUserId?: string | null;
@@ -47,7 +47,7 @@ export type AdminBookingListFilters = {
 // Customer bookings, filtered on the current contractual snapshot so historical names,
 // prices and archived resources remain visible. "active" is a staff reservation status only.
 function adminBookingsWhere() {
-  return `FROM public.bookings b JOIN public.booking_revisions v ON v.id=b.current_revision_id AND v.booking_id=b.id
+  return `FROM public.checkout_records b JOIN public.bookings confirmed ON confirmed.id=b.id JOIN public.booking_revisions v ON v.id=b.current_revision_id AND v.booking_id=b.id
     WHERE ($1::text IS NULL OR b.status::text=$1) AND ($2::uuid IS NULL OR v.location_id=$2)
       AND ($3::uuid IS NULL OR v.court_id=$3) AND ($4::date IS NULL OR v.booking_date>=$4) AND ($5::date IS NULL OR v.booking_date<=$5)
       AND ($6::text='' OR strpos(b.id::text,lower($6))>0 OR strpos(lower(v.customer_name),lower($6))>0
@@ -114,7 +114,7 @@ export async function findAdminBookingsPage(manager: EntityManager, filters: Adm
 export async function listAdminBookingCoaches(manager: EntityManager) {
   const rows: unknown = await manager.query(`SELECT id,name FROM (
     SELECT DISTINCT ON (v.coach_user_id) v.coach_user_id AS id,v.coach_name AS name
-    FROM public.bookings b JOIN public.booking_revisions v ON v.id=b.current_revision_id AND v.booking_id=b.id
+    FROM public.checkout_records b JOIN public.bookings confirmed ON confirmed.id=b.id JOIN public.booking_revisions v ON v.id=b.current_revision_id AND v.booking_id=b.id
     WHERE v.coach_user_id IS NOT NULL
     ORDER BY v.coach_user_id,v.recorded_at DESC,v.id DESC
   ) coaches ORDER BY lower(name),name,id`);
@@ -122,25 +122,26 @@ export async function listAdminBookingCoaches(manager: EntityManager) {
 }
 
 export async function insertCheckoutBooking(manager: EntityManager, input: {
-  id: string; reservationId: string; accountUserId: string | null; status: BookingEntity["status"]; revision: RevisionSnapshot;
+  id: string; reservationId: string; accountUserId: string | null; status: CheckoutRecordEntity["status"]; revision: RevisionSnapshot;
 }) {
-  await manager.getRepository(BookingEntity).insert({ id: input.id, reservationId: input.reservationId,
+  await manager.getRepository(CheckoutRecordEntity).insert({ id: input.id, reservationId: input.reservationId,
     accountUserId: input.accountUserId, status: input.status, currentRevisionId: input.revision.id });
   await insertRevision(manager, input.revision);
+  if (input.status === "confirmed") await confirmBookingRecord(manager, input.id, input.revision.id);
 }
 export async function findBookingCancellationNotice(manager: EntityManager, id: string) {
-  const booking = await manager.getRepository(BookingEntity).findOneBy({ id });
+  const booking = await manager.getRepository(CheckoutRecordEntity).findOneBy({ id });
   return booking ? findRevision(manager, booking.currentRevisionId) : null;
 }
 export function findCheckoutBookingStatus(manager: EntityManager, id: string) {
-  return manager.getRepository(BookingEntity).findOne({ where: { id }, select: { status: true } });
+  return manager.getRepository(CheckoutRecordEntity).findOne({ where: { id }, select: { status: true } });
 }
 export function lockCheckoutBooking(manager: EntityManager, id: string) {
-  return manager.getRepository(BookingEntity).createQueryBuilder("booking")
+  return manager.getRepository(CheckoutRecordEntity).createQueryBuilder("booking")
     .where("booking.id = :id", { id }).setLock("pessimistic_write").getOne();
 }
 export async function discoverBookingLocation(manager: EntityManager, id: string) {
-  return manager.getRepository(BookingEntity).createQueryBuilder("b")
+  return manager.getRepository(CheckoutRecordEntity).createQueryBuilder("b")
     .innerJoin(CourtReservationEntity, "r", "r.id=b.reservationId")
     .innerJoin(CourtEntity, "c", "c.id=r.courtId").select("c.locationId", "location_id").addSelect("r.coachUserId", "coach_user_id")
     .where("b.id=:id", { id }).getRawOne<{ location_id: string; coach_user_id: string | null }>();
@@ -155,11 +156,11 @@ export async function findBookingForUpdate(manager: EntityManager, id: string, r
     cancellation_notice_minutes: v.cancellationNoticeMinutes, payment_method: v.paymentMethod,
     updated_at: b.updatedAt.toISOString(), token_matches: revisionId ? revisionId === v.id : null };
 }
-export async function updateSettlementBookingStatus(manager: EntityManager, id: string, status: BookingEntity["status"]) {
-  await manager.getRepository(BookingEntity).update(id, { status, updatedAt: new Date() });
+export async function updateSettlementBookingStatus(manager: EntityManager, id: string, status: CheckoutRecordEntity["status"]) {
+  await manager.getRepository(CheckoutRecordEntity).update(id, { status, updatedAt: new Date() });
 }
 // Owner-scoped read: another account's booking is indistinguishable from a missing one.
 export async function findOwnedBookingRevision(manager: EntityManager, id: string, accountUserId: string) {
-  const booking = await manager.getRepository(BookingEntity).findOneBy({ id, accountUserId });
+  const booking = await manager.getRepository(CheckoutRecordEntity).findOneBy({ id, accountUserId });
   return booking ? { status: booking.status, revision: await findRevision(manager, booking.currentRevisionId) } : null;
 }

@@ -374,7 +374,7 @@ async function contract(bookingId: string) {
   const [row] = await q<{ total: number; end: number; rescheduled: number }>(
     `SELECT v.total_amount_minor AS total,r.ends_at_minute AS "end",
     (SELECT count(*)::integer FROM public.booking_revisions WHERE booking_id=b.id AND kind='rescheduled') AS rescheduled
-    FROM public.bookings b JOIN public.booking_revisions v ON v.id=b.current_revision_id JOIN public.court_reservations r ON r.id=b.reservation_id WHERE b.id=$1`,
+    FROM public.checkout_records b JOIN public.booking_revisions v ON v.id=b.current_revision_id JOIN public.court_reservations r ON r.id=b.reservation_id WHERE b.id=$1`,
     [bookingId],
   );
   return row;
@@ -401,10 +401,10 @@ async function newCheckout(page: Page, court: string) {
   expect(scripts).toEqual([]);
   await page.getByRole("button", { name: "Continue to payment", exact: true }).click();
   await expect.poll(async () => (await q<{ id: string }>(
-    "SELECT b.id FROM public.bookings b JOIN public.court_reservations r ON r.id=b.reservation_id WHERE r.court_id=$1", [courtIds.get(court)]
+    "SELECT b.id FROM public.checkout_records b JOIN public.court_reservations r ON r.id=b.reservation_id WHERE r.court_id=$1", [courtIds.get(court)]
   )).length).toBe(1);
   const [booking] = await q<{ id: string }>(
-    "SELECT b.id FROM public.bookings b JOIN public.court_reservations r ON r.id=b.reservation_id WHERE r.court_id=$1", [courtIds.get(court)]
+    "SELECT b.id FROM public.checkout_records b JOIN public.court_reservations r ON r.id=b.reservation_id WHERE r.court_id=$1", [courtIds.get(court)]
   );
   bookings.push(booking.id);
   await fillCard(page, "4000000000003220");
@@ -463,7 +463,7 @@ if (process.env.LIVE_LATE !== "1") test.describe("live lifecycle", () => {
     await expect(page.getByRole("region", { name: "Booking confirmed", exact: true })).toBeVisible({ timeout: 30_000 });
     await verifiedCapture(bookingId, intent, 5000);
     expect(await contract(bookingId)).toMatchObject({ total: 5000, end: 1020, rescheduled: 0 });
-    expect(await q("SELECT b.status,r.status AS reservation FROM public.bookings b JOIN public.court_reservations r ON r.id=b.reservation_id WHERE b.id=$1", [bookingId]))
+    expect(await q("SELECT b.status,r.status AS reservation FROM public.checkout_records b JOIN public.court_reservations r ON r.id=b.reservation_id WHERE b.id=$1", [bookingId]))
       .toEqual([{ status: "confirmed", reservation: "active" }]);
     await expect(page.locator('[data-sonner-toast][data-type="loading"]')).toHaveCount(0);
   });
@@ -474,7 +474,7 @@ if (process.env.LIVE_LATE !== "1") test.describe("live lifecycle", () => {
     await expect(page.getByRole("button", { name: "Pay and confirm booking", exact: true })).toBeEnabled({ timeout: 15_000 });
     expect(await element.evaluate(node => node.isConnected)).toBe(true);
     expect(stripe(["payment_intents", "retrieve", intent])).toMatchObject({ status: "requires_payment_method", amount_received: 0 });
-    expect(await q("SELECT b.status,r.status AS reservation FROM public.bookings b JOIN public.court_reservations r ON r.id=b.reservation_id WHERE b.id=$1", [bookingId]))
+    expect(await q("SELECT b.status,r.status AS reservation FROM public.checkout_records b JOIN public.court_reservations r ON r.id=b.reservation_id WHERE b.id=$1", [bookingId]))
       .toEqual([{ status: "pending_payment", reservation: "held" }]);
     expect(await q("SELECT c.id FROM public.payment_capture_receipts c JOIN public.payment_attempts p ON p.id=c.payment_attempt_id WHERE p.booking_id=$1", [bookingId])).toEqual([]);
     await fillCard(page, "4000000000003220");

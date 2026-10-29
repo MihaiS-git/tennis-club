@@ -76,4 +76,13 @@ export function configureTestEnvironment() {
     PGOPTIONS: "",
   });
   assertTestEnvironment();
+  // Playwright workers inherit the runner's readiness check.
+  if (process.env.TEST_WORKER_INDEX === undefined) {
+    try {
+      execFileSync(process.execPath, [resolve("tests/local/check-services.mjs")],
+        { env: process.env, stdio: ["ignore", "pipe", "pipe"], timeout: 20_000 });
+    } catch (error) {
+      throw new Error(error.stderr?.toString().trim() || "Isolated test service readiness check failed.");
+    }
+  }
 }

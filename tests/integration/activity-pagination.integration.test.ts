@@ -37,10 +37,10 @@ async function seed(manager: EntityManager, count: number) {
     SELECT (jsonb_populate_record(NULL::public.court_reservations,to_jsonb(r)||jsonb_build_object(
       'id',f.reservation_id,'booking_date',date '1700-01-01'+f.n))).*
     FROM public.court_reservations r CROSS JOIN activity_fixture_ids f WHERE r.id=$1`, [reservationId]);
-  await manager.query(`INSERT INTO public.bookings
-    SELECT (jsonb_populate_record(NULL::public.bookings,to_jsonb(b)||jsonb_build_object(
+  await manager.query(`INSERT INTO public.checkout_records
+    SELECT (jsonb_populate_record(NULL::public.checkout_records,to_jsonb(b)||jsonb_build_object(
       'id',f.booking_id,'reservation_id',f.reservation_id,'current_revision_id',f.revision_id))).*
-    FROM public.bookings b CROSS JOIN activity_fixture_ids f WHERE b.id=$1`, [bookingId]);
+    FROM public.checkout_records b CROSS JOIN activity_fixture_ids f WHERE b.id=$1`, [bookingId]);
   await manager.query(`INSERT INTO public.booking_revisions
     SELECT (jsonb_populate_record(NULL::public.booking_revisions,to_jsonb(v)||jsonb_build_object(
       'id',f.revision_id,'booking_id',f.booking_id,'booking_date',date '1700-01-01'+f.n))).*
@@ -49,8 +49,9 @@ async function seed(manager: EntityManager, count: number) {
     SELECT (jsonb_populate_record(NULL::public.court_reservations,to_jsonb(r)||jsonb_build_object(
       'id',f.direct_id,'created_by_user_id',$2::uuid,'booking_date',date '1400-01-01'+f.n))).*
     FROM public.court_reservations r CROSS JOIN activity_fixture_ids f WHERE r.id=$1`, [reservationId, actorId]);
+  await manager.query("INSERT INTO public.bookings(id,confirmation_revision_id) SELECT booking_id,revision_id FROM activity_fixture_ids");
   await manager.query("SET CONSTRAINTS ALL IMMEDIATE");
-  for (const table of ["bookings", "booking_revisions", "court_reservations", "courts", "locations"]) {
+  for (const table of ["checkout_records", "bookings", "booking_revisions", "court_reservations", "courts", "locations"]) {
     await manager.query(`ANALYZE public.${table}`);
   }
   return actorId;
@@ -87,7 +88,7 @@ if (process.env.ACTIVITY_BENCHMARK === "1") test("measure activity batch plans o
             queries, returned: offset, elapsedMs: performance.now() - started }) + "\n");
         }
         for (const offset of [0, Math.floor(count / 2000) * 1000, Math.floor((count - 1) / 1000) * 1000]) {
-          const [{ id: cursor }]: { id: string }[] = await runner.manager.query(`SELECT id FROM public.${kind === "booking" ? "bookings" : "court_reservations"}
+          const [{ id: cursor }]: { id: string }[] = await runner.manager.query(`SELECT id FROM public.${kind === "booking" ? "checkout_records" : "court_reservations"}
             WHERE ${kind === "booking" ? "account_user_id" : "created_by_user_id"}=$1 ORDER BY id OFFSET $2 LIMIT 1`, [actorId, Math.max(0, offset - 1)]);
           for (const mode of ["offset", "seek"] as const) {
             const times: number[] = [];
@@ -114,7 +115,7 @@ test("UUID continuation visits every owner row once across real database batches
   try {
     const actorId = await seed(runner.manager, 2000);
     for (const kind of ["booking", "reservation"] as const) {
-      const expected: { id: string }[] = await runner.manager.query(`SELECT id FROM public.${kind === "booking" ? "bookings" : "court_reservations"}
+      const expected: { id: string }[] = await runner.manager.query(`SELECT id FROM public.${kind === "booking" ? "checkout_records" : "court_reservations"}
         WHERE ${kind === "booking" ? "account_user_id" : "created_by_user_id"}=$1
         AND status=$2 ORDER BY id`, [actorId, kind === "booking" ? "confirmed" : "active"]);
       const ids: string[] = [];

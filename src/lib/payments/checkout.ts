@@ -1,9 +1,7 @@
 import "server-only";
 import * as adjustments from "@/lib/db/repositories/booking-adjustments.repository";
 import type { EntityManager } from "typeorm";
-import { buildBookingRevision } from "@/lib/bookings/revision";
-import { advanceRevision } from "@/lib/db/repositories/booking-revisions.repository";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { getDataSource } from "@/lib/db/data-source";
@@ -35,7 +33,7 @@ class CheckoutParentChanged extends Error {}
 
 // Record cancellation intent before contacting Stripe, preventing a new capture
 // acceptance. Keep occupancy until provider cancellation or ordinary hold expiry.
-async function requestCheckoutCancellation(access: z.infer<typeof checkoutAccessSchema>, retry = 0): Promise<void> {
+async function requestCheckoutCancellation(access: { attemptId: string } & ({ token: string; providerPaymentId?: never } | { token?: never; providerPaymentId: string }), retry = 0): Promise<void> {
   try {
     await inTransaction(async manager => {
       const parent = await payments.discoverSettlementParent(manager, access.attemptId);
@@ -46,7 +44,8 @@ async function requestCheckoutCancellation(access: z.infer<typeof checkoutAccess
       const attempt = await lockCheckoutAttempt(manager, access.attemptId);
       const resource = reservation && await reservations.findReservationResourceFacts(manager, reservation.court_id);
       if (!booking || !reservation || !attempt || attempt.bookingId !== booking.id
-        || attempt.checkoutTokenHash !== tokenHash(access.token) || attempt.method !== "online")
+        || (access.token ? attempt.checkoutTokenHash !== tokenHash(access.token)
+          : !access.providerPaymentId || attempt.providerPaymentId !== access.providerPaymentId) || attempt.method !== "online")
         throw new Error("Payment unavailable.");
       if (booking.reservation_id !== parent.reservation_id || resource?.location_id !== parent.location_id)
         throw new CheckoutParentChanged();
@@ -65,11 +64,10 @@ async function requestCheckoutCancellation(access: z.infer<typeof checkoutAccess
       if (reservation.status === "cancelled")
         throw new Error("This checkout is now managed through booking management.");
       if (booking.status !== "cancelled") {
-        const revision = buildBookingRevision(booking.revision, { id: randomUUID(), bookingId: booking.id,
-          kind: "cancelled", bookingState: "cancelled", operationKey: "cancellation", intentHash: "checkout_abandoned",
-          actorUserId: null, actorScope: "guest", recordedAt: new Date(await reservations.readReservationClockTime(manager)),
-          adjustmentId: null, cancellationCause: "checkout_abandoned" }, booking.revision);
-        await advanceRevision(manager, { revision, previousId: booking.current_revision_id, status: "cancelled" });
+        // This is checkout cancellation intent, not a booking cancellation.
+        // Revoke capture acceptance under the same aggregate locks; Stripe
+        // confirmation (or safe expiry) decides when the held row is released.
+        await bookings.updateSettlementBookingStatus(manager, booking.id, access.token ? "cancelled" : "failed");
       }
     });
   } catch (error) {
@@ -253,6 +251,22 @@ export async function abandonOnlineCheckout(input: unknown, unusedOnly = false) 
   const result = await readOnlineCheckout(input);
   return { released: ["cancelled", "refunded", "refund_pending", "refund_failed"].includes(result.paymentStatus),
     paymentStatus: result.paymentStatus };
+}
+
+// A signed failure event can be stale: re-read Stripe before ending initial
+// checkout. Modification retries retain their existing behavior. An accepted
+// capture or newer authorization always wins over an older card-failure event.
+export async function resolveFailedCheckoutPayment(input: { attemptId: string; providerPaymentId: string }) {
+  const row = await findCheckoutAttempt((await getDataSource()).manager, input.attemptId);
+  const attempt = attemptSchema.extend({ providerPaymentId: z.string().min(1) }).parse(row);
+  if (attempt.adjustmentId || attempt.providerPaymentId !== input.providerPaymentId || attempt.status !== "pending") return;
+  // Coaching retains its existing retryable-card-failure workflow. Genuine
+  // terminal outcomes still release both resources through shared settlement.
+  if ((await bookings.findBookingCancellationNotice((await getDataSource()).manager, attempt.bookingId))?.coachUserId) return;
+  const evidence = await (await onlinePaymentAdapter(attempt.provider)).readPayment(attempt);
+  if (evidence.status !== "pending" || evidence.live) return observeCheckoutPayment(attempt);
+  await requestCheckoutCancellation({ attemptId: attempt.id, providerPaymentId: attempt.providerPaymentId });
+  return cancelCheckoutPayment(attempt);
 }
 
 // Called only with the attempt returned by trusted booking creation.

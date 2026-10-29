@@ -11,7 +11,7 @@ export async function POST(request: Request) {
   try {
     return Response.json(await processPendingEmailDeliveries());
   } catch (error) {
-    logger.error({ event: "notifications.delivery_failed", error }, "Notification delivery invocation failed");
+    logger.error({ event: "notifications.delivery_failed", err: error }, "Notification delivery invocation failed");
     return Response.json({ error: "Delivery unavailable" }, { status: 503 });
   }
 }

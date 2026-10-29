@@ -301,7 +301,7 @@ test("location currency changes only without unfinished bookings, unresolved fin
     expect(await readAdminLocationCurrencyChange(locationId, admin)).toEqual([]);
     expect(await save({ currency: "EUR" })).toEqual({ ok: true, id: locationId });
     expect(await currency()).toBe("EUR");
-    expect((await service.from("bookings").select("status").eq("id", checkout.booking_id).single()).data?.status).toBe("expired");
+    expect((await service.from("checkout_records").select("status").eq("id", checkout.booking_id).single()).data?.status).toBe("expired");
     // Historical contracts and payment evidence keep their original currency and amounts.
     expect(await readBookingContracts(service, { ids: [courtBooking, lessonBooking] })).toEqual(contracts);
     expect((await readBookingContracts(service, { ids: [checkout.booking_id] }))[0]).toMatchObject({ total_amount_minor: 6000, currency: "RON" });

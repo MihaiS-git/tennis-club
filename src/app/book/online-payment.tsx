@@ -23,9 +23,9 @@ type Props = { confirmationMessage?: string; checkout: OnlineCheckout; holdExpir
 
 const endedMessages: Record<PaymentPurpose, Record<"refund_failed" | "refund_pending" | "refunded" | "uncertain" | "cancelled" | "ended" | "expired", string>> = {
   booking: {
-    refund_failed: "The booking is cancelled, but the refund failed. Contact the club; do not pay again yet.",
+    refund_failed: "No booking was confirmed, but the refund failed. Contact the club; do not pay again yet.",
     refund_pending: "Your booking was not confirmed. A captured payment needs a refund; do not pay again until it is resolved.",
-    refunded: "Payment refunded. This booking is cancelled.",
+    refunded: "Payment refunded. No booking was confirmed.",
     uncertain: "This checkout has ended, but the payment outcome is still uncertain. You may close this window; do not pay again yet.",
     cancelled: "Payment cancelled. The court hold has been released.",
     ended: "This checkout has expired or ended. Payment cannot be started here.",

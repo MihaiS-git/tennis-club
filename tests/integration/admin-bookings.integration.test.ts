@@ -43,9 +43,9 @@ test("Admin bookings list guest, account, cancelled and historical bookings with
       cancellation_notice_minutes: 1440, payment_method: "online", created_at: `2026-09-${String(index + 1).padStart(2, "0")}T10:00:00Z` })));
 
     const first = await listAdminBookings(query(), admin), second = await listAdminBookings(query({ page: "2" }), admin);
-    expect(first).toMatchObject({ total: 23, totalPages: 2, page: 1 }); expect(first.rows).toHaveLength(20); expect(second.rows).toHaveLength(3);
+    expect(first).toMatchObject({ total: 22, totalPages: 2, page: 1 }); expect(first.rows).toHaveLength(20); expect(second.rows).toHaveLength(2);
     // Newest-created first, with no duplicates across pages.
-    expect([...first.rows, ...second.rows].map((row) => row.id)).toEqual([...bookingIds].reverse());
+    expect([...first.rows, ...second.rows].map((row) => row.id)).toEqual(bookingIds.slice(0, 22).reverse());
     expect(first.rows.find((row) => row.id === bookingIds[20])).toMatchObject({ status: "cancelled", account_user_id: users[0],
       court_name: "Court B", location_id: central, total_amount_minor: 1020, currency: "RON" });
     expect(first.rows.find((row) => row.id === bookingIds[21])).toMatchObject({ account_user_id: null, location_name: "Bookings archived",
@@ -53,17 +53,17 @@ test("Admin bookings list guest, account, cancelled and historical bookings with
     expect(await listAdminBookings(query({ page: "99" }), admin)).toMatchObject({ page: 2, rows: second.rows });
 
     expect((await listAdminBookings(query({ status: "cancelled" }), admin)).rows.map((row) => row.id)).toEqual([bookingIds[20]]);
-    expect((await listAdminBookings(query({ status: "pending_payment" }), admin)).rows.map((row) => row.id)).toEqual([bookingIds[22]]);
+    expect((await listAdminBookings(query({ q: bookingIds[22] }), admin)).rows.map((row) => row.id)).toEqual([]);
     expect((await listAdminBookings(query({ location: archived }), admin)).rows.map((row) => row.id)).toEqual([bookingIds[21]]);
-    expect((await listAdminBookings(query({ location: central }), admin)).total).toBe(22);
+    expect((await listAdminBookings(query({ location: central }), admin)).total).toBe(21);
     expect((await listAdminBookings(query({ location: central, court: courtB }), admin)).rows.map((row) => row.id)).toEqual([bookingIds[20]]);
     // A court from another location yields nothing rather than widening the filter.
     expect((await listAdminBookings(query({ location: central, court: oldCourt }), admin)).total).toBe(0);
     expect((await listAdminBookings(query({ from: "2099-01-01", to: "2099-01-03" }), admin)).rows.map((row) => row.id))
-      .toEqual([bookingIds[22], bookingIds[20]]);
+      .toEqual([bookingIds[20]]);
     expect((await listAdminBookings(query({ to: "2021-01-01" }), admin)).rows.map((row) => row.id)).toEqual([bookingIds[21]]);
     const scheduled = await listAdminBookings(query({ sort: "scheduled", dir: "asc" }), admin);
-    expect(scheduled.rows[0].id).toBe(bookingIds[21]); expect(scheduled.rows[1].id).toBe(bookingIds[22]);
+    expect(scheduled.rows[0].id).toBe(bookingIds[21]); expect(scheduled.rows[1].id).toBe(bookingIds[20]);
     expect((await listAdminBookings(query({ dir: "asc" }), admin)).rows[0].id).toBe(bookingIds[0]);
 
     expect((await listAdminBookings(parseAdminBookingQuery({ q: bookingIds[5].slice(0, 13).toUpperCase() }), admin)).rows.map((row) => row.id)).toContain(bookingIds[5]);

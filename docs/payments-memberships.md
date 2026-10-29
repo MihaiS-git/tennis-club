@@ -8,16 +8,17 @@ location read exposes this boolean, while TypeORM Transaction A rechecks it unde
 location row lock. Contact, amount and currency snapshots still come from the
 server-side booking service and existing TypeScript calendar pricing calculation using transaction-authoritative facts.
 
-`bookings.current_revision_id` is a required same-booking reference to the immutable
+`checkout_records.current_revision_id` is a required same-booking reference to the immutable
 `booking_revisions` row authoritative for commercial terms. Its `payment_method` is
 required and constrained to `online` or `pay_at_club`; `payment_attempts.method` is
 also required. There is no nullable legacy booking payment contract. Booking identity
 and ownership are permanent; court occupancy remains separate and mutable.
 See [booking contracts](booking-domain.md#implemented-immutable-booking-contracts).
 Online commits
-atomically insert a `pending_payment` booking, its one `held` court reservation,
-and a `pending` payment attempt. Pay at club inserts a `confirmed` booking, `active`
-reservation and `due` payment record. Stripe checkout uses Payment Element inside
+atomically insert a `pending_payment` internal checkout record, its one `held` court reservation,
+and a `pending` payment attempt. No `bookings` row exists yet. Pay at club inserts a
+confirmed checkout record, its `bookings` identity with immutable confirmation-revision proof,
+an `active` reservation and a `due` payment record. Stripe checkout uses Payment Element inside
 the existing confirmation dialog. A pending hold is never shown as a confirmed booking.
 
 `payment_attempts` supports multiple attempts per booking. Each row stores method,
@@ -47,8 +48,9 @@ adapters. The Stripe webhook calls the common event operation, which reuses this
 settlement transaction; no browser-callable settlement action exists. Its TypeORM
 READ COMMITTED transaction takes the shared configuration fence, then locks
 location → booking → reservation → attempt and validates the stored provider/reference.
-A timely success confirms the same booking/reservation. Failure/expiry releases the same reservation and marks the booking/attempt
-failed/expired. A late success cannot reclaim a released or replaced interval.
+A timely verified capture confirms the same checkout/reservation and inserts exactly one
+`bookings` identity in that transaction. Failure/expiry releases the reservation and
+marks only the internal checkout/attempt failed/expired. A late success cannot reclaim a released or replaced interval.
 Duplicate settlement returns the existing terminal status.
 Pending/failed/expired checkouts never appear as confirmed
 personal bookings. Pay at club records a confirmed revision at creation and sends
@@ -210,13 +212,12 @@ settlement plus `payment_provider_events` receipt together. Same-event delivery 
 different success events for the same attempt cannot duplicate confirmation mail.
 Out-of-order failure cannot downgrade a settled success. A retryable card decline
 (`requires_payment_method`) records a `retryable_failed` provider event but retains
-the same pending attempt, booking, hold, PaymentIntent and original expiry so another
-card can be entered. Terminal Stripe cancellation records attempt status `cancelled`,
-marks the internal booking `expired`, and releases its reservation immediately.
+the same pending attempt, checkout, hold, PaymentIntent and original expiry for coaching/modification retries. Initial court checkout instead re-reads Stripe and cancels a still-unused failed intent before releasing its hold. Terminal Stripe cancellation records attempt status `cancelled`,
+marks the internal checkout `expired`, and releases its reservation immediately.
 Expiry also releases the hold
 without creating customer activity; expiry cleanup during polling invalidates `/book`.
 My Activity's owner projections include only confirmed/cancelled booking states,
-and online rows require a succeeded payment attempt. A cancellation that races capture may appear in Cancelled history; an uncharged checkout does not.
+and online rows require a succeeded payment attempt. An abandoned checkout has no booking identity, even if a late capture requires compensation, and never enters booking history.
 
 Late successful charges and amount mismatches are durably recorded with
 `reconciliation_required = true` and a structured server log. They do not reclaim
@@ -247,9 +248,9 @@ unchanged (never "cancelled") when its payment fails, expires or is refunded.
 
 X, Close and Escape dismiss the checkout immediately, including during provider calls or cancellation. Dismissal makes no claim that payment was cancelled, clears loading feedback, and ignores late action/Stripe/polling callbacks. An uncertain outcome is shown without encouraging another payment. Closing, unmounting or `pagehide` attempts capability-bound cleanup of an unused checkout with a keepalive POST to `/api/payments/checkout/abandon`. A late checkout-creation response after dismissal also requests cleanup. Local submitted/unknown outcomes skip this request; the server independently skips submitted, authenticated or captured payments. React effect replay does not abandon the mounted checkout. If navigation loses the request, the existing hold deadline and Cron sweep remain authoritative.
 
-Cancel payment has a separate confirmation. Confirmation unmounts the active payment form, preventing submissions and late UI confirmation. The capability-authorized command records booking cancellation intent under location → booking → reservation → attempt locks before contacting Stripe. Once a booking is confirmed, this capability cannot cancel it, even within its original hold deadline. Confirmed bookings use normal booking-management authorization and refund-backed cancellation, preserving occupancy until required refunds succeed. No Auth or provider call occurs inside a transaction.
+Cancel payment has a separate confirmation. Confirmation unmounts the active payment form, preventing submissions and late UI confirmation. The capability-authorized command records internal checkout cancellation intent under location → booking → reservation → attempt locks before contacting Stripe. Once a booking is confirmed, this capability cannot cancel it, even within its original hold deadline. Confirmed bookings use normal booking-management authorization and refund-backed cancellation, preserving occupancy until required refunds succeed. No Auth or provider call occurs inside a transaction.
 
-Checkout abandonment records a cancelled revision before contacting Stripe, preventing
+Checkout abandonment records internal checkout cancellation intent without a cancelled booking revision, preventing
 new capture acceptance under the existing aggregate locks. Occupancy stays held until
 Stripe confirms cancellation or the ordinary unaccepted hold expires; an accepted capture
 rejects abandonment and remains protected until its financial outcome is known.
@@ -257,12 +258,12 @@ The attempt may remain pending while the provider outcome is uncertain. Navigati
 uses processing-preserving dismissal and also preserves authentication/authorization
 observed by that provider call. Explicit cancellation follows the existing cancellation
 state machine. The adapter uses stable abandonment idempotency and retrieve-after-failure
-recovery. An exact capture racing cancellation preserves that cancelled contract,
+recovery. An exact capture racing cancellation preserves that ended checkout,
 records capture evidence and creates its compensation obligation, whose refund is
 dispatched after commit (see Recovery without a scheduler). Guest requests use the same capability and
 a nullable refund requester.
 
-Expiry ends payment entry locally even when the status endpoint is unavailable. Server expiry retains the original release/late-capture reconciliation policy, including for held bookings with cancellation intent. Expired attempts cannot be reused; polling attempts provider cancellation when possible. Keep paying is available only for a usable checkout before cancellation starts. A definite card decline permits retry on the original unexpired intent; transport/unknown errors block further submissions. Payment loading feedback becomes a non-blocking uncertainty warning after 30 seconds; booking submission and cancellation loading are bounded at 15 seconds. Customers can always leave while Stripe webhooks (retried by Stripe for up to three days) settle the financial outcome.
+Expiry ends payment entry locally even when the status endpoint is unavailable. Server expiry retains the original release/late-capture reconciliation policy, including for held bookings with cancellation intent. Expired attempts cannot be reused; polling attempts provider cancellation when possible. Keep paying is available only for a usable checkout before cancellation starts. A signed court-checkout card failure is re-read at Stripe; if the exact intent still awaits a card, server cancellation ends that checkout and releases its hold after provider confirmation. Coaching and modification card declines retain their existing retry workflow; transport/unknown errors block further submissions. Payment loading feedback becomes a non-blocking uncertainty warning after 30 seconds; booking submission and cancellation loading are bounded at 15 seconds. Customers can always leave while Stripe webhooks (retried by Stripe for up to three days) settle the financial outcome.
 
 Focused checks (external intent creation is mocked; signatures and local DB are real):
 
@@ -616,7 +617,7 @@ for up to three days on a non-2xx response) is the retry mechanism for missed wo
 | Card authorized after the deadline | The authorization is cancelled at Stripe; no charge. |
 | Payment succeeds, webhook delayed or missing | Customer status poll reads the PaymentIntent; Stripe redelivers the webhook. Both settle through `processOnlinePaymentEvent` with deduplicated receipts. |
 | Card declined | `payment_intent.payment_failed` keeps the same intent and hold until the deadline; the customer may try another card. |
-| Abandoned checkout | The unpaid hold expires at its PostgreSQL deadline. The Cron hold sweep or the next polling/occupancy write settles it locally. Cron also samples overdue registered intents on every run, including locally expired/failed attempts, and cancels unused intents through the existing check service. Processing remains unresolved for a later check/webhook. Captured funds follow existing settlement/compensation rules. Polling and Admin Check with Stripe remain available. A later authorization is never captured. |
+| Abandoned checkout | Its immutable PostgreSQL deadline ends payment eligibility. Registered initial payments retain occupancy until a definitive provider outcome. The Cron hold sweep or the next polling/occupancy write settles it locally. Cron also samples overdue registered intents on every run, including locally expired/failed attempts, and cancels unused intents through the existing check service. Processing remains unresolved for a later check/webhook. Captured funds follow existing settlement/compensation rules. Polling and Admin Check with Stripe remain available. A later authorization is never captured. |
 | Accepted capture interrupted before dispatch | During grace, observe only. After grace, polling or Admin Check with Stripe retrieves the intent and attempts cancellation, preserving occupancy until Stripe confirms capture or cancellation. Uncertainty remains visible to Admin. |
 | Accepted capture completes after grace (booking or surcharge) | Accepted occupancy remains protected; verified success applies normally, without a refund solely for lateness. Later observations never dispatch another capture. |
 | Unaccepted late capture, or an otherwise invalid capture | The settlement commits the receipt, the full refund obligation and a `late_capture` financial exception atomically, then dispatches the refund. Released occupancy is never reclaimed. |
@@ -627,18 +628,22 @@ for up to three days on a non-2xx response) is the retry mechanism for missed wo
 
 ### Checkout hold expiry sweep
 
-Expired holds stop blocking availability as soon as PostgreSQL time passes
-`hold_expires_at`; no job is needed for that. Supabase Cron additionally calls
-`POST /api/payments/holds/expire` every five minutes with
+Unregistered initial checkout holds stop blocking availability at their PostgreSQL deadline.
+Registered initial attempts retain their reservation while provider cancellation/capture is
+unresolved, including after that deadline. This same protection applies in public, internal,
+owner-edit and coach occupancy reads and in location-locked expiry before writes. Clock
+expiry never overrides a possible provider outcome. Accepted modification protection is unchanged.
+
+Supabase Cron calls `POST /api/payments/holds/expire` every five minutes with
 `Authorization: Bearer <CHECKOUT_EXPIRY_CRON_SECRET>` (a server-only random value of at least
 32 characters, independent of the notification secret). The endpoint runs the existing
-`expirePaymentHolds` service once: at most 100 bookings per call, one location-first
-transaction per location, `SKIP LOCKED` on locations, bookings, reservations and attempts,
-so a location or aggregate busy with a booking write, webhook or status poll is left for the
-next run. It marks ordinary abandoned bookings `expired`, pending attempts `expired`, and
-releases the reservation; expired modification holds are discarded the same way. Holds with
-an accepted capture (hold extended through the capture grace) are not candidates, and a
-succeeded attempt still owning a held reservation is skipped for reconciliation.
+`expirePaymentHolds` service once: at most 100 safe local expirations per call, using
+location-first transactions and `SKIP LOCKED`. Unregistered unpaid attempts become
+`expired`; their reservations become `released`. Registered initial attempts are resolved
+through the provider check below instead of being blindly released. Definitive Stripe
+cancellation settles the checkout as `expired`, the attempt as `cancelled`, and the physical
+reservation as `released`, atomically under the existing aggregate locks. No actual booking,
+cancellation revision or booking notification is created. Financial evidence is retained.
 After those transactions commit, the endpoint samples at most five overdue registered
 Stripe attempts (`pending`, `expired` or `failed`) and calls `checkOnlinePayment` in
 processing-preserving mode. Sampling avoids one unavailable intent starving the rest.
@@ -649,10 +654,12 @@ Terminal evidence uses the existing settlement/receipt and late-capture compensa
 services; a racing success is observed rather than cancelled or assumed refunded.
 Failures and processing remain eligible on subsequent runs and visible to Admin.
 No transaction spans Stripe HTTP. The request-driven expiry before occupancy writes
-and during checkout polling remains unchanged. Authorized Admin booking list/detail
-reads also run the same bounded local expiry before reading persisted statuses, so
-an overdue unpaid court or coaching booking shows Expired without browser polling.
-This does not contact Stripe, invent provider cancellation, or expire accepted captures.
+and during checkout polling uses the same protection. Admin booking reads remain restricted
+to actual booking identities. Admin Calendar presents initial held rows as temporary
+checkout holds with a deadline and payment-review link. Transaction reads include an
+authoritative `bookings` existence flag so checkout references/statuses never link to or
+claim an actual booking. An uncertain registered attempt remains Pending and appears in
+Needs attention after the existing grace, with Check with Stripe available.
 Cron must still be configured for cleanup on an otherwise idle deployment.
 
 For local Supabase, set `CHECKOUT_EXPIRY_CRON_SECRET` and
@@ -699,9 +706,9 @@ Configure the Stripe webhook endpoint with `payment_intent.succeeded`,
 `payment_intent.amount_capturable_updated`, `refund.created`, `refund.updated` and
 `refund.failed`.
 
-Known limitations: an authorization that no webhook or poll ever reports is neither
-captured nor cancelled by the application; Stripe releases it after the authorization
-validity period, without a charge. A refund whose request never reached Stripe produces
+Known limitations: an authorization that no webhook or poll reports is never blindly
+captured. Configured expiry Cron checks overdue registered intents and cancels eligible
+authorizations; Stripe processing or transport uncertainty retains protection for later recovery. A refund whose request never reached Stripe produces
 no webhook and needs the Admin check. A refund Stripe fails after success requires the
 club to repay the customer outside the application. A process interrupted after acceptance
 but before dispatch cannot safely be distinguished from a lost capture response with the
@@ -709,7 +716,7 @@ existing state: later requests never capture again. After grace they retrieve an
 provider cancellation. Occupancy remains protected while Stripe is unreachable or cannot
 confirm cancellation; the payment remains visible in Admin Needs attention. No blind
 capture retry or time-based release occurs. With no checkout request, webhook or Admin
-check, remote cleanup waits; local unpaid occupancy still expires safely.
+check or configured expiry Cron, registered provider cleanup waits and its occupancy remains protected.
 
 ## TypeScript decision and persistence boundary
 
@@ -890,3 +897,18 @@ refund statuses; reporting changes for receipt-only or mismatched captures are
 intentionally deferred. Provider reconciliation is request- and webhook-driven (see
 Recovery without a scheduler). See the
 [historical design and deferred financial proposal](booking-financial-immutability-design.md).
+
+
+## Checkout and booking identity separation
+
+`SeparateCheckoutBookings1791462257927` introduces the separate business booking identity
+without deleting data or modifying earlier migrations. The old aggregate becomes
+`checkout_records`; financial FKs and revision IDs retain their values. The new `bookings`
+table has one row per genuinely confirmed booking, with same-aggregate confirmation-revision
+proof. Migration backfill requires an actual confirmed creation/confirmation revision;
+a cancelled abandoned checkout is insufficient. Business lists, details, history, coach
+options and counts join these real identities; technical payment review remains available
+for unsuccessful checkouts. Direct-reservation exclusion checks still use all checkout
+records, preventing a customer allocation from becoming a staff reservation.
+
+See [investigation, validation and manual steps](checkout-lifecycle-correction.md).

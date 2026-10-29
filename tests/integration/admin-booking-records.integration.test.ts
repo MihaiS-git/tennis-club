@@ -116,12 +116,8 @@ test("Admin booking records show persisted history and verified financial operat
     expect(guest.operations.rows.map(row => [row.method, row.transaction_status, row.amount_minor])).toEqual([["pay_at_club", "due", 4000]]);
     expect(guest.cancellation).toMatchObject({ availability: "unavailable", refundAvailable: false });
 
-    const unpaid = (await getAdminBookingRecords(expired, { supabase: admin }))!;
-    expect(unpaid.history.map(event => [event.label, event.recorded, event.at])).toEqual([["Booking created", true, "2026-10-03T10:00:00.000Z"],
-      ["Checkout expired", false, null]]);
-    expect(unpaid.operations).toEqual({ rows: [], page: 1, total: 0, totalPages: 1 });
-    expect(unpaid.summary).toMatchObject({ paid: 0, outstanding: 0 });
-    expect(unpaid.cancellation.availability).toBe("unavailable");
+    // An expired checkout has financial evidence, but no business booking.
+    expect(await getAdminBookingRecords(expired, { supabase: admin })).toBeNull();
 
     // Losing the Admin role denies the records read.
     expect((await db.from("user_roles").delete().eq("user_id", users[0]).eq("role_code", "admin")).error).toBeNull();
@@ -151,7 +147,7 @@ async function onlineBookingFixture(marker: string) {
   expect((await db.from("court_reservations").insert({ id: ids.reservation, court_id: ids.court, booking_date: "2099-12-01",
     starts_at_minute: 600, ends_at_minute: 660, status: "active" })).error).toBeNull();
   await insertBookingFixture([{ id: ids.booking, reservation_id: ids.reservation, customer_name: `${marker} Guest`,
-    customer_email: `${marker}-guest@example.test`, customer_phone: "1", status: "pending_payment", total_amount_minor: 5000, currency: "RON",
+    customer_email: `${marker}-guest@example.test`, customer_phone: "1", status: "confirmed", total_amount_minor: 5000, currency: "RON",
     cancellation_notice_minutes: 1440, payment_method: "online", created_at: "2026-10-01T10:00:00Z" }]);
   const cleanup = async () => {
     await cleanupBookingFixtures({ bookingIds: [ids.booking] });
@@ -178,13 +174,13 @@ test("a settlement committed during the read cannot make booking, summary and op
         await manager.query(`UPDATE public.payment_attempts SET status='succeeded',completed_at='2026-10-01T10:01:00Z' WHERE id=$1`, [attempt]);
         await manager.query(`INSERT INTO public.payment_capture_receipts(payment_attempt_id,provider,provider_payment_id,provider_capture_id,amount_minor,currency)
           VALUES($1,'stripe',$2,$3,5000,'RON')`, [attempt, `pi_${attempt}`, `ch_${attempt}`]);
-        await manager.query(`UPDATE public.bookings SET status='confirmed' WHERE id=$1`, [fixture.ids.booking]);
+        await manager.query(`UPDATE public.checkout_records SET status='confirmed' WHERE id=$1`, [fixture.ids.booking]);
       });
       settled = true;
     };
     const during = (await getAdminBookingRecords(fixture.ids.booking, { supabase: fixture.admin }))!;
     expect(settled).toBe(true);
-    expect(during.booking.status).toBe("pending_payment");
+    expect(during.booking.status).toBe("confirmed");
     expect(during.summary).toMatchObject({ paid: 0, pendingPayments: 5000, outstanding: 5000 });
     expect(during.operations.rows.map(row => [row.transaction_id, row.transaction_status])).toEqual([[attempt, "pending"]]);
 

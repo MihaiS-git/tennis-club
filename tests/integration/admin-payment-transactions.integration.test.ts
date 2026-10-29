@@ -59,7 +59,7 @@ test("Admin transaction projection lists every payment and refund, filters befor
     id: captureReceiptIds[index], payment_attempt_id: id, provider: "stripe", provider_payment_id: `original-${id}`,
     provider_capture_id: `capture-${id}`, amount_minor: 1000+index, currency: "RON",
   })))).error).toBeNull();
-  const contexts = await db.from("bookings").select("id,current_revision_id").in("id", bookingIds);
+  const contexts = await db.from("checkout_records").select("id,current_revision_id").in("id", bookingIds);
   expect(contexts.error).toBeNull();
   const contextIds = new Map(contexts.data?.map(row => [row.id, row.current_revision_id]));
   expect((await db.from("payment_refunds").insert([0,1,3].map((index) => ({ booking_id: bookingIds[index], payment_attempt_id: attemptIds[index],
@@ -93,7 +93,8 @@ test("Admin transaction projection lists every payment and refund, filters befor
   expect(all.find(r => r.booking_id === bookingIds[4])).toMatchObject({ needsAttention: false, refund: null, account_user_id: users[0] });
   // Guest bookings carry no account link, even though the Admin's email shares the marker.
   expect(all.filter(r => r.booking_id !== bookingIds[4]).every(r => r.account_user_id === null)).toBe(true);
-  expect(all.find(r => r.booking_id === bookingIds[22])).toMatchObject({ payment_status: "failed", needsAttention: false });
+  expect(all.find(r => r.booking_id === bookingIds[22])).toMatchObject({ payment_status: "failed", needsAttention: false, is_actual_booking: false, operation_label: "Checkout payment" });
+  expect(all.find(r => r.booking_id === bookingIds[4])).toMatchObject({ is_actual_booking: true });
   expect((await listAdminPaymentTransactions(query({ attention: "required" }),admin)).rows.map(row => row.booking_id)).toEqual(expect.arrayContaining([bookingIds[1], bookingIds[2]]));
   expect((await listAdminPaymentTransactions(query({ attention: "required" }),admin)).total).toBe(2);
   expect((await listAdminPaymentTransactions(query({ method: "pay_at_club" }),admin)).total).toBe(1);
@@ -164,7 +165,7 @@ test.each([
     [attemptId, `pi_${attemptId}`, `capture_${attemptId}`]);
     const successful = statuses.at(-1) === "succeeded";
     await manager.query(`INSERT INTO public.payment_refunds(id,booking_id,payment_attempt_id,provider,provider_payment_id,amount_minor,captured_amount_minor,currency,reason,context_revision_id,status)
-      SELECT $1,id,$3,'stripe',$4,2500,5000,'RON','late_capture_compensation',current_revision_id,$5 FROM public.bookings WHERE id=$2`,
+      SELECT $1,id,$3,'stripe',$4,2500,5000,'RON','late_capture_compensation',current_revision_id,$5 FROM public.checkout_records WHERE id=$2`,
     [refundId, bookingId, attemptId, `pi_${attemptId}`, successful ? "succeeded" : "pending_retry"]);
     const ids: string[] = [];
     for (const [index, status] of statuses.entries()) {
@@ -218,7 +219,7 @@ test.each([
       await manager.query(`INSERT INTO public.payment_refunds(id,booking_id,payment_attempt_id,operation_key,provider,provider_payment_id,
         amount_minor,currency,reason,context_revision_id)
         SELECT $1,id,$3,'missing-snapshot','stripe',$4,1000,'RON','late_capture_compensation',current_revision_id
-        FROM public.bookings WHERE id=$2`, [missingId, bookingId, attemptId, `pi_${attemptId}`]);
+        FROM public.checkout_records WHERE id=$2`, [missingId, bookingId, attemptId, `pi_${attemptId}`]);
       await expect(readFinancialHistory(manager, { ...filters, transaction: { kind: "refund", id: missingId } })).rejects.toThrow();
       const { lockRefundForProcessing } = await import("@/lib/db/repositories/payments.repository");
       await expect(lockRefundForProcessing(manager, { id: missingId })).rejects.toThrow();
@@ -254,7 +255,7 @@ test("page hydration preserves tied ordering, booking-only rows and filtered tot
     await manager.query(`INSERT INTO public.payment_refunds(id,booking_id,payment_attempt_id,provider,provider_payment_id,
       amount_minor,captured_amount_minor,currency,reason,context_revision_id,status)
       SELECT $1,id,$3,'stripe',$4,1000,5000,'RON','late_capture_compensation',current_revision_id,'pending_retry'
-      FROM public.bookings WHERE id=$2`, [refundId, bookingIds[0], attemptIds[0], `pi_${attemptIds[0]}`]);
+      FROM public.checkout_records WHERE id=$2`, [refundId, bookingIds[0], attemptIds[0], `pi_${attemptIds[0]}`]);
     const filters = { page: 1, status: "all", provider: "all", method: "all", attention: false, search: locationId,
       sort: "date", direction: "desc", bookingId: null, attentionRefundStatuses: ["failed", "pending_retry"] } as const;
     // All records share transaction now(): kind and ID must break ties across pages.

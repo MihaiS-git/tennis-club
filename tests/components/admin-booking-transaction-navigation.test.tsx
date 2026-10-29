@@ -31,6 +31,7 @@ const contract = { revisionId: "ae000000-0000-4000-8000-0000000000e1", bookingSt
   bookingDate: "2025-01-01", startMinute: 600, endMinute: 690, customerName: "Guest Person", customerEmail: "guest@example.test",
   customerPhone: "123", totalAmountMinor: 4550, currency: "RON" as const, paymentMethod: "online" as const };
 const transaction: AdminPaymentTransaction = {
+  is_actual_booking: true,
   context: { ...contract, source: "booking_revision", confirmationRevisionId: null }, previous_context: null, proposal: null,
   current_booking: { ...contract, status: "confirmed" }, financials: null, customer_phone: "123", booking_total_minor: 4550,
   transaction_kind: "payment", transaction_id: paymentId, payment_attempt_id: paymentId, adjustment_id: null,

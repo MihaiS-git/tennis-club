@@ -29,6 +29,7 @@ const transactionSchema = z.object({
   applied_revision_id: z.uuid().nullable(), confirmation_revision_id: z.uuid().nullable(),
   adjustment_status: z.enum(["pending", "applied", "cancelled", "expired", "unsuccessful"]).nullable(),
   transaction_status: paymentStatusSchema.nullable(),
+  is_actual_booking: z.boolean(),
   refunded_minor: z.number().int().nonnegative(), booking_id: z.uuid(), reservation_id: z.uuid(),
   // The booking's own account link; guest bookings have none and are never matched by email.
   account_user_id: z.uuid().nullable(),
@@ -93,6 +94,7 @@ export async function readFinancialHistory(manager: EntityManager, query: Parame
         adjustment: adjustment ? { ...adjustment, currency: z.enum(locationCurrencies).parse(adjustment.currency) } : null,
         adjustmentStatus: adjustment_status, appliedRevisionId: applied_revision_id,
         confirmationRevisionId: confirmation_revision_id, reason: row.refund?.reason ?? null }),
+      ...(!row.is_actual_booking && row.transaction_kind === "payment" ? { operation_label: "Checkout payment" } : {}),
       current_booking: { ...revisionContext(current), status: row.booking_status },
       financials: { ...financial, outstanding: reportedOutstanding(financial.totals, { ...current, status: row.booking_status }) },
     };

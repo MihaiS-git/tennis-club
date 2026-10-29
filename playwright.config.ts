@@ -9,6 +9,7 @@ const appUrl = "http://localhost:3100";
 process.env.STRIPE_SECRET_KEY = "sk_test_IsolatedFixture";
 process.env.STRIPE_PUBLISHABLE_KEY = "pk_test_IsolatedFixture";
 process.env.STRIPE_WEBHOOK_SECRET = "whsec_IsolatedFixture";
+process.env.CHECKOUT_EXPIRY_CRON_SECRET = "isolated-checkout-expiry-acceptance-secret";
 process.env.STRIPE_TEST_API_URL = "http://127.0.0.1:3111";
 process.env.APP_URL = appUrl;
 process.env.PLAYWRIGHT_APP_URL = appUrl;

@@ -44,7 +44,7 @@ function serve(bookings: unknown[], reservations: unknown[] = [], succeededIds: 
   const orderedReservations = z.array(z.object({ id: z.string() }).passthrough()).parse(reservations).sort((a, b) => a.id.localeCompare(b.id));
   queryRead.mockImplementation(async (sql: string, args: unknown[]) => {
     if (sql.includes("public.payment_attempts")) return succeededIds.map(booking_id => ({ booking_id }));
-    const rows = args[1] === "cancelled" ? [] : sql.includes("public.bookings b") ? orderedBookings : orderedReservations;
+    const rows = args[1] === "cancelled" ? [] : sql.includes("public.checkout_records b") ? orderedBookings : orderedReservations;
     const remaining = args[4] ? rows.filter(row => row.id > String(args[4])) : rows;
     return remaining.slice(0, Number(args[3])).map((row) => ({ row }));
   });
@@ -174,7 +174,7 @@ test("preserves cancellation snapshots and history filters", async () => {
   account.mockResolvedValue({ state: "active", userId: owner, roles: ["admin"] });
   queryRead.mockImplementation(async (sql: string, args: unknown[]) => {
     if (args[1] !== "cancelled") return [];
-    return (sql.includes("public.bookings b") ? [{ ...booking, status: "cancelled" }]
+    return (sql.includes("public.checkout_records b") ? [{ ...booking, status: "cancelled" }]
       : [{ ...reservation, status: "cancelled", cancelled_at: "2026-10-02T00:00:00Z", canceller: { first_name: "Admin", last_name: null } }]).map((row) => ({ row }));
   });
   const query = parseActivityQuery({ status: "cancelled", type: "reservation", court: id(2), from: "2026-10-03", to: "2026-10-03" }, "history");
@@ -482,9 +482,9 @@ test.each(["upcoming", "history"] as const)("%s advances raw cursors through ine
     expect(queryRead).toHaveBeenCalledTimes(scope === "history" ? 8 : 6);
     const reads = queryRead.mock.calls.filter(([sql]) => !sql.includes("public.payment_attempts"));
     expect(reads.every(([sql]) => !sql.includes("OFFSET"))).toBe(true);
-    expect(reads.filter(([sql, args]) => sql.includes("public.bookings b") && args[1] === "confirmed")
+    expect(reads.filter(([sql, args]) => sql.includes("public.checkout_records b") && args[1] === "confirmed")
       .map(([, args]) => args[4])).toEqual([undefined, id(1099), id(2099)]);
-    expect(reads.filter(([sql, args]) => !sql.includes("public.bookings b") && args[1] === "active")
+    expect(reads.filter(([sql, args]) => !sql.includes("public.checkout_records b") && args[1] === "active")
       .map(([, args]) => args[4])).toEqual([undefined, id(10999)]);
     expect(reads.filter(([, args]) => args[1] === "cancelled").every(([, args]) => args[4] === undefined)).toBe(true);
     expect(result.locations).toEqual([{ id: id(3), name: "Club A" }]);

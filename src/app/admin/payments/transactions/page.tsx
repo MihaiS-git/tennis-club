@@ -24,7 +24,7 @@ export default async function AdminPaymentsPage({ searchParams }: {
       <table aria-label="Payment transactions" className="w-full min-w-[880px] text-left text-sm">
         <thead className="border-b border-border bg-surface-muted text-xs font-semibold text-muted-foreground">
           <tr>{([
-            ["Date","date"], ["Customer",null], ["Booking",null], ["Transaction",null], ["Amount","amount"], ["Method",null],
+            ["Date","date"], ["Customer",null], ["Booking / Checkout",null], ["Transaction",null], ["Amount","amount"], ["Method",null],
             ["Status","payment"],
           ] as const).map(([label,sort]) => {
             const active = query.sort === sort;

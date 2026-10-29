@@ -21,11 +21,11 @@ test("customer/Admin refunds preserve occupancy until verified, complete on a la
   const admin = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_PUBLISHABLE_KEY!, { auth: { persistSession: false, autoRefreshToken: false } });
   const previous = (await db.from("payment_provider_settings").select("active_provider").single()).data!.active_provider;
   const rows = async (table: string, bookingId: string) => {
-    const result = await db.from(table).select("*").eq(table === "bookings" ? "id" : "booking_id", bookingId);
+    const result = await db.from(table).select("*").eq(table === "checkout_records" ? "id" : "booking_id", bookingId);
     expect(result.error).toBeNull(); return result.data!;
   };
   const cancelled = async (booking: { booking_id: string; reservation_id: string }) => {
-    expect((await rows("bookings", booking.booking_id))[0].status).toBe("cancelled");
+    expect((await rows("checkout_records", booking.booking_id))[0].status).toBe("cancelled");
     expect((await db.from("court_reservations").select("status").eq("id", booking.reservation_id).single()).data?.status).toBe("cancelled");
   };
   async function book(start: number, method: CheckoutFixtureInput["paymentMethod"] = "online") {
@@ -67,13 +67,13 @@ test("customer/Admin refunds preserve occupancy until verified, complete on a la
     const [first, duplicate] = await Promise.all([cancel(own.booking_id), cancel(own.booking_id)]);
     expect(first).toEqual(duplicate); expect(first.outcome).toBe("cancellation_pending");
     if (first.outcome !== "cancellation_pending" || !first.refundIds[0]) throw new Error("Expected refund ID");
-    expect((await rows("bookings",own.booking_id))[0].status).toBe("confirmed");
+    expect((await rows("checkout_records",own.booking_id))[0].status).toBe("confirmed");
     expect(await rows("payment_refunds", own.booking_id)).toMatchObject([{ id: first.refundIds[0], amount_minor: 5000, captured_amount_minor: 5000,
       currency: "RON", status: "pending", payment_attempt_id: own.payment_attempt_id, requested_by_user_id: users[0] }]);
     expect(await rows("payment_refunds", own.booking_id)).toHaveLength(1);
     refundPayment.mockRejectedValueOnce(new Error("network response lost"));
     expect(await processBookingRefund(first.refundIds[0])).toBe("pending_retry");
-    expect((await rows("bookings",own.booking_id))[0].status).toBe("confirmed");
+    expect((await rows("checkout_records",own.booking_id))[0].status).toBe("confirmed");
     expect((await rows("payment_refunds", own.booking_id))[0]).toMatchObject({ status: "pending_retry" });
     refundPayment.mockResolvedValue({ status: "succeeded", providerRefundId: `refund-${first.refundIds[0]}` });
     expect(await cancel(own.booking_id)).toEqual(first);
@@ -89,7 +89,7 @@ test("customer/Admin refunds preserve occupancy until verified, complete on a la
     const adminRefund = await book(660);
     const withRefund = await cancel(adminRefund.booking_id, true);
     expect(withRefund).toMatchObject({ outcome: "cancellation_pending", refundIds: [expect.any(String)] });
-    expect((await rows("bookings",adminRefund.booking_id))[0].status).toBe("confirmed");
+    expect((await rows("checkout_records",adminRefund.booking_id))[0].status).toBe("confirmed");
     expect(await cancel(adminRefund.booking_id, true)).toEqual(withRefund);
     if(withRefund.outcome!=="cancellation_pending") throw new Error("Missing refund");
     expect(await processBookingRefund(withRefund.refundIds[0])).toBe("succeeded");
@@ -116,7 +116,7 @@ test("customer/Admin refunds preserve occupancy until verified, complete on a la
     const ownerFlow = await book(900);
     refundPayment.mockRejectedValueOnce(new Error("ambiguous network response"));
     expect(await cancelOwnCustomerBooking(ownerFlow.booking_id, member)).toEqual({ ok: true, outcome: "cancellation_pending" });
-    expect((await rows("bookings",ownerFlow.booking_id))[0].status).toBe("confirmed");
+    expect((await rows("checkout_records",ownerFlow.booking_id))[0].status).toBe("confirmed");
     const ownerRefund = (await rows("payment_refunds", ownerFlow.booking_id))[0];
     // The Stripe refund webhook for this refund replays the unconfirmed request.
     expect(await processBookingRefund(ownerRefund.id, { strict: true })).toBe("succeeded");
@@ -138,7 +138,7 @@ test("customer/Admin refunds preserve occupancy until verified, complete on a la
     refundPayment.mockReset();
     expect((await db.from("payment_provider_settings").update({ active_provider: previous }).eq("id", true)).error).toBeNull();
     const ids = (await db.from("court_reservations").select("id").eq("court_id", courtId)).data?.map(r => r.id) ?? [];
-    const bookings = (await db.from("bookings").select("id").in("reservation_id", ids)).data?.map(b => b.id) ?? [];
+    const bookings = (await db.from("checkout_records").select("id").in("reservation_id", ids)).data?.map(b => b.id) ?? [];
     await cleanupBookingFixtures({ bookingIds: bookings });
     expect((await db.from("court_reservations").delete().eq("court_id", courtId)).error).toBeNull();
     expect((await db.from("pricing_rule_sets").delete().eq("location_id",locationId)).error).toBeNull();

@@ -777,7 +777,7 @@ test("settlement lock wait crosses persisted hold deadline; expiry and replaceme
 });
 
 test.each(["expiry"])("%s first serializes hold cleanup and application replacement insertion without deadlock", async first => {
-  const f=await seed(600,false,true), locked=deferred(), release=deferred();
+  const f=await seed(600,false,true,undefined,actorId,false), locked=deferred(), release=deferred();
   if (first === "settlement") {
     const original=bookings.findBookingForUpdate;
     vi.spyOn(bookings,"findBookingForUpdate").mockImplementationOnce(async (...args)=>{
@@ -795,6 +795,7 @@ test.each(["expiry"])("%s first serializes hold cleanup and application replacem
     await database.query("UPDATE public.court_reservations SET hold_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",[f.reservationId]);
     // Trusted writes explicitly expire holds before inserting a replacement.
     await expirePaymentHolds();
+    await database.query("UPDATE payment_attempts SET provider_payment_id=$2 WHERE id=$1", [f.attemptId, `pi-${f.attemptId}`]);
     const replacement=await seed(600,false,true), before=await settlementState(replacement);
     expect(await processOnlinePaymentEvent(paymentEvent(f))).toBe("expired"); expect(await settlementState(replacement)).toEqual(before);
     // One late-capture exception records that the late payment is being refunded.
@@ -1015,7 +1016,7 @@ test("completion fences obligation and execution snapshots and cannot regress ve
     .toEqual(history.map(e=>({result:e.terminalResult,id:e.providerRefundId,completed:e.completedAt})));
 });
 test("expiry skips a busy payment attempt without partial lifecycle changes and succeeds on a later poll", async () => {
-  const f=await seed(600,false,true);await database.query("UPDATE public.court_reservations SET hold_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",[f.reservationId]);
+  const f=await seed(600,false,true,undefined,actorId,false);await database.query("UPDATE public.court_reservations SET hold_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",[f.reservationId]);
   const before=await settlementState(f),blocker=await runner();
   try {
     await payments.lockSettlementAttempt(blocker.manager,f.attemptId);
@@ -1026,7 +1027,7 @@ test("expiry skips a busy payment attempt without partial lifecycle changes and 
   } finally {if(blocker.isTransactionActive)await blocker.rollbackTransaction();await blocker.release();}
 });
 test.each(["reservation"])("TypeScript expiry failure after %s write rolls back the complete aggregate", async stage => {
-  const f=await seed(600,false,true);await database.query("UPDATE public.court_reservations SET hold_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",[f.reservationId]);
+  const f=await seed(600,false,true,undefined,actorId,false);await database.query("UPDATE public.court_reservations SET hold_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",[f.reservationId]);
   const before=await settlementState(f);
   if(stage==="booking") {
     const write=bookings.updateSettlementBookingStatus;
@@ -1432,10 +1433,12 @@ test("expired checkout capture commits one compensation obligation and retains i
   vi.spyOn(stripeAdapter, "refundPayment").mockImplementation(async refund => ({
     status: "succeeded", providerRefundId: `re-${refund.id}`,
   }));
-  const f = await seed(600, false, true);
+  const f = await seed(600, false, true, undefined, actorId, false);
   const originalRevision = (await state(f)).booking!.revision;
   await database.query("UPDATE public.court_reservations SET hold_expires_at='2020-01-01' WHERE id=$1", [f.reservationId]);
   await expirePaymentHolds();
+  // Delayed registration after safe unregistered expiry preserves provider evidence.
+  await database.query("UPDATE payment_attempts SET provider_payment_id=$2 WHERE id=$1", [f.attemptId, `pi-${f.attemptId}`]);
   const replacement = await seed(600, false, true), replacementBefore = await state(replacement);
   const event = paymentEvent(f);
   expect(await processOnlinePaymentEvent(event)).toBe("expired");
@@ -1542,7 +1545,7 @@ test("late compensation retains original request context after subsequent checko
   const before = await database.query("SELECT * FROM public.payment_refunds WHERE booking_id=$1", [f.id]);
   expect(before).toEqual([expect.objectContaining({ reason: "late_capture_compensation", context_revision_id: initial.id })]);
   await abandonOnlineCheckout({ attemptId: f.attemptId, token });
-  expect((await state(f)).booking!.revision).toMatchObject({ kind: "cancelled", cancellationCause: "checkout_abandoned" });
+  expect((await state(f)).booking!.revision).toMatchObject({ kind: "created", cancellationCause: null });
   expect((await payments.findCheckoutAttempt(database.manager, f.attemptId))?.status).toBe("cancelled");
   // A distinct late event sees the provider cancellation; the refund still
   // belongs to the original expired request, not the abandonment revision.
@@ -1960,7 +1963,7 @@ test("status polling that observes processing records the live lease", async () 
   expect(await listBookingsWithLivePayment(database.manager, [f.id])).toEqual(new Set());
 });
 
-test("initial-booking checkout expiry is unchanged by modification leases", async () => {
+test("initial checkout provider resolution leaves processing modification leases unchanged", async () => {
   const outcomes = simulatedStripe();
   const paid = await seed(840, true);
   const p = await proposeSurcharge(paid);
@@ -1969,11 +1972,13 @@ test("initial-booking checkout expiry is unchanged by modification leases", asyn
   const initial = await seed(1080, false, true);
   const deadline = (await database.query("SELECT expires_at FROM public.payment_attempts WHERE id=$1", [initial.attemptId]))[0].expires_at;
   await database.query("UPDATE public.court_reservations SET hold_expires_at='2020-01-01' WHERE id=$1", [initial.reservationId]);
-  expect(await expirePaymentHolds({ courtId })).toBe(1);
+  expect(await expirePaymentHolds({ courtId })).toBe(0);
+  expect((await state(initial)).reservation?.status).toBe("held");
+  expect(await checkOnlinePayment(initial.attemptId)).toBe("cancelled");
   expect((await state(initial)).booking?.status).toBe("expired");
   expect((await state(initial)).reservation?.status).toBe("released");
   expect(await database.query("SELECT status,expires_at FROM public.payment_attempts WHERE id=$1", [initial.attemptId]))
-    .toEqual([{ status: "expired", expires_at: deadline }]);
+    .toEqual([{ status: "cancelled", expires_at: deadline }]);
   expect(await holds(p.id)).toEqual([expect.objectContaining({ status: "held" })]);
 });
 

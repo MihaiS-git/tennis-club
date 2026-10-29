@@ -76,7 +76,7 @@ test("Admin opens one booking from Calendar and List, returns to each origin and
     // The booking and its history remain; only occupancy is released.
     const [after] = await db.query(`SELECT b.status, r.status AS reservation_status,
       (SELECT count(*)::int FROM public.booking_revisions WHERE booking_id=b.id) AS revisions
-      FROM public.bookings b JOIN public.court_reservations r ON r.id=b.reservation_id WHERE b.id=$1`, [bookingId]);
+      FROM public.checkout_records b JOIN public.court_reservations r ON r.id=b.reservation_id WHERE b.id=$1`, [bookingId]);
     expect(after).toEqual({ status: "cancelled", reservation_status: "cancelled", revisions: before.revisions + 1 });
     await page.goto(calendarUrl);
     await expect(page.getByRole("button", { name: new RegExp(`Booking · ${customer}`) })).toHaveCount(0);
@@ -162,7 +162,7 @@ test("Admin edits their own booking from Booking Details; other customers' booki
     // One appended revision; no payment record is created or changed for a pay-at-club edit.
     const [after] = await db.query(evidence, [ownBooking]);
     expect(after).toEqual({ revisions: before.revisions + 1, attempts: before.attempts });
-    const [row] = await db.query(`SELECT b.status, r.starts_at_minute, r.ends_at_minute, v.total_amount_minor FROM public.bookings b
+    const [row] = await db.query(`SELECT b.status, r.starts_at_minute, r.ends_at_minute, v.total_amount_minor FROM public.checkout_records b
       JOIN public.court_reservations r ON r.id=b.reservation_id JOIN public.booking_revisions v ON v.id=b.current_revision_id WHERE b.id=$1`, [ownBooking]);
     expect(row).toEqual({ status: "confirmed", starts_at_minute: 600, ends_at_minute: 690, total_amount_minor: 7500 });
   } finally {

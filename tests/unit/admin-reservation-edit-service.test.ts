@@ -57,7 +57,7 @@ test("preserves current values, microsecond token, fixed location and court/occu
     occupancy: [{ court_id: id(3), starts_at_minute: 600, ends_at_minute: 660 }] });
   expect(result.day.courts.map((court) => court.court.id)).toEqual([id(3), id(2)]);
   expect(query.mock.calls[0][1]).toEqual([target.id, null]);
-  expect(query.mock.calls[0][0]).toContain("NOT EXISTS(SELECT 1 FROM public.bookings");
+  expect(query.mock.calls[0][0]).toContain("NOT EXISTS(SELECT 1 FROM public.checkout_records");
   expect(query.mock.calls[0][0]).toContain("AND c.is_active");
   expect(query.mock.calls[1][1]).toEqual(["2026-10-16", id(1), target.id, 0, 1000]);
   expect(query.mock.calls.every(([sql]) => !/INSERT|UPDATE|DELETE/.test(sql))).toBe(true);

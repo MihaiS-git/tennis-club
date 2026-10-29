@@ -127,6 +127,20 @@ test("delivery cutoff is passed to claims and invalid cutoffs claim nothing", as
   expect(mocks.claim).not.toHaveBeenCalled();
 });
 
+test("a local production build rejects live delivery before claims or Admin failure alerts", async () => {
+  vi.stubEnv("NODE_ENV", "production");
+  vi.stubEnv("NOTIFICATION_EMAIL_MODE", "live");
+  vi.stubEnv("APP_URL", "http://localhost:3000");
+  vi.stubEnv("VITEST", "");
+  vi.stubEnv("NOTIFICATION_TEST_RUNNER", "");
+  const request = vi.fn(); vi.stubGlobal("fetch", request);
+  await expect(processPendingEmailDeliveries()).rejects.toThrow("Live Brevo delivery is not permitted in this environment");
+  expect(mocks.expired).not.toHaveBeenCalled();
+  expect(mocks.claim).not.toHaveBeenCalled();
+  expect(mocks.messages).not.toHaveBeenCalled();
+  expect(request).not.toHaveBeenCalled();
+});
+
 test.each([
   [1, 5], [2, 15], [3, 60], [4, 360],
 ] as const)("retryable attempt %i schedules %i minutes", async (attempts, minutes) => {

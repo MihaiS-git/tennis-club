@@ -60,7 +60,7 @@ async function booking(owner: string | null = null, method: "online" | "pay_at_c
   nextMinute += duration;
   bookingIds.push(row.booking_id);
   const { manager } = await getDataSource();
-  const [identity] = await manager.query("SELECT current_revision_id FROM public.bookings WHERE id=$1", [row.booking_id]);
+  const [identity] = await manager.query("SELECT current_revision_id FROM public.checkout_records WHERE id=$1", [row.booking_id]);
   return { ...row, revision: await findRevision(manager, identity.current_revision_id) };
 }
 
@@ -93,11 +93,11 @@ test("confirmation, rescheduling and failed/successful cancellation refunds sett
   const database = await getDataSource();
   expect(await database.query("SELECT kind FROM public.booking_financial_exceptions WHERE booking_id=$1", [held.booking_id]))
     .toEqual([{ kind: "cancellation_rejected" }]);
-  expect(await database.query("SELECT b.status,r.status AS reservation_status FROM public.bookings b JOIN public.court_reservations r ON r.id=b.reservation_id WHERE b.id=$1", [held.booking_id]))
+  expect(await database.query("SELECT b.status,r.status AS reservation_status FROM public.checkout_records b JOIN public.court_reservations r ON r.id=b.reservation_id WHERE b.id=$1", [held.booking_id]))
     .toEqual([{ status: "confirmed", reservation_status: "active" }]);
   refundPayment.mockImplementation(async ({ id }: { id: string }) => ({ status: "succeeded", providerRefundId: `re_${id}` }));
   expect(await finishBookingCancellation(await cancelBookingCommand(held.booking_id, owner, false))).toMatchObject({ ok: true, outcome: "cancelled" });
-  expect(await database.query("SELECT b.status,r.status AS reservation_status FROM public.bookings b JOIN public.court_reservations r ON r.id=b.reservation_id WHERE b.id=$1", [held.booking_id]))
+  expect(await database.query("SELECT b.status,r.status AS reservation_status FROM public.checkout_records b JOIN public.court_reservations r ON r.id=b.reservation_id WHERE b.id=$1", [held.booking_id]))
     .toEqual([{ status: "cancelled", reservation_status: "cancelled" }]);
   expect(await database.query("SELECT status FROM public.payment_refunds WHERE booking_id=$1 ORDER BY created_at,id", [held.booking_id]))
     .toEqual([{ status: "voided" }, { status: "succeeded" }]);
@@ -116,7 +116,7 @@ test("financial exceptions commit atomically, retain first context, reject chang
   await inTransaction(manager => recordBookingFinancialException(manager, facts));
   const before = await database.query("SELECT * FROM public.booking_financial_exceptions WHERE event_key=$1", [facts.key]);
   await appendBookingContractFixture(held.booking_id, { customer_email: "later@example.test" });
-  const [current] = await database.query("SELECT current_revision_id FROM public.bookings WHERE id=$1", [held.booking_id]);
+  const [current] = await database.query("SELECT current_revision_id FROM public.checkout_records WHERE id=$1", [held.booking_id]);
   await inTransaction(manager => recordBookingFinancialException(manager, { ...facts, revisionId: current.current_revision_id }));
   expect(await database.query("SELECT * FROM public.booking_financial_exceptions WHERE event_key=$1", [facts.key])).toEqual(before);
   await expect(inTransaction(manager => recordBookingFinancialException(manager, { ...facts, kind: "late_capture" }))).rejects.toThrow("identity changed");
@@ -162,7 +162,7 @@ test("a crash after the definitive refund result keeps one rejected cancellation
   expect(await resolveRefundBackedAdjustment(result.adjustmentId)).toBe("unsuccessful");
   expect(await database.query("SELECT event_key,kind FROM public.booking_financial_exceptions WHERE booking_id=$1", [held.booking_id]))
     .toEqual([{ event_key: key, kind: "cancellation_rejected" }]);
-  expect(await database.query("SELECT status FROM public.bookings WHERE id=$1", [held.booking_id]))
+  expect(await database.query("SELECT status FROM public.checkout_records WHERE id=$1", [held.booking_id]))
     .toEqual([{ status: "confirmed" }]);
 });
 
@@ -201,7 +201,7 @@ test("a rejected price reduction records modification failure without an outstan
   expect(await resolveRefundBackedAdjustment(result.adjustmentId)).toBe("unsuccessful");
   expect(await database.query("SELECT event_key FROM public.booking_financial_exceptions WHERE booking_id=$1", [held.booking_id]))
     .toEqual([{ event_key: `adjustment:${result.adjustmentId}:abandoned` }]);
-  expect(await database.query("SELECT status FROM public.bookings WHERE id=$1", [held.booking_id])).toEqual([{ status: "confirmed" }]);
+  expect(await database.query("SELECT status FROM public.checkout_records WHERE id=$1", [held.booking_id])).toEqual([{ status: "confirmed" }]);
 });
 
 test("a coach conflict when applying a refunded reduction keeps the booking and records the unapplied change", async () => {
@@ -242,7 +242,7 @@ test("a coach conflict when applying a refunded reduction keeps the booking and 
     expect(await database.query("SELECT status FROM public.booking_adjustments WHERE id=$1", [result.adjustmentId])).toEqual([{ status: "unsuccessful" }]);
     expect(await database.query("SELECT event_key,kind FROM public.booking_financial_exceptions WHERE booking_id=$1", [held.booking_id]))
       .toEqual([{ event_key: `adjustment:${result.adjustmentId}:unapplied`, kind: "refunded_modification_unapplied" }]);
-    expect(await database.query("SELECT b.status,v.total_amount_minor FROM public.bookings b JOIN public.booking_revisions v ON v.id=b.current_revision_id WHERE b.id=$1",
+    expect(await database.query("SELECT b.status,v.total_amount_minor FROM public.checkout_records b JOIN public.booking_revisions v ON v.id=b.current_revision_id WHERE b.id=$1",
       [held.booking_id])).toEqual([{ status: "confirmed", total_amount_minor: 10000 }]);
   } finally {
     await database.query("DELETE FROM public.court_reservations WHERE court_id=$1", [otherCourt]);

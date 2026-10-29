@@ -37,7 +37,7 @@ async function fixture(manager: EntityManager, reason: PaymentRefundEntity["reas
     VALUES($1,$2,'online','stripe',$3,5000,'RON','succeeded',now()+interval '10 minutes',now())`, [attemptId, bookingId, providerPaymentId]);
   await manager.query(`INSERT INTO public.payment_capture_receipts(payment_attempt_id,provider,provider_payment_id,provider_capture_id,amount_minor,currency)
     VALUES($1,'stripe',$2,$2,5000,'RON')`, [attemptId, providerPaymentId]);
-  const context: { current_revision_id: string }[] = await manager.query("SELECT current_revision_id FROM public.bookings WHERE id=$1", [bookingId]);
+  const context: { current_revision_id: string }[] = await manager.query("SELECT current_revision_id FROM public.checkout_records WHERE id=$1", [bookingId]);
   await manager.getRepository(PaymentRefundEntity).insert({ id: refundId, bookingId, paymentAttemptId: attemptId,
     provider: "stripe", providerPaymentId, amountMinor: 2500, capturedAmountMinor: 5000, currency: "RON", reason,
     contextRevisionId: context[0].current_revision_id, operationKey: randomUUID() });
