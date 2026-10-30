@@ -4,6 +4,7 @@ import { locationCurrencies } from "@/lib/admin/locations-validation";
 import type { BookingAdjustmentEntity } from "@/lib/db/entities/booking-adjustment.entity";
 import type { summarizeReportedFinancials } from "@/lib/payments/financials";
 import type { LocationCurrency } from "@/lib/pricing/money";
+import { formatMoney } from "@/lib/pricing/currency";
 import type { RevisionSnapshot } from "./revision";
 import { bookingStatusLabels, type BookingStatus } from "./admin-query";
 
@@ -29,7 +30,7 @@ type HistoryAdjustment = Pick<BookingAdjustmentEntity, "id" | "baseRevisionId" |
 
 const actors: Record<RevisionSnapshot["actorScope"], string> = {
   guest: "guest", customer: "customer", coach_owner: "coach", admin_owner: "administrator (own booking)",
-  admin: "administrator", provider: "verified payment",
+  coach: "assigned coach", admin: "administrator", provider: "verified payment",
 };
 const stateStatus = {
   pending_payment: { label: "Awaiting payment", tone: "warning" },
@@ -46,6 +47,7 @@ const requestStatus = {
 const cancellationCauses = {
   owner_cancelled: "Cancelled by the booking owner",
   admin_cancelled: "Cancelled by an administrator",
+  coach_cancelled: "Cancelled by the assigned coach",
   checkout_abandoned: "Checkout abandoned before payment",
 } as const;
 const inferredStatus: Record<BookingStatus, string> = {
@@ -88,10 +90,17 @@ export function buildBookingHistory(input: { status: BookingStatus; revisions: r
       detail: `Booked by ${actor} · ${revision.paymentMethod === "online" ? "Online payment" : "Pay at club"}` });
     else if (revision.kind === "confirmed") events.push({ ...base, kind: "confirmed", label: "Booking confirmed", previous: null, next: null,
       detail: revision.actorScope === "provider" ? "Confirmed by verified payment" : `Confirmed by ${actor}` });
-    else if (revision.kind === "rescheduled") events.push({ ...base, kind: "change", label: prior ? changeLabel(prior, current) : "Rescheduled",
-      previous: prior, next: current, detail: `Changed by ${actor}` });
+    else if (revision.kind === "rescheduled") {
+      // A staff change to a dearer destination records its price; the club absorbed the rest.
+      const destination = request?.target.destinationTotalMinor;
+      const absorbed = destination !== undefined && destination > revision.totalAmountMinor
+        ? ` · Destination price ${formatMoney(destination, revision.currency)}, club absorbed ${
+          formatMoney(destination - revision.totalAmountMinor, revision.currency)}` : "";
+      events.push({ ...base, kind: "change", label: prior ? changeLabel(prior, current) : "Rescheduled",
+        previous: prior, next: current, detail: `Changed by ${actor}${absorbed}` });
+    }
     else events.push({ ...base, kind: "cancelled", label: "Cancelled", previous: null, next: current,
-      detail: revision.cancellationCause ? cancellationCauses[revision.cancellationCause] : `Cancelled by ${actor}` });
+      detail: `${revision.cancellationCause ? cancellationCauses[revision.cancellationCause] : `Cancelled by ${actor}`}${request?.target.cancellationExplanation ? ` · ${request.target.cancellationExplanation}` : ""}` });
   });
   // Applied requests are represented by their accepted revision above.
   for (const adjustment of input.adjustments) {
@@ -100,8 +109,8 @@ export function buildBookingHistory(input: { status: BookingStatus; revisions: r
     const target = adjustment.target;
     events.push({ key: adjustment.id, kind: "request", recorded: true, at: adjustment.createdAt.toISOString(), requestedAt: null,
       label: adjustment.kind === "cancellation" ? "Cancellation requested" : "Modification requested",
-      detail: `Requested by ${adjustment.scope === "admin" ? "an administrator" : "the booking owner"} · not applied${
-        adjustment.status === "pending" ? " yet" : ""}`,
+      detail: `Requested by ${target.actorScope === "coach" ? "the assigned coach" : adjustment.scope === "admin" ? "an administrator" : "the booking owner"} · not applied${
+        adjustment.status === "pending" ? " yet" : ""}${target.cancellationExplanation ? ` · ${target.cancellationExplanation}` : ""}`,
       status: requestStatus[adjustment.status],
       previous: baseRevision ? schedule(baseRevision) : null,
       next: adjustment.kind === "cancellation" ? null : { courtId: target.courtId, locationName: target.locationName, courtName: target.courtName,
@@ -166,9 +175,7 @@ export function adminCancellationAvailability(input: { status: BookingStatus; st
   return "eligible";
 }
 
-// Booking Details offers editing only through the existing owner rescheduling boundary:
-// Admins may reschedule their own court bookings, never other customers' or coaching bookings.
-export function adminBookingEditable(input: { availability: AdminCancellationAvailability; accountUserId: string | null;
-  actorUserId: string; includesCoaching: boolean }) {
-  return input.availability === "eligible" && input.accountUserId === input.actorUserId && !input.includesCoaching;
+// Admin operational editing applies to any eligible court or coaching booking.
+export function adminBookingEditable(input: { availability: AdminCancellationAvailability }) {
+  return input.availability === "eligible";
 }

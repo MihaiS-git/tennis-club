@@ -24,4 +24,5 @@ export const courtMutationSchema = z.strictObject({
 export type CourtMutationResult =
   | { ok: true; id: string }
   | { ok: false; reason: "invalid-input"; fieldErrors: Record<string, string> }
-  | { ok: false; reason: "duplicate-slug" | "not-found" | "invalid-location" | "has-coverage" | "has-pricing" };
+  | { ok: false; reason: "duplicate-slug" | "not-found" | "invalid-location" | "has-coverage" | "has-pricing" }
+  | { ok: false; reason: "occupied"; message: string };

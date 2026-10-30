@@ -1,6 +1,7 @@
 import type { BookingTypeSnapshot } from "./booking-type";
 import { bookingType } from "./booking-type";
 import type { LocationCurrency } from "@/lib/pricing/money";
+import type { CoachingEvidence } from "./revision";
 import type { PersonalReservation } from "@/lib/reservations/personal";
 
 export type CustomerBookingHistoryItem = BookingTypeSnapshot & {
@@ -10,7 +11,7 @@ export type CustomerBookingHistoryItem = BookingTypeSnapshot & {
   status: "confirmed" | "cancelled";
   customer_name: string; customer_email: string; customer_phone: string;
   cancellation_notice_minutes: number;
-  total_amount_minor: number; currency: LocationCurrency;
+  total_amount_minor: number; currency: LocationCurrency; coaching?: CoachingEvidence | null;
 };
 
 type DirectReservationHistoryItem = PersonalReservation & {

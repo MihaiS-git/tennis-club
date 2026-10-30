@@ -1,35 +1,44 @@
 "use client";
 
-import { CourtTimelineGrid, TimelineLegend, timelineCellLabels, timelineCellStyles, timelineSelectedStyle } from "@/components/court-timeline-grid";
+import { CourtTimelineGrid, TimelineLegend, timelineCellLabels, timelineCellStyles, timelineSelectedStyle, type TimelineCellState } from "@/components/court-timeline-grid";
 import { minuteToTime } from "@/lib/admin/opening-hours-validation";
 import type { ReservationCell, ReservationSelection } from "@/lib/reservations/domain";
 
-export type ReservationTimetableDay = {
+export type ReservationTimetableDay<Cell extends TimelineCellState = ReservationCell> = {
   times: number[];
   // Rates are present only for customer booking edits; Admin/staff reservations are free.
-  courts: { court: { id: string; name: string }; cells: ReservationCell[]; rates?: (number | null)[] }[];
+  courts: { court: { id: string; name: string }; cells: Cell[]; rates?: (number | null)[] }[];
   currency?: string;
 };
-export type OccupiedInterval = { id: string; courtId: string; startsAtMinute: number; endsAtMinute: number; label: string; includesCoaching?: boolean; kind?: "booking" | "reservation" };
+// lesson: the signed-in Coach's own assigned lesson; blockLabel is its booked program.
+export type OccupiedInterval = { id: string; courtId: string; startsAtMinute: number; endsAtMinute: number; label: string;
+  includesCoaching?: boolean; kind?: "booking" | "reservation" | "lesson"; blockLabel?: string };
 
 // Staff reservations are distinguished from customer bookings in Admin occupancy.
 const reservationBlockStyle = "bg-clay-300 text-primary";
+// The signed-in Coach's own lessons stand apart from every other occupied interval.
+const lessonBlockStyle = "bg-tennis text-forest-900";
 
-export function ReservationTimetable({ day, date, timezone, selection, onChoose, occupiedIntervals = [], onOccupiedClick, disabled = false }: {
-  day: ReservationTimetableDay; date: string; timezone?: string; selection: ReservationSelection | null;
-  onChoose: (courtId: string, cells: ReservationCell[], row: number) => void;
+export function ReservationTimetable<Cell extends TimelineCellState = ReservationCell>({ day, date, timezone, selection, onChoose, occupiedIntervals = [], onOccupiedClick, disabled = false, fixedDuration, original }: {
+  fixedDuration?: number; original?: { courtId: string; startMinute: number; endMinute: number };
+  day: ReservationTimetableDay<Cell>; date: string; timezone?: string; selection: ReservationSelection | null;
+  onChoose: (courtId: string, cells: Cell[], row: number) => void;
   occupiedIntervals?: OccupiedInterval[]; onOccupiedClick?: (id: string) => void; disabled?: boolean;
 }) {
   if (day.times.length === 0) return <p className="mt-4 text-sm text-muted-foreground">Closed on this date.</p>;
-  const firstActionableMinute = day.times.find((_, index) => day.courts.some(({ cells }) => cells[index] === "available" && (cells[index - 1] === "available" || cells[index + 1] === "available")));
-  // Booked time drawn as a staff reservation block is described by that block's own legend entry.
+  const firstActionableMinute = day.times.find((_, index) => day.courts.some(({ cells }) => cells[index] === "available" && (fixedDuration || cells[index - 1] === "available" || cells[index + 1] === "available")));
+  // Booked time drawn as a staff reservation or own lesson block is described by that block's own legend entry.
   const legendCells = day.courts.flatMap(({ court, cells }) => cells.filter((cell, row) => cell !== "booked"
-    || !occupiedIntervals.some((item) => item.kind === "reservation" && item.courtId === court.id
+    || !occupiedIntervals.some((item) => (item.kind === "reservation" || item.kind === "lesson") && item.courtId === court.id
       && item.startsAtMinute < day.times[row] + 30 && day.times[row] < item.endsAtMinute)));
+  const ownLessons = occupiedIntervals.some((item) => item.kind === "lesson");
   return <>
     <TimelineLegend cells={legendCells}
-      extras={occupiedIntervals.some((item) => item.kind === "reservation") ? [{ label: "Reservation", className: reservationBlockStyle }] : []}>
-      Select a half-hour cell to start a one-hour interval, then click adjacent cells to adjust.
+      extras={[...occupiedIntervals.some((item) => item.kind === "reservation") ? [{ label: "Reservation", className: reservationBlockStyle }] : [],
+        ...ownLessons ? [{ label: "Your lesson", className: lessonBlockStyle }] : [],
+        ...fixedDuration ? [{ label: "Original reservation", className: "bg-surface ring-2 ring-inset ring-accent" }] : []]}>
+      {ownLessons && "Your lessons show their booked program; other bookings and lessons show as Booked. "}
+      {fixedDuration ? `Select a start for the existing ${fixedDuration}-minute duration.` : "Select a half-hour cell to start a one-hour interval, then click adjacent cells to adjust."}
     </TimelineLegend>
     <CourtTimelineGrid times={day.times} rows={day.courts} date={date} timezone={timezone}
       selectedStartMinute={selection?.startMinute} selectedEndMinute={selection?.endMinute} firstActionableMinute={firstActionableMinute}
@@ -44,23 +53,27 @@ export function ReservationTimetable({ day, date, timezone, selection, onChoose,
             if (row > 0 && day.times[row - 1] + 30 > occupied.startsAtMinute) return null;
             const span = day.times.filter((time) => time >= minute && time < occupied.endsAtMinute).length;
             const label = `${court.name} ${date} ${minuteToTime(occupied.startsAtMinute)}–${minuteToTime(occupied.endsAtMinute)}, ${occupied.label}`;
-            const blockStyle = occupied.kind === "reservation" ? reservationBlockStyle : timelineCellStyles.booked;
+            const blockStyle = occupied.kind === "reservation" ? reservationBlockStyle : occupied.kind === "lesson" ? lessonBlockStyle : timelineCellStyles.booked;
+            const blockLabel = occupied.kind === "reservation" ? "Reservation" : occupied.kind === "lesson" ? occupied.blockLabel ?? "Your lesson"
+              : occupied.includesCoaching ? "Coaching" : null;
             return <div key={`${minute}:${occupied.id}`} role="cell" aria-colspan={span} style={{ gridColumn: `${row + 2} / span ${span}` }} className="min-w-0 border-b border-r border-border p-0.5">
               {onOccupiedClick ? <button type="button" disabled={disabled} onClick={() => onOccupiedClick(occupied.id)} aria-label={label}
-                className={`block h-full w-full rounded-control border border-current/30 focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-accent ${blockStyle}`}>{(occupied.kind === "reservation" || occupied.includesCoaching) && <span className="block truncate px-1 text-[10px] font-semibold">{occupied.kind === "reservation" ? "Reservation" : "Coaching"}</span>}</button>
+                className={`block h-full w-full rounded-control border border-current/30 focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-accent ${blockStyle}`}>{blockLabel && <span className="block truncate px-1 text-[10px] font-semibold">{blockLabel}</span>}</button>
                 : <div aria-label={label} className={`h-full rounded-control border border-current/30 ${blockStyle}`} />}
             </div>;
           }
           const cell = cells[row];
           const selected = selection?.courtId === court.id && row >= selection.startRow && row < selection.endRow;
-          const selectable = cell === "available" && (cells[row - 1] === "available" || cells[row + 1] === "available");
-          const label = timelineCellLabels[cell];
-          const accessibleLabel = `${court.name} ${date} ${minuteToTime(minute)}–${minuteToTime(minute + 30)}, ${label}${selected ? ", selected" : ""}`;
+          const selectable = cell === "available" && (fixedDuration || cells[row - 1] === "available" || cells[row + 1] === "available");
+          const isOriginal = original?.courtId === court.id && minute >= original.startMinute && minute < original.endMinute;
+          const originalStyle = isOriginal ? "ring-2 ring-inset ring-accent" : "";
+          const label = fixedDuration && selectable ? `${fixedDuration} min, Available` : fixedDuration && cell === "unavailable" ? "Unavailable start" : timelineCellLabels[cell];
+          const accessibleLabel = `${court.name} ${date} ${minuteToTime(minute)}–${minuteToTime(minute + (fixedDuration && selectable ? fixedDuration : 30))}, ${label}${isOriginal ? ", Original reservation" : ""}${selected ? ", selected" : ""}`;
           return <div key={minute} role="cell" style={{ gridColumn: row + 2 }} className={`min-w-0 border-b ${selected ? "border-primary" : "border-border"}`}>
             {selectable ? <button type="button" disabled={disabled} aria-label={accessibleLabel} aria-pressed={selected}
               onClick={() => onChoose(court.id, cells, row)}
-              className={`block h-full w-full border-r focus-visible:relative focus-visible:z-10 focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-accent ${selected ? `border-primary ${timelineSelectedStyle}` : `border-border ${timelineCellStyles[cell]}`}`} />
-              : <div aria-label={accessibleLabel} className={`h-full border-r border-border ${timelineCellStyles[cell]}`} />}
+              className={`block h-full w-full border-r ${originalStyle} focus-visible:relative focus-visible:z-10 focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-accent ${selected ? `border-primary ${timelineSelectedStyle}` : `border-border ${timelineCellStyles[cell]}`}`} />
+              : <div aria-label={accessibleLabel} className={`h-full border-r border-border ${originalStyle} ${selected ? timelineSelectedStyle : timelineCellStyles[cell]}`} />}
           </div>;
         });
       }} />

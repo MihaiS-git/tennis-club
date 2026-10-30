@@ -2,9 +2,9 @@
 
 Admin-configured programs, public coach profiles and coaching prices form the foundation.
 Coaches and Admins manage private coach availability (see [Coach availability](#coach-availability)).
-Reservation Steps 1–6 support Private and Semi-private lessons on `/book?mode=coaching`, using protected
-coach/court holds and the existing combined-payment, settlement, expiry and refund lifecycle.
-Coaching packages remain deferred. Customer lesson rescheduling uses the shared My Activity editor
+Private and Semi-private lessons are booked online at `/book?mode=coaching`, using protected
+coach/court holds and the shared checkout, settlement, expiry and refund lifecycle.
+Coaching packages are planned, not implemented. Customer lesson rescheduling uses the shared My Activity editor
 (see "Lesson rescheduling"). Group and Junior sessions are organized by the coach or club, who
 reserve the court through the existing staff reservation; they are paid at the club and are never
 booked or paid online (see [Online booking by program type](#online-booking-by-program-type)).
@@ -278,7 +278,8 @@ deterministic for one local date:
    from the supplied timezone map are omitted, so callers decide which locations are acceptable.
 
 Overlap is compared in wall time across locations. This is exact while a coach's locations share
-a timezone (the expected case for one club); see the open decisions below.
+a timezone (the expected case for one club); coaches teaching across timezones are not
+supported exactly.
 
 ### Rules and authorization
 
@@ -353,10 +354,9 @@ and Add extra availability actions open focused dialogs. Time off has From date 
 (inclusive); only single-day time off offers partial-day times. The optional private note is
 shared by both workflows. Edit and Remove operate on one whole persisted period.
 
-## Coaching reservations (persistence foundation)
+## Coaching reservations
 
-The initial migration's coaching columns let lessons reuse the existing booking,
-revision, reservation and payment lifecycle. Server-side checkout, settlement and `/book?mode=coaching` now use it.
+Lessons reuse the booking, revision, reservation and payment lifecycle through these columns:
 
 - `court_reservations.coach_user_id` (nullable, FK `coach_profiles`): a lesson is one ordinary
   court reservation that also occupies its coach, so holds, expiry, settlement and release
@@ -445,9 +445,9 @@ Tests: `tests/unit/coaching/lesson-quote.test.ts`,
 ## Lesson booking creation
 
 `createCoachingBooking(input, reader?)` in `src/lib/coaching/booking.ts` atomically creates one
-pending lesson of any program type with the court-booking lifecycle: a `pending_payment` booking, its `created`
-revision, one `held` court reservation naming the coach (`coach_user_id`) and one `pending` online
-payment attempt sharing the hold deadline. It starts no Stripe checkout itself. The `/book` coaching Server Action delegates to
+pending Private or Semi-private lesson (the locked quote rejects other types) with the court-booking
+lifecycle: a `pending_payment` checkout record, its `created` revision, one `held` court reservation naming the coach (`coach_user_id`) and one `pending` online
+payment attempt sharing the 5-minute initial checkout deadline. It starts no Stripe checkout itself. The `/book` coaching Server Action delegates to
 `commitCoachingCheckout`, which starts the shared checkout after commit. Guests book without an account and are never matched by email;
 authenticated customers use the verified session account. Contact fields reuse the court
 booking rules (`bookingContactShape`); the input is strict, so no account id is accepted.
@@ -469,12 +469,12 @@ amount, required participant count and lesson price/person) beside the court slo
 that evidence, and later revisions carry them unchanged. Tests:
 `tests/integration/coaching-booking.integration.test.ts`, `tests/unit/booking-revision.test.ts`.
 
-## Step 5: shared Stripe checkout and settlement
+## Checkout and settlement
 
 `commitCoachingCheckout(input, reader?)` in `src/lib/coaching/checkout.ts` delegates to
 `createCoachingBooking`, then passes its committed attempt ID to the existing
-`startOnlineCheckout`. Step 6 connects it to `/book?mode=coaching` through the existing
-timetable/checkout and a thin Server Action; there is no separate booking page.
+`startOnlineCheckout`. `/book?mode=coaching` reaches it through the shared timetable/checkout
+and a thin Server Action; there is no separate booking page.
 Only online payment is accepted, with one PaymentIntent for the combined total. The
 stored provider, amount and currency are authoritative, including included-rental lessons.
 Initialization failure returns the existing safe error and leaves the original unpaid
@@ -501,8 +501,8 @@ breakdown. Confirmation copies those terms unchanged. Later weekly changes do no
 or cancel confirmed reservations. Both GiST exclusions remain authoritative.
 
 A verified successful capture alone confirms the booking and activates its existing
-reservation. Duplicate/concurrent events cannot append another confirmation. Declines
-remain retryable under the existing deadline; terminal failure/cancellation and unpaid
+reservation. Duplicate/concurrent events cannot append another confirmation. A definitive
+decline ends the checkout like a court checkout (a new card needs a new checkout); terminal failure/cancellation and unpaid
 expiry release both resources together. Unknown provider outcomes remain pending/uncertain
 and use the existing poll/webhook/Admin process. Accepted capture keeps both resources
 protected while uncertain; later observations never dispatch another capture. Unaccepted
@@ -546,11 +546,80 @@ original court. Totals, surcharge checkout and refund status come from the exist
 owner quote/save actions and modification UI; the browser never prices or excludes the
 original reservation itself. `tests/components/lesson-reschedule.test.tsx` covers it.
 
+### Coach lesson management
+
+Coach List, Calendar and lesson Details use the same `OperationalBookingEdit` as Admin,
+with `loadCoachBookingEditorAction`, `loadCoachBookingDayAction` and `changeCoachBookingAction`.
+The spacious timetable reuses public booking presentation with staff scheduling policy;
+location/date/Coach changes reload one day and invalidate the financial preview. Active Coaches manage
+only lessons currently assigned to them. The loader scopes by both current revision and
+reservation assignment and returns editing fields and resource choices, without account,
+payment ledger, refund identity or provider data. `runOperationalBookingChange` uses Coach
+capacity and rechecks assignment, role, lifecycle and stale tokens under transaction locks,
+even for Admin+Coach accounts. Reassignment transfers management access immediately.
+
+Coaches may change location, court, date/start and assigned Coach, retaining program,
+duration, participants and agreed lesson fee. Own working hours, time off and location
+assignments may be overridden; replacement Coaches must meet their availability restrictions.
+Program assignments do not restrict operational reassignment. Actual court and Coach
+occupancy always applies.
+
+The shared server preview shows current/destination details, agreed amount, destination
+price, currency, refund or club absorption and final customer obligation before explicit
+confirmation. Quotes are invalidated by edits and checked again on save. Customer obligation
+never increases; bundled rental and Coach-only reassignment do not reprice. Refund-backed
+changes preserve the original until settlement and report pending/success/failure honestly.
+Only preview amounts and settlement status reach the Coach, without refund/adjustment IDs.
+
+The existing assigned-Coach cancellation action remains shared by all three surfaces;
+Admin cancellation explanations are not accepted. Changes and cancellations reuse domain
+notifications, including assignment/unassignment and actual refund settlement, with no
+customer finances in Coach notifications. The management UI uses the current operational
+change actions through the staff Calendar.
+
+### Staff operational booking changes
+
+One foundation serves Admin changes of court bookings and lessons and Coach changes of their
+currently assigned lessons; both staff areas expose it through their own authorized Server Actions.
+
+- Authorization (`src/lib/bookings/operational-policy.ts`): pure policy, evaluated under the
+  booking's locks. Admin authority is independent of coach assignment; a Coach needs the Coach
+  role and the current assignment (revision and reservation). An Admin+Coach account acts with
+  the capacity of the operation. Overrides of configurable Coach restrictions (working hours,
+  time off, location assignment): Admin for any coach, a Coach only their own. Program
+  compatibility never limits a change; court and coach occupancy are never overridable.
+- Target and scheduling (`src/lib/bookings/operational.ts`, `operationalSchedule` in
+  `lesson-quote.ts`): date, start, court, location and, for a lesson, coach. The location must
+  be locked, active, unarchived and in the booking currency; the court an active court of it;
+  a destination coach needs an active account, the Coach role and an unarchived profile.
+  Program, duration and participant count are the booking's own.
+- Concurrency: `withBooking` with a `target` locks the current and destination coach profiles
+  in id order, then the current, destination and expired-hold locations in id order, expires
+  holds at the current and destination locations and retries on a changed parent or coach.
+  Both GiST exclusions arbitrate races; overlap failures map to `court-unavailable` and
+  `coach-booked` after rollback.
+- Notifications: a completed reassignment (immediate, or after its verified refunds) sends the
+  customer the updated lesson, the replacement coach an in-app `coaching.assigned` message and
+  the previous coach an in-app `coaching.unassigned` message, keyed by the applied revision.
+  Coach messages carry the lesson details only (no prices, payments or refunds). Pending,
+  rejected and abandoned changes send no coach messages.
+- Revisions: a change (including a reassignment only) appends a `rescheduled` revision whose
+  coach and location columns are the operational assignment. `pricing_evidence.coaching`
+  keeps `coachUserId`, `locationId` and `source` as the commercial provenance of the agreed
+  price; only a `created` revision must match them.
+- Financial consequence (`operationalFinancialQuote`): the destination is priced by the
+  authoritative scheduling quote; a lesson keeps its agreed coaching fee and reprices only the
+  court component, and a coach reassignment never reprices. An equal price changes nothing
+  financially; a higher price is absorbed by the club (agreed obligation and evidence kept); a
+  lower price lowers the obligation and refunds eligible collected funds through the existing
+  refund-backed modification (pay-at-club: the amount due is reduced). Any consequence other
+  than none must be accepted exactly as quoted (`financialAcceptance`); see
+  [payments](payments-memberships.md#staff-operational-price-differences).
+
 ### Retained limitations
 
 The existing provider-initialization/attachment ambiguity and loss of guest capability on
-browser refresh remain as documented in `payments-memberships.md` and the payment workflow
-audit. No new recovery workflow or migration is introduced.
+browser refresh remain as documented in [payments](payments-memberships.md#typeorm-checkout-boundary).
 
 Focused coverage extends `tests/integration/coaching-booking.integration.test.ts` with mocked
 Stripe and real isolated PostgreSQL. Its explicit payment matrix covers included/excluded
@@ -563,51 +632,7 @@ mismatch, late compensation, cancellation refunds and lesson rescheduling.
 `tests/unit/coaching/checkout.test.ts` covers the post-commit entry point;
 `tests/components/personal-activity.test.tsx` verifies that coaching offers Reschedule instead of Edit and retains Cancel.
 
-### Step 5 changed files and focused validation
-
-Application changes:
-
-- `src/lib/coaching/checkout.ts`: internal post-commit checkout entry point.
-- `src/lib/payments/service.ts`: coaching contract validation within shared settlement.
-- `src/lib/db/repositories/reservations.repository.ts`: locked coach identity projection.
-- `src/lib/bookings/commands.ts`: shared coaching eligibility (lesson rescheduling since replaced it).
-- `src/lib/db/repositories/court-activity.repository.ts`, `src/lib/bookings/activity-service.ts`,
-  `src/lib/bookings/personal.ts`, `src/lib/bookings/history.ts`: owner-scoped coaching classification.
-- `src/app/my-activity/bookings/customer-booking-cancellation.tsx`: withhold coaching Edit.
-
-Tests: `tests/unit/coaching/checkout.test.ts`,
-`tests/integration/coaching-booking.integration.test.ts`,
-`tests/components/personal-activity.test.tsx`, `tests/unit/activity-service.test.ts`;
-`tests/unit/booking-commit.test.ts` only gains the null coach field in its
-court-only locked-reservation fixture.
-Documentation: this file and `README.md`.
-
-Focused commands (Stripe SDK calls mocked; isolated `tennis-club-tests` PostgreSQL only):
-
-```bash
-npm run test:integration -- tests/integration/coaching-booking.integration.test.ts \
-  tests/integration/stripe-payment.integration.test.ts \
-  tests/integration/owner-customer-booking-reschedule.integration.test.ts \
-  tests/integration/personal-customer-bookings.integration.test.ts
-npx vitest run tests/unit/coaching/checkout.test.ts tests/unit/payment-integrity.test.ts \
-  tests/unit/booking-commit.test.ts tests/components/personal-activity.test.tsx \
-  tests/unit/customer-booking-action.test.ts tests/unit/stripe-adapter.test.ts \
-  tests/unit/activity-service.test.ts
-npm run typecheck
-npx eslint src/lib/coaching/checkout.ts src/lib/payments/service.ts \
-  src/lib/bookings/{commands,personal,history,activity-service}.ts \
-  src/lib/db/repositories/{reservations,court-activity}.repository.ts \
-  src/app/my-activity/bookings/customer-booking-cancellation.tsx \
-  tests/unit/coaching/checkout.test.ts tests/integration/coaching-booking.integration.test.ts \
-  tests/components/personal-activity.test.tsx \
-  tests/unit/{booking-commit,activity-service}.test.ts
-```
-
-Validation passed: 26 PostgreSQL integration tests across four focused files, 118 unit/component
-tests across seven files, TypeScript, scoped ESLint and `git diff --check`.
-No migrations, database resets, real financial transactions, builds, commits or Step 6 UI work.
-
-## Step 6: coaching mode on `/book`
+## Coaching mode on `/book`
 
 `/book` retains court booking. `/book?mode=coaching` adds Private and Semi-private lessons on the same
 page, with mode links and shared location/date navigation. Selection order is
@@ -662,7 +687,7 @@ Included; separately charged rental is shown in the location currency beside coa
 The shared `BookingConfirmation` retains customer details, account defaults, guest support,
 validation, `OnlinePayment`/Payment Element, checkout dismissal/cancellation, status polling
 and server-verified confirmation. Its thin `commitCoachingBookingAction` validates the
-existing Step 4 schema and delegates to `commitCoachingCheckout`; it returns the existing
+coaching checkout schema and delegates to `commitCoachingCheckout`; it returns the existing
 pending-checkout contract, never a client-side confirmation. Coaching offers online
 payment only. No provider adapter, lifecycle, pricing rule or backend availability logic
 is reimplemented. Coaching success names the coach/court booking without promising an
@@ -679,42 +704,7 @@ checkout holds resources, its chosen quote remains snapshotted in UI state acros
 revalidation, even when that hold disappears from public availability. Payment outcomes
 continue to come exclusively from the existing verified status flow.
 
-Coaching and coach detail pages link to the shared booking route. The browser
-capability/initialization recovery limitations from Step 5 remain.
-
-### Step 6 validation
-
-Focused component/unit coverage includes mode and URL selection changes, public service
-selection, invalid/ineligible choices, multiple courts/prices, full-duration selection
-and highlighting, included/excluded rental, guest/account contact defaults, pending versus
-verified payment, checkout expiry, quote refresh and retained contact, and preservation of
-the agreed breakdown across hold revalidation. Existing court calendar, action, location
-navigation and online payment tests are retained.
-
-```bash
-npx vitest run tests/components/booking-calendar.test.tsx \
-  tests/components/coaching-booking-controls.test.tsx tests/unit/book-page.test.tsx \
-  tests/unit/coaching-booking-action.test.ts tests/components/coaching-page.test.tsx \
-  tests/components/coach-profile-page.test.tsx tests/components/online-payment.test.tsx \
-  tests/unit/customer-booking-action.test.ts tests/components/location-select.test.tsx
-npm run typecheck
-```
-
-Headless Chrome smoke checks against the existing local development server use 1440 × 1000
-and 390 × 844 (touch) viewports: coaching controls and all court rows render, duration/date
-navigation retains preferences, location changes reset dependent choices, mode switching
-returns to the ordinary timetable, and document width does not overflow. No client errors
-were observed. The available development data has no lesson starts at the inspected times;
-selectable/payment cases use focused component fixtures and mocked payment transport.
-Validation passed: **84 focused tests across nine files**, TypeScript, scoped ESLint
-on the touched application/test files, `git diff --check`, and both browser smoke viewports.
-No real financial transaction, database reset, build or commit is made.
-
-Step 6 touches the shared `/book` content, calendar, controls, confirmation and actions;
-adds `coaching-controls.tsx` and the public offer prop type `coaching-selection.ts`;
-adds an optional legend label override to `court-timeline-grid.tsx`; links the Coaching and
-coach detail pages; and updates the focused tests above plus this document and README.
-The coaching creation/checkout modules only have their obsolete UI-deferred comments updated.
+Coaching and coach detail pages link to the shared booking route.
 
 ## Development seed
 
@@ -768,13 +758,14 @@ financial records, settlement, cancellation, refund and rescheduling lifecycle u
 
 Within the online types, eligibility depends on configuration (active, assigned, priced,
 available, valid participant range). The Coaching mode shows actual configured program names,
-selects the first eligible program (including the sole option), and offers only priced configured
-durations on the existing court grid. Switching programs preserves the coach and customer contact
+never selects a program automatically, and offers only priced configured durations on the
+existing court grid. Switching programs preserves the coach and customer contact
 while clearing the previous duration, interval and review. The whole lesson must fit coach and court
 availability.
 
-The configured coaching amount is the complete session price for any permitted participant count;
-there is no per-participant pricing online. The existing resolver chooses the coach override, then club default; no applicable price
+The coaching amount is the configured lesson price/person for the selected duration and exact
+participant count, multiplied by that count (`coachingLessonAmount()`); one customer pays for all
+participants. The resolver chooses the coach override, then club default; no applicable price
 means unavailable. Included rental adds zero; excluded rental adds the selected court's full interval
 price once. There is one combined Stripe payment. New revisions snapshot the participant count beside
 the historical program/coach names and agreed amounts; confirmation carries those terms unchanged.
@@ -818,42 +809,16 @@ excluded from roster, availability and booking reads and cannot be republished o
 normal Admin mutations. Historical names, contracts, reservations and financial evidence remain.
 Auth/account records, player profiles, roles and personal court bookings are never removed.
 
+Revoking the Coach role (`updateAdminUserRole`) or suspending the account (`updateAdminUserStatus`)
+applies the same rule (`coachHasActiveLessons`) and returns `active-lessons`, after the existing
+final-admin and self-management checks. Both lock the target's role and account rows `FOR UPDATE`
+while lesson checkout holds them `FOR SHARE`, so a concurrent checkout either commits first and
+blocks the change, or waits and is refused because the coach is no longer eligible.
+
 Focused regressions: `admin/coaching.integration.test.ts` covers cross-location/override/stale-currency
 cleanup, retained prices, rollback, real foreign keys, removal authorization, historical protections,
 coach eligibility and preserved identities. `admin-coaching.test.tsx` covers visible icon actions,
 confirmation, explicit deactivation, archive feedback and canonical Junior duration selection.
-
-### Correction validation and changed files
-
-The existing uncommitted Private/Semi-private selector, quote, booking, snapshot and
-single-payment corrections were preserved and verified. Earlier development fixtures contained unsupported 45-minute Junior lessons. Current
-fixtures use canonical durations; legacy financial contracts remain untouched.
-
-Changes for management cleanup and removal:
-
-- `src/app/admin/coaching/actions.ts`
-- `src/app/admin/coaching/coaching-form.tsx`
-- `src/app/admin/coaching/delete-button.tsx`
-- `src/app/admin/coaching/programs/programs-table.tsx`
-- `src/app/admin/coaching/programs/program-dialog.tsx`
-- `src/app/admin/coaching/coaches/coaches-table.tsx`
-- `src/lib/coaching/admin.ts`
-- `src/lib/coaching/validation.ts`
-- `src/lib/db/repositories/coaching.repository.ts`
-- `src/lib/db/entities/coach-profile.entity.ts`
-- `tests/components/admin-coaching.test.tsx`
-- `tests/unit/coaching/authorization.test.ts`
-- `tests/integration/admin/coaching.integration.test.ts`
-- `tests/integration/coaching-booking.integration.test.ts`
-- `docs/coaching.md`
-
-Validation: 172 unit/component tests across 13 focused files; 42 PostgreSQL integration
-tests across Admin coaching, coaching booking, lesson availability and coaching reservation
-constraints; TypeScript and scoped ESLint passed. The three Admin integration tests were
-also rerun after adding the explicit assignment cleanup assertion. The new migration alone
-was applied to the isolated test database and local development database; no reset, unrelated
-migration, build, broad suite or commit was performed.
-
 
 ## Management lists and time-off ranges
 
@@ -869,20 +834,19 @@ counts and page reads share a read snapshot. The Programs page also reads the li
 prices (for the Program dialog), and the Coaches page the listed coaches' own overrides (for the
 read-only Individual prices section). Checkout resolution uses the same resolver.
 
-Saving time off rejects overlapping active coaching occupancy or unexpired payment holds
-with `booking-conflict`, preserving every booking. Extra availability at a different location
+Saving time off rejects overlapping active coaching occupancy, unexpired holds and
+payment-protected holds past their deadline (registered unresolved intents or accepted
+captures, the shared `protectedPaymentOccupancy` rule) with `booking-conflict`, preserving
+every booking. Extra availability at a different location
 also rejects such conflicts. This check uses each reservation's own local playing date and
 half-open minutes under the existing coach-profile write fence; booking commands hold its
-shared counterpart before location locks and reread the ranged schedule. Expired holds do not
+shared counterpart before location locks and reread the ranged schedule. Expired unprotected holds do not
 reject configuration. PostgreSQL's inclusive `daterange` plus minute-range GiST exclusion backs
 TypeScript overlap checks. Availability never bypasses opening hours, public eligibility,
 court/coach occupancy or other existing lesson quote restrictions.
 
-The consolidated initial migration and entity include non-null `until_date`; existing
-applied databases are unchanged by source edits. An explicitly authorized development rebuild
-and separate test-project reinitialization are required before exercising ranged workflows.
-Do not run a reset/rebuild without approval. Existing single-day fixtures explicitly store
-identical start and end dates. Focused range integration coverage is in
+`coach_availability_exceptions.until_date` is non-null; single-day periods store identical
+start and end dates. Focused range integration coverage is in
 `tests/integration/admin/coach-availability.integration.test.ts`; list coverage is in
 `tests/integration/admin/coaching-lists.integration.test.ts`.
 
@@ -901,7 +865,7 @@ previous singleton values, and never dispatches Brevo. Supabase Auth mail is ind
 
 ## Baseline and legacy preservation
 
-The three final-state baseline migrations create the complete pricing schema directly:
+The two final-state baseline migrations create the complete pricing schema directly:
 `coaching_prices` is the only coaching price table, and there is no pricing unit column,
 participant-rate table, repair migration, conditional schema upgrade or automatic price
 expansion. Local development databases are rebuilt from the baseline

@@ -71,7 +71,7 @@ export async function getPublicCourtDay(location: PublicLocation, date: string, 
       logger.error({ event: "courts.public_calendar_read_failed" }, "Failed to load court day");
       throw new Error("Unable to load court availability.");
     }
-    return buildCourtDay({ date, today, currentMinute: localMinute(location.timezone, now), courts: location.courts,
+    return buildCourtDay({ timezone: location.timezone, date, today, currentMinute: localMinute(location.timezone, now), courts: location.courts,
       ...configuration, reservations });
   } catch (error: unknown) {
     logger.error({ event: "courts.public_calendar_read_failed", code: normalizeDatabaseError(error).sqlState }, "Database projection failed");

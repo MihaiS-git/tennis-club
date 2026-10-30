@@ -17,6 +17,8 @@ export class SupabaseAuthStorage1791462257926 implements MigrationInterface {
     await queryRunner.query(`REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC, anon, authenticated`);
     await queryRunner.query(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC, anon, authenticated`);
     await queryRunner.query(`REVOKE ALL ON public.user_messages, public.email_deliveries FROM service_role`);
+    // Match the explicit confirmed-identity grant in the final schema.
+    await queryRunner.query(`GRANT ALL ON public.bookings TO service_role`);
     // Financial exception evidence is reachable only through the application's server-side connection.
     await queryRunner.query(`REVOKE ALL ON public.booking_financial_exceptions FROM service_role`);
 

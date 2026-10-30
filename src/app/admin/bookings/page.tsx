@@ -24,7 +24,7 @@ export default async function AdminBookingsPage({ searchParams }: {
     <ManagementTabs view="calendar" />
     <Suspense fallback={<LoadingStatus variant="page" label="Loading reservations…" />}>
       <ReservationContent href="/admin/bookings?view=calendar"
-        searchParams={Promise.resolve({ location: single(params.location), date: single(params.date) })} />
+        searchParams={Promise.resolve({ location: single(params.location), date: single(params.date), reschedule: single(params.reschedule) })} />
     </Suspense>
   </>;
   const parsed = parseAdminBookingQuery(params);

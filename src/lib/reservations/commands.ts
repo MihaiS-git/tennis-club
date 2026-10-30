@@ -1,4 +1,5 @@
 import "server-only";
+import { readClubTimezoneError } from "@/lib/club/timezone-policy";
 
 import type { EntityManager } from "typeorm";
 import type { z } from "zod";
@@ -56,6 +57,8 @@ function directReservationTargetEligibility(input: Input,
 export async function createDirectReservationCommand(input: Input, actorId: string, now: Date): Promise<ReservationResult> {
   return inTransaction(async (manager) => {
     await lockConfigurationForRead(manager);
+    const timezoneError = await readClubTimezoneError(manager);
+    if (timezoneError) return { ok: false, message: timezoneError };
     await lockLocations(manager, [input.locationId]);
     if (!permittedActor(await lockReservationActorFacts(manager, actorId))) {
       return { ok: false, message: "Unable to reserve this court. Try again." };
@@ -111,6 +114,8 @@ export async function editDirectReservationCommand(edit: Edit, actorId: string, 
         ? "This reservation has changed since you opened it. Refresh and try again."
         : "This reservation has changed since you opened it. Refresh the details and try again." };
       if (edit.kind === "schedule") {
+        const timezoneError = await readClubTimezoneError(manager);
+        if (timezoneError) return { ok: false, message: timezoneError };
         if (hasStarted(row, resource.location_timezone, now)) return { ok: false,
           message: "An in-progress reservation can only change its reason." };
         if (hasStarted(row, resource.location_timezone, databaseNow)) return unavailableEdit;

@@ -1,335 +1,208 @@
 # Booking Domain
 
-## Locations and resources
+Court bookings, coaching lessons, staff (direct) reservations, checkout holds, rescheduling
+and cancellation. Payments and refunds are in [payments](payments-memberships.md); lesson
+rules are in [coaching](coaching.md); pricing and opening hours are in [pricing](pricing.md).
 
-A court belongs to exactly one physical location.
+## Locations and courts
 
-A coach may work at multiple locations.
+One club operates several physical locations. A court belongs to exactly one location; a
+coach may teach at several. Each location has an IANA timezone, one currency (EUR, USD, GBP,
+RON or CHF), effective-dated opening hours, a customer cancellation notice and an optional
+Pay at club switch. Bookings store location-local dates and half-open minute intervals.
 
-A location may define:
+- **Publication.** `locations.is_public` is the Admin's explicit intent and defaults to false.
+  Public `/book`, `/courts` and coaching discovery list only active, unarchived, published
+  locations that are also *ready*: valid name/slug/timezone/currency, opening hours, an active
+  court, and current or future base-state pricing for every active court. Readiness is
+  derived in `src/lib/locations/publication.ts`; no flag is stored. Enabling Public booking is
+  rejected server-side with the missing configuration.
+- **Courts.** Surface (clay/hard/grass/carpet), outdoor/indoor environment and lighting.
+  Outdoor courts may have inclusive calendar-date *coverage periods* (GiST prevents overlaps);
+  `getCourtStateForDate()` in `src/lib/courts/state.ts` returns indoor, outdoor or covered.
+  A court with coverage periods cannot become indoor until they are removed.
+- **Archive/deactivation.** Archiving deactivates a location; restoring leaves it inactive
+  until explicitly activated. Admin refuses timezone changes, location deactivation/archive,
+  court deactivation and court moves while affected unfinished bookings exist, and refuses
+  currency changes while bookings, unresolved financial operations or court prices exist.
+  See [architecture](architecture.md#location-currency-changes).
+- **Cancellation notice.** `locations.customer_cancellation_notice_minutes` (0–43,200,
+  default 1,440) is set under Booking policy and snapshotted on each booking revision; later
+  location changes never affect existing bookings.
 
-- opening hours;
-- courts;
-- court schedules;
-- coaches;
-- local pricing;
-- operational exceptions.
-
-Court and coach availability both participate in booking validation.
+Admin manages locations at `/admin/locations` and each location's Courts, Opening hours and
+Pricing tabs at `/admin/locations/[locationId]?tab=…`. Legacy `/admin/courts` and
+`/admin/pricing` redirect there.
 
 ## Availability
 
-Availability combines normal schedules with exceptions and current reservations.
+A court interval is bookable when the location's applicable opening-hours schedule covers it,
+a compatible price applies to every 30-minute cell, it is in the future, and no `active` or
+protected `held` reservation overlaps it. There are no opening-hours exceptions. Configuration
+changes never cancel, move or reject existing reservations; calendars extend their visible
+range to show occupancy outside the current hours.
 
-```text
-base schedule
-+ exceptions
-+ active bookings
-+ temporary booking holds
-= actual availability
-```
+Reservations need at least 60 minutes, start and end on 30-minute boundaries and stay within
+one local day. Calendars default to the location's current date; `/book` rejects past dates,
+while staff calendars can show past dates read-only. Open timetables refresh every 15 seconds
+and on focus.
 
-Example:
-
-```text
-Court 1
-
-Normal schedule:
-Monday–Friday 08:00–22:00
-
-Exception:
-24 December — Closed
-```
-
-A coach can be offered only when:
-
-```text
-coach works at selected location
-AND
-coach is available
-AND
-coach has no overlapping booking
-```
-
-## Court booking flow
-
-```text
-Choose location
-→ choose date/time
-→ view available courts
-→ select court
-→ calculate authoritative price
-→ create temporary booking hold
-→ pay if required
-→ confirm booking
-```
-
-A booking fully covered by membership entitlement may be confirmed without payment after server-side validation.
-
-## Court + coach booking
-
-```text
-Choose location
-→ choose date/time
-→ select court
-→ find coaches available for the same interval/location
-→ select coach
-→ calculate total price
-→ create temporary hold
-→ pay
-→ confirm booking
-```
-
-The court and coach must both remain available for the entire interval.
+A held reservation blocks occupancy while its deadline is later than the shared `now`, and
+also while it is *payment-protected* (a registered unresolved Stripe intent or an accepted
+capture). Reads never expire holds; writes expire safe holds under location locks first. The
+same occupancy predicate is used by public, staff, owner-edit, coach and expiry queries.
 
 ## Concurrency
 
-A prior availability query is not enough.
+An availability check followed by an insert is never sufficient. PostgreSQL arbitrates with
+partial GiST exclusions on `court_reservations` for `active`/`held` rows:
+`court_reservation_no_overlap` per court and `court_reservation_coach_no_overlap` per coach
+across all courts and locations. Overlap violations roll back the whole write set and return
+a safe availability message.
 
-This is unsafe:
+Lock order: shared (or, for configuration writes, exclusive) configuration advisory fence
+`(1791462257, 1)` → location `FOR UPDATE` → checkout/booking → reservation → payment rows →
+actor role/account fences. Changed-parent discovery retries in at most three fresh
+transactions. No Auth, Storage or Stripe call runs inside a transaction. See
+[architecture](architecture.md#resource-persistence).
 
-```text
-check availability
-→ insert booking
-```
-
-Another request may reserve the same resource between those steps.
-
-The database must prevent overlapping active reservations for:
-
-- the same court;
-- the same coach.
-
-Two concurrent requests for the same resource/time must never both succeed.
-
-## Booking holds
-
-Paid checkout requires a temporary hold so the resource does not remain publicly available while payment is in progress.
+## Checkout lifecycle
 
 ```text
-available
-→ held
-→ payment
-→ confirmed
+timetable selection (browser only, no reservation)
+→ customer details → Continue to payment
+→ Transaction A: checkout record + held reservation + pending payment attempt (5-minute hold)
+→ Stripe Payment Element (manual capture)
+→ verified capture → confirmed booking, active reservation
 ```
 
-or:
+- Timetable selection never creates a reservation. **Continue to payment** creates the
+  temporary hold; `paymentHoldDurationSeconds` (5 minutes) applies to court and coaching
+  checkout alike, with no heartbeat or extension. Paid booking modifications use their own
+  10-minute hold (`modificationHoldDurationSeconds`).
+- The server recalculates price, notice and payment method under locks; a stale browser quote
+  returns the current price for reconfirmation. Guests book without an account; active
+  signed-in accounts (including Admins and Coaches) are resolved server-side and get editable
+  profile contact defaults. Contact edits affect only the booking snapshot. Guest email
+  matching never grants ownership.
+- **Pay at club** (if enabled for the location) confirms immediately with a `due` payment
+  request and no provider.
+- **Explicit cancellation** of an unpaid checkout releases the court (and coach) immediately
+  once Stripe confirms cancellation of the intent.
+- **Definitive card declines** end both court and coaching initial checkouts; a new card needs
+  a new checkout. An expired payment form cannot start a payment.
+- **Abandonment** (closed browser): unregistered holds expire at the deadline; registered
+  intents keep occupancy until Stripe confirms cancellation or capture. Processing,
+  accepted-capture and uncertain payments retain protection. The every-minute expiry Cron
+  resolves them without a browser.
 
-```text
-available
-→ held
-→ expired
-```
+Details: [payments](payments-memberships.md#stripe-one-time-checkout).
 
-The exact hold duration belongs in application configuration/domain policy.
+## Checkout records and booking identities
 
-Expired holds release the resources.
+`checkout_records` owns each temporary allocation: one unique `court_reservations` row, an
+optional account link, lifecycle status (`pending_payment`, `confirmed`, `cancelled`,
+`failed`, `expired`) and a required `current_revision_id`. `bookings` contains only genuinely
+confirmed identities with their confirmation-revision proof, inserted atomically with online
+settlement or pay-at-club creation. Failed, expired and abandoned checkouts have no booking
+identity and no cancellation revision or notification. Business booking lists, details,
+history and counts require a `bookings` identity; payment review and occupancy guards use all
+checkout records. Financial `booking_id` references keep the shared aggregate UUID.
 
-## Booking states
+Reservation statuses are `held`, `active`, `released` (hold ended) and `cancelled`.
 
-Expected states:
+## Immutable booking contracts
 
-```text
-held
-confirmed
-cancelled
-completed
-expired
-```
+Commercial terms live only in append-only `booking_revisions`: number, predecessor, operation
+key/intent hash, kind, effective state, schedule, location/court identities and historical
+names/timezone, contact, total/currency/payment method, cancellation notice, actor,
+adjustment source and cancellation cause. Pricing evidence is typed and bounded (48
+half-hour slots) and has no live FK to replaceable pricing rules. `buildBookingRevision()`
+builds every snapshot.
 
-Rescheduling should normally be represented as booking history rather than a permanent `rescheduled` state.
+Composite FKs enforce same-booking predecessor, current head and adjustment lineage (the
+current-pointer FK is deferred). Native integrity triggers reject non-linear appends, rewound
+heads, revision UPDATE/DELETE/TRUNCATE and ownership changes; they validate structure only.
+
+- Online creation appends a pending revision; verified settlement appends exactly one
+  confirmed revision, even with duplicate receipts.
+- Same-price and Pay-at-club changes append one revision and move occupancy atomically.
+  Pay-at-club debt comes from the current revision; the original request is unchanged.
+- Online increases and reductions use the adjustment workflow in
+  [payments](payments-memberships.md#paid-booking-price-adjustments).
+- The revision UUID is the contractual stale token; the lossless reservation `updated_at`
+  is the occupancy token. Identical saves do not write.
 
 ## Rescheduling
 
-Members should be able to choose between:
+Customer self-rescheduling is owner-only, from `/my-activity/bookings` (including Admin and Coach
+owners). Location is fixed. Ordinary owners must be within the snapshotted notice cutoff
+(inclusive); Admin/Coach owners bypass notice only. Every owner must act before start.
+Guest self-management is not implemented. Coaching lessons change only date and start time; see
+[lesson rescheduling](coaching.md#lesson-rescheduling).
 
-```text
-Manage booking
-├── Reschedule
-└── Cancel / Refund
-```
+Admin operational editing uses the existing staff Calendar, entered from List, Calendar and Details, through
+`runOperationalBookingChange`. Admins may move eligible customer or guest court/coaching
+bookings across active locations and courts, and reassign active Coaches. Program,
+duration, participants and agreed lesson fee stay fixed. Coach configuration restrictions
+may be overridden; court/Coach occupancy, started bookings, inactive original resources,
+pending financial operations and currency restrictions remain authoritative.
 
-Rescheduling flow:
+The shared `OperationalCalendarReschedule` uses the existing staff Calendar and
+`CourtTimelineGrid`. Location/date navigation loads a single
+staff-authorized day; court/time selection preserves duration, marks the original interval
+and proposed destination, and shows unrelated occupancy without its details. Coach selection
+reloads applicable availability and supports reassignment at the original interval.
+`loadOperationalBookingDay` reuses the existing operational day reads and scheduling policy,
+excludes the booking's reservation from court and Coach occupancy, and returns only generic
+cells and permitted starts. It does not apply public publication or customer eligibility.
+A changed revision blocks preview; scheduling conflicts refresh occupancy and clear selection.
+Timetable clicks never save or request a financial quote.
 
-```text
-select new location/court/date/time
-→ validate availability
-→ optionally change coach
-→ calculate new price
-→ compare with previous amount
-→ charge/refund difference
-→ move reservation atomically
-→ store rescheduling history
-```
+Every change is previewed server-side and explicitly confirmed with `financialAcceptance`.
+The club absorbs increases; reductions refund eligible captured funds or reduce club debt.
+Refund-backed changes remain pending until settlement. Coach-only reassignment preserves
+the agreed price. Customer and Coach notifications come from the existing domain events.
 
-Price outcomes:
+## Cancellation
 
-```text
-same price
-→ no payment operation
+- Owners cancel confirmed future bookings within the notice rules; Admins may cancel
+  eligible customer and guest bookings strictly before start from
+  `/admin/bookings/[bookingId]`. Admins cannot choose refund/no-refund.
+- Pay-at-club or nothing refundable: the cancellation completes immediately.
+- Refund-backed cancellation is a pending request; the booking and occupancy stay unchanged
+  until every refund succeeds. See [refunds](payments-memberships.md#stripe-cancellation-refunds).
+- Admins may supply an optional trimmed explanation of up to 500 characters. Existing
+  cancellation adjustments retain the first accepted explanation through refund retries;
+  the applied revision references it for history and customer/assigned-Coach notifications.
+  Coach notifications contain operational details and the explanation, without financial details.
+- Cancellation never deletes booking or financial records.
 
-higher price
-→ charge difference
+## Staff (direct) reservations
 
-lower price
-→ refund difference according to policy
-```
+Active Admins and Coaches create free reservations with a required reason (≤ 255 chars) in
+their staff calendars for active courts at structurally ready locations, including
+unpublished ones. They have no price or payment and record their creator.
 
-The booking may retain its identity while scheduled resources change.
+- **Admin** may edit any active direct reservation (future: date/court/time/reason at the
+  fixed location; started: reason only) and cancel it strictly before start.
+- **Owners** (Admin/Coach creators) edit their own on `/my-activity/bookings` with the same
+  rules and may cancel until the reservation ends.
+- Edits lock the row, compare the microsecond `updated_at` token and keep the location fixed;
+  stale edits and GiST conflicts leave the original unchanged. Cancellation records the
+  canceller and releases occupancy. Direct commands reject rows linked to a checkout record.
 
-## Cancellation and refunds
+## Staff and customer views
 
-Cancellation/refund policy must be configurable rather than hard-coded in UI components.
+| Route | Audience | Content |
+| --- | --- | --- |
+| `/book`, `/book?mode=coaching` | Public | Single-day court timetable; Private/Semi-private lessons |
+| `/my-activity/bookings`, `/my-activity/history` | Account owner | Upcoming and past bookings and own direct reservations, 20 rows per page |
+| `/admin/bookings` (List, `?view=calendar`) | Active Admin | All bookings and staff reservations; details at `/admin/bookings/[id]` and `/admin/bookings/reservations/[id]` |
+| `/coach/bookings` (List, `?view=calendar`) | Active Coach | Court calendar; own lessons (read-only, no prices) and own reservations |
 
-Illustrative policy from the product specification:
-
-```text
-More than 24 hours:
-100% refund
-
-6–24 hours:
-50% refund
-
-Less than 6 hours:
-No refund
-```
-
-This example is not a fixed production policy.
-
-Cancellation flow:
-
-```text
-request cancellation
-→ load booking/payment state
-→ evaluate cancellation policy
-→ calculate refund
-→ cancel booking
-→ create Stripe refund if applicable
-→ synchronize payment state
-```
-
-Prevent:
-
-- duplicate cancellation;
-- duplicate refund;
-- refunds exceeding paid amount;
-- unauthorized refunds;
-- refunds for unpaid transactions.
-
-Admin cancellation of customer bookings and direct reservations is permitted only
-strictly before the location-local start. The details dialog hides cancellation
-for started or past intervals. Both cancellation transactions check wall-clock time after
-acquiring row locks; rejected attempts preserve all booking/reservation snapshots.
-
-## Booking UI
-
-### Desktop
-
-Use a court/resource timeline rather than a generic list.
-
-```text
-           17:00   17:30   18:00   18:30   19:00
-
-Court 1    booked  booked  ───── available ─────
-Court 2    ───── available ─────  booked  booked
-Court 3    booked  ───── available ─────────────
-Court 4    ───────────────── available ─────────
-```
-
-Make important information immediately visible:
-
-- court;
-- surface/type;
-- available time;
-- duration;
-- price.
-
-After selecting a court/time, show compatible coaches for the same interval.
-
-### Mobile
-
-Do not shrink the desktop timeline.
-
-Use mobile-specific resource cards and time-slot controls.
-
-```text
-Court 1
-
-17:00
-17:30
-18:00
-19:30
-```
-
-## Implemented checkout lifecycle
-
-See [payment lifecycle foundation](payments-memberships.md). Online commits create
-one pending booking, one temporary reservation hold and one payment attempt.
-Pay at club confirms immediately only when enabled for that location. Expired holds stop blocking using database time
-and transactional cleanup, with the same reservation GiST constraint.
-
-
-## Implemented immutable booking contracts
-
-A checkout aggregate is linked permanently to its account owner and one mutable
-court-reservation occupancy row; a business booking identity exists only after confirmation. `checkout_records.current_revision_id` points to the
-sole authoritative commercial snapshot in `booking_revisions`; price, contact,
-currency, method and cancellation notice are not duplicated on `bookings`.
-Operational checkout/hold status and processing timestamps remain on the identity.
-PostgreSQL rejects every ownership change after creation, including NULL-to-account,
-account-to-NULL and account-to-account changes. Unchanged ownership writes are allowed.
-Guest email equality never establishes account ownership.
-
-Revisions record their number, predecessor, stable operation key/intent hash,
-operation kind, effective state, local schedule, location/court identities and
-historical names/timezone, customer contact, total/currency/method/policy, recorded
-actor scope/time, adjustment source and cancellation cause. Pricing evidence is
-versioned, typed and bounded to 48 half-hour slots, preserving rule/rule-set IDs,
-rates and date scope. It has no live FK to replaceable pricing rules. Existing
-calendar pricing and rounding functions remain the price authority.
-
-Online creation records a pending revision and held occupancy. Verified successful
-settlement appends one confirmed revision and activates the same reservation.
-Duplicate receipts or distinct observations of the same capture cannot append
-another confirmation. Failed/expired checkout changes processing state without
-creating a fictional confirmed contract. Pay-at-club creation records a confirmed
-contract with an uncollected `due` request, never a captured online payment.
-
-Owner same-price and Pay-at-club changes append one applied revision and move
-occupancy atomically. Pay-at-club debt derives from the current revision; its
-original payment-request amount remains unchanged. Online reductions also create
-newest-capture-first refund obligations atomically. Online increases retain the
-proposal, surcharge and hold-fragment workflow: the base revision and confirmed
-occupancy remain unchanged until verified capture passes current eligibility,
-pricing and concurrency checks. An unapplied capture retains its evidence and
-compensation obligation without a rescheduled revision.
-
-Owners retain existing active-account, fixed-location, notice and before-start
-rules, including Coach/Admin owner notice bypass. The revision UUID is the booking
-concurrency token; the lossless reservation timestamp remains the occupancy fence.
-Stable operation keys reject changed intent. Identical effective saves leave the
-pointer, timestamps, payments and refunds unchanged; a genuine
-price-only contractual change appends a revision.
-
-Owner/Admin cancellation appends a final snapshot, releases occupancy and creates
-remaining captured-funds obligations in one transaction. Cancellation without a
-refund still replays successfully. Admins can cancel customer/guest bookings and
-refund captured online funds automatically; they cannot reschedule someone else's
-booking or choose to retain captured funds. Uncollected Pay-at-club debt is never
-refunded. Admin direct-reservation editing is unchanged. Checkout abandonment uses
-the capability boundary, records cancellation intent and releases occupancy;
-provider calls follow commit, with compensation for later exact captures.
-
-Composite FKs enforce same-booking predecessor, current-head and adjustment lineage;
-the initial current-pointer FK is deferred to allow identity/revision insertion in
-one transaction. Unique numbering, predecessor and operation keys protect identity.
-Native integrity triggers reject non-linear appends, orphan/rewound heads and any
-revision UPDATE/DELETE/TRUNCATE and ownership changes. They validate structure only, never pricing,
-eligibility, refunds or application workflows. Revisions never cascade away.
-
-
-Checkout persistence now lives in `checkout_records`. The separate `bookings` table
-contains only identities promoted on genuine confirmation, with the original
-confirmation revision retained as proof. Financial `booking_id` references keep the
-shared aggregate UUID, including unsuccessful checkout evidence. See
-[checkout lifecycle correction](checkout-lifecycle-correction.md).
+`/admin/reservations` redirects to the role's Calendar; `/admin` redirects Admins to Locations
+and Coaches to `/coach/bookings`. The Admin Calendar shows initial holds as **Temporary
+checkout hold** (deadline and payment-review link) and paid modification holds as
+**Modification in progress**, with no booking management controls. Public `/book` reads only
+court, date and minutes of occupancy; reasons, creators and contacts stay private.

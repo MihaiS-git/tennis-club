@@ -24,8 +24,8 @@ export default async function CoachBookingsPage({ searchParams }: {
     <AdminPageHeader title="Bookings & Reservations" description="Reserve courts and review the day’s bookings by location." />
     <ManagementTabs view="calendar" base="/coach/bookings" />
     <Suspense fallback={<LoadingStatus variant="page" label="Loading reservations…" />}>
-      <ReservationContent href="/coach/bookings?view=calendar"
-        searchParams={Promise.resolve({ location: single(params.location), date: single(params.date) })} />
+      <ReservationContent href="/coach/bookings?view=calendar" scope="coach"
+        searchParams={Promise.resolve({ location: single(params.location), date: single(params.date), reschedule: single(params.reschedule) })} />
     </Suspense>
   </>;
   const parsed = parseCoachBookingQuery(params);

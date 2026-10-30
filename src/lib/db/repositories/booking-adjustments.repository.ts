@@ -74,8 +74,10 @@ export async function findAdjustmentRequest(manager: EntityManager, bookingId: s
 export async function insertAdjustment(manager: EntityManager, input: {
   bookingId: string; baseRevisionId: string; actorId: string; scope: "owner" | "admin"; requestKey: string; target: AdjustmentTarget;
   originalTotal: number; newTotal: number; currency: string; expiresAt: Date; kind?: AdjustmentKind; createdAt?: Date;
+  // applied: a decision recorded together with the revision it explains (no pending phase).
+  status?: "pending" | "applied";
 }) {
-  const value = manager.getRepository(BookingAdjustmentEntity).create({ ...input, id: randomUUID(), status: "pending" });
+  const value = manager.getRepository(BookingAdjustmentEntity).create({ status: "pending", ...input, id: randomUUID() });
   await manager.getRepository(BookingAdjustmentEntity).insert(value);
   return value;
 }
@@ -87,15 +89,18 @@ export async function adjustmentAttempt(manager: EntityManager, id: string) {
 }
 // Protect the target with the existing GiST exclusions, without overlapping the
 // original confirmed occupancy. Fragments may be one half-hour long; a coaching
-// fragment also names the coach, so court_reservation_coach_no_overlap holds it.
+// fragment also names the coach, so court_reservation_coach_no_overlap holds it. A
+// coach-only fragment (occupiesCourt false) is exempt from the court exclusion only.
 export async function insertAdjustmentHolds(manager: EntityManager, input: {
   adjustmentId: string; expiresAt: Date;
-  fragments: readonly { courtId: string; date: string; startMinute: number; endMinute: number; coachUserId?: string | null }[];
+  fragments: readonly { courtId: string; date: string; startMinute: number; endMinute: number; coachUserId?: string | null;
+    occupiesCourt?: boolean }[];
 }) {
   for (const fragment of input.fragments) {
     await manager.getRepository(CourtReservationEntity).insert({ id: randomUUID(), courtId: fragment.courtId,
       adjustmentId: input.adjustmentId, bookingDate: fragment.date, startsAtMinute: fragment.startMinute, endsAtMinute: fragment.endMinute,
-      status: "held", holdExpiresAt: input.expiresAt, coachUserId: fragment.coachUserId ?? null });
+      status: "held", holdExpiresAt: input.expiresAt, coachUserId: fragment.coachUserId ?? null,
+      occupiesCourt: fragment.occupiesCourt ?? true });
   }
 }
 export async function releaseAdjustmentHolds(manager: EntityManager, adjustmentId: string) {

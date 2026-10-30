@@ -69,7 +69,9 @@ test("Coaches list and open only their own lessons and staff reservations, enfor
       expect(row).not.toHaveProperty("total_amount_minor"); expect(row).not.toHaveProperty("account_user_id");
     }
     expect(own.rows.find((row) => row.id === lessons.aConfirmed)).toMatchObject({ kind: "booking", status: "confirmed",
-      customer_name: `${marker} aConfirmed`, coach_name: "Coach A", coaching_program_name: "Coach list private" });
+      customer_name: `${marker} aConfirmed`, coach_name: "Coach A", coaching_program_name: "Coach list private",
+      cancellation: { availability: "eligible" } });
+    expect(own.rows.find((row) => row.id === lessons.aCancelled)).toMatchObject({ cancellation: { availability: "unavailable", refundAvailable: false } });
     expect(ids((await listCoachBookings(query({ type: "coaching" }), coachA)).rows)).toEqual([lessons.aConfirmed, lessons.aCancelled].sort());
     expect(ids((await listCoachBookings(query({ type: "reservation" }), coachA)).rows)).toEqual([ownActive, ownCancelled].sort());
     expect(ids((await listCoachBookings(query({ status: "active" }), coachA)).rows)).toEqual([ownActive]);
@@ -93,7 +95,10 @@ test("Coaches list and open only their own lessons and staff reservations, enfor
       starts_at_minute: start, ends_at_minute: start + 60 });
     const lessonFor = (key: "aConfirmed" | "bConfirmed", coach: string, start: number, name: string) => ({ kind: "lesson", id: lessons[key], court_id: court,
       booking_date: "2099-04-01", starts_at_minute: start, ends_at_minute: start + 60, coach_user_id: coach, coach_name: name,
-      coaching_program_name: "Coach list private", customer_name: `${marker} ${key}`, customer_email: `${key}@example.test`, customer_phone: "+40 700" });
+      coaching_program_name: "Coach list private", customer_name: `${marker} ${key}`, customer_email: `${key}@example.test`, customer_phone: "+40 700",
+      // The Cancel lesson state Lesson details shows, without amounts.
+      cancellation: { availability: "eligible", startsAt: expect.stringMatching(`^2099-04-01T${String(start / 60).padStart(2, "0")}:00:00`),
+        refundAvailable: expect.any(Boolean) } });
     const calendarNow = new Date("2026-10-01T00:00:00Z");
     for (const [client, own, ownStart, name, other, otherStart] of [[coachA, "aConfirmed", 480, "Coach A", "bConfirmed", 660],
       [coachB, "bConfirmed", 660, "Coach B", "aConfirmed", 480]] as const) {

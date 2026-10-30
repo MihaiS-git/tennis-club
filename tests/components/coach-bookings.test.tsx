@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import { installDialogMock } from "../helpers/dialog";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ query: "", replace: vi.fn(), push: vi.fn(), refresh: vi.fn(), authorize: vi.fn(), list: vi.fn(),
-  options: vi.fn(), lesson: vi.fn(), reservation: vi.fn(), calendar: vi.fn(), form: vi.fn(),
+  options: vi.fn(), lesson: vi.fn(), reservation: vi.fn(), calendar: vi.fn(), form: vi.fn(), cancelLesson: vi.fn(),
   own: { cancel: vi.fn(), edit: vi.fn(), load: vi.fn() }, admin: { cancel: vi.fn(), edit: vi.fn(), load: vi.fn() },
   notFound: vi.fn(() => { throw new Error("not found"); }) }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: mocks.replace, push: mocks.push, refresh: mocks.refresh }),
@@ -12,6 +12,9 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: mocks.replace, 
 vi.mock("@/lib/coaching/authorization", () => ({ requireActiveCoach: mocks.authorize }));
 vi.mock("@/lib/bookings/coach-bookings", () => ({ listCoachBookings: mocks.list, listCoachBookingFilterOptions: mocks.options,
   getCoachLesson: mocks.lesson, getCoachDirectReservation: mocks.reservation }));
+vi.mock("@/app/coach/bookings/lessons/[bookingId]/actions", () => ({ cancelCoachLessonAction: mocks.cancelLesson,
+  loadCoachBookingDayAction: vi.fn(), loadCoachBookingEditorAction: vi.fn(), changeCoachBookingAction: vi.fn() }));
+
 vi.mock("@/app/admin/reservations/reservation-content", () => ({ ReservationContent: (props: object) => { mocks.calendar(props); return <p>Scheduler</p>; } }));
 vi.mock("@/app/my-activity/bookings/actions", () => ({ cancelOwnReservationAction: mocks.own.cancel,
   editOwnReservationAction: mocks.own.edit, loadReservationEditDayAction: mocks.own.load }));
@@ -36,12 +39,15 @@ const locations = [{ id: locationId, name: "RIVUS", archived: false, courts: [{ 
 const listed = { created_at: "2099-10-01T08:00:00+00:00", booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660,
   location_id: locationId, location_name: "RIVUS", location_timezone: "UTC", court_id: courtId, court_name: "Court 1" };
 const lessonRow = { ...listed, kind: "booking", id: lessonId, status: "confirmed", includes_coaching: true, coach_name: "Coach A",
-  coaching_program_name: "Juniors", customer_name: "Ana Player", customer_email: "ana@example.test" };
+  coaching_program_name: "Juniors", customer_name: "Ana Player", customer_email: "ana@example.test",
+  cancellation: { availability: "eligible", startsAt: "2099-10-15T10:00:00.000Z", refundAvailable: false } };
 const reservationRow = { ...listed, kind: "reservation", id: reservationId, status: "active", reason: "Clinic",
   creator_name: "Coach A", creator_email: "coach@example.test" };
 const lesson = { id: lessonId, status: "confirmed", booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660,
   location_name: "RIVUS", location_timezone: "UTC", court_name: "Court 1", coach_name: "Coach A", coaching_program_name: "Juniors",
-  customer_name: "Ana Player", customer_email: "ana@example.test", customer_phone: "+40 700", created_at: "2099-10-01T08:00:00+00:00" };
+  customer_name: "Ana Player", customer_email: "ana@example.test", customer_phone: "+40 700", created_at: "2099-10-01T08:00:00+00:00",
+  // A past or cancelled lesson: the Coach's Cancel lesson action is covered in coach-lesson-cancellation.test.tsx.
+  cancellation: { availability: "unavailable", startsAt: "2099-10-15T10:00:00.000Z", refundAvailable: false } };
 const reservation = { id: reservationId, court_id: courtId, coach_user_id: null, booking_date: "2099-10-15", starts_at_minute: 600,
   ends_at_minute: 720, reason: "Clinic", created_by_user_id: coachId, status: "active", created_at: "2099-10-01T08:00:00+00:00",
   updated_at: "2099-10-01T08:00:00.123456+00:00", cancelled_at: null, cancelled_by_user_id: null, hold_expires_at: null,
@@ -75,11 +81,98 @@ test("the Coach List shows own lessons and reservations with Coach links, tabs a
   expect(within(tabs).getByRole("link", { name: "List" }).getAttribute("aria-current")).toBe("page");
   const table = screen.getByRole("table", { name: "Bookings and reservations" });
   expect(within(table).getAllByRole("columnheader").map((cell) => cell.textContent))
-    .toEqual(["Reference", "Type", "Customer or staff", "Location and court", "Scheduled", "Status", "Created"]);
+    .toEqual(["Reference", "Type", "Customer or staff", "Location and court", "Scheduled", "Status", "Created", "Actions"]);
   expect(within(table).getAllByRole("link", { name: "#cc000000" }).map((link) => link.getAttribute("href")))
     .toEqual([`/coach/bookings/lessons/${lessonId}?sort=scheduled`, `/coach/bookings/reservations/${reservationId}?sort=scheduled`]);
   expect(within(table).getByText("Ana Player")).toBeDefined();
   expect(screen.queryByText(/Total|RON|No charge|Guest/)).toBeNull();
+});
+
+describe("Cancel lesson in the Coach List", () => {
+  const otherLessonId = "cc000000-0000-4000-8000-000000000011";
+  const withRows = (...rows: object[]) => mocks.list.mockResolvedValue({ rows, page: 1, total: rows.length, totalPages: 1 });
+  const showList = async () => {
+    render(await CoachBookingsPage({ searchParams: Promise.resolve({ type: "all", page: "1" }) }));
+    return screen.getByRole("table", { name: "Bookings and reservations" });
+  };
+  const rowOf = (table: HTMLElement, name: string) => within(table).getByText(name).closest("tr")!;
+
+  test("an eligible own lesson confirms, cancels once through the Coach action and refreshes without navigating", async () => {
+    let resolve!: (value: object) => void;
+    mocks.cancelLesson.mockReturnValue(new Promise((done) => { resolve = done; }));
+    withRows({ ...lessonRow, cancellation: { ...lessonRow.cancellation, refundAvailable: true } }, reservationRow);
+    const table = await showList();
+    const trigger = within(rowOf(table, "Ana Player")).getByRole("button", { name: "Cancel lesson" });
+    expect(trigger.getAttribute("title")).toBe("Cancel lesson");
+    // Above the row's stretched link, never inside it.
+    expect(trigger.closest("a")).toBeNull();
+    expect(trigger.className).toContain("z-10");
+    // Reschedule lesson sits beside it, with the same placement.
+    const reschedule = within(rowOf(table, "Ana Player")).getByRole("button", { name: "Reschedule lesson" });
+    expect(reschedule.getAttribute("title")).toBe("Reschedule lesson");
+    expect(reschedule.closest("a")).toBeNull();
+    expect(reschedule.className).toContain("z-10");
+    // Staff reservations keep their own details-page actions only.
+    expect(within(rowOf(table, "Clinic")).queryByRole("button")).toBeNull();
+    fireEvent.click(trigger);
+    expect(mocks.push).not.toHaveBeenCalled();
+    const confirmation = screen.getByRole("dialog", { name: "Cancel lesson?" });
+    for (const value of ["Ana Player", "Juniors lesson", "RIVUS · Court 1", "15 Oct 2099 · 10:00–11:00",
+      "The customer's online payment will be refunded automatically."]) expect(confirmation.textContent).toContain(value);
+    fireEvent.click(within(confirmation).getByRole("button", { name: "Confirm cancellation" }));
+    fireEvent.click(within(confirmation).getByRole("button", { name: "Cancelling lesson…" }));
+    const busy = within(rowOf(table, "Ana Player")).getByRole("button", { name: "Cancelling lesson…" });
+    expect((busy as HTMLButtonElement).disabled).toBe(true);
+    expect(busy.getAttribute("aria-busy")).toBe("true");
+    resolve({ ok: true, outcome: "cancellation_pending" });
+    await waitFor(() => expect(mocks.refresh).toHaveBeenCalledOnce());
+    expect(mocks.cancelLesson).toHaveBeenCalledExactlyOnceWith({ id: lessonId });
+    expect(mocks.push).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "Cancel lesson?" })).toBeNull();
+  });
+
+  test("keeping the lesson or a declined request leaves the List unchanged", async () => {
+    mocks.cancelLesson.mockResolvedValue({ ok: false, message: "This lesson is no longer available to cancel." });
+    withRows(lessonRow);
+    const table = await showList();
+    const trigger = within(table).getByRole("button", { name: "Cancel lesson" });
+    fireEvent.click(trigger);
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Cancel lesson?" })).getByRole("button", { name: "Keep booking" }));
+    expect(screen.queryByRole("dialog", { name: "Cancel lesson?" })).toBeNull();
+    expect(mocks.cancelLesson).not.toHaveBeenCalled();
+    fireEvent.click(trigger);
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Cancel lesson?" })).getByRole("button", { name: "Confirm cancellation" }));
+    await waitFor(() => expect(mocks.cancelLesson).toHaveBeenCalledOnce());
+    await waitFor(() => expect((within(table).getByRole("button", { name: "Cancel lesson" }) as HTMLButtonElement).disabled).toBe(false));
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Cancel lesson?" })).toBeTruthy();
+  });
+
+  test("started, pending and cancelled lessons offer no action and show why", async () => {
+    const row = (id: string, name: string, availability: string, status = "confirmed") => ({ ...lessonRow, id, status, customer_name: name,
+      cancellation: { ...lessonRow.cancellation, availability } });
+    withRows(row(lessonId, "Started Player", "started"), row(otherLessonId, "Pending Player", "cancellation_pending"),
+      row("cc000000-0000-4000-8000-000000000012", "Changing Player", "change_pending"),
+      row("cc000000-0000-4000-8000-000000000013", "Cancelled Player", "unavailable", "cancelled"));
+    const table = await showList();
+    expect(within(table).queryByRole("button", { name: /Cancel|Reschedule/ })).toBeNull();
+    expect(within(rowOf(table, "Started Player")).getByText("Started").getAttribute("title"))
+      .toBe("This lesson has started and can no longer be rescheduled or cancelled.");
+    // A requested refund never reads as completed.
+    expect(within(rowOf(table, "Pending Player")).getByText("Cancellation pending").getAttribute("title"))
+      .toBe("Cancellation requested. The lesson stays confirmed until the customer's refund is confirmed.");
+    expect(within(rowOf(table, "Changing Player")).getByText("Change pending")).toBeDefined();
+    expect(rowOf(table, "Cancelled Player").lastElementChild!.textContent).toBe("");
+  });
+
+  test("the mobile cards offer the same control", async () => {
+    withRows(lessonRow, reservationRow);
+    await showList();
+    const cards = within(screen.getByRole("list", { name: "Bookings and reservations" })).getAllByRole("listitem");
+    expect(within(cards[0]).getByRole("button", { name: "Cancel lesson" })).toBeDefined();
+    expect(within(cards[0]).getByRole("button", { name: "Reschedule lesson" })).toBeDefined();
+    expect(within(cards[1]).queryByRole("button")).toBeNull();
+  });
 });
 
 test("the Coach toolbar offers only lessons and own reservations, without a Coach filter", () => {
@@ -103,7 +196,7 @@ test("the Coach Calendar tab keeps the existing occupancy calendar under the Coa
   expect(screen.getByRole("link", { name: "Calendar" }).getAttribute("aria-current")).toBe("page");
 });
 
-test("lesson details show the schedule and customer contact, no financial records or actions, and return to the source", async () => {
+test("lesson details show the schedule and customer contact, no financial records, and return to the source", async () => {
   await openLesson({ type: "coaching", page: "2" });
   expect(mocks.authorize.mock.invocationCallOrder[0]).toBeLessThan(mocks.lesson.mock.invocationCallOrder[0]);
   expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Lesson #cc000000");
@@ -167,4 +260,14 @@ test("ended or cancelled own reservations show their record without actions", as
   await openReservation();
   expect(screen.queryByRole("region", { name: "Reservation actions" })).toBeNull();
   expect(screen.getByText("Clinic")).toBeDefined();
+});
+
+test("Reschedule lesson in the Coach List navigates to Calendar rescheduling", async () => {
+  mocks.list.mockResolvedValue({ rows: [lessonRow], page: 1, total: 1, totalPages: 1 });
+  render(await CoachBookingsPage({ searchParams: Promise.resolve({ type: "all", page: "1" }) }));
+  const table = screen.getByRole("table", { name: "Bookings and reservations" });
+  fireEvent.click(within(table).getByRole("button", { name: "Reschedule lesson" }));
+  expect(mocks.push).toHaveBeenCalledExactlyOnceWith(`/coach/bookings?view=calendar&reschedule=${lessonId}`);
+  expect(mocks.refresh).not.toHaveBeenCalled();
+  expect(screen.queryByRole("dialog", { name: "Reschedule lesson" })).toBeNull();
 });

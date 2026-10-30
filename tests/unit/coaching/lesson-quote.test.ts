@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { projectCoachingLessonAvailability } from "@/lib/coaching/lesson-availability";
-import { listCoachingLessonOffers, listCoachingRescheduleOffers, quoteCoachingLesson, quoteCoachingReschedule, type CoachingLessonDay } from "@/lib/coaching/lesson-quote";
+import { listCoachingLessonOffers, listCoachingRescheduleOffers, operationalSchedule, quoteCoachingLesson, quoteCoachingReschedule, type CoachingLessonDay } from "@/lib/coaching/lesson-quote";
 import type { PublicCoachingFacts } from "@/lib/db/repositories/coaching.repository";
 import type { PricingRule } from "@/lib/pricing/validation";
 import { mondayWeekday } from "@/lib/pricing/resolution";
@@ -441,4 +441,59 @@ describe("purchased lesson reschedule quotes", () => {
     expect(listCoachingRescheduleOffers(busyCourt, agreed).map((offer) => [offer.startMinute, offer.court.id]))
       .toEqual([[600, ids.court2], [630, ids.court2], [660, ids.court2], [690, ids.court1], [690, ids.court2]]);
   });
+});
+
+describe("operational scheduling", () => {
+  const agreed = { participantCount: 1, pricePerPersonMinor: 10000, programId: ids.private, coachUserId: ids.ana, locationId: ids.east, durationMinutes: 60, source: "coach" as const,
+    amountMinor: 10000, currency: "RON" as const, courtRentalIncluded: false, courtRentalMinor: 6000, courtAmountMinor: 6000 };
+  const reason = (day: CoachingLessonDay, startMinute: number, policy: "enforce" | "override", courtId = ids.court1) => {
+    const result = quoteCoachingReschedule(day, agreed, { courtId, startMinute }, policy);
+    return result.ok ? "ok" : result.reason;
+  };
+
+  it("an override skips only the coach's configurable windows and time off", () => {
+    // Outside working hours (600–780 at East).
+    expect(reason(eastDay(), 900, "enforce")).toBe("coach-unavailable");
+    expect(reason(eastDay(), 900, "override")).toBe("ok");
+    // A full-day time off.
+    const off = eastDay({}, { exceptions: [{ date, kind: "unavailable", location_id: null, start_minute: null, end_minute: null }] });
+    expect(reason(off, 600, "enforce")).toBe("coach-unavailable");
+    expect(reason(off, 600, "override")).toBe("ok");
+  });
+
+  it("never overrides coach or court occupancy, opening hours, pricing or DST", () => {
+    expect(reason(eastDay({}, { occupancy: [{ booking_date: date, starts_at_minute: 900, ends_at_minute: 960 }] }), 900, "override")).toBe("coach-booked");
+    const busyCourt = eastDay({ courtOccupancy: [{ court_id: ids.court1, booking_date: date, starts_at_minute: 900, ends_at_minute: 960 }] });
+    expect(reason(busyCourt, 900, "override")).toBe("court-unavailable");
+    expect(reason(busyCourt, 900, "override", ids.court2)).toBe("ok");
+    // Closed (hours end at 1320) and unpriced intervals stay unavailable.
+    expect(reason(eastDay(), 1320, "override")).toBe("court-unavailable");
+    const dst = "2027-03-28";
+    const spring = eastDay({ date: dst, today: "2027-01-01", hours: [hours(ids.east, dst, 0, 1440)], pricing: [rule(ids.east, ids.court1, dst, 6000, 0, 1440)] });
+    expect(reason(spring, 180, "override")).toBe("invalid-time");
+  });
+
+  it("schedules a court booking without a coach under the same court rules", () => {
+    const day = { ...eastDay(), coach: null };
+    const schedule = operationalSchedule(day);
+    expect(schedule({ courtId: ids.court2, startMinute: 900, endMinute: 990 })).toMatchObject({ ok: true,
+      slot: { court: { id: ids.court2 }, startMinute: 900, endMinute: 990, courtRentalMinor: 12000 } });
+    expect(schedule({ courtId: ids.court2, startMinute: 900, endMinute: 930 })).toEqual({ ok: false, reason: "invalid-time" });
+    const busy = operationalSchedule({ ...day, coach: null, courtOccupancy: [{ court_id: ids.court2, booking_date: date, starts_at_minute: 930, ends_at_minute: 990 }] });
+    expect(busy({ courtId: ids.court2, startMinute: 900, endMinute: 990 })).toEqual({ ok: false, reason: "court-unavailable" });
+  });
+});
+
+it.each([
+  ["2027-03-28", 180, false], ["2027-03-28", 150, false],
+  ["2027-03-28", 60, true], ["2027-03-28", 240, true],
+  ["2027-10-31", 120, false], ["2027-10-31", 180, true],
+  ["2027-03-28", 0, true], ["2027-10-31", 1380, true],
+])("coaching quotes and offers agree with court DST availability on %s at %i", (date, startMinute, valid) => {
+  const day = eastDay({ date, today: "2027-01-01", hours: [hours(ids.east, date, 0, 1440)],
+    pricing: [rule(ids.east, ids.court1, date, 6000, 0, 1440)] },
+    { weekly: [weekly(ids.east, date, 0, 1440)] });
+  expect(reason(day, lesson({ startMinute }))).toBe(valid ? "ok" : "invalid-time");
+  const offers = listCoachingLessonOffers(day, { programId: ids.private, durationMinutes: 60, participantCount: 1 });
+  expect(offers.some(offer => offer.startMinute === startMinute)).toBe(valid);
 });

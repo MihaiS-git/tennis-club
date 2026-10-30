@@ -71,6 +71,7 @@ export function transactionStatusLabel(t: Pick<import("./admin").AdminPaymentTra
   if (!t.transaction_status) return "Unknown";
   if (t.transaction_kind === "refund") return t.transaction_status === "succeeded" ? "Completed" : paymentStatusLabels[t.transaction_status];
   const status = paymentStatusLabels[t.transaction_status];
-  if (t.transaction_status !== "succeeded" || t.refunded_minor === 0) return status;
+  // A late capture keeps its ended attempt status; its verified compensation still shows.
+  if (t.refunded_minor === 0) return status;
   return `${status} · ${t.refunded_minor >= t.amount_minor ? "Fully refunded" : "Partially refunded"}`;
 }

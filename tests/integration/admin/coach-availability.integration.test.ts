@@ -8,7 +8,7 @@ import {
 } from "../../../src/lib/coaching/availability";
 import { resolveCoachAvailability } from "../../../src/lib/coaching/availability-schedule";
 import { listCoachDayAvailability } from "@/lib/db/repositories/coach-availability.repository";
-import { localToday } from "../../../src/lib/courts/local-time";
+import { localStartInstant, localToday } from "../../../src/lib/courts/local-time";
 import { cleanupAuthFixtures, localFixtureClient } from "../auth-fixtures";
 import { ensureIntegrationAdminAnchor } from "../admin-anchor";
 import { insertOpeningHoursFixture } from "../opening-hours-fixtures";
@@ -16,7 +16,7 @@ import { insertOpeningHoursFixture } from "../opening-hours-fixtures";
 const service = localFixtureClient();
 const password = "availability-integration-password-123";
 const userIds: string[] = [];
-// A: Europe/Bucharest, B: UTC, C: assigned to nobody.
+// All locations share Europe/Bucharest; C is assigned to nobody.
 const [locationA, locationB, locationC] = [randomUUID(), randomUUID(), randomUUID()];
 const courtIds: string[] = [];
 const locationIds = [locationA, locationB, locationC];
@@ -73,8 +73,8 @@ test("coach availability enforces ownership, Admin authorization, eligibility, s
   await ensureIntegrationAdminAnchor(service);
   assert.strictEqual((await service.from("locations").insert([
     { id: locationA, name: "Availability East", slug: `availability-east-${locationA}`, timezone: "Europe/Bucharest" },
-    { id: locationB, name: "Availability West", slug: `availability-west-${locationB}`, timezone: "UTC" },
-    { id: locationC, name: "Availability North", slug: `availability-north-${locationC}`, timezone: "UTC" },
+    { id: locationB, name: "Availability West", slug: `availability-west-${locationB}`, timezone: "Europe/Bucharest" },
+    { id: locationC, name: "Availability North", slug: `availability-north-${locationC}`, timezone: "Europe/Bucharest" },
   ])).error, null);
   // Open around the clock: containment in opening hours is covered by coach-working-hours.
   for (const location_id of [locationA, locationB]) {
@@ -151,7 +151,7 @@ test("coach availability enforces ownership, Admin authorization, eligibility, s
   expect(adminView.selected?.coach).toEqual({ user_id: coach.id, display_name: "Availability Coach", ineligibility: null });
   expect(adminView.selected?.weekly.map((row) => row.id)).toEqual([mondayMorning.id, mondayEvening.id, tuesday.id, byAdmin.id]);
   expect(adminView.selected?.locations.map((location) => [location.id, location.timezone]).sort())
-    .toEqual([[locationA, "Europe/Bucharest"], [locationB, "UTC"]].sort());
+    .toEqual([[locationA, "Europe/Bucharest"], [locationB, "Europe/Bucharest"]].sort());
   const own = await changeOwnCoachAvailability(weekly(locationB, 5, 540, 600), adminCoach.client);
   assert.ok(own.ok);
   expect(await changeCoachAvailability({ coach_user_id: coach.id, change: { operation: "remove-weekly", id: byAdmin.id } }, adminCoach.client))
@@ -211,8 +211,7 @@ test("coach availability enforces ownership, Admin authorization, eligibility, s
   expect(raced.filter((result) => !result.ok)).toEqual([{ ok: false, reason: "overlap" }]);
 
   // Date exceptions: whole-day and interval absences, one-off additional hours.
-  const today = localToday("Europe/Bucharest", new Date()) < localToday("UTC", new Date())
-    ? localToday("Europe/Bucharest", new Date()) : localToday("UTC", new Date());
+  const today = localToday("Europe/Bucharest", new Date());
   const day = addDays(today, 14);
   const vacation = await changeOwnCoachAvailability(absence(day), coach.client);
   assert.ok(vacation.ok);
@@ -285,7 +284,8 @@ test("coach availability enforces ownership, Admin authorization, eligibility, s
   expect(resolve(day).length).toBe(0);
   const next = resolve(addDays(day, 1));
   expect(next.filter((window) => window.source === "exception"))
-    .toEqual([expect.objectContaining({ location_id: locationB, starts_at: `${addDays(day, 1)}T20:00:00.000Z`, ends_at: `${addDays(day, 1)}T22:00:00.000Z` })]);
+    .toEqual([expect.objectContaining({ location_id: locationB,
+      starts_at: localStartInstant("Europe/Bucharest", addDays(day, 1), 1200), ends_at: localStartInstant("Europe/Bucharest", addDays(day, 1), 1320) })]);
   // The 09:00–11:00 absence removes any Monday-morning interval on that date.
   if (weekday(addDays(day, 1)) === 0) expect(next.some((window) => window.start_minute < 660 && window.end_minute > 540)).toBe(false);
 

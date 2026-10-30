@@ -1,5 +1,11 @@
+import { renderToStaticMarkup } from "react-dom/server";
+import MessageDetailsPage from "@/app/messages/[messageId]/page";
+const messageAccount = vi.hoisted(() => ({ userId: "" }));
+vi.mock("@/lib/profile/profile", () => ({ profileContext: async () => ({ account: { state: "active", userId: messageAccount.userId } }) }));
+vi.mock("@/app/messages/[messageId]/read-signal", () => ({ MessageReadSignal: () => null }));
+vi.mock("@/app/messages/[messageId]/unread-button", () => ({ MessageDetailActions: () => null }));
 import { randomUUID } from "node:crypto";
-import { afterAll, afterEach, beforeAll, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, onTestFinished, test, vi } from "vitest";
 import { getDataSource } from "@/lib/db/data-source";
 import { inTransaction } from "@/lib/db/transaction";
 import { findRevision } from "@/lib/db/repositories/booking-revisions.repository";
@@ -16,6 +22,12 @@ import { finishBookingAdjustment } from "@/lib/payments/booking-adjustments";
 import { prepareRefund, initiateRefundExecution, commitRefundExecution } from "@/lib/payments/refund-commands";
 import { resolveRefundBackedAdjustment } from "@/lib/bookings/commands";
 import * as evidence from "@/lib/db/repositories/booking-financial-exceptions.repository";
+import { findAdminBookingDetails } from "@/lib/db/repositories/bookings.repository";
+import { recordBookingFinancialException as recordFinancialExceptionNotification } from "@/lib/notifications/events";
+import { readFinancialHistory } from "@/lib/payments/financial-history";
+import { attentionRefundStatuses } from "@/lib/payments/domain";
+import { expirePaymentHolds } from "@/lib/payments/hold-expiry";
+import { findOwnBookingActivityTarget } from "@/lib/bookings/activity-service";
 
 const { refundPayment } = vi.hoisted(() => ({ refundPayment: vi.fn() }));
 vi.mock("@/lib/payments/providers", () => ({ onlinePaymentAdapter: async () => ({ refundPayment }) }));
@@ -250,4 +262,90 @@ test("a coach conflict when applying a refunded reduction keeps the booking and 
     await database.query("DELETE FROM public.courts WHERE id=$1", [otherCourt]);
     await database.query("DELETE FROM public.coach_profiles WHERE user_id=$1", [coach]);
   }
+});
+
+// Resolves a notification href the way its target page does: Booking Details needs a
+// confirmed booking; the transaction detail page reads one exact transaction.
+async function resolvesForAdmin(href: string) {
+  const { manager } = await getDataSource();
+  const booking = /^\/admin\/bookings\/([0-9a-f-]{36})#financial-history$/.exec(href);
+  if (booking) return (await findAdminBookingDetails(manager, booking[1])) !== null;
+  const transaction = /^\/admin\/payments\/transactions\/(payment|refund|booking)\/([0-9a-f-]{36})$/.exec(href);
+  if (!transaction) return false;
+  const page = await readFinancialHistory(manager, { page: 1, status: "all", provider: "all", method: "all", attention: false,
+    search: "", sort: "date", direction: "desc", bookingId: null, attentionRefundStatuses,
+    transaction: { kind: transaction[1] as "payment" | "refund" | "booking", id: transaction[2] } });
+  return page.rows.length === 1;
+}
+
+async function messageHref(userId: string, eventKeyPrefix: string) {
+  const rows: { href: string }[] = await (await getDataSource()).query(
+    "SELECT href FROM public.user_messages WHERE user_id=$1 AND starts_with(event_key,$2)", [userId, eventKeyPrefix]);
+  expect(rows).toHaveLength(1);
+  return rows[0].href;
+}
+
+async function renderedMessageLink(userId: string, href: string, label: string) {
+  messageAccount.userId = userId;
+  const [message] = await (await getDataSource()).query("SELECT id FROM public.user_messages WHERE user_id=$1 AND href=$2", [userId, href]);
+  const html = renderToStaticMarkup(await MessageDetailsPage({ params: Promise.resolve({ messageId: message.id }), searchParams: Promise.resolve({}) }));
+  expect(html).toContain(`href="${href}"`);
+  expect(html).toContain(`>${label}</a>`);
+}
+
+test("financial exception notifications open existing evidence for expired checkouts and confirmed bookings", async () => {
+  const db = localFixtureClient();
+  const adminUser = await db.auth.admin.createUser({ email: `financial-admin-${randomUUID()}@example.test`,
+    password: "financial-admin-test-123", email_confirm: true });
+  expect(adminUser.error).toBeNull();
+  const adminId = adminUser.data.user!.id;
+  userIds.push(adminId);
+  expect((await db.from("user_roles").insert({ user_id: adminId, role_code: "admin" })).error).toBeNull();
+  const customerEmail = `financial-link-${randomUUID()}@example.test`;
+  const customer = await db.auth.admin.createUser({ email: customerEmail, password: "financial-link-test-123", email_confirm: true });
+  expect(customer.error).toBeNull();
+  const owner = customer.data.user!.id;
+  userIds.push(owner);
+  onTestFinished(async () => { await (await getDataSource()).query(
+    "DELETE FROM public.user_messages WHERE user_id = ANY($1::uuid[])", [[adminId, owner]]); });
+  refundPayment.mockImplementation(async ({ id }: { id: string }) => ({ status: "succeeded", providerRefundId: `re_${id}` }));
+
+  // A capture after local expiry: the checkout never becomes a booking.
+  const expired = await insertCheckoutFixture({ courtId, bookingDate: "2099-10-15", startMinute: nextMinute, endMinute: nextMinute + 60,
+    accountUserId: owner, customerName: "Late customer", customerEmail, customerPhone: "123", totalAmountMinor: 5000,
+    currency: "RON", paymentMethod: "online", provider: "stripe", holdSeconds: 600 });
+  nextMinute += 60;
+  bookingIds.push(expired.booking_id);
+  const database = await getDataSource();
+  await database.query("UPDATE public.court_reservations SET hold_expires_at='2020-01-01T00:00:00Z' WHERE id=$1", [expired.reservation_id]);
+  await expirePaymentHolds({ courtId });
+  await database.query("UPDATE public.payment_attempts SET provider_payment_id=$2 WHERE id=$1", [expired.payment_attempt_id, `pi_${expired.payment_attempt_id}`]);
+  expect(await processOnlinePaymentEvent({ provider: "stripe", providerPaymentId: `pi_${expired.payment_attempt_id}`,
+    attemptId: expired.payment_attempt_id, eventId: `evt_${randomUUID()}`, outcome: "succeeded", amountMinor: 5000, currency: "RON" }))
+    .toBe("expired");
+  expect(await database.query("SELECT kind FROM public.booking_financial_exceptions WHERE booking_id=$1", [expired.booking_id]))
+    .toEqual([{ kind: "late_capture" }]);
+  // The previous Booking Details link would be a 404 for this checkout.
+  expect(await findAdminBookingDetails(database.manager, expired.booking_id)).toBeNull();
+  const lateAdminHref = await messageHref(adminId, "financial.exception:");
+  expect(lateAdminHref).toBe(`/admin/payments/transactions/payment/${expired.payment_attempt_id}`);
+  await renderedMessageLink(adminId, lateAdminHref, "View transaction");
+  expect(await resolvesForAdmin(lateAdminHref)).toBe(true);
+  // Customers reach their history list; no history entry is fabricated for the checkout.
+  expect(await messageHref(owner, "financial.customer:")).toBe("/my-activity/history");
+  expect(await messageHref(owner, "financial.refund:")).toBe("/my-activity/history");
+  expect(await findOwnBookingActivityTarget(expired.booking_id, owner)).toBeNull();
+
+  // A confirmed booking keeps its Booking Details and history deep links.
+  const held = await booking(owner);
+  await confirm(held);
+  const [current] = await database.query("SELECT current_revision_id FROM public.checkout_records WHERE id=$1", [held.booking_id]);
+  await inTransaction(manager => recordFinancialExceptionNotification(manager, { key: `payment:${held.payment_attempt_id}:link`,
+    bookingId: held.booking_id, revisionId: current.current_revision_id, kind: "surcharge_unapplied", paymentAttemptId: held.payment_attempt_id }));
+  const confirmedAdminHref = (await database.query("SELECT href FROM public.user_messages WHERE user_id=$1 AND event_key=$2",
+    [adminId, `financial.exception:payment:${held.payment_attempt_id}:link`]))[0].href;
+  expect(confirmedAdminHref).toBe(`/admin/bookings/${held.booking_id}#financial-history`);
+  await renderedMessageLink(adminId, confirmedAdminHref, "View booking");
+  expect(await resolvesForAdmin(confirmedAdminHref)).toBe(true);
+  expect(await findOwnBookingActivityTarget(held.booking_id, owner)).toMatchObject({ booking: { id: held.booking_id } });
 });

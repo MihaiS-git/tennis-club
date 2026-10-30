@@ -10,6 +10,7 @@ vi.mock("@/lib/db/repositories/accounts.repository", () => ({ lockActiveAdminAcc
 vi.mock("@/lib/db/repositories/club-settings.repository", () => ({ readClubSettings: mocks.read, writeClubSettings: mocks.write,
   readClubContact: mocks.readContact, writeClubContact: mocks.writeContact }));
 import { readAdminClubContact, readAdminClubSettings, saveClubContact, saveClubSettings, sendClubTestEmail } from "@/lib/club/settings";
+import * as brevo from "@/lib/notifications/brevo";
 import { clubContactSchema, clubSettingsSchema, telephoneHref } from "@/lib/club/schema";
 
 const settings = { officialEmail: "official@example.com", senderName: "Club Name", emailsEnabled: true };
@@ -20,7 +21,7 @@ beforeEach(() => {
   mocks.user.mockResolvedValue({ data: { user: { id: "admin-id", email: "verified@example.com", email_confirmed_at: "2026-01-01" } }, error: null });
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ messageId: "<test>" }), { status: 201 })));
 });
-afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 
 test("only authorized Admin can read, update or send tests", async () => {
   mocks.admin.mockRejectedValue(new Error("Denied"));
@@ -45,9 +46,10 @@ test.each([{ ...settings, officialEmail: "invalid" }, { ...settings, senderName:
 });
 
 test("test email uses saved sender and verified identity and reports acceptance without provider identifiers", async () => {
-  expect(await sendClubTestEmail()).toMatchObject({ ok: true, message: "Test email submitted to Brevo. Check your inbox." });
+  expect(await sendClubTestEmail()).toMatchObject({ ok: true, message: "Test request accepted by Brevo in sandbox mode. No email will arrive." });
   expect(mocks.info).toHaveBeenCalledWith(expect.objectContaining({ messageId: "<test>", mode: "sandbox" }), expect.any(String));
   const request = JSON.parse(vi.mocked(fetch).mock.calls[0][1]?.body as string);
+  expect(request.headers["X-Sib-Sandbox"]).toBe("drop");
   expect(request.sender).toEqual({ email: settings.officialEmail, name: settings.senderName });
   expect(request.to).toEqual([{ email: "verified@example.com" }]);
   expect(mocks.write).not.toHaveBeenCalled();
@@ -120,4 +122,14 @@ test("telephone links keep only dialable characters", () => {
   expect(telephoneHref("+40 (21) 123-4567")).toBe("tel:+40211234567");
   expect(telephoneHref("021 123 4567")).toBe("tel:0211234567");
   expect(clubContactSchema.safeParse({ contactEmail: "", contactPhone: "(021) 123.4567" }).success).toBe(true);
+});
+
+
+test("live test feedback reports provider acceptance without promising delivery", async () => {
+  // Stub transport/config: automated tests must never dispatch live mail.
+  vi.spyOn(brevo, "brevoConfig").mockReturnValue({ apiKey: "mock", sender: settings.officialEmail, mode: "live" });
+  vi.spyOn(brevo, "sendBrevoEmail").mockResolvedValue({ ok: true, messageId: "<test>" });
+  expect(await sendClubTestEmail()).toEqual({ ok: true,
+    message: "Test email accepted by Brevo. Acceptance does not confirm inbox delivery." });
+  expect(fetch).not.toHaveBeenCalled();
 });

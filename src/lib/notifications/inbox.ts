@@ -73,10 +73,12 @@ export async function deleteOwnMessage(userId: string, rawId: unknown) {
   return updateUserMessages((await getDataSource()).manager, userId, [id.data], "delete");
 }
 
-// Phase 2 emits only these paths. Treat all other stored href values as text,
+// Notification producers emit only these paths. Treat all other stored href values as text,
 // including protocol-relative, encoded, or future destinations.
 export function safeMessageHref(href: string | null) {
-  if (!href) return null;
+  if (!href || href !== href.trim()) return null;
+  const transaction = /^\/admin\/payments\/transactions\/(?:payment|refund|booking)\/([^/]+)$/.exec(href);
+  if (transaction && z.uuid().safeParse(transaction[1]).success) return href;
   if (href === "/my-activity/bookings" || href === "/my-activity/history") return href;
   if (/^\/my-activity\/(?:bookings|history)\?booking=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(href)) return href;
   return /^\/(?:admin\/bookings|coach\/bookings\/lessons)\/[0-9a-f-]{36}(?:#financial-history)?$/i.test(href) ? href : null;

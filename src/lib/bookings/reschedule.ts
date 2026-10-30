@@ -8,12 +8,15 @@ import { getDataSource } from "@/lib/db/data-source";
 import { listBookingEditDayCoverage, listCheckoutLocationCourts } from "@/lib/db/repositories/clubs.repository";
 import { listBookingEditDayPricing } from "@/lib/db/repositories/pricing.repository";
 import { courtSlotRates } from "@/lib/courts/calendar";
+import { createLocalIntervalValidator } from "@/lib/courts/local-time";
 import { toCalendarCoveragePeriod, toCalendarPricingRule } from "@/lib/courts/calendar-projections";
 import { mondayWeekday } from "@/lib/pricing/resolution";
 import { readCurrentAccount } from "@/lib/auth/account";
-import { bookingRescheduleInputSchema, readCustomerBookingEditContext, rescheduleCustomerBookingCommand } from "./commands";
+import { BookingEditUnavailableError, bookingRescheduleInputSchema, changeBookingOperationallyCommand, readCustomerBookingEditContext,
+  rescheduleCustomerBookingCommand } from "./commands";
+import { operationalChangeInputSchema, type OperationalCapacity } from "./operational-policy";
 import { normalizeDatabaseError, reservationOverlap } from "@/lib/db/errors";
-import { finishBookingAdjustment } from "@/lib/payments/booking-adjustments";
+import { finishBookingAdjustment, finishOperationalChange } from "@/lib/payments/booking-adjustments";
 import type { AdjustmentTarget } from "@/lib/db/entities/booking-adjustment.entity";
 import type { OnlineCheckout } from "@/lib/payments/domain";
 import type { RefundStatus } from "@/lib/payments/refunds";
@@ -52,14 +55,27 @@ export async function loadBookingEditDay(id: unknown, date: unknown, client: Cli
   if (account.state !== "active")
     throw new Error("An active authorized account is required to edit a booking.");
   const context = await readCustomerBookingEditContext(input.id, input.date, account.userId);
-  if (!context) throw new Error("This booking is no longer available to edit.");
+  if (!context) throw new BookingEditUnavailableError("This booking is no longer available to edit.");
+  return projectBookingEditDay(context, input.date, now);
+}
+
+// The edit timetable of one date from an authorized edit context, shared by owner and
+// assigned-Coach rescheduling. Callers authorize and read the context under the booking locks.
+export async function projectBookingEditDay(context: NonNullable<Awaited<ReturnType<typeof readCustomerBookingEditContext>>>,
+  date: string, now: Date) {
   const booking = bookingEditContextSchema.parse(context);
   const availability = await loadReservationEditDayForLocation({ locationId: context.location_id,
-    timezone: context.location_timezone, date: input.date, occupancy: context.occupancy, now,
+    timezone: context.location_timezone, date, occupancy: context.occupancy, now,
     configuration: { location: booking.location, hours: context.hours } });
+  const day = await withCourtRates(availability.day, context.location_id, date,
+    context.hours, booking.currency, context.location.courts);
+  // As on the public calendar, a slot whose local times do not exist or do not
+  // elapse exactly as priced (DST transitions) cannot be selected.
+  const validInterval = createLocalIntervalValidator(context.location_timezone, date);
+  const validSlots = day.times.map((minute) => validInterval(minute, minute + 30));
   // Every Edit opens a fresh form; earlier modifications are never resumed here.
-  return { ...availability, day: await withCourtRates(availability.day, context.location_id, input.date,
-    context.hours, booking.currency, context.location.courts), booking };
+  return { ...availability, day: { ...day, courts: day.courts.map((row) => ({ ...row,
+    cells: row.cells.map((cell, index) => cell === "available" && !validSlots[index] ? "closed" as const : cell) })) }, booking };
 }
 
 type RateCourt = Parameters<typeof courtSlotRates>[0]["court"];
@@ -106,4 +122,13 @@ export async function runBookingReschedule(input: unknown, actorId: string): Pro
     logger.error({ event: "bookings.reschedule_failed", actorId, bookingId: parsed.data.id, code: failure.sqlState }, "Booking reschedule failed");
     return { ok: false, message: "Unable to reschedule this booking. Try again." };
   }
+}
+
+// The shared staff operational change application workflow:
+// validate, run the locked command, then process any refund after commit. The caller
+// supplies the verified actor; the command re-authorizes the capacity under its locks.
+export async function runOperationalBookingChange(input: unknown, actorId: string, capacity: OperationalCapacity) {
+  const parsed = operationalChangeInputSchema.safeParse(input);
+  if (!parsed.success) return { ok: false as const, reason: "invalid_target" as const };
+  return finishOperationalChange(await changeBookingOperationallyCommand(parsed.data, actorId, capacity));
 }

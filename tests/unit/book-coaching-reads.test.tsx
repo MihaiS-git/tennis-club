@@ -77,7 +77,7 @@ it("loads locations, coaching facts, day configuration and court occupancy once 
   expect(calendar.cancellationNoticeMinutes).toBe(180);
   for (const read of [db.hours, db.coverage, db.pricing, db.courtOccupancy, db.coachDay, db.coachOccupancy]) expect(read).toHaveBeenCalledTimes(1);
   // The calendar grid is the pure court day of the lesson read's own configuration and occupancy.
-  expect(calendar.day).toEqual(buildCourtDay({ date: "2099-10-15", today: "2099-10-15", currentMinute: 540,
+  expect(calendar.day).toEqual(buildCourtDay({ timezone: location.timezone, date: "2099-10-15", today: "2099-10-15", currentMinute: 540,
     courts: location.courts as never, hours, coverage: [], pricing: [], reservations: occupancy }));
   expect((calendar.day as { courts: { cells: string[] }[] }).courts[0].cells).toContain("booked");
 });

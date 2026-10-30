@@ -40,6 +40,6 @@ export default async function MessageDetailsPage({ params, searchParams }: {
     <time dateTime={message.createdAt.toISOString()} className="mt-2 block text-sm text-muted-foreground">{message.createdAt.toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })}</time>
     <p className="mt-6 whitespace-pre-wrap break-words border-t border-border pt-6 text-sm leading-7 text-foreground">{message.kind === "email.delivery_failed" ? "An outbound booking email could not be delivered." : message.bodyText}</p>
     {delivery && <DeliveryDetails messageId={message.id} delivery={delivery} />}
-    {href && <Link href={href} className="mt-6 inline-flex min-h-10 items-center font-semibold text-primary underline hover:text-accent">View booking</Link>}
+    {href && <Link href={href} className="mt-6 inline-flex min-h-10 items-center font-semibold text-primary underline hover:text-accent">{href.startsWith("/admin/payments/transactions/") ? "View transaction" : "View booking"}</Link>}
   </article>;
 }

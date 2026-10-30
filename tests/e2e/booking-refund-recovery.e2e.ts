@@ -73,16 +73,29 @@ async function signIn(page: Page, booking: BookingFixture) {
 }
 
 async function cancelThroughBrowser(page: Page, booking: BookingFixture, message: string, onFeedback?: () => void) {
+  const viewport = page.viewportSize();
   await page.goto("/my-activity/bookings");
   const row = page.getByRole("row", { name: /Details for/ }).filter({ hasText: booking.courtName });
   await row.click();
   await page.getByRole("dialog", { name: "Booking", exact: true }).getByRole("button", { name: "Cancel booking", exact: true }).click();
-  const confirmation = page.getByRole("dialog", { name: "Cancel booking?", exact: true });
+  const confirmation = page.getByRole("region", { name: "Cancel booking?", exact: true });
   await expect(confirmation).toContainText("This will cancel your booking and free the court.");
-  await confirmation.getByRole("button", { name: "Cancel booking", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(1);
+  await expect(confirmation).toContainText("15 Oct 2099 · 16:00–17:00");
+  await expect(confirmation.getByRole("button", { name: "Keep booking" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  expect(await booking.db.query("SELECT status FROM public.checkout_records WHERE id=$1", [booking.bookingId])).toEqual([{ status: "confirmed" }]);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/my-activity/bookings");
+  await page.getByRole("row", { name: /Details for/ }).filter({ hasText: booking.courtName }).click();
+  const details = page.getByRole("dialog", { name: "Booking", exact: true });
+  await details.getByRole("button", { name: "Cancel booking", exact: true }).click();
+  await confirmation.getByRole("button", { name: "Confirm cancellation", exact: true }).focus();
+  await page.keyboard.press("Enter");
   await expect(page.getByText(message, { exact: true })).toBeVisible();
   onFeedback?.();
   await expect(row).toHaveCount(0);
+  if (viewport) await page.setViewportSize(viewport);
 }
 
 async function assertCancellation(booking: BookingFixture, status: string) {
@@ -125,7 +138,7 @@ test("Definitive refund failure keeps the booking confirmed; a fresh customer ca
   const row=page.getByRole("row",{name:/Details for/}).filter({hasText:booking.courtName});
   await row.click();
   await page.getByRole("dialog",{name:"Booking",exact:true}).getByRole("button",{name:"Cancel booking",exact:true}).click();
-  await page.getByRole("dialog",{name:"Cancel booking?",exact:true}).getByRole("button",{name:"Cancel booking",exact:true}).click();
+  await page.getByRole("region",{name:"Cancel booking?",exact:true}).getByRole("button",{name:"Confirm cancellation",exact:true}).click();
   await expect(page.getByText("The refund could not be processed, so your booking was not cancelled. It remains confirmed.",{exact:true})).toBeVisible();
   await expect(row).toHaveCount(1);
   expect(await booking.db.query("SELECT status FROM public.checkout_records WHERE id=$1",[booking.bookingId])).toEqual([{status:"confirmed"}]);

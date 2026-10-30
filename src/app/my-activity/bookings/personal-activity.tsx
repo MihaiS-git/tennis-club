@@ -232,7 +232,7 @@ export function PersonalActivity({ staff, userId, initialActivity, initialError,
               setError("Unable to load your court activity. Try again.");
             }
           }} /> : <>
-        <BookingDetails booking={selectedBooking} />
+        <BookingDetails booking={selectedBooking} noticeBypass={staff} />
         {/* Re-read when polling reports a resolved payment, change or new total. */}
         <BookingPayment key={`${selectedBooking.id}:${selectedBooking.total_amount_minor}:${selectedBooking.payment_pending}:${selectedBooking.pending_change}`} bookingId={selectedBooking.id} />
         <DialogFooter>

@@ -21,9 +21,13 @@ export function CoachingBookingDetails({ booking, title = "Coaching details" }: 
   </DetailSection>;
 }
 
-export function BookingDetails({ booking }: { booking: Omit<PersonalCustomerBooking, "id" | "starts_at_instant"> & CoachingDetailsSnapshot & { starts_at_instant?: string } }) {
+// noticeBypass: the viewer is an Admin or Coach owner, who may act until the booking starts.
+export function BookingDetails({ booking, noticeBypass = false }: {
+  booking: Omit<PersonalCustomerBooking, "id" | "starts_at_instant"> & CoachingDetailsSnapshot & { starts_at_instant?: string };
+  noticeBypass?: boolean;
+}) {
   const cutoff = booking.starts_at_instant
-    ? new Date(customerMutationDeadline({ ...booking, starts_at_instant: booking.starts_at_instant }, false).deadline) : null;
+    ? new Date(customerMutationDeadline({ ...booking, starts_at_instant: booking.starts_at_instant }, noticeBypass).deadline) : null;
   return <>
     {bookingType(booking) === "coaching" && <DetailSection title="Booking type"><dt className="text-muted-foreground">Type</dt><dd>{bookingTypeLabel(booking)}</dd></DetailSection>}
     <CoachingBookingDetails booking={booking} />

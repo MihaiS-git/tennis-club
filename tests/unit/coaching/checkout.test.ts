@@ -36,7 +36,7 @@ it("reports initialization uncertainty without confirming or replacing the commi
   create.mockResolvedValue({ ok: true, paymentAttemptId: "attempt" });
   start.mockRejectedValue(new Error("Private Stripe error"));
   expect(await commitCoachingCheckout({})).toEqual({ ok: false, availabilityChanged: true,
-    message: "Unable to start payment. No booking is confirmed. The temporary hold will expire within 10 minutes." });
+    message: "Unable to start payment. No booking is confirmed. The temporary hold will expire within 5 minutes." });
   expect(create).toHaveBeenCalledTimes(1);
   expect(start).toHaveBeenCalledExactlyOnceWith("attempt");
   expect(logError).toHaveBeenCalledExactlyOnceWith({ event: "payments.checkout_start_failed", attemptId: "attempt" },

@@ -19,6 +19,8 @@ type PaymentPurpose = "booking" | "modification";
 type Props = { confirmationMessage?: string; checkout: OnlineCheckout; holdExpiresAt: string; disabled?: boolean;
   purpose?: PaymentPurpose;
   onPaymentStatus?: (status: CheckoutPaymentStatus) => void;
+  // A definitive card failure ends a booking checkout; the owner releases it.
+  onDeclined?: () => void;
   onConfirmed: (amount: number, currency: LocationCurrency, policy: ConfirmedCancellationPolicy | null) => void };
 
 const endedMessages: Record<PaymentPurpose, Record<"refund_failed" | "refund_pending" | "refunded" | "uncertain" | "cancelled" | "ended" | "expired", string>> = {
@@ -51,6 +53,9 @@ function statusPresentation(status: CheckoutPaymentStatus, processing: boolean) 
   if (status === "cancelled" || status === "refunded") return { Icon: Info, spin: false, className: "border-border bg-surface-muted text-foreground" };
   return { Icon: AlertTriangle, spin: false, className: "border-border-strong bg-warning-background text-foreground" };
 }
+// Booking checkouts end on a definitive failure or expiry; restarting rechecks availability.
+const declinedMessage = "This checkout has ended and no booking was made. To try another card, please select a time again.";
+const reservationExpiredMessage = "Your reservation has expired. Please select a time again.";
 const processingMessage = "Processing payment and waiting for booking confirmation…";
 const slowAuthenticationMessage = "Still waiting for card authentication. Complete it in your bank's window; do not pay again.";
 
@@ -76,7 +81,7 @@ export function OnlinePayment(props: Props) {
   </Elements>;
 }
 
-function PaymentForm({ checkout, holdExpiresAt, onConfirmed, onPaymentStatus, disabled = false, purpose = "booking",
+function PaymentForm({ checkout, holdExpiresAt, onConfirmed, onPaymentStatus, onDeclined, disabled = false, purpose = "booking",
   confirmationMessage = "Booking confirmed." }: Props) {
   const stripe = useStripe(), elements = useElements();
   // processing: the loading indicator only. authenticating: stripe.confirmPayment
@@ -94,6 +99,8 @@ function PaymentForm({ checkout, holdExpiresAt, onConfirmed, onPaymentStatus, di
   const notification = useRef<string | number | undefined>(undefined);
   const finished = useRef(false);
   const uncertain = useRef(false);
+  // The decline message stays until the server reports the checkout's outcome.
+  const declined = useRef<string | null>(null);
   const callbacks = useRef({ onConfirmed, onPaymentStatus });
   const generation = useRef(0);
   const messages = endedMessages[purpose];
@@ -157,6 +164,8 @@ function PaymentForm({ checkout, holdExpiresAt, onConfirmed, onPaymentStatus, di
             : state === "refund_pending" ? messages.refund_pending
             : state === "refunded" ? messages.refunded
             : result.paymentUncertain ? messages.uncertain
+            : state === "cancelled" && declined.current ? declined.current
+            : state === "cancelled" && purpose === "booking" && result.status === "expired" ? reservationExpiredMessage
             : state === "cancelled" ? messages.cancelled
             : messages.ended;
           showStatus(state === "processing" || state === "unknown" ? "unknown" : state, text);
@@ -167,7 +176,7 @@ function PaymentForm({ checkout, holdExpiresAt, onConfirmed, onPaymentStatus, di
           notification.current = undefined;
           // Keep checking uncertain and refund outcomes without a loading toast.
           if (!result.paymentUncertain && state !== "refund_pending") finished.current = true;
-        } else if (authenticatingRef.current) {
+        } else if (authenticatingRef.current || declined.current) {
           // Payment Element owns this interaction until confirmPayment returns.
         } else if (state === "unknown") {
           if (!uncertain.current) unknown("Unable to establish the payment outcome. You may close this window; do not pay again yet.");
@@ -185,6 +194,7 @@ function PaymentForm({ checkout, holdExpiresAt, onConfirmed, onPaymentStatus, di
     }
     function expired() {
       if (disposed || finished.current) return;
+      if (declined.current) { void check(); return; }
       uncertain.current = true; setProcessing(false);
       processingStarted.current = null;
       showStatus("expired", messages.expired);
@@ -218,7 +228,7 @@ function PaymentForm({ checkout, holdExpiresAt, onConfirmed, onPaymentStatus, di
       generation.current += 1;
     };
     // Refs keep current callbacks; this lifecycle belongs to one checkout only.
-  }, [checkout.attemptId, checkout.token, holdExpiresAt, confirmationMessage, messages, showStatus, unknown]);
+  }, [checkout.attemptId, checkout.token, holdExpiresAt, confirmationMessage, messages, purpose, showStatus, unknown]);
 
   async function pay(event: FormEvent) {
     event.preventDefault();
@@ -235,13 +245,21 @@ function PaymentForm({ checkout, holdExpiresAt, onConfirmed, onPaymentStatus, di
       if (result.error) {
         const text = result.error.message ?? "Payment could not be completed. Please check your details.";
         // Stripe also reports failed 3DS as an invalid_request_error with this
-        // specific code. The unexpired intent can accept another payment method.
+        // specific code. Both are definitive failures of this confirmation.
         if (result.error.type === "validation_error" || result.error.type === "card_error"
           || (result.error.type === "invalid_request_error" && result.error.code === "payment_intent_authentication_failure")) {
           if (result.error.type === "validation_error") { setFieldError(text); toast.dismiss(notification.current); }
           else toast.error(text, { id: notification.current });
           notification.current = undefined;
           processingStarted.current = null; setProcessing(false); setMessage("");
+          // Court and coaching bookings need a new checkout for another card.
+          // Modifications keep their existing retry within the same proposal.
+          if (result.error.type !== "validation_error" && purpose === "booking") {
+            declined.current = `${text} ${declinedMessage}`;
+            setCheckoutEnded(true);
+            showStatus("failed", declined.current);
+            onDeclined?.();
+          }
         } else {
           unknown("Payment outcome is uncertain. You may close this window; do not pay again yet.");
         }

@@ -18,6 +18,13 @@ export async function lockConfigurationForWrite(manager: EntityManager): Promise
   await manager.query("SELECT pg_advisory_xact_lock(1791462257, 1)");
 }
 
+export async function listLocationTimezones(manager: EntityManager, operationalOnly: boolean) {
+  return manager.getRepository(LocationEntity).find({
+    select: { id: true, name: true, timezone: true },
+    where: { archivedAt: IsNull(), ...(operationalOnly ? { isActive: true } : {}) },
+  });
+}
+
 export async function lockLocations(manager: EntityManager, ids: readonly string[]): Promise<LocationEntity[]> {
   if (!ids.length) return [];
   return manager.getRepository(LocationEntity).createQueryBuilder("location")
@@ -66,14 +73,16 @@ export async function updateUnarchivedLocation(manager: EntityManager, id: strin
   return returnedIds.parse(result.raw)[0]?.id ?? null;
 }
 
-// Live occupancy facts from the location-local date onward, plus every hold. Earlier
-// dates have ended; the location service decides which remaining rows are unfinished.
-export async function listLocationLiveOccupancy(manager: EntityManager, locationId: string, fromDate: string) {
+// Live occupancy facts from the location-local date onward, plus every hold, optionally
+// for one court. Earlier dates have ended; the location service decides which remaining
+// rows are unfinished.
+export async function listLocationLiveOccupancy(manager: EntityManager, locationId: string, fromDate: string, courtId?: string) {
   const rows: unknown = await manager.query(`SELECT r.status::text AS status, r.booking_date::text AS date,
       r.ends_at_minute AS end_minute, b.id IS NOT NULL AS booked, r.coach_user_id IS NOT NULL AS coaching
     FROM public.court_reservations r JOIN public.courts c ON c.id=r.court_id
     LEFT JOIN public.checkout_records b ON b.reservation_id=r.id
-    WHERE c.location_id=$1 AND (r.status='held' OR (r.status='active' AND r.booking_date>=$2::date))`, [locationId, fromDate]);
+    WHERE c.location_id=$1 AND ($3::uuid IS NULL OR r.court_id=$3)
+      AND (r.status='held' OR (r.status='active' AND r.booking_date>=$2::date))`, [locationId, fromDate, courtId ?? null]);
   return z.array(z.object({ status: z.enum(["active", "held"]), date: z.iso.date(), end_minute: z.number().int(),
     booked: z.boolean(), coaching: z.boolean() })).parse(rows);
 }
@@ -95,7 +104,7 @@ export async function listAdminCourts(manager: EntityManager, locationId?: strin
 
 export async function findCourtConfiguration(manager: EntityManager, id: string) {
   return manager.getRepository(CourtEntity).findOne({
-    where: { id }, select: { id: true, locationId: true, environment: true },
+    where: { id }, select: { id: true, locationId: true, environment: true, isActive: true },
   });
 }
 

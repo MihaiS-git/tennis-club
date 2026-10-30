@@ -1,4 +1,5 @@
 import "server-only";
+import { readClubTimezoneError } from "@/lib/club/timezone-policy";
 
 import { z } from "zod";
 import { localStartInstant } from "@/lib/courts/local-time";
@@ -237,6 +238,10 @@ export async function saveCoachProfile(input: unknown, supabase?: Client): Promi
     if (create && !account?.roles.includes("coach")) return { ok: false, reason: "not-eligible" };
     if (fields.is_public && eligibility) return { ok: false, reason: "not-eligible" };
     const retainedLocations = new Set(profile?.locationIds ?? []);
+    for (const location of locations.filter((location) => locationIds.includes(location.id) && !retainedLocations.has(location.id))) {
+      const timezoneError = await readClubTimezoneError(manager, location);
+      if (timezoneError) return { ok: false, reason: "invalid-input", fieldErrors: { location_ids: timezoneError } };
+    }
     // New assignments need a current location; existing ones may be kept after archiving.
     if (locationIds.some((id) => !retainedLocations.has(id)
       && !locations.some((location) => location.id === id && location.archivedAt === null))) return { ok: false, reason: "invalid-location" };
@@ -303,13 +308,17 @@ export async function deleteCoachProfile(input: unknown, supabase?: Client): Pro
     const profile = await coaching.lockCoachProfile(manager, parsed.data.user_id, "pessimistic_write");
     await requireAdminFence(manager, actor.userId);
     if (!profile) return { ok: false, reason: "not-found" };
-    const facts = await coaching.readCoachRemovalFacts(manager, profile.userId);
     const now = new Date();
-    if (facts.reservations.some(row => row.status === "held"
-      || Date.parse(localStartInstant(row.timezone, row.date, row.endMinute)) > now.getTime())) {
-      return { ok: false, reason: "active-lessons" };
-    }
-    await coaching.removeCoachConfiguration(manager, profile.userId, facts.hasHistory, now);
-    return { ok: true, id: profile.userId, archived: facts.hasHistory };
+    if (await coachHasActiveLessons(manager, profile.userId, now)) return { ok: false, reason: "active-lessons" };
+    const hasHistory = await coaching.coachHasBookingHistory(manager, profile.userId);
+    await coaching.removeCoachConfiguration(manager, profile.userId, hasHistory, now);
+    return { ok: true, id: profile.userId, archived: hasHistory };
   });
+}
+
+// Pending lesson checkouts and lessons that have not ended still need an operational
+// coach. Callers hold locks that keep new lessons for this coach out until commit.
+export async function coachHasActiveLessons(manager: EntityManager, coachUserId: string, now = new Date()) {
+  return (await coaching.listCoachLiveLessons(manager, coachUserId)).some((row) => row.status === "held"
+    || Date.parse(localStartInstant(row.timezone, row.date, row.endMinute)) > now.getTime());
 }

@@ -33,7 +33,7 @@ it("keeps the committed hold and logs the attempt when provider initialization f
   create.mockResolvedValue(pending);
   start.mockRejectedValue(new Error("Private Stripe error"));
   expect(await commitCustomerCheckout(intent)).toEqual({ ok: false, availabilityChanged: true,
-    message: "Unable to start payment. No booking is confirmed. The temporary hold will expire within 10 minutes." });
+    message: "Unable to start payment. No booking is confirmed. The temporary hold will expire within 5 minutes." });
   expect(create).toHaveBeenCalledTimes(1);
   expect(logError).toHaveBeenCalledExactlyOnceWith({ event: "payments.checkout_start_failed", attemptId: "attempt" },
     "Unable to start online payment");

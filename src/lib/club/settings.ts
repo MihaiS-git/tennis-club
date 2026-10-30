@@ -75,7 +75,9 @@ export async function sendClubTestEmail(): Promise<{ ok: boolean; message: strin
     }
     logger.info({ event: "club.test_email_accepted", actorId: actor.userId, messageId: result.messageId,
       mode: config.mode }, "Club test email accepted by Brevo");
-    return { ok: true, message: "Test email submitted to Brevo. Check your inbox." };
+    return { ok: true, message: config.mode === "sandbox"
+      ? "Test request accepted by Brevo in sandbox mode. No email will arrive."
+      : "Test email accepted by Brevo. Acceptance does not confirm inbox delivery." };
   } catch (error) {
     logger.error({ event: "club.test_email_failed", actorId: actor.userId, error }, "Club test email failed");
     return { ok: false, message: "Unable to send the test email. Check server email configuration." };

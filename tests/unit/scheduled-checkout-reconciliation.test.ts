@@ -5,7 +5,7 @@ const m = vi.hoisted(() => ({ find: vi.fn(), booking: vi.fn(), reservation: vi.f
 vi.mock("@/lib/db/data-source", () => ({ getDataSource: async () => ({ manager: {} }) }));
 vi.mock("@/lib/db/transaction", () => ({ inTransaction: async (run: (manager: object) => unknown) => run({}) }));
 vi.mock("@/lib/db/repositories/payments.repository", () => ({ findCheckoutAttempt: m.find,
-  discoverSettlementParent: async () => ({ booking_id: "booking", reservation_id: "reservation", location_id: "location" }),
+  discoverSettlementParent: async () => ({ booking_id: "booking", reservation_id: "reservation", location_id: "location", coach_user_id: null }),
   lockSettlementAttempt: m.attempt }));
 vi.mock("@/lib/db/repositories/bookings.repository", () => ({ findBookingForUpdate: m.booking }));
 vi.mock("@/lib/db/repositories/reservations.repository", () => ({ findReservationForUpdate: m.reservation,

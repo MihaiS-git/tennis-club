@@ -14,11 +14,14 @@ vi.mock("@/app/book/online-payment", () => ({ OnlinePayment: (props: ComponentPr
   return <section aria-label="Online payment"><button onClick={() => props.onConfirmed(settled.amount, settled.currency, null)}>Simulate confirmed status</button>
     <button onClick={() => props.onPaymentStatus?.("processing")}>Simulate processing</button>
     <button onClick={() => props.onPaymentStatus?.("unknown")}>Simulate unknown</button>
-    <button onClick={() => props.onPaymentStatus?.("expired")}>Simulate expiry</button></section>;
+    <button onClick={() => props.onPaymentStatus?.("expired")}>Simulate expiry</button>
+    <button onClick={() => props.onPaymentStatus?.("cancelled")}>Simulate server expiry</button>
+    <button onClick={() => { props.onPaymentStatus?.("failed"); props.onDeclined?.(); }}>Simulate decline</button></section>;
 } }));
 import { CalendarControls } from "@/app/book/calendar-controls";
 import { BookingCalendar } from "@/app/book/booking-calendar";
 import { BookCourtLink } from "@/components/book-court-link";
+import { buildCourtDay } from "@/lib/courts/calendar";
 import type { CourtDay } from "@/lib/courts/calendar";
 
 beforeEach(() => {
@@ -365,6 +368,73 @@ it.each(["Close", "escape", "pagehide", "unmount"])("attempts unused checkout cl
   expect(abandon).not.toHaveBeenCalled();
 });
 
+it.each(["Close", "Close dialog", "escape"])("%s refreshes the timetable only after unused-checkout cleanup answers", async trigger => {
+  let answer!: (released: boolean) => void;
+  navigationAbandon.mockReturnValueOnce(new Promise(resolve => { answer = resolve; }));
+  await openCheckout();
+  refresh.mockClear();
+  if (trigger === "escape") fireEvent(screen.getByRole("dialog"), new Event("cancel", { cancelable: true }));
+  else fireEvent.click(screen.getByRole("button", { name: trigger }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(navigationAbandon).toHaveBeenCalledExactlyOnceWith(checkout);
+  // A refresh before the server released the hold would show the court occupied.
+  await Promise.resolve();
+  expect(refresh).not.toHaveBeenCalled();
+  answer(true);
+  await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+  // Unmount does not send a second cleanup request.
+  cleanup();
+  await Promise.resolve();
+  expect(navigationAbandon).toHaveBeenCalledOnce();
+  expect(abandon).not.toHaveBeenCalled();
+});
+
+it.each([false, true])("a definitive decline ends the checkout and restarts from the timetable after release (coaching=%s)", async lesson => {
+  let answer!: (released: boolean) => void;
+  navigationAbandon.mockReturnValueOnce(new Promise(resolve => { answer = resolve; }));
+  if (lesson) {
+    coachingConfirm.mockResolvedValue({ ok: true, status: "pending_payment", holdExpiresAt: "2099-10-15T10:00:00Z", checkout,
+      totalAmountMinor: 17000, currency: "RON" });
+    render(<BookingCalendar {...coachingProps} initialContact={{ customerName: "Guest", customerEmail: "guest@example.test", customerPhone: "123" }} />);
+    fireEvent.click(screen.getByRole("button", { name: /Court 1 .*90 min lesson/ }));
+    await openConfirmation();
+    fireEvent.click(screen.getByRole("button", { name: "Continue to payment" }));
+    await screen.findByRole("region", { name: "Online payment" });
+  } else await openCheckout();
+  refresh.mockClear();
+  fireEvent.click(screen.getByRole("button", { name: "Simulate decline" }));
+  expect(navigationAbandon).toHaveBeenCalledExactlyOnceWith(checkout);
+  expect(screen.queryByRole("button", { name: "Cancel payment" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Select a time again" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.queryByRole("region", { name: "Selected interval" })).toBeNull();
+  expect(refresh).not.toHaveBeenCalled();
+  answer(true);
+  await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+  cleanup();
+  await Promise.resolve();
+  expect(navigationAbandon).toHaveBeenCalledOnce();
+  expect(abandon).not.toHaveBeenCalled();
+  expect(lastToast("warning")).toBe("");
+});
+
+it("a checkout the server expired offers a restart without a cleanup request or uncertainty warning", async () => {
+  await openCheckout();
+  refresh.mockClear();
+  fireEvent.click(screen.getByRole("button", { name: "Simulate server expiry" }));
+  fireEvent.click(screen.getByRole("button", { name: "Select a time again" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(refresh).toHaveBeenCalledOnce();
+  expect(navigationAbandon).not.toHaveBeenCalled();
+  expect(abandon).not.toHaveBeenCalled();
+  expect(lastToast("warning")).toBe("");
+  // The released interval can be selected again; Continue to payment rechecks it on the server.
+  fireEvent.click(screen.getByRole("button", { name: /Court 1 2026-10-01 16:00–16:30/ }));
+  await openConfirmation();
+  fireEvent.click(screen.getByRole("button", { name: "Continue to payment" }));
+  await waitFor(() => expect(confirm).toHaveBeenCalledTimes(2));
+});
+
 it.each(["processing", "unknown", "confirmed"])("does not abandon %s payment on navigation", async state => {
   await openCheckout();
   fireEvent.click(screen.getByRole("button", { name: state === "confirmed" ? "Simulate confirmed status" : `Simulate ${state}` }));
@@ -659,4 +729,24 @@ it.each(["review", "submitting", "pending", "processing"])("Clear filters preser
   expect(abandon).not.toHaveBeenCalled();
   expect(coachingConfirm).toHaveBeenCalledTimes(phase === "review" ? 0 : 1);
   if (phase === "pending" || phase === "processing") expect(screen.getByRole("region", { name: "Online payment" })).toBeTruthy();
+});
+
+it("does not render selectable cells for the skipped Bucharest hour on March 28, 2027", () => {
+  const court = courts[0].court;
+  const stamp = "2027-01-01T00:00:00Z";
+  const day = buildCourtDay({ timezone: "Europe/Bucharest", date: "2027-03-28", today: "2027-01-01", currentMinute: 0,
+    courts: [court], coverage: [], reservations: [],
+    hours: [{ id: crypto.randomUUID(), location_id: crypto.randomUUID(), weekday: 6,
+      opens_at_minute: 0, closes_at_minute: 1440, created_at: stamp, updated_at: stamp }],
+    pricing: [{ id: crypto.randomUUID(), rule_set_id: crypto.randomUUID(), location_id: crypto.randomUUID(), court_id: court.id,
+      court_state: "outdoor", weekday: 6, starts_at_minute: 0, ends_at_minute: 1440, starts_on: null, ends_on: null,
+      price_per_hour_minor: 1200, created_at: stamp, updated_at: stamp }] });
+  render(<BookingCalendar onlinePaymentAvailable day={day} date="2027-03-28" locationName="Club"
+    currency="RON" cancellationNoticeMinutes={120} timezone="Europe/Bucharest" />);
+  for (const time of ["03:00–03:30", "03:30–04:00"]) {
+    expect(screen.queryByRole("button", { name: new RegExp(time) })).toBeNull();
+    expect(screen.getByLabelText(new RegExp(`${time}, No pricing`))).toBeTruthy();
+  }
+  fireEvent.click(screen.getByRole("button", { name: /04:00–04:30/ }));
+  expect(screen.getByText("04:00–05:00 · 60 min")).toBeTruthy();
 });

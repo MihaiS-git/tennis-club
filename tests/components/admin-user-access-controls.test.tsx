@@ -94,6 +94,16 @@ it("keeps state unchanged for final-active-admin", async () => {
   expect(within(dialog).getByRole("heading", { name: "Roles" }).closest("section")?.querySelector('[role="alert"]')).toBeNull();
 });
 
+it("explains that a coach with upcoming lessons keeps the role", async () => {
+  updateUserRoleAction.mockResolvedValue({ ok: false, reason: "active-lessons" });
+  const dialog = await openDialog({ ...user, roles: ["coach"] });
+  fireEvent.click(within(roleRow(dialog, "Coach")).getByRole("button", { name: "Remove" }));
+  confirm("Remove Coach role");
+  await waitFor(() => expect(error).toHaveBeenCalledExactlyOnceWith(
+    "This coach has upcoming lessons or pending lesson checkouts. Cancel those lessons or wait until they are completed first.", { id: "user-operation" }));
+  expect(within(roleRow(dialog, "Coach")).getByRole("button", { name: "Remove" })).toBeTruthy();
+});
+
 it("reports errors once through Sonner, retains account state, and permits retries", async () => {
   updateUserStatusAction.mockResolvedValueOnce({ ok: false, reason: "final-active-admin" })
     .mockResolvedValueOnce({ ok: true, user: { id: userId, status: "suspended" } });

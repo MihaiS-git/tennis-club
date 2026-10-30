@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import dynamic from "next/dynamic";
 import { Button } from "@/components/button";
-import { ReservationEditForm, type ReservationEditDraft, type ReservationEditSaveResult } from "@/components/reservation-edit-form";
+import { AvailabilityUnavailableError, ReservationEditForm, type ReservationEditDraft, type ReservationEditSaveResult } from "@/components/reservation-edit-form";
 import type { ReservationTimetableDay } from "@/components/reservation-timetable";
 import { TimelineLegend } from "@/components/court-timeline-grid";
 import { BookingTimetable, lessonStartOffers, lessonTimetableDay, lessonTimetableLabels, type LessonOffer } from "@/components/booking-timetable";
@@ -28,6 +28,7 @@ export type BookingEditActions = {
   save: typeof rescheduleOwnBookingAction;
 };
 const ownerActions: BookingEditActions = { load: loadOwnBookingEditDayAction, quote: quoteOwnBookingAction, save: rescheduleOwnBookingAction };
+type EditDay = Exclude<Awaited<ReturnType<BookingEditActions["load"]>>, { ok: false }>;
 
 type Quote = { key: string; total: number; requiresConfirmation?: boolean };
 function draftKey(draft: ReservationEditDraft) {
@@ -44,8 +45,8 @@ type LessonTerms = NonNullable<BookingEditContext["coaching"]>;
 type LessonDay = ReservationTimetableDay & { lesson: LessonTerms | null };
 
 // The /book lesson timetable: a start selects the lesson's full, fixed length.
-function LessonTimetable({ day, date, timezone, currency, selection, select, disabled }: {
-  day: LessonDay; date: string; timezone: string; currency: AdminBooking["currency"];
+function LessonTimetable({ day, date, timezone, currency, selection, select, disabled, hidePrices }: {
+  day: LessonDay; date: string; timezone: string; currency: AdminBooking["currency"]; hidePrices: boolean;
   selection: ReservationSelection | null; select: (selection: ReservationSelection | null) => void; disabled: boolean;
 }) {
   const { lesson } = day;
@@ -58,6 +59,7 @@ function LessonTimetable({ day, date, timezone, currency, selection, select, dis
       Select a new lesson start for the full {lesson.durationMinutes} minutes. Dotted cells cannot start a full lesson; solid cells are occupied courts.
     </TimelineLegend>
     <BookingTimetable lesson={lesson} lessonOffers={offers} day={visibleDay} date={date} timezone={timezone} currency={currency} disabled={disabled}
+      hidePrices={hidePrices}
       selection={selection && { courtId: selection.courtId, startMinute: selection.startMinute, endMinute: selection.endMinute,
         startRowIndex: selection.startRow, endRowIndex: selection.endRow }}
       onSelect={(row, index) => {
@@ -91,8 +93,8 @@ function LessonChange({ context, lesson, draft }: { context: BookingEditContext;
   </section>;
 }
 
-function BookingPrice({ id, context, draft, currency, quote, acknowledged, onQuote, onAcknowledge, actions, pending }: {
-  pending: boolean;
+function BookingPrice({ id, context, draft, currency, quote, acknowledged, onQuote, onAcknowledge, actions, pending, fixedPrice }: {
+  pending: boolean; fixedPrice: boolean;
   actions: BookingEditActions;
   id: string; context: BookingEditContext; draft: ReservationEditDraft; currency: AdminBooking["currency"];
   quote: Quote | null; acknowledged: boolean; onQuote: (quote: Quote | null) => void; onAcknowledge: (value: boolean) => void;
@@ -114,6 +116,12 @@ function BookingPrice({ id, context, draft, currency, quote, acknowledged, onQuo
     return () => { disposed = true; if (notification !== undefined) toast.dismiss(notification); };
   }, [id, context.updated_at, context.current_revision_id, courtId, draft.date, startMinute, endMinute, key, onQuote, actions]);
   const currentQuote = quote?.key === key ? quote : null;
+  // The assigned Coach's move: the server confirms the start and keeps the agreed price.
+  if (fixedPrice) return <section aria-label="Lesson price" className="rounded-control border border-border bg-surface-muted/50 p-3 text-sm">
+    <p role="status" className={currentQuote ? "font-medium" : "text-muted-foreground"}>{currentQuote
+      ? "This start is available. The agreed lesson price is unchanged; the customer is not charged or refunded."
+      : draft.selection ? "Checking the new lesson start…" : "The agreed lesson price is unchanged; the customer is not charged or refunded."}</p>
+  </section>;
   const increase = currentQuote ? currentQuote.total > context.total_amount_minor : false;
   return <section aria-label="Booking price" className="rounded-control border border-border bg-surface-muted/50 p-3 text-sm">
     <dl className="grid grid-cols-2 gap-3">
@@ -126,9 +134,7 @@ function BookingPrice({ id, context, draft, currency, quote, acknowledged, onQuo
       {increase ? "Additional amount payable: " : "Eligible refund: "}
       {formatMoney(Math.abs(currentQuote.total - context.total_amount_minor), currency)}
     </p>}
-    {context.refunds.map(refund => <p key={refund.id} className="mt-2 text-muted-foreground">
-      Refund {formatMoney(refund.amount, currency)}: {refund.status === "succeeded" ? "completed" : refund.status === "failed" ? "could not be completed; the club will contact you" : refund.status === "voided" ? "not made; the change was abandoned" : "requested, awaiting confirmation"}
-    </p>)}
+    {/* Payment and refund history belongs to the booking's Payment section, not this price comparison. */}
     {currentQuote && (currentQuote.total !== context.total_amount_minor || currentQuote.requiresConfirmation) && <label className="mt-3 flex items-center gap-2 font-medium">
       <input type="checkbox" checked={acknowledged} disabled={pending} onChange={(event) => onAcknowledge(event.target.checked)} />
       I confirm the new total of {formatMoney(currentQuote.total, currency)}.
@@ -137,7 +143,10 @@ function BookingPrice({ id, context, draft, currency, quote, acknowledged, onQuo
 }
 
 type BookingEditFormProps = {
-  booking: Pick<AdminBooking, "id" | "booking_date" | "currency">; location?: Pick<InternalLocation, "name" | "courts">; actions?: BookingEditActions; onCancel: () => void;
+  booking: Pick<AdminBooking, "id" | "booking_date"> & Partial<Pick<AdminBooking, "currency">>;
+  location?: Pick<InternalLocation, "name" | "courts">; actions?: BookingEditActions; onCancel: () => void;
+  // The assigned Coach's lesson move: no totals are shown or confirmed, the agreed price is kept.
+  fixedPrice?: boolean;
   onSaved: () => Promise<void>; onPendingChange: (value: boolean) => void;
   // The unpaid modification created in this dialog, which X must dismiss.
   onAdjustment?: (id: string | null) => void;
@@ -147,9 +156,10 @@ export function BookingEditForm(props: BookingEditFormProps) {
   return <BookingEditSession key={`${props.booking.id}/${props.booking.booking_date}`} {...props} />;
 }
 
-function BookingEditSession({ booking, location, onCancel, onSaved, onPendingChange, onAdjustment, actions = ownerActions }: BookingEditFormProps) {
+function BookingEditSession({ booking, location, onCancel, onSaved, onPendingChange, onAdjustment, actions = ownerActions,
+  fixedPrice = false }: BookingEditFormProps) {
   const active = useRef(true);
-  const [initial, setInitial] = useState<Awaited<ReturnType<BookingEditActions["load"]>> | null>(null);
+  const [initial, setInitial] = useState<EditDay | null>(null);
   const context = initial?.booking;
   const [error, setError] = useState("");
   const [quote, setQuote] = useState<Quote | null>(null);
@@ -162,13 +172,19 @@ function BookingEditSession({ booking, location, onCancel, onSaved, onPendingCha
     day: { ...initial.day, courts: initial.booking.coaching
       ? initial.day.courts.filter(row => row.court.id === initial.booking.court_id) : initial.day.courts,
       lesson: initial.booking.coaching } } : undefined, [initial, booking.id, booking.booking_date]);
+  // A refused day read keeps its specific explanation, e.g. a lesson whose coach can no longer teach it.
+  const loadDay = useMemo(() => async (id: string, date: string) => {
+    const result = await actions.load(id, date);
+    if ("ok" in result) throw new AvailabilityUnavailableError(result.message);
+    return result;
+  }, [actions]);
   // A lesson's starts depend on the date, so each day read carries them to its timetable.
   const loadLessonDay = useMemo(() => async (id: string, date: string) => {
-    const result = await actions.load(id, date);
+    const result = await loadDay(id, date);
     return { day: { ...result.day, courts: result.booking.coaching
       ? result.day.courts.filter(row => row.court.id === result.booking.court_id) : result.day.courts,
       lesson: result.booking.coaching } };
-  }, [actions]);
+  }, [loadDay]);
   useEffect(() => {
     let disposed = false;
     active.current = true;
@@ -176,18 +192,22 @@ function BookingEditSession({ booking, location, onCancel, onSaved, onPendingCha
     // timer but dismissal with animation frames; fast completion/disposal can
     // dismiss before publication and leave an infinite loading toast on screen.
     let notification: string | number | undefined;
-    actions.load(booking.id, booking.booking_date).then((result) => {
+    loadDay(booking.id, booking.booking_date).then((result) => {
       // Every Edit opens a fresh form; earlier modifications are never resumed.
       if (!disposed) setInitial(result);
-    }).catch(() => { if (!disposed) {
-      setError("This booking is no longer available to edit. Close and reopen its details.");
-      notification = toast.error("This booking is no longer available to edit. Close and reopen its details.");
+    }).catch((failure: unknown) => { if (!disposed) {
+      const message = failure instanceof AvailabilityUnavailableError ? failure.message
+        : "This booking is no longer available to edit. Close and reopen its details.";
+      setError(message);
+      notification = toast.error(message);
     } });
     return () => { active.current = false; disposed = true; if (notification !== undefined) toast.dismiss(notification); };
-  }, [booking.id, booking.booking_date, actions]);
+  }, [booking.id, booking.booking_date, loadDay]);
   if (!context) return <div className="mt-4 min-h-20 text-sm" aria-busy={!error}>
     {error ? <p role="alert">{error}</p> : <LoadingStatus label="Loading booking…" />}
     <Button type="button" variant="text" onClick={onCancel} className="mt-3 underline">Back to details</Button></div>;
+  // Coach lessons carry no price fields; the edit context names the booking's currency.
+  const currency = booking.currency ?? context.currency as AdminBooking["currency"];
   if (adjustment) return <section aria-label="Booking modification" data-booking-modification className="mx-auto mt-4 max-w-xl space-y-4 text-sm">
     <div className="rounded-control border border-border bg-surface-muted p-4">
       <h3 className="mb-3 font-heading text-base font-semibold text-primary">{adjustment.adjustmentStatus === "pending" ? "Complete your modification"
@@ -199,12 +219,12 @@ function BookingEditSession({ booking, location, onCancel, onSaved, onPendingCha
           <dt className="text-muted-foreground">Date</dt><dd>{adjustment.target.date}</dd>
           <dt className="text-muted-foreground">Time</dt><dd>{minuteToTime(adjustment.target.startMinute)}–{minuteToTime(adjustment.target.endMinute)}</dd>
         </>}
-        <dt className="text-muted-foreground">Current total</dt><dd>{formatMoney(context.total_amount_minor, booking.currency)}</dd>
-        <dt className="text-muted-foreground">{adjustment.adjustmentStatus === "applied" ? "Updated total" : "Proposed total"}</dt><dd>{formatMoney(adjustment.totalAmountMinor, booking.currency)}</dd>
+        <dt className="text-muted-foreground">Current total</dt><dd>{formatMoney(context.total_amount_minor, currency)}</dd>
+        <dt className="text-muted-foreground">{adjustment.adjustmentStatus === "applied" ? "Updated total" : "Proposed total"}</dt><dd>{formatMoney(adjustment.totalAmountMinor, currency)}</dd>
       </dl>
       <div className="mt-3 flex flex-wrap items-baseline justify-between gap-2 border-t border-border pt-3 text-primary">
         <span className="font-semibold">{adjustment.refundStatus || adjustment.totalAmountMinor < context.total_amount_minor ? "Refund amount" : "Additional amount payable"}</span>
-        <strong className="text-2xl tabular-nums">{formatMoney(Math.abs(adjustment.totalAmountMinor - context.total_amount_minor), booking.currency)}</strong>
+        <strong className="text-2xl tabular-nums">{formatMoney(Math.abs(adjustment.totalAmountMinor - context.total_amount_minor), currency)}</strong>
       </div>
       {adjustment.refundStatus && <dl className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
         <dt className="text-muted-foreground">Refund status</dt>
@@ -228,12 +248,12 @@ function BookingEditSession({ booking, location, onCancel, onSaved, onPendingCha
   const reservation = { ...context, id: booking.id, reason: null,
     location_name: fixedLocation.name, court_name: fixedLocation.courts.find((c) => c.id === context.court_id)?.name ?? "Court" };
   const canSave = (draft: ReservationEditDraft) => quote?.key === draftKey(draft)
-    && (!(quote.total !== context.total_amount_minor || quote.requiresConfirmation) || acknowledged);
-  const price = (draft: ReservationEditDraft, pending: boolean) => <BookingPrice id={booking.id} context={context} draft={draft} currency={booking.currency}
-    actions={actions} pending={pending} quote={quote} acknowledged={acknowledged} onQuote={receiveQuote} onAcknowledge={setAcknowledged} />;
+    && (fixedPrice || !(quote.total !== context.total_amount_minor || quote.requiresConfirmation) || acknowledged);
+  const price = (draft: ReservationEditDraft, pending: boolean) => <BookingPrice id={booking.id} context={context} draft={draft} currency={currency}
+    actions={actions} pending={pending} fixedPrice={fixedPrice} quote={quote} acknowledged={acknowledged} onQuote={receiveQuote} onAcknowledge={setAcknowledged} />;
   const save = async (draft: ReservationEditDraft): Promise<ReservationEditSaveResult> => {
     if (!quote || quote.key !== draftKey(draft)) return { ok: false, message: "Wait for the recalculated total before saving." };
-    if ((quote.total !== context.total_amount_minor || quote.requiresConfirmation) && !acknowledged)
+    if (!fixedPrice && (quote.total !== context.total_amount_minor || quote.requiresConfirmation) && !acknowledged)
       return { ok: false, message: "Confirm the new total before saving." };
     const key = draftKey(draft);
     if (request.current?.key !== key) request.current = { key, id: crypto.randomUUID() };
@@ -251,6 +271,7 @@ function BookingEditSession({ booking, location, onCancel, onSaved, onPendingCha
         : result.adjustmentStatus === "pending" ? "Complete the additional payment to update your booking."
         : "The previous modification has ended. Check its financial outcome." };
     }
+    if (result.ok && fixedPrice) return { ok: true as const, message: "Lesson rescheduled. The customer has been notified." };
     if (!result.ok && "reason" in result && result.reason === "price_changed" && result.totalAmountMinor !== undefined) {
       receiveQuote({ key: draftKey(draft), total: result.totalAmountMinor, requiresConfirmation: true });
     }
@@ -259,13 +280,13 @@ function BookingEditSession({ booking, location, onCancel, onSaved, onPendingCha
   if (lesson) return <ReservationEditForm reservation={reservation} inProgress={false} scheduleOnly loadAvailability={loadLessonDay}
     initialAvailability={initialAvailability}
     onCancel={onCancel} onPendingChange={onPendingChange} canSave={canSave}
-    renderTimetable={(input) => <LessonTimetable {...input} timezone={context.location_timezone} currency={booking.currency} />}
+    renderTimetable={(input) => <LessonTimetable {...input} timezone={context.location_timezone} currency={currency} hidePrices={fixedPrice} />}
     renderScheduleDetails={(draft, pending) => <>
       <LessonChange context={context} lesson={lesson} draft={draft} />
       {price(draft, pending)}
     </>}
     onSave={save} onSaved={onSaved} />;
-  return <ReservationEditForm<ReservationTimetableDay> reservation={reservation} inProgress={false} scheduleOnly loadAvailability={actions.load}
+  return <ReservationEditForm<ReservationTimetableDay> reservation={reservation} inProgress={false} scheduleOnly loadAvailability={loadDay}
     initialAvailability={initialAvailability}
     onCancel={onCancel} onPendingChange={onPendingChange} canSave={canSave}
     renderScheduleDetails={price} onSave={save} onSaved={onSaved} />;

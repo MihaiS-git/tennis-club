@@ -27,6 +27,9 @@ function selectionForDay(day: ReservationTimetableDay, desired: Pick<Reservation
     desired.startMinute, desired.endMinute) : null;
 }
 
+// A loader refusal whose message is a safe, specific explanation for the user.
+export class AvailabilityUnavailableError extends Error {}
+
 export function ReservationEditForm<Day extends ReservationTimetableDay = ReservationTimetableDay>({ reservation, inProgress, loadAvailability, initialAvailability, onCancel, onSave, onSaved, onStale, onPendingChange, scheduleOnly = false, renderScheduleDetails, renderTimetable, canSave }: {
   scheduleOnly?: boolean;
   // Replaces the default interval timetable, e.g. lesson starts of a fixed length.
@@ -88,10 +91,11 @@ export function ReservationEditForm<Day extends ReservationTimetableDay = Reserv
         : null;
       setSelection((current) => selectionForDay(value.day, initialSelection ?? current));
       firstLoad.current = false;
-    }).catch(() => {
+    }).catch((error: unknown) => {
       if (!disposed) {
-        setAvailability({ day: null, reservationId: reservation.id, date, loader: loadAvailability, refreshKey, error: "Unable to load court availability. Try again." });
-        toast.error("Unable to load court availability. Try again.", { id: notification,
+        const message = error instanceof AvailabilityUnavailableError ? error.message : "Unable to load court availability. Try again.";
+        setAvailability({ day: null, reservationId: reservation.id, date, loader: loadAvailability, refreshKey, error: message });
+        toast.error(message, { id: notification,
           action: { label: "Retry", onClick: () => setRefreshKey((key) => key + 1) } });
       }
     });
@@ -139,7 +143,7 @@ export function ReservationEditForm<Day extends ReservationTimetableDay = Reserv
         if (result.pending) { toast.info(result.message ?? "Complete the additional payment to update your booking.", { id: notification }); return; }
         saved = true;
         await onSaved?.();
-        toast.success(scheduleOnly ? "Booking updated." : "Reservation updated.", { id: notification });
+        toast.success(result.message ?? (scheduleOnly ? "Booking updated." : "Reservation updated."), { id: notification });
         return;
       }
       if (result.stale) {

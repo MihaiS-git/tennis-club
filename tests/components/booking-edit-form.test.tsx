@@ -366,3 +366,47 @@ it.each(["cancelled", "expired", "unsuccessful"])("presents the %s modification 
   expect(screen.getByText("Proposed total")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
 });
+
+it("keeps historical refunds out of the price comparison; current and new totals stay accurate", async () => {
+  const day = bookingDay("online");
+  day.booking.refunds = [{ id: "88888888-8888-4888-8888-888888888888", amount: 2500, status: "succeeded" },
+    { id: "99999999-9999-4999-8999-999999999999", amount: 1000, status: "voided" }] as never;
+  load.mockResolvedValue(day);
+  quote.mockResolvedValue({ ok: true, totalAmountMinor: 7500 });
+  render(<BookingEditForm booking={booking} onCancel={vi.fn()} onPendingChange={vi.fn()} onSaved={vi.fn()} actions={{ load, quote, save }} />);
+  await screen.findByText("Current reservation");
+  quote.mockResolvedValue({ ok: true, totalAmountMinor: 10000 });
+  extendInterval();
+  const price = await screen.findByRole("region", { name: "Booking price" });
+  await waitFor(() => expect(price.textContent).toContain("Additional amount payable"));
+  expect(price.textContent).toMatch(/Current total.*75[.,]00.*New total.*100[.,]00/);
+  expect(price.textContent).toMatch(/Additional amount payable: .*25[.,]00/);
+  expect(price.textContent).not.toMatch(/Refund|completed|abandoned/);
+});
+
+it.each([
+  "This lesson's coach is no longer available for lessons. Contact the club to rearrange it.",
+  "This lesson's coach no longer teaches at this location. Contact the club to rearrange it.",
+  "This location is not accepting lesson bookings right now.",
+])("shows the specific eligibility refusal returned by the edit read: %s", async (message) => {
+  load.mockResolvedValue({ ok: false, message });
+  render(<BookingEditForm booking={booking} onCancel={vi.fn()} onPendingChange={vi.fn()} onSaved={vi.fn()} actions={{ load, quote, save }} />);
+  expect((await screen.findByRole("alert")).textContent).toBe(message);
+  await expectToast(message);
+  expect(quote).not.toHaveBeenCalled();
+});
+
+it("keeps unexpected edit read failures generic", async () => {
+  load.mockRejectedValue(new Error("relation \"public.booking_revisions\" does not exist"));
+  render(<BookingEditForm booking={booking} onCancel={vi.fn()} onPendingChange={vi.fn()} onSaved={vi.fn()} actions={{ load, quote, save }} />);
+  expect((await screen.findByRole("alert")).textContent).toBe("This booking is no longer available to edit. Close and reopen its details.");
+});
+
+it("explains a refusal on a later date's read instead of a generic availability error", async () => {
+  quote.mockResolvedValue({ ok: true, totalAmountMinor: 7500 });
+  renderBooking("owner");
+  await screen.findByText("Current reservation");
+  load.mockResolvedValueOnce({ ok: false, message: "The rescheduling window for this booking has closed." });
+  fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2099-10-16" } });
+  await expectToast("The rescheduling window for this booking has closed.");
+});

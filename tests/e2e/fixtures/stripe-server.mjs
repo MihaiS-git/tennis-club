@@ -2,6 +2,7 @@
 import { createServer } from "node:http";
 const intents = new Map(), refunds = new Map(), requests = new Map();
 const failNextRefund = new Set(), refundDispatches = [];
+const delayedRefunds = new Map();
 let next = 0;
 const server = createServer(async (req, res) => {
   res.setHeader("Content-Type", "application/json");
@@ -14,11 +15,22 @@ const server = createServer(async (req, res) => {
   const reply=(data,status=200)=>{res.statusCode=status;res.end(JSON.stringify(data));};
   if(path==="/health") return reply({ok:true});
   if(path==="/fixture/payment" && req.method==="POST") {
-    const {id,amount,attemptId,failRefund}=JSON.parse(raw);
+    const {id,amount,attemptId,failRefund,delayRefund}=JSON.parse(raw);
     const intent={id,object:"payment_intent",amount,amount_received:amount,currency:"ron",status:"succeeded",metadata:{payment_attempt_id:attemptId}};
     intents.set(id,intent);
     if(failRefund) failNextRefund.add(id);
+    if(delayRefund) {
+      let release;
+      const ready = new Promise(resolve => { release = resolve; });
+      delayedRefunds.set(id,{ready,release});
+    }
     return reply(intent);
+  }
+  if(path==="/fixture/release-refund" && req.method==="POST") {
+    const {id}=JSON.parse(raw);
+    delayedRefunds.get(id)?.release();
+    delayedRefunds.delete(id);
+    return reply({ok:true});
   }
   if(path==="/fixture/evidence" && req.method==="GET") {
     const paymentId=new URL(req.url,"http://127.0.0.1:3111").searchParams.get("paymentId");
@@ -27,6 +39,7 @@ const server = createServer(async (req, res) => {
   }
   if(path==="/fixture/payment" && req.method==="DELETE") {
     const {id}=JSON.parse(raw);
+    delayedRefunds.get(id)?.release(); delayedRefunds.delete(id);
     intents.delete(id); failNextRefund.delete(id);
     for(const [refundId,refund] of refunds) if(refund.payment_intent===id) refunds.delete(refundId);
     for(const [requestKey,response] of requests) if(response.id===id || response.payment_intent===id) requests.delete(requestKey);
@@ -69,6 +82,7 @@ const server = createServer(async (req, res) => {
     const id=`re_fixture${++next}`;
     const paymentId=body.get("payment_intent"), failed=failNextRefund.delete(paymentId);
     refundDispatches.push({paymentId,idempotencyKey:key,executionId:body.get("metadata[refund_execution_id]")});
+    await delayedRefunds.get(paymentId)?.ready;
     const refund={id,object:"refund",payment_intent:body.get("payment_intent"),amount:Number(body.get("amount")),
       currency:"ron",status:failed?"failed":"succeeded",metadata:{payment_refund_id:body.get("metadata[payment_refund_id]"),refund_execution_id:body.get("metadata[refund_execution_id]")}};
     refunds.set(id,refund); if(key) requests.set(key,refund); return reply(refund);

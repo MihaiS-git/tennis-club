@@ -20,6 +20,7 @@ const failureMessages = {
   "invalid-input": "Invalid user update.",
   "not-found": "This user no longer exists.",
   "final-active-admin": "At least one active administrator must remain.",
+  "active-lessons": "This coach has upcoming lessons or pending lesson checkouts. Cancel those lessons or wait until they are completed first.",
 } as const;
 
 export function UserAccessControls({ user, currentAdminId }: {

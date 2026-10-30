@@ -1,4 +1,21 @@
-# Authentication testing
+# Testing
+
+## Commands
+
+| Command | Scope | Needs |
+| --- | --- | --- |
+| `npm test` | Unit (`tests/unit/`) and component (`tests/components/`) suites | Nothing external |
+| `npm run typecheck`, `npm run lint`, `npm run build` | Static checks and production build | — |
+| `npm run test:integration [-- files]` | Services, repositories, transactions, PostgreSQL integrity, Auth/Storage | Isolated test Supabase |
+| `npm run test:e2e [-- files]` | Playwright against an isolated production build on port 3100 | Isolated test Supabase, Google Chrome |
+| `npx playwright test -c playwright.stripe-live.config.ts` | Optional real Stripe test mode | Stripe CLI and test keys |
+
+Normal changes run lint, typecheck, relevant unit/component tests and build; behavior touching
+persistence, payments or concurrency also runs the relevant integration (and E2E) files.
+Documentation-only changes need no test run, except that
+`tests/unit/checkout-hold-expiry-cron.test.ts` reads `docs/payments-memberships.md`.
+
+## Authentication coverage
 
 Focused automated coverage includes signup action role-field exclusion, callback decisions, mandatory-confirmation signup decisions, preconfirmation auth-user/application-account/zero-role provisioning in the local database, account loading with zero elevated roles, denied browser database access, suspended-account behavior, query-error classification, auth validation/action state, current-password verification, recovery-session password reset and subsequent sign-in, production `APP_URL` safety, and flash-query cleanup. React Testing Library covers password visibility, rendered signup errors, stale-error clearing, pending submit behavior, Sonner success/error dispatch, preservation of unrelated URL parameters during flash consumption, and prevention of duplicate display while the same flash URL remains mounted. TypeScript integration tests verify application authorization, administrator grants and audit attribution, and suspended-user role restrictions.
 
@@ -25,7 +42,7 @@ npm run test:e2e
 ```
 
 The initializer verifies the test stack endpoints and database identity before
-applying pending migrations from the four registered TypeORM migrations (924–927), atomically. It is
+applying pending migrations from the two registered TypeORM baselines (924 and 926), atomically. It is
 idempotent and checks for pending migrations. It never drops data or runs the
 100-user development seed. Supabase application SQL migrations/seeding are disabled;
 Auth and Storage infrastructure still comes from native Supabase startup.
@@ -110,7 +127,7 @@ the guarded rebuild rejects remote targets and production.
 ## TypeORM cutover validation
 
 Fresh application schema comes exclusively from TypeORM; native Supabase startup
-must not apply application SQL migrations. See [fresh setup](../README.md#application-migrations-and-fresh-local-setup).
+must not apply application SQL migrations. See [database setup](../README.md#database-setup-and-migrations).
 Use the isolated test initialization and npm runners above for final-migration
 validation. `db/migration-cutover.integration.test.ts` requires the test project
 identity and ports, and verifies native constraints, grants, Auth and Storage through
@@ -137,8 +154,8 @@ persistence to verify the court overlap exclusions (reservations, coverage, open
 hours, schedule validity and pricing), valid adjacent intervals, partial payment uniqueness, positive
 payment/capture/refund amounts, capture identity/deduplication, immutable payment-request/provider-event/capture
 facts, refund/adjustment foreign keys, operation/request uniqueness, adjustment hold-fragment
-duration/state and restrictive financial deletes. It also requires the four registered
-migrations (924–927) and an empty TypeORM schema-builder diff. The consolidated migrations
+duration/state and restrictive financial deletes. It also requires the two registered
+baselines (924 and 926), and an empty TypeORM schema-builder diff. The consolidated migrations
 now create `user_messages` and `email_deliveries` with ownership/deduplication constraints,
 delivery-state checks, and inbox/due-delivery indexes. Security coverage includes
 browser-role table/column and future-table privileges, real denied reads, Auth signup
@@ -213,29 +230,20 @@ covered by `tests/integration/db/booking-mutations.integration.test.ts`.
 
 ## Consolidated schema generation
 
-The first three migrations remain the original baseline; the focused checkout/booking
-identity separation is migration 927. Do not regenerate the initial migration from
-current final metadata while retaining 927: that would duplicate its new tables.
-The baseline-generation recipe below documents the original baseline workflow;
-this lifecycle change preserves those files and applies all four migrations.
+The two final-state baselines create the application schema/integrity/reference data
+and Supabase security integration, in that order. There is no rename, backfill or
+replacement of an earlier exclusion constraint. See [baseline consolidation](database-baseline.md)
+for the comparison against the former final schema and the development transition.
 
-Regenerate the editable initial migration with the existing shared DataSource and
-loader, against a positively verified empty disposable local database (never an
-arbitrary inherited `DATABASE_URL`):
-
-```bash
-DATABASE_URL=<verified-isolated-empty-database-url> node --conditions=react-server --import=./scripts/ts-loader.mjs node_modules/typeorm/cli.js migration:generate src/lib/db/migrations/InitialApplicationSchema -d src/lib/db/migration-data-source.mjs -t 1791462257924
-```
-
-Review generated DDL, then put `CREATE EXTENSION IF NOT EXISTS btree_gist WITH SCHEMA
-extensions` and `SET LOCAL search_path = public, extensions` at the beginning of
-`up()` before the entity-generated exclusions. Retain the extension on rollback.
-Re-append the handwritten `booking_financial_exceptions` table (it has no entity) at the
-end of `up()` and drop it first in `down()`. Ordinary tables, checks, indexes, keys and all exclusions come from entity metadata.
-The Auth reference is non-synchronized, and the email expression index is declared
-with `synchronize: false`; a post-initialization schema comparison must propose zero
-changes, including no native-object drops. Do not preserve the removed effective-hours
-or booking-adjustment patch migrations. No legacy data backfills are required.
+The initial migration includes entity-derived DDL plus handwritten expression indexes,
+integrity triggers, reference rows and the entity-less `booking_financial_exceptions`
+table. Do not regenerate it blindly from metadata: that would omit those native objects.
+Keep `btree_gist` installation and the transaction search path before the exclusions.
+Circular checkout/revision/adjustment references require tables before foreign keys;
+the current-revision and adjustment-source constraints remain deferred. Retain the
+financial-history rollback refusal and nonempty Storage bucket rollback protection.
+A post-initialization TypeORM schema-builder comparison must propose zero changes;
+it complements, rather than replaces, catalog/security and behavioral integration checks.
 
 Supabase integration rollback opts into the installed Storage SQL delete guard
 inside the migration transaction; the native bucket/object FK still refuses a
@@ -244,7 +252,7 @@ nonempty bucket. Runtime Storage access and policies are unchanged.
 
 ## Booking revision validation
 
-The migration-cutover suite checks the four-migration history (924–927), zero schema diff,
+The migration-cutover suite checks the two-baseline history (924 and 926), zero schema diff,
 non-synchronized Auth reference, composite current/predecessor relationships,
 strict linear numbering, atomic head advancement and revision UPDATE/DELETE/TRUNCATE
 rejection. Ownership checks reject guest/account reassignment in every direction,
@@ -275,20 +283,14 @@ The affected Stripe refunds, Admin reconciliation, booking-mutations and financi
 history suites retain cancellation idempotency, atomic receipt resolution, failed
 adjustment compensation and RON 50 → 75 → 100 → 75 → cancellation coverage.
 Regenerate the existing initial migration only against verified empty isolated
-infrastructure; apply all four registered migrations (924–927) and verify zero metadata drift.
+infrastructure; apply both registered baselines (924 and 926) and verify zero metadata drift.
 No provider calls occur inside transactions, and no real Stripe calls or
 normal development reset are part of these checks.
 
-## Request-driven payment recovery
+## Payment recovery coverage
 
-When switching an existing local checkout from the removed scheduler, stop its Next.js
-development servers and remove stale generated `dev/server/instrumentation.js` entrypoints
-from `.next` and `.next-test` before restarting. Otherwise Next.js can load the deleted
-instrumentation from an earlier compilation and start the obsolete timer. This concerns
-generated local output only; do not restore the removed source or change database data.
-
-No scheduler runs. Integration tests drive each outcome the way production does: the
-checkout status poll, `processOnlinePaymentEvent` (signed webhook), and
+Integration tests drive each outcome the way production does: the checkout status poll,
+`processOnlinePaymentEvent` (signed webhook), the checkout-expiry endpoint, and
 `processBookingRefund` with `{ strict: true, providerChanged: true }` (Stripe refund webhook) or
 `{ actorId, retryRejected: true, strict: true }` (Admin "Check with Stripe").
 Initialize the isolated test database with the guarded test initializer before running them.
@@ -301,8 +303,9 @@ node node_modules/vitest/vitest.mjs run tests/unit/booking-commit.test.ts -t 'pa
 node tests/run-integration.mjs tests/integration/db/booking-mutations.integration.test.ts -t 'accepted surcharge|a surcharge is authorized only|a surcharge authorization rejected|a surcharge whose capture fails'
 ```
 
-The initializer applies pending additive migrations only to the verified isolated test
-project. Surcharge tests cover the capture deadline, acceptance with and without extra
+The initializer applies pending migrations only to the verified isolated test
+project. After a baseline rewrite, recreate that disposable stack first; the initializer
+does not reconcile an existing migration history. Surcharge tests cover the capture deadline, acceptance with and without extra
 court holds, and capture racing expiry, dismissal, supersession and delayed provider
 signals.
 
@@ -327,10 +330,9 @@ npm run test:integration -- tests/integration/notifications.integration.test.ts
 npx playwright test tests/e2e/notifications.e2e.ts
 ```
 
-These tests require the isolated `tests/local` schema. If its three migration names
-were recorded before notification tables were added to the consolidated migration
-files, running the initializer alone will not replay them. Use the documented
-test-only stop/start without backup above, then initialize the isolated database.
+These tests require the initialized isolated `tests/local` schema. If an edited baseline
+migration was already recorded there, recreate only the test stack with the stop/start
+without backup above, then initialize it.
 
 ## Coaching coverage
 
@@ -359,17 +361,10 @@ no provider requests. Notification integration fixtures explicitly enable email 
 testing channel policies and restore the original settings afterward. The migration cutover
 test verifies the disabled singleton, suppression column and canonical coaching durations.
 
-## Test registration and optional performance runs
+## Test registration
 
 Normal unit, component, integration and E2E suites register no skipped tests. The
-activity-service CPU benchmark registers only when `ACTIVITY_SERVICE_BENCHMARK` is
-set to its output filename. The PostgreSQL activity benchmark registers only with
-`ACTIVITY_BENCHMARK=1`; its UUID continuation regression always runs. For example:
-
-```bash
-ACTIVITY_SERVICE_BENCHMARK=/tmp/activity-service.json npx vitest run tests/unit/activity-service.test.ts
-ACTIVITY_BENCHMARK=1 npm run test:integration -- tests/integration/activity-pagination.integration.test.ts
-```
+activity UUID continuation regression always runs.
 
 Optional live Stripe lifecycle cases register by server mode: ordinary lifecycle
 cases with `LIVE_LATE` unset, late authorization/capture only with `LIVE_LATE=1`
@@ -383,7 +378,7 @@ The initial baseline directly creates `coaching_prices` as the only coaching pri
 (lesson price/person per program × duration × `participant_count` × currency × Club/Coach
 scope) with its two scope indexes; there is no `pricing_unit` column and no
 `coaching_participant_prices` table. The
-four registered migrations are 924–927; no coaching repair migration or automatic
+two registered baselines are 924 and 926; no coaching repair migration or automatic
 legacy data interpretation runs. Recreate only the disposable test stack using the
 explicit `tests/local` stop/start procedure above to validate an edited baseline.
 
@@ -399,8 +394,11 @@ Development is separate and disposable. After baseline edits, rebuild the local
 development database from the corrected baseline (`npm run db:dev:rebuild`, which refuses
 non-local targets) and reseed it (`npm run db:dev:seed`, `npm run db:dev:seed:coaching`)
 instead of patching it in place. The rebuilt schema must have zero TypeORM metadata diff
-and baseline entries 924–926 plus checkout separation 927.
+and exactly the baseline entries 924 and 926. Rebuilding development is a separate,
+user-initiated operation; baseline verification uses only the isolated test stack.
 
+
+### Checkout abandonment coverage
 
 Browser-abandoned initial checkout regression (fake Stripe, isolated production server):
 
@@ -409,18 +407,13 @@ npm run test:e2e -- tests/e2e/initial-checkout.e2e.ts
 npm run test:integration -- tests/integration/checkout-abandonment.integration.test.ts tests/integration/db/checkout.integration.test.ts tests/integration/stripe-payment.integration.test.ts tests/integration/admin-payment-transactions.integration.test.ts tests/integration/admin-operational-bookings.integration.test.ts
 ```
 
-The browser-close acceptance case launches a separate authenticated customer browser,
-opens Payment Element and closes that browser without Pay or Cancel. It verifies the
-hold before expiry, waits across the real 600-second database deadline, then invokes
-the existing secret-protected expiry endpoint as the scheduler would. Expect about
-11 minutes for the browser file. No deadline override or database timestamp mutation
-is used by that browser case. Stripe requests stay on the loopback fixture. Integration
-cases use the existing guarded deadline fixture for fast race and failure coverage.
+Stripe requests stay on the loopback fixture. Integration cases use the existing guarded
+deadline fixture for fast race and failure coverage; the browser-close case is described below.
 
 
-### Deterministic browser-abandoned checkout coverage
+### Deterministic browser-close case
 
-`tests/e2e/initial-checkout.e2e.ts` closes the authenticated customer's browser before authorization, verifies the original ten-minute deadline and valid hold, then uses the existing guarded `setPaymentAttemptExpiryFixture` inside an isolated database transaction. The reservation deadline is moved to the same past instant. Only fixture deadlines change; checkout, payment and occupancy states remain unresolved until the production `/api/payments/holds/expire` endpoint reconciles with the fake Stripe provider. The test verifies cancellation, expired checkout, released occupancy, absence of a booking identity, and another customer's successful booking of that interval. No real-time expiry wait or production deadline override is used. Run it independently with:
+`tests/e2e/initial-checkout.e2e.ts` closes the authenticated customer's browser before authorization, verifies the original five-minute deadline and valid hold, then uses the existing guarded `setPaymentAttemptExpiryFixture` inside an isolated database transaction. The reservation deadline is moved to the same past instant. Only fixture deadlines change; checkout, payment and occupancy states remain unresolved until the production `/api/payments/holds/expire` endpoint reconciles with the fake Stripe provider. The test verifies cancellation, expired checkout, released occupancy, absence of a booking identity, and another customer's successful booking of that interval. No real-time expiry wait or production deadline override is used. Run it independently with:
 
 ```bash
 npm run test:e2e -- tests/e2e/initial-checkout.e2e.ts --grep 'browser closes'

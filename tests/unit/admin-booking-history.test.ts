@@ -69,6 +69,23 @@ test("multiple modifications use recorded predecessor snapshots and their own sn
   expect(hasRecordedChanges(events)).toBe(true);
 });
 
+test("an assigned coach's cancellation is attributed to the coach, distinct from a coach acting as booking owner", () => {
+  const cancelled = buildBookingHistory({ status: "cancelled", revisions: [revision(1, { actorScope: "coach_owner" }),
+    revision(2, { kind: "cancelled", bookingState: "cancelled", cancellationCause: "coach_cancelled", actorScope: "coach", adjustmentId: uuid(92) })],
+  adjustments: [adjustment({ id: uuid(92), kind: "cancellation", scope: "admin", status: "applied",
+    target: { ...adjustment({}).target, actorScope: "coach" } })] });
+  expect(cancelled.map(event => event.detail)).toEqual(["Booked by coach · Online payment", "Cancelled by the assigned coach"]);
+  // A refund-backed request still awaiting (or refused by) the provider names the coach too.
+  for (const status of ["pending", "unsuccessful"] as const) {
+    const requested = buildBookingHistory({ status: "confirmed", revisions: [revision(1)],
+      adjustments: [adjustment({ kind: "cancellation", scope: "admin", status, target: { ...adjustment({}).target, actorScope: "coach" } })] });
+    expect(requested[1].detail).toMatch(/^Requested by the assigned coach · not applied/);
+  }
+  const admin = buildBookingHistory({ status: "confirmed", revisions: [revision(1)],
+    adjustments: [adjustment({ kind: "cancellation", scope: "admin", status: "pending", target: { ...adjustment({}).target, actorScope: "admin" } })] });
+  expect(admin[1].detail).toBe("Requested by an administrator · not applied yet");
+});
+
 test("a move between two distinct courts with the same name is a reschedule; a renamed court is not", () => {
   const moved = buildBookingHistory({ status: "confirmed", adjustments: [],
     revisions: [revision(1), revision(2, { courtId: uuid(71) })] });
@@ -257,13 +274,30 @@ test("records derive cancellation availability and refund notice in the same sna
   expect(records?.cancellation.refundAvailable).toBe(false);
 });
 
-test("Admin editing is limited to the existing owner rescheduling boundary", () => {
-  const actor = "ad000000-0000-4000-8000-0000000000a1";
-  const base = { availability: "eligible" as const, accountUserId: actor, actorUserId: actor, includesCoaching: false };
-  expect(adminBookingEditable(base)).toBe(true);
-  expect(adminBookingEditable({ ...base, accountUserId: "ad000000-0000-4000-8000-0000000000b2" })).toBe(false);
-  expect(adminBookingEditable({ ...base, accountUserId: null })).toBe(false);
-  expect(adminBookingEditable({ ...base, includesCoaching: true })).toBe(false);
+test("Admin operational editing follows lifecycle eligibility", () => {
+  expect(adminBookingEditable({ availability: "eligible" })).toBe(true);
   for (const availability of ["started", "cancellation_pending", "change_pending", "unavailable"] as const)
-    expect(adminBookingEditable({ ...base, availability })).toBe(false);
+    expect(adminBookingEditable({ availability })).toBe(false);
+});
+
+test("a staff change to a dearer destination shows the destination price the club absorbed", () => {
+  const decision = adjustment({ id: uuid(91), scope: "admin", status: "applied", newTotal: 5000,
+    target: { ...adjustment({}).target, destinationTotalMinor: 7000, actorScope: "admin" } });
+  const events = buildBookingHistory({ status: "confirmed", adjustments: [decision],
+    revisions: [revision(1), revision(2, { actorScope: "admin", adjustmentId: decision.id, startMinute: 660, endMinute: 720 })] });
+  expect(events.find(event => event.key === uuid(2))).toMatchObject({ kind: "change",
+    detail: expect.stringMatching(/^Changed by administrator · Destination price RON\s70\.00, club absorbed RON\s20\.00$/) });
+  // An applied decision is represented by its revision, never as an open request.
+  expect(events.some(event => event.key === decision.id)).toBe(false);
+});
+
+
+test("cancellation history retains explanations while pending and after settlement", () => {
+  const request = adjustment({ kind: "cancellation", scope: "admin", target: {
+    ...adjustment({}).target, cancellationExplanation: "Court maintenance" } });
+  expect(buildBookingHistory({ status: "confirmed", revisions: [revision(1)], adjustments: [request] }).at(-1)?.detail)
+    .toContain("Court maintenance");
+  expect(buildBookingHistory({ status: "cancelled", revisions: [revision(1), revision(2, {
+    kind: "cancelled", bookingState: "cancelled", actorScope: "admin", cancellationCause: "admin_cancelled", adjustmentId: request.id })],
+    adjustments: [{ ...request, status: "applied" }] }).at(-1)?.detail).toBe("Cancelled by an administrator · Court maintenance");
 });

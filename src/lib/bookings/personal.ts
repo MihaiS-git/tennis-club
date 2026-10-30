@@ -1,4 +1,5 @@
 import type { BookingTypeSnapshot } from "./booking-type";
+import type { CoachingEvidence } from "./revision";
 import type { LocationCurrency } from "@/lib/pricing/money";
 
 export type PersonalCustomerBooking = BookingTypeSnapshot & {
@@ -14,8 +15,11 @@ export type PersonalCustomerBooking = BookingTypeSnapshot & {
   customer_email: string;
   customer_phone: string;
   cancellation_notice_minutes: number;
+  payment_method?: "online" | "pay_at_club";
   total_amount_minor: number;
   currency: LocationCurrency;
+  // The current revision's agreed lesson terms; null for a court booking.
+  coaching?: CoachingEvidence | null;
   // A modification payment is still processing; Edit stays hidden until it resolves.
   payment_pending?: boolean;
   // A requested cancellation or price reduction awaits its verified refund. The

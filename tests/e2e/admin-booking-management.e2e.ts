@@ -36,6 +36,13 @@ test("Admin opens one booking from Calendar and List, returns to each origin and
     const calendarUrl = `/admin/bookings?view=calendar&location=${locationId}&date=${date}`;
     await page.goto(calendarUrl);
     await page.getByRole("button", { name: new RegExp(`Booking · ${customer}`) }).click();
+    const preview = page.getByRole("dialog", { name: "Booking details" });
+    await preview.getByRole("button", { name: "Cancel booking", exact: true }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(1);
+    await expect(preview.getByRole("region", { name: "Cancel booking?" })).toContainText("15 Oct 2099 · 10:00–11:00");
+    await page.keyboard.press("Escape");
+    expect(await db.query("SELECT status FROM public.checkout_records WHERE id=$1", [bookingId])).toEqual([{ status: "confirmed" }]);
+    await page.getByRole("button", { name: new RegExp(`Booking · ${customer}`) }).click();
     await page.getByRole("dialog", { name: "Booking details" }).getByRole("link", { name: "View full booking details" }).click();
     await expect(page).toHaveURL(new RegExp(`/admin/bookings/${bookingId}\\?back=`));
     await expect(page.getByRole("heading", { name: `Booking #${bookingId.slice(0, 8)}` })).toBeVisible();
@@ -56,15 +63,23 @@ test("Admin opens one booking from Calendar and List, returns to each origin and
     await expect(table.getByText(customer)).toBeVisible();
     await table.getByRole("link", { name: `#${bookingId.slice(0, 8)}` }).click();
 
+    // Mobile and keyboard confirmation from Booking Details.
+    await page.setViewportSize({ width: 390, height: 844 });
     // Cancel from Booking Details through the existing Admin service.
     const actions = page.getByRole("region", { name: "Booking actions" });
     await actions.getByRole("button", { name: "Cancel booking" }).click();
     const confirmation = page.getByRole("dialog", { name: "Cancel booking?" });
     await expect(confirmation).toContainText(customer);
-    await confirmation.getByRole("button", { name: "Keep booking" }).click();
+    await expect(confirmation.getByRole("button", { name: "Keep booking" })).toBeFocused();
+    await page.mouse.click(1, 1);
+    await expect(confirmation).toBeVisible();
+    await confirmation.getByRole("button", { name: "Keep booking" }).focus();
+    await page.keyboard.press("Enter");
     await expect(confirmation).toHaveCount(0);
     await actions.getByRole("button", { name: "Cancel booking" }).click();
-    await confirmation.getByRole("button", { name: "Cancel booking" }).click();
+    await confirmation.getByLabel("Cancellation explanation (optional)").fill("Court maintenance");
+    await confirmation.getByRole("button", { name: "Confirm cancellation" }).focus();
+    await page.keyboard.press("Enter");
     await expect(page.locator("[data-sonner-toast][data-type='success']")).toContainText("Booking cancelled.");
     await expect(page.getByRole("heading", { name: `Booking #${bookingId.slice(0, 8)}` }).locator("..")).toContainText("Cancelled");
     await expect(page.getByRole("button", { name: "Cancel booking" })).toHaveCount(0);
@@ -72,6 +87,8 @@ test("Admin opens one booking from Calendar and List, returns to each origin and
     await page.reload();
     await expect(page.getByRole("button", { name: "Cancel booking" })).toHaveCount(0);
     await expect(page.getByRole("region", { name: "Booking history" })).toContainText("Cancelled by an administrator");
+
+    await expect(page.getByRole("region", { name: "Booking history" })).toContainText("Court maintenance");
 
     // The booking and its history remain; only occupancy is released.
     const [after] = await db.query(`SELECT b.status, r.status AS reservation_status,
@@ -97,9 +114,8 @@ test("Admin opens one booking from Calendar and List, returns to each origin and
   }
 });
 
-// Editing reuses the owner rescheduling form and service: offered only for the Admin's
-// own court booking, with a recalculated price that must be acknowledged before saving.
-test("Admin edits their own booking from Booking Details; other customers' bookings offer no edit", async ({ page }) => {
+// Admin operational editing shares one server-quoted interface across every entry point.
+test("Admin edits guest and account bookings from Details, List and Calendar", async ({ page }) => {
   test.setTimeout(120000);
   page.setDefaultTimeout(10000);
   const db = await new DataSource({ type: "postgres", url: process.env.DATABASE_URL }).initialize();
@@ -135,36 +151,55 @@ test("Admin edits their own booking from Booking Details; other customers' booki
     await page.goto("/login"); await page.getByLabel("Email", { exact: true }).fill(email); await page.getByLabel("Password", { exact: true }).fill(password);
     await page.getByRole("button", { name: "Sign in", exact: true }).click(); await expect(page).toHaveURL(/\/$/);
 
-    // Another customer's booking: cancellation only, no rescheduling.
+    // Guest Details use exactly the same operational editor as List and Calendar.
     await page.goto(`/admin/bookings/${guestBooking}`);
-    await expect(page.getByRole("region", { name: "Booking actions" }).getByRole("button", { name: "Cancel booking" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Edit booking" })).toHaveCount(0);
+    await page.getByRole("button", { name: "Edit booking" }).click();
+    let dialog = page.getByRole("region", { name: "Rescheduling booking" });
+    await expect(page).toHaveURL(new RegExp(`view=calendar&reschedule=${guestBooking}`));
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.getByRole("table", { name: "Court timetable" })).toHaveCount(1);
+    await dialog.getByRole("button", { name: "Exit rescheduling" }).click();
+    await expect(dialog).toHaveCount(0);
+    await page.getByRole("button", { name: /Booking · Edit guest/ }).click();
+    await page.getByRole("dialog", { name: "Booking details" }).getByRole("button", { name: "Edit booking" }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await page.getByRole("table", { name: "Court timetable" }).getByRole("button", { name: /15:00–16:00/ }).first().click();
+    await dialog.getByRole("button", { name: "Preview change" }).click();
+    await expect(dialog.getByRole("region", { name: "Financial preview" })).toContainText("No financial adjustment");
+    await dialog.getByRole("button", { name: "Confirm booking change" }).click();
+    await expect(dialog).toHaveCount(0);
+    await page.goto(`/admin/bookings/${guestBooking}`);
+    await expect(page.getByText("15:00–16:00 (UTC)")).toBeVisible();
 
     const listUrl = `/admin/bookings?q=${encodeURIComponent(owner)}&location=${locationId}&sort=scheduled&dir=asc`;
     await page.goto(listUrl);
-    await page.getByRole("table", { name: "Bookings and reservations" }).getByRole("link", { name: `#${ownBooking.slice(0, 8)}` }).click();
-    await page.getByRole("region", { name: "Booking actions" }).getByRole("button", { name: "Edit booking" }).click();
-    const dialog = page.getByRole("dialog", { name: "Edit booking" });
-    await dialog.getByRole("button", { name: `E1 ${date} 11:00–11:30, Available`, exact: true }).click();
-    const price = dialog.getByRole("region", { name: "Booking price" });
-    await expect(price).toContainText("75.00");
-    // The changed total must be acknowledged before the existing service accepts it.
-    await expect(dialog.getByRole("button", { name: "Save changes", exact: true })).toBeDisabled();
-    await price.getByRole("checkbox").check();
-    await dialog.getByRole("button", { name: "Save changes", exact: true }).click();
+    await page.getByRole("table", { name: "Bookings and reservations" }).getByRole("button", { name: "Edit booking" }).click();
+    dialog = page.getByRole("region", { name: "Rescheduling booking" });
+    await page.getByRole("table", { name: "Court timetable" }).getByRole("button", { name: /11:00–12:00/ }).first().click();
+    await dialog.getByRole("button", { name: "Preview change" }).click();
+    await expect(dialog.getByRole("region", { name: "Financial preview" })).toContainText("Final customer obligation");
+    await dialog.getByRole("button", { name: "Confirm booking change" }).click();
     await expect(dialog).toHaveCount(0);
-    await expect(page.getByText("10:00–11:30 (UTC)")).toBeVisible();
-    await expect(page.getByText("75.00").first()).toBeVisible();
-    await expect(page.getByRole("region", { name: "Booking history" })).toContainText("11:30");
-    await page.getByRole("link", { name: "Back to Bookings" }).click();
-    await expect(page).toHaveURL(new RegExp(`/admin/bookings\\?q=.*&location=${locationId}&sort=scheduled&dir=asc$`));
+    await page.goto(listUrl);
+    await expect(page.getByRole("table")).toContainText("11:00–12:00");
 
-    // One appended revision; no payment record is created or changed for a pay-at-club edit.
+    await page.goto(`/admin/bookings?view=calendar&location=${locationId}&date=${date}`);
+    await page.getByRole("button", { name: new RegExp(`Booking · ${owner}`) }).click();
+    await page.getByRole("dialog", { name: "Booking details" }).getByRole("button", { name: "Edit booking" }).click();
+    dialog = page.getByRole("region", { name: "Rescheduling booking" });
+    await page.getByRole("table", { name: "Court timetable" }).getByRole("button", { name: /12:00–13:00/ }).first().click();
+    await dialog.getByRole("button", { name: "Preview change" }).click();
+    await dialog.getByRole("button", { name: "Confirm booking change" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await page.goto(`/admin/bookings/${ownBooking}`);
+    await expect(page.getByText("12:00–13:00 (UTC)")).toBeVisible();
+    await expect(page.getByRole("region", { name: "Booking history" })).toContainText("12:00");
     const [after] = await db.query(evidence, [ownBooking]);
-    expect(after).toEqual({ revisions: before.revisions + 1, attempts: before.attempts });
-    const [row] = await db.query(`SELECT b.status, r.starts_at_minute, r.ends_at_minute, v.total_amount_minor FROM public.checkout_records b
+    expect(after).toEqual({ revisions: before.revisions + 2, attempts: before.attempts });
+    const [row] = await db.query(`SELECT b.status,r.starts_at_minute,r.ends_at_minute,v.total_amount_minor FROM public.checkout_records b
       JOIN public.court_reservations r ON r.id=b.reservation_id JOIN public.booking_revisions v ON v.id=b.current_revision_id WHERE b.id=$1`, [ownBooking]);
-    expect(row).toEqual({ status: "confirmed", starts_at_minute: 600, ends_at_minute: 690, total_amount_minor: 7500 });
+    expect(row).toEqual({ status: "confirmed", starts_at_minute: 720, ends_at_minute: 780, total_amount_minor: 5000 });
   } finally {
     try {
       await db.transaction(manager => cleanupBookingEvidence(manager, { bookingIds: [ownBooking, guestBooking] }));

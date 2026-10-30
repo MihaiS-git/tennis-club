@@ -7,7 +7,8 @@ import type { CoachBookingListItem } from "@/lib/bookings/coach-bookings";
 import { BookingRow, type ListScope } from "./booking-row";
 
 // The shared List results for Admins and Coaches: server-sorted, URL-backed and paginated.
-// Coaches have no Total column; their records carry no price.
+// Coaches have no Total column; their records carry no price. Their Actions column
+// offers Reschedule lesson and Cancel lesson on their own eligible lessons.
 export function BookingsList({ result, query, href, scope = "admin" }: {
   result: { rows: (AdminBookingListItem | CoachBookingListItem)[]; page: number; total: number; totalPages: number };
   query: AdminBookingQuery; href: (query: AdminBookingQuery, page?: number) => string; scope?: ListScope;
@@ -16,7 +17,7 @@ export function BookingsList({ result, query, href, scope = "admin" }: {
   const hasFilters = Boolean(query.q || query.type !== "all" || query.status !== "all" || query.location || query.from || query.to);
   const columns = ([
     ["Reference", null], ["Type", null], ["Customer or staff", null], ["Location and court", null], ["Scheduled", "scheduled"],
-    ["Status", null], ["Total", null], ["Created", "created"],
+    ["Status", null], ["Total", null], ["Created", "created"], ["Actions", null],
   ] as const).filter(([label]) => scope === "admin" || label !== "Total");
   return <>
     <p className="mb-3 text-sm text-muted-foreground">{result.total} {result.total === 1 ? "result" : "results"} · Times in each location’s timezone</p>

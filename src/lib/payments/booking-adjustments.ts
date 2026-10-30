@@ -7,8 +7,10 @@ import * as payments from "@/lib/db/repositories/payments.repository";
 import * as bookings from "@/lib/db/repositories/bookings.repository";
 import { lockLocations } from "@/lib/db/repositories/clubs.repository";
 import type { BookingRescheduleResult } from "@/lib/bookings/reschedule";
+import type { OperationalChangeResult } from "@/lib/bookings/commands";
+import { findRevisionOperation } from "@/lib/db/repositories/booking-revisions.repository";
 import { logger } from "@/lib/logger";
-import { processBookingRefund } from "./refunds";
+import { processBookingRefund, type RefundStatus } from "./refunds";
 import { summarizeRefunds, type PaymentProvider } from "./domain";
 import { onlinePaymentAdapter } from "./providers";
 import { processOnlinePaymentEvent, settleOnlinePayment } from "./service";
@@ -131,4 +133,18 @@ export async function finishBookingAdjustment(result: BookingRescheduleResult & 
     return { ...outcome, adjustmentStatus: current?.status ?? outcome.adjustmentStatus };
   }
   catch { return outcome; } // Never report a new booking as applied; the lease still ends at the cutoff.
+}
+
+// Post-commit step of a staff operational change. A price reduction returning collected
+// funds is a pending refund-backed change: its refunds are processed here, outside any
+// transaction, and the verified outcome applies (or abandons) the change. Stripe usually
+// confirms at once; otherwise the Stripe refund webhook or an Admin check finishes it.
+export async function finishOperationalChange(result: OperationalChangeResult): Promise<OperationalChangeResult & { refundStatus?: RefundStatus }> {
+  if (!result.ok || !result.adjustmentId || result.adjustmentStatus !== "pending" || !result.refundIds?.length) return result;
+  const statuses = await Promise.all(result.refundIds.map(id => processBookingRefund(id)));
+  const manager = (await getDataSource()).manager;
+  const current = await adjustments.findAdjustment(manager, result.adjustmentId);
+  const applied = current?.status === "applied" ? await findRevisionOperation(manager, current.bookingId, current.requestKey) : null;
+  return { ...result, refundStatus: summarizeRefunds(statuses), adjustmentStatus: current?.status ?? result.adjustmentStatus,
+    ...(applied ? { changed: true, revisionId: applied.id, totalAmountMinor: applied.totalAmountMinor } : {}) };
 }

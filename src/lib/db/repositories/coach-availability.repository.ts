@@ -6,6 +6,7 @@ import { z } from "zod";
 import { mondayWeekday } from "@/lib/pricing/resolution";
 
 import { readIndependently } from "../transaction";
+import { protectedPaymentOccupancy } from "./reservations.repository";
 
 import { CoachAvailabilityExceptionEntity } from "../entities/coach-availability-exception.entity";
 import { CoachWeeklyAvailabilityEntity } from "../entities/coach-weekly-availability.entity";
@@ -163,7 +164,7 @@ export async function hasCoachExceptionBookingConflict(manager: EntityManager, c
   const rows: unknown = await manager.query(`SELECT EXISTS (
     SELECT 1 FROM public.court_reservations r JOIN public.courts c ON c.id=r.court_id
     WHERE r.coach_user_id=$1 AND r.booking_date BETWEEN $2::date AND $3::date
-      AND (r.status='active' OR (r.status='held' AND r.hold_expires_at > clock_timestamp()))
+      AND (r.status='active' OR (r.status='held' AND (r.hold_expires_at > clock_timestamp() OR ${protectedPaymentOccupancy})))
       AND ($6::uuid IS NULL OR c.location_id <> $6::uuid)
       AND r.starts_at_minute < $5 AND r.ends_at_minute > $4
   ) AS conflict`, [coachUserId, from, until, start, end, extraLocationId]);

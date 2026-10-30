@@ -310,9 +310,13 @@ export async function deleteUnusedProgram(manager: EntityManager, programId: str
   await manager.getRepository(CoachingProgramEntity).delete({ id: programId });
 }
 
-export async function readCoachRemovalFacts(manager: EntityManager, coachUserId: string) {
-  const hasRevisions = await manager.getRepository(BookingRevisionEntity).existsBy({ coachUserId });
-  const hasReservations = await manager.getRepository(CourtReservationEntity).existsBy({ coachUserId });
+export async function coachHasBookingHistory(manager: EntityManager, coachUserId: string) {
+  return await manager.getRepository(BookingRevisionEntity).existsBy({ coachUserId })
+    || await manager.getRepository(CourtReservationEntity).existsBy({ coachUserId });
+}
+
+// The coach's held and active lesson occupancy; the coaching service decides which remain unfinished.
+export async function listCoachLiveLessons(manager: EntityManager, coachUserId: string) {
   const reservations = await manager.getRepository(CourtReservationEntity).createQueryBuilder("reservation")
       .innerJoin(CourtEntity, "court", "court.id=reservation.court_id")
       .innerJoin(LocationEntity, "location", "location.id=court.location_id")
@@ -320,9 +324,9 @@ export async function readCoachRemovalFacts(manager: EntityManager, coachUserId:
       .addSelect("reservation.ends_at_minute", "endMinute").addSelect("location.timezone", "timezone")
       .where("reservation.coach_user_id=:coachUserId AND reservation.status IN ('active','held')", { coachUserId })
       .getRawMany<unknown>();
-  return { hasHistory: hasRevisions || hasReservations, reservations: z.array(z.object({
+  return z.array(z.object({
     status: z.enum(["active", "held"]), date: z.iso.date(), endMinute: z.number().int(), timezone: z.string(),
-  })).parse(reservations) };
+  })).parse(reservations);
 }
 
 export async function removeCoachConfiguration(manager: EntityManager, coachUserId: string, archive: boolean, now: Date) {

@@ -2,7 +2,7 @@
 import { expectToast, lastToast } from "../helpers/notifications";
 import { installDialogMock } from "../helpers/dialog";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AdminOperationalOccupancy } from "@/lib/reservations/service";
 import { ReservationCalendar } from "@/app/admin/reservations/reservation-calendar";
 import { localMinute, localToday } from "@/lib/courts/local-time";
@@ -11,13 +11,18 @@ const { reserveAction, ownerEdit, ownerAvailability, ownerBookingLoad, ownerBook
 vi.mock("@/app/my-activity/bookings/actions", () => ({ cancelOwnReservationAction: ownerCancelAction, editOwnReservationAction: ownerEdit,
   loadReservationEditDayAction: ownerAvailability, loadOwnBookingEditDayAction: ownerBookingLoad,
   quoteOwnBookingAction: ownerBookingQuote, rescheduleOwnBookingAction: ownerBookingSave, cancelOwnCustomerBookingAction: ownerBookingCancel }));
-vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
+const coachCancel = vi.hoisted(() => vi.fn());
+const push = vi.hoisted(() => vi.fn());
+vi.mock("@/app/coach/bookings/lessons/[bookingId]/actions", () => ({ cancelCoachLessonAction: coachCancel,
+  loadCoachBookingDayAction: vi.fn(), loadCoachBookingEditorAction: vi.fn(), changeCoachBookingAction: vi.fn() }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh, push }) }));
 vi.mock("@/app/admin/reservations/actions", () => ({ reserveCourtAction: reserveAction, cancelAdminReservationAction: cancelAction,
   cancelAdminCustomerBookingAction: cancelBookingAction, editAdminReservationAction: editAction, loadAdminReservationEditDayAction: adminAvailability }));
 beforeAll(() => {
   installDialogMock();
 });
-afterEach(() => { cleanup(); reserveAction.mockReset(); [ownerEdit, ownerAvailability, ownerBookingLoad, ownerBookingQuote, ownerBookingSave, ownerBookingCancel].forEach((mock) => mock.mockReset()); ownerCancelAction.mockReset(); cancelAction.mockReset(); cancelBookingAction.mockReset(); editAction.mockReset(); adminAvailability.mockReset(); refresh.mockReset(); });
+afterEach(() => { cleanup(); reserveAction.mockReset(); [ownerEdit, ownerAvailability, ownerBookingLoad, ownerBookingQuote, ownerBookingSave, ownerBookingCancel].forEach((mock) => mock.mockReset()); ownerCancelAction.mockReset(); cancelAction.mockReset(); cancelBookingAction.mockReset(); editAction.mockReset(); adminAvailability.mockReset(); refresh.mockReset(); push.mockReset(); coachCancel.mockReset(); });
+const eligibleLesson = { availability: "eligible" as const, startsAt: "2099-10-15T11:00:00.000Z", refundAvailable: false };
 
 it("offers a reason and Reserve action after selection, without pricing", () => {
   render(<ReservationCalendar canManage date="2099-10-15" location={{ id: "11111111-1111-4111-8111-111111111111", name: "Club", timezone: "UTC", courts: [] }}
@@ -56,11 +61,11 @@ it("confirms booking cancellation and refreshes the timetable in place", async (
     adminOccupancy={[booking]} />);
   fireEvent.click(screen.getByRole("button", { name: /10:00–11:00, Booking · Ana Pop/ }));
   fireEvent.click(screen.getByRole("button", { name: "Cancel booking" }));
-  const confirmation = screen.getByRole("dialog", { name: "Cancel booking?" });
+  const confirmation = screen.getByRole("region", { name: "Cancel booking?" });
   for (const value of ["Ana Pop", "RIVUS · Court 2", "15 Oct 2099 · 10:00–11:00", "RON", "90.00",
     "This will cancel the booking and free the court."]) expect(confirmation.textContent).toContain(value);
   expect(within(confirmation).getByRole("button", { name: "Keep booking" })).toBeTruthy();
-  fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel booking" }));
+  fireEvent.click(within(confirmation).getByRole("button", { name: "Confirm cancellation" }));
   await waitFor(() => expect(cancelBookingAction).toHaveBeenCalledWith({ id: booking.id }));
   await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
   expect(cancelAction).not.toHaveBeenCalled();
@@ -264,13 +269,13 @@ it.each([false, true])("Admin cancellation reflects captured-funds refund availa
     adminOccupancy={[booking]} />);
   fireEvent.click(screen.getByRole("button", { name: /10:00–11:00, Booking · Ana Pop/ }));
   fireEvent.click(screen.getByRole("button", { name: "Cancel booking" }));
-  const confirmation = screen.getByRole("dialog", { name: "Cancel booking?" });
+  const confirmation = screen.getByRole("region", { name: "Cancel booking?" });
   for (const value of ["Ana Pop", "RIVUS · Court 2", "15 Oct 2099 · 10:00–11:00", "RON", "90.00",
     "This will cancel the booking and free the court."]) expect(confirmation.textContent).toContain(value);
   expect(within(confirmation).getByRole("button", { name: "Keep booking" })).toBeTruthy();
   expect(within(confirmation).queryByRole("checkbox")).toBeNull();
   expect(confirmation.textContent?.includes("refunded automatically")).toBe(refundable);
-  fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel booking" }));
+  fireEvent.click(within(confirmation).getByRole("button", { name: "Confirm cancellation" }));
   await waitFor(() => expect(cancelBookingAction).toHaveBeenCalledWith({ id: booking.id }));
   await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
   expect(cancelAction).not.toHaveBeenCalled();
@@ -433,13 +438,13 @@ it("Coach cancels own booking with automatic refund, preserves failed confirmati
   fireEvent.click(screen.getByRole("button", { name: /Booking · Customer/ }));
   expect(screen.getByRole("button", { name: "Edit booking" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Cancel booking" }));
-  const confirmation = screen.getByRole("dialog", { name: "Cancel booking?" });
+  const confirmation = screen.getByRole("region", { name: "Cancel booking?" });
   expect(within(confirmation).queryByRole("checkbox")).toBeNull();
   expect(ownerBookingCancel).not.toHaveBeenCalled();
-  fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel booking" }));
+  fireEvent.click(within(confirmation).getByRole("button", { name: "Confirm cancellation" }));
   await expectToast("Try again.");
-  expect(screen.getByRole("dialog", { name: "Cancel booking?" })).toBeTruthy();
-  fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel booking" }));
+  expect(screen.getByRole("region", { name: "Cancel booking?" })).toBeTruthy();
+  fireEvent.click(within(confirmation).getByRole("button", { name: "Confirm cancellation" }));
   await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
   expect(ownerBookingCancel).toHaveBeenLastCalledWith(ownBooking.id);
   expect(cancelBookingAction).not.toHaveBeenCalled();
@@ -534,7 +539,7 @@ it.each([
   expect(within(dialog).getByRole("link", { name: "View full booking details" }).getAttribute("href")).toBe(`/admin/bookings/${booking.id}?${new URLSearchParams({
     back: `/admin/bookings?view=calendar&location=${coachLocation.id}&date=${booking.booking_date}` })}`);
   expect(within(dialog).getByRole("button", { name: "Cancel booking" })).toBeTruthy();
-  expect(within(dialog).queryByRole("button", { name: "Edit booking" })).toBeNull();
+  expect(within(dialog).getByRole("button", { name: "Edit booking" })).toBeTruthy();
   rerender(<ReservationCalendar {...props} day={day} canManage={false} />);
   expect(within(dialog).queryByRole("link", { name: "View full booking details" })).toBeNull();
   expect(within(dialog).queryByRole("button", { name: "Cancel booking" })).toBeNull();
@@ -617,7 +622,7 @@ it("links a Coach only to their own reservation and own lesson details, returnin
     reservation("33333333-3333-4333-8333-000000000002", otherId, "Other Coach", 630),
     { kind: "lesson", id: "33333333-3333-4333-8333-000000000003", court_id: courtId, booking_date: "2099-10-15", starts_at_minute: 660,
       ends_at_minute: 690, coach_user_id: coachId, coach_name: "Me Coach", coaching_program_name: "Juniors", customer_name: "My Student",
-      customer_email: "student@example.test", customer_phone: "+40 700" },
+      customer_email: "student@example.test", customer_phone: "+40 700", cancellation: eligibleLesson },
     { kind: "occupied", id: `occupied:${courtId}:690`, court_id: courtId, booking_date: "2099-10-15", starts_at_minute: 690, ends_at_minute: 720 }];
   render(<ReservationCalendar actorUserId={coachId} date="2099-10-15" location={location} adminOccupancy={occupancy}
     day={{ times: [600, 630, 660, 690], courts: [{ court: location.courts[0], cells: ["booked", "booked", "booked", "booked"] }] }} />);
@@ -632,7 +637,7 @@ it("links a Coach only to their own reservation and own lesson details, returnin
   dialog = open(/Reservation · Other Coach/, "Reservation details");
   expect(within(dialog).queryByRole("link")).toBeNull();
   fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
-  dialog = open(/Coaching · My Student/, "Lesson details");
+  dialog = open(/Your lesson · Juniors · My Student/, "Lesson details");
   for (const text of ["Me Coach", "Juniors", "My Student", "student@example.test", "+40 700", "RIVUS", "Court 2"]) expect(within(dialog).getByText(text)).toBeTruthy();
   expect(within(dialog).queryByText(/Total|Currency|Payment|Customer type|Cancellation|Coaching fee/)).toBeNull();
   const link = within(dialog).getByRole("link", { name: "View lesson details" });
@@ -649,6 +654,129 @@ it("links a Coach only to their own reservation and own lesson details, returnin
   expect(within(dialog).getByText("11:30–12:00 (UTC)")).toBeTruthy();
 });
 
+it("distinguishes a Coach's own Private and Semi-private lessons from masked occupancy and explains them in the legend", () => {
+  const courtId = "22222222-2222-4222-8222-222222222222", coachId = "44444444-4444-4444-8444-444444444444";
+  const location = { id: "11111111-1111-4111-8111-111111111111", name: "RIVUS", timezone: "UTC", courts: [{ id: courtId, name: "Court 2" }] };
+  const lesson = (id: string, program: string, customer: string, start: number) => ({ kind: "lesson" as const, id, court_id: courtId,
+    booking_date: "2099-10-15", starts_at_minute: start, ends_at_minute: start + 60, coach_user_id: coachId, coach_name: "Me Coach",
+    coaching_program_name: program, customer_name: customer, customer_email: `${customer}@example.test`, customer_phone: "+40 700",
+    cancellation: eligibleLesson });
+  const occupancy: AdminOperationalOccupancy[] = [lesson("33333333-3333-4333-8333-000000000001", "Private", "Solo", 600),
+    lesson("33333333-3333-4333-8333-000000000002", "Semi-private", "Pair", 660),
+    // Another coach's lesson and a customer booking reach the Coach as bare intervals.
+    { kind: "occupied", id: `occupied:${courtId}:720`, court_id: courtId, booking_date: "2099-10-15", starts_at_minute: 720, ends_at_minute: 780 }];
+  render(<ReservationCalendar actorUserId={coachId} date="2099-10-15" location={location} adminOccupancy={occupancy}
+    day={{ times: [600, 630, 660, 690, 720, 750], courts: [{ court: location.courts[0], cells: ["booked", "booked", "booked", "booked", "booked", "booked"] }] }} />);
+  const privateBlock = screen.getByRole("button", { name: "Court 2 2099-10-15 10:00–11:00, Your lesson · Private · Solo" });
+  const semiBlock = screen.getByRole("button", { name: "Court 2 2099-10-15 11:00–12:00, Your lesson · Semi-private · Pair" });
+  const masked = screen.getByRole("button", { name: "Court 2 2099-10-15 12:00–13:00, Booked" });
+  expect(privateBlock.textContent).toBe("Private");
+  expect(semiBlock.textContent).toBe("Semi-private");
+  expect(masked.textContent).toBe("");
+  expect(privateBlock.className).toContain("bg-tennis");
+  expect(masked.className).not.toContain("bg-tennis");
+  const legend = screen.getByRole("list", { name: "Timetable legend" });
+  expect(within(legend).getByText("Your lesson")).toBeTruthy();
+  expect(within(legend).getByText("Booked")).toBeTruthy();
+  expect(screen.getByText(/Your lessons show their booked program; other bookings and lessons show as Booked\./)).toBeTruthy();
+  // The existing lesson dialog, its customer contact and its details link are unchanged.
+  fireEvent.click(semiBlock);
+  const dialog = screen.getByRole("dialog", { name: "Lesson details" });
+  for (const text of ["Semi-private", "Pair", "Pair@example.test", "+40 700"]) expect(within(dialog).getByText(text)).toBeTruthy();
+  expect(within(dialog).getByRole("link", { name: "View lesson details" }).getAttribute("href"))
+    .toContain(`/coach/bookings/lessons/${occupancy[1].id}?`);
+});
+
+describe("a Coach's Cancel lesson in the Calendar lesson dialog", () => {
+  const courtId = "22222222-2222-4222-8222-222222222222", coachId = "44444444-4444-4444-8444-444444444444";
+  const lessonId = "33333333-3333-4333-8333-000000000003";
+  const location = { id: "11111111-1111-4111-8111-111111111111", name: "RIVUS", timezone: "UTC", courts: [{ id: courtId, name: "Court 2" }] };
+  const back = `/coach/bookings?view=calendar&location=${location.id}&date=2099-10-15`;
+  const lesson = (cancellation: object = {}): AdminOperationalOccupancy => ({ kind: "lesson", id: lessonId, court_id: courtId,
+    booking_date: "2099-10-15", starts_at_minute: 660, ends_at_minute: 720, coach_user_id: coachId, coach_name: "Me Coach",
+    coaching_program_name: "Juniors", customer_name: "My Student", customer_email: "student@example.test", customer_phone: "+40 700",
+    cancellation: { ...eligibleLesson, ...cancellation } });
+  const masked: AdminOperationalOccupancy = { kind: "occupied", id: `occupied:${courtId}:600`, court_id: courtId,
+    booking_date: "2099-10-15", starts_at_minute: 600, ends_at_minute: 660 };
+  const show = (occupancy: AdminOperationalOccupancy[]) => render(<ReservationCalendar actorUserId={coachId} date="2099-10-15"
+    location={location} adminOccupancy={occupancy}
+    day={{ times: [600, 630, 660, 690], courts: [{ court: location.courts[0], cells: ["booked", "booked", "booked", "booked"] }] }} />);
+  const openLesson = () => {
+    fireEvent.click(screen.getByRole("button", { name: /Your lesson · Juniors · My Student/ }));
+    return screen.getByRole("dialog", { name: "Lesson details" });
+  };
+
+  it("confirms once, cancels through the Coach action, closes the dialog and refreshes the Calendar", async () => {
+    let resolve!: (value: object) => void;
+    coachCancel.mockReturnValue(new Promise((done) => { resolve = done; }));
+    show([lesson({ refundAvailable: true }), masked]);
+    const dialog = openLesson();
+    // Contact and the details link stay alongside the new action.
+    for (const text of ["My Student", "student@example.test", "+40 700"]) expect(within(dialog).getByText(text)).toBeTruthy();
+    expect(within(dialog).getByRole("link", { name: "View lesson details" }).getAttribute("href"))
+      .toBe(`/coach/bookings/lessons/${lessonId}?${new URLSearchParams({ back })}`);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel lesson" }));
+    const confirmation = screen.getByRole("region", { name: "Cancel lesson?" });
+    for (const value of ["My Student", "Juniors lesson", "RIVUS · Court 2", "15 Oct 2099 · 11:00–12:00",
+      "The customer's online payment will be refunded automatically."]) expect(confirmation.textContent).toContain(value);
+    fireEvent.click(within(confirmation).getByRole("button", { name: "Confirm cancellation" }));
+    fireEvent.click(within(confirmation).getByRole("button", { name: "Cancelling lesson…" }));
+    // The lesson dialog cannot be closed mid-request.
+    expect((within(dialog).getByRole("button", { name: "Close dialog" }) as HTMLButtonElement).disabled).toBe(true);
+    resolve({ ok: true, outcome: "cancelled", refundStatus: "pending" });
+    await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+    expect(coachCancel).toHaveBeenCalledExactlyOnceWith({ id: lessonId });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // A requested refund is never reported as completed.
+    expect(lastToast("success")).toBe("Lesson cancelled. The customer's refund has been requested.");
+  });
+
+  it("keeps the lesson dialog open when the Coach keeps the lesson or the server declines", async () => {
+    coachCancel.mockResolvedValue({ ok: false, message: "This lesson is no longer available to cancel." });
+    show([lesson()]);
+    const dialog = openLesson();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel lesson" }));
+    fireEvent.click(within(screen.getByRole("region", { name: "Cancel lesson?" })).getByRole("button", { name: "Keep booking" }));
+    expect(screen.queryByRole("region", { name: "Cancel lesson?" })).toBeNull();
+    expect(coachCancel).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel lesson" }));
+    fireEvent.click(within(screen.getByRole("region", { name: "Cancel lesson?" })).getByRole("button", { name: "Confirm cancellation" }));
+    await waitFor(() => expect(lastToast("error")).toBe("This lesson is no longer available to cancel."));
+    expect(refresh).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Lesson details" })).toBeTruthy();
+  });
+
+  it.each([
+    ["started", "This lesson has started and can no longer be rescheduled or cancelled."],
+    ["cancellation_pending", "Cancellation requested. The lesson stays confirmed until the customer's refund is confirmed."],
+    ["change_pending", "A change to this lesson is still being processed. Rescheduling and cancellation are available once it finishes."],
+  ])("a %s lesson explains why it offers no Cancel or Reschedule lesson action", (availability, message) => {
+    show([lesson({ availability })]);
+    const dialog = openLesson();
+    expect(within(dialog).queryByRole("button", { name: "Cancel lesson" })).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: "Reschedule lesson" })).toBeNull();
+    expect(within(dialog).getByRole("status").textContent).toBe(message);
+    expect(within(dialog).getByRole("link", { name: "View lesson details" })).toBeTruthy();
+  });
+
+  it("offers no lesson action on masked bookings", () => {
+    show([lesson(), masked]);
+    fireEvent.click(screen.getByRole("button", { name: /10:00–11:00, Booked/ }));
+    const dialog = screen.getByRole("dialog", { name: "Occupied court details" });
+    expect(within(dialog).queryByRole("button", { name: /Cancel|Reschedule/ })).toBeNull();
+  });
+
+  it("enters Calendar rescheduling and closes the lesson dialog", async () => {
+    show([lesson()]);
+    const dialog = openLesson();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Reschedule lesson" }));
+    expect(push).toHaveBeenCalledExactlyOnceWith(`/coach/bookings?view=calendar&reschedule=${lessonId}`);
+    expect(refresh).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(coachCancel).not.toHaveBeenCalled();
+  });
+});
+
 it("identifies a temporary checkout hold and its deadline without booking management", () => {
   const courtId = "22222222-2222-4222-8222-222222222222";
   const location = { id: "11111111-1111-4111-8111-111111111111", name: "Club", timezone: "UTC", courts: [{ id: courtId, name: "Court 2" }] };
@@ -663,4 +791,24 @@ it("identifies a temporary checkout hold and its deadline without booking manage
   expect(screen.getByText(/No booking has been confirmed/)).toBeTruthy();
   expect(screen.getByRole("link", { name: "Review checkout payment" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Cancel booking" })).toBeNull();
+});
+
+it("shows a booking modification hold as a temporary change, never as a confirmed booking", () => {
+  const courtId = "22222222-2222-4222-8222-222222222222", bookingId = "44444444-4444-4444-8444-444444444444";
+  const location = { id: "11111111-1111-4111-8111-111111111111", name: "Club", timezone: "UTC", courts: [{ id: courtId, name: "Court 2" }] };
+  render(<ReservationCalendar canManage date="2099-10-15" location={location}
+    day={{ times: [600, 630, 660], courts: [{ court: location.courts[0], cells: ["available", "booked", "booked"] }] }}
+    adminOccupancy={[{ kind: "modification", id: "33333333-3333-4333-8333-333333333333", booking_id: bookingId, court_id: courtId,
+      booking_date: "2099-10-15", starts_at_minute: 630, ends_at_minute: 690,
+      hold_expires_at: "2099-10-14T10:10:00Z", customer_name: "Ana", customer_email: "ana@example.test" }]} />);
+  fireEvent.click(screen.getByRole("button", { name: "Court 2 2099-10-15 10:30–11:30, Modification in progress" }));
+  const dialog = screen.getByRole("dialog", { name: "Modification in progress" });
+  expect(within(dialog).getByText("Temporary")).toBeTruthy();
+  expect(within(dialog).getByText("10:30–11:30 (UTC)")).toBeTruthy();
+  expect(within(dialog).getByText(/This is not a confirmed booking/)).toBeTruthy();
+  expect(within(dialog).getByText("Ana · ana@example.test")).toBeTruthy();
+  expect(within(dialog).queryByText("Confirmed")).toBeNull();
+  expect(within(dialog).queryByRole("button", { name: "Cancel booking" })).toBeNull();
+  expect(within(dialog).getByRole("link", { name: "View booking being changed" }).getAttribute("href"))
+    .toContain(`/admin/bookings/${bookingId}`);
 });

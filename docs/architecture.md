@@ -85,7 +85,7 @@ replacement keeps new bytes at the canonical path; removal clears the reference 
 best-effort deletion. Rare non-atomic orphan/concurrent outcomes remain accepted.
 
 TypeORM is the sole application migration authority. Native Auth/Storage integration is
-installed by that history after Supabase infrastructure starts. See [fresh setup](../README.md#application-migrations-and-fresh-local-setup).
+installed by that history after Supabase infrastructure starts. See [database setup](../README.md#database-setup-and-migrations).
 Existing populated databases require a separately authorized, data-preserving cutover.
 
 ## Location currency changes
@@ -125,6 +125,21 @@ draft. Only `locations.currency` changes: booking revisions, payment attempts, c
 refunds and adjustments keep their own snapshotted currencies and amounts, and coaching
 prices stay keyed by their explicit currency. Any broader currency migration is a separate,
 manual, backed-up operation outside the application.
+
+### Timezone, deactivation, archive and court moves
+
+Bookings store location-local dates and minutes, and inactive or archived locations and
+inactive courts leave the operational calendar. In the same transactions and lock order, after
+the same skip-locked hold expiry, Admin therefore refuses with `{ reason: "occupied", message }`:
+
+- a **timezone** change while the location has unfinished bookings or unresolved financial
+  operations (the currency blockers above, without court pricing);
+- **location deactivation** (`is_active` true → false) or **archive** while it has unfinished bookings;
+- **court deactivation** or a **court move** to another location while that court has unfinished
+  bookings (`unfinishedBookings` scoped to the court, at its current location).
+
+Ended, cancelled and released occupancy never blocks, other edits are unaffected, and no booking
+is cancelled, refunded or moved automatically.
 
 ## Next.js responsibilities
 
@@ -209,7 +224,6 @@ Examples:
 - court availability;
 - coach availability;
 - booking lists;
-- partner requests;
 - interactive admin screens.
 
 TanStack Query should call the Next.js server boundary rather than Supabase directly.
@@ -285,14 +299,18 @@ public.player_profiles
 
 `public.users` owns account and personal/contact data; `player_profiles` owns optional tennis data. `coach_profiles` is its implemented sibling for public coaching data (see `coaching.md`). The `/profile` Server Component authorizes through the user-scoped Auth client and reads through `loadProfile` and TypeORM repositories, and route-local Server Actions delegate mutations to TypeScript application functions. The private `profile-avatars` bucket stores uploaded player images; profile rows contain only object paths. Browser-side Supabase access is not introduced. See `profiles.md`.
 
-The three consolidated migrations are `InitialApplicationSchema1791462257924`,
-`ApplicationNativeIntegrity1791462257925` and `SupabaseAuthStorage1791462257926`.
-The initial migration is TypeORM-generated from the same metadata used at runtime,
-including schedules, adjustments, adjustment holds/payment links and refund operations.
-Its handwritten parts configure `btree_gist` and the transaction search path
-before the generated exclusions and create the entity-less `booking_financial_exceptions` table. The native migration owns the email expression
-index, minimal bootstrap records and ownership/revision/financial-context integrity guards; the integration migration owns Auth hooks,
-Storage policies and browser-role restrictions. No business policy is added in SQL.
+The two registered baselines are `InitialApplicationSchema1791462257924` and
+`SupabaseAuthStorage1791462257926`. The initial migration creates the final application
+schema directly, including separate `checkout_records` and confirmed `bookings`,
+`court_reservations.occupies_court`, schedules, adjustments, payment/refund records and
+all overlap exclusions. Coach-only holds skip `court_reservation_no_overlap` while
+`court_reservation_coach_no_overlap` still applies; court-occupancy readers skip such rows.
+The same migration owns expression indexes, minimal reference records and immutable
+ownership/revision/financial guards, including the entity-less `booking_financial_exceptions`
+table. It configures `btree_gist` and the transaction search path before exclusions.
+The integration migration depends on those tables/functions and native Supabase infrastructure;
+it owns Auth hooks, Storage policies and browser-role restrictions. No business policy is
+added in SQL. See [baseline consolidation](database-baseline.md).
 
 UUID defaults use generated-column metadata with the PostgreSQL `pgcrypto` UUID
 strategy; extension installation remains migration-controlled. A non-synchronized
@@ -306,8 +324,9 @@ fragments) use restrictive deletes rather than destructive cascades. Disposable
 test fixtures explicitly delete children in dependency order; application workflows
 remain unchanged. Immutable booking revisions and refund executions are implemented.
 
-Unreleased development schema is evolved in its owning initial migration without
-patch chains; released production migrations remain immutable. Rebuilding local history requires explicit approval for a destructive database reset.
+Unreleased development schema is evolved in its owning migration without patch chains;
+applied shared/production migrations remain immutable and new changes add focused migrations.
+Rebuilding a local database discards its data and requires explicit approval.
 
 Future domain entities are introduced when their workflow is implemented rather than creating the full future schema mechanically.
 
@@ -351,9 +370,9 @@ Redirect-based auth messages use the global Sonner toaster. Field and form valid
 
 ## Booking revisions and owner/Admin boundaries
 
-See [the implemented booking contract](booking-domain.md#implemented-immutable-booking-contracts).
-The permanent identity contains ID, reservation/account links, processing status,
-current-revision reference and timestamps. Commercial terms exist only in immutable
+See [the booking contract](booking-domain.md#immutable-booking-contracts).
+The checkout record contains ID, reservation/account links, processing status,
+current-revision reference and timestamps; `bookings` adds the confirmed identity. Commercial terms exist only in immutable
 `BookingRevisionEntity` rows. Current reads join that pointer, and personal activity
 uses historical names and schedules from the current contract. No booking-history
 side table or legacy mutable commercial columns remain.
@@ -373,7 +392,10 @@ write. Pay-at-club requests remain original evidence while current debt
 comes from the current contract. The existing refund allocator remains the only
 newest-capture-first allocation implementation.
 
-Admin management rescheduling services, actions and UI controls are removed.
+Admin and assigned-Coach operational rescheduling is exposed through the existing staff
+Calendar, with entry points from List, Calendar and Details. The shared
+`runOperationalBookingChange` foundation applies club-absorbed increases and
+refund-backed reductions (see [coaching](coaching.md)).
 Admins and Coaches may still modify their own bookings through the owner boundary;
 Admins may cancel customer/guest bookings with automatic captured-funds refunds.
 Direct-reservation editing remains separate. Cancellation is replayable independently
@@ -382,13 +404,13 @@ of whether a refund was needed. Shared owner booking editing lives in
 
 The initial migration remains TypeORM-generated. It includes the deferred composite
 current-pointer FK, all revision checks/keys and adjustment-base/source relationships.
-The native migration adds permanent-ownership and append-only/linear-history/current-head integrity guards,
+The initial schema baseline includes permanent-ownership and append-only/linear-history/current-head integrity guards,
 the expression index and bootstrap records. Supabase integration and browser-role
 restrictions remain the third migration. The Auth reference stays non-synchronized;
 no application schema generation manages `auth.users`. No patch migration or backfill
 is introduced. Refund executions are implemented; expanded capture/return observations remain deferred.
 
-## Payment settlement (Phase 7)
+## Payment settlement
 
 Webhook signature verification, event normalization/Zod validation and Stripe calls remain
 outside persistence. The TypeORM READ COMMITTED transaction takes the shared configuration
@@ -411,9 +433,9 @@ Receiptless abandonment uses the same local transaction after provider-confirmed
 TypeScript hold expiry uses TypeORM.
 
 Booking revision history is implemented; the remaining financial-model work is
-described in [Task 4 limitations](payments-memberships.md#remaining-financial-model-work-task-4).
+described in [known limitations](payments-memberships.md#known-financial-model-limitations).
 
-## Refund execution and reconciliation (Phase 8)
+## Refund execution and reconciliation
 
 Refund obligations preserve their captured-funds allocation and historical contract context;
 individual provider requests use immutable `refund_executions` and five-minute leases.
@@ -425,7 +447,8 @@ transactions.
 
 Refund-backed cancellations and reductions retain the current booking and occupancy until
 all obligations succeed. Requests, signed Stripe webhooks and the Admin **Check with Stripe**
-action drive recovery; there is no payment/refund scheduler. Unknown outcomes retain the
+action drive refund recovery; there is no refund scheduler. The every-minute checkout-expiry
+Cron also checks a bounded batch of overdue registered payments, never capturing. Unknown outcomes retain the
 same execution and exact key, with replay limited to 23 hours after dispatch and evidence-only
 lookup thereafter. A replacement execution requires affirmative retryable provider failure
 and an explicit Admin check; definitive non-retryable failures require subsequent resolution.

@@ -85,6 +85,8 @@ export function CourtDialog({ court, locations, locationId, triggerLabel = "Crea
       } else if (result.reason === "invalid-location") {
         toast.dismiss(notification);
         setFieldErrors({ location_id: "This location no longer exists. Select another location." });
+      } else if (result.reason === "occupied") {
+        toast.error(result.message, { id: notification });
       } else {
         toast.error(result.reason === "has-coverage" ? "Remove this court’s coverage periods before changing it to indoor."
           : result.reason === "has-pricing" ? "This court cannot be changed in that way while pricing rules still depend on it. Update or remove those rules first."

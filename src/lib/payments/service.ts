@@ -13,6 +13,7 @@ import { getCalendarSelection } from "@/lib/courts/interval-selection";
 import { localToday, localMinute } from "@/lib/courts/local-time";
 import { mondayWeekday } from "@/lib/pricing/resolution";
 import { lockLocations } from "@/lib/db/repositories/clubs.repository";
+import { lockCoachProfileForBooking } from "@/lib/db/repositories/coaching.repository";
 import { hasOccupancyConflict } from "@/lib/reservations/occupancy";
 import * as payments from "@/lib/db/repositories/payments.repository";
 import * as captures from "@/lib/db/repositories/payment-capture-receipts.repository";
@@ -57,6 +58,9 @@ async function commitSettlement(value: Settlement, event: OnlinePaymentEvent | n
       await clubs.lockConfigurationForRead(manager);
       const parent = await payments.discoverSettlementParent(manager, value.attemptId);
       if (!parent) return { result: "unavailable", reconciliation: false };
+      // Availability writes lock coach → location. Take the same coach fence
+      // before location so confirmation's revision FK cannot invert that order.
+      if (parent.coach_user_id) await lockCoachProfileForBooking(manager, parent.coach_user_id);
       // Occupancy mutex precedes every booking/reservation/attempt lock. A hold
       // cannot become active while a replacement is checking expired occupancy.
       const [location] = await lockLocations(manager, [parent.location_id]);
@@ -72,7 +76,8 @@ async function commitSettlement(value: Settlement, event: OnlinePaymentEvent | n
       if (value.outcome === "succeeded" && !event?.providerCaptureId)
         throw new Error("Successful online settlement requires verified capture evidence.");
       const resourceFacts = await reservations.findReservationResourceFacts(manager, r.court_id);
-      if (b.reservation_id !== parent.reservation_id || resourceFacts?.location_id !== parent.location_id)
+      if (b.reservation_id !== parent.reservation_id || resourceFacts?.location_id !== parent.location_id
+        || r.coach_user_id !== parent.coach_user_id)
         throw new SettlementParentChanged();
       const capture = event?.outcome === "succeeded" ? await captures.recordCaptureReceipt(manager, {
         payment_attempt_id: attempt.id, provider: event.provider, provider_payment_id: event.providerPaymentId,
@@ -135,7 +140,7 @@ async function commitSettlement(value: Settlement, event: OnlinePaymentEvent | n
           const prices = await listCheckoutPricing(manager, r.court_id, mondayWeekday(r.booking_date), r.booking_date);
           const coverage = await clubs.listCheckoutCourtCoverage(manager, r.court_id, r.booking_date);
           const now = new Date(await reservations.readReservationClockTime(manager));
-          const day = buildCourtDay({ date: r.booking_date, today: localToday(location.timezone, now), currentMinute: localMinute(location.timezone, now),
+          const day = buildCourtDay({ timezone: location.timezone, date: r.booking_date, today: localToday(location.timezone, now), currentMinute: localMinute(location.timezone, now),
             courts: court ? [{ id: court.id, name: court.name, slug: court.slug, surface: court.surface,
               environment: court.environment, has_lighting: court.hasLighting }] : [], hours,
             coverage: coverage.map(toCalendarCoveragePeriod),

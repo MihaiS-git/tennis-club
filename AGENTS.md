@@ -4,18 +4,17 @@
 
 `tennis-club` is a Next.js application for operating a single tennis club with multiple physical locations.
 
-The platform will manage:
+The platform manages:
 
 - locations and courts;
 - coaches and coach availability;
 - members;
 - court and coaching bookings;
-- memberships and subscriptions;
 - Stripe payments and refunds;
 - player profiles and ratings;
 - club administration.
 
-Matches, partner matching/matchmaking, match results and rankings are deferred indefinitely; do not add `/matches` or `/rankings` routes, navigation or public claims for them.
+Memberships and subscriptions are planned, not implemented (see `docs/roadmap.md`). Matches, partner matching/matchmaking, match results and rankings are deferred indefinitely; do not add `/matches` or `/rankings` routes, navigation or public claims for them.
 
 Read `README.md` before making architectural or domain-level changes.
 
@@ -347,7 +346,7 @@ Supabase secret/service-role credentials are limited to guarded local seed and t
 fixtures. Production application persistence, Stripe webhooks use TypeORM.
 
 `SUPABASE_SECRET_KEY` is not required by production application persistence.
-Checkout creation/initialization and coupled reads use TypeORM. Payment settlement and Phase 8 refund/reconciliation use TypeORM transactions;
+Checkout creation/initialization and coupled reads use TypeORM. Payment settlement and refund/reconciliation use TypeORM transactions;
 refund commands do not use that client. Polling expiry transport and confirmation-policy
 reads use TypeORM.
 The coupled personal direct-reservation service uses TypeORM after
@@ -408,8 +407,6 @@ Tennis data visible to active authenticated users may include:
 
 - display name;
 - rating;
-- ranking;
-- match statistics;
 - rating history (when implemented).
 
 Private data may include:
@@ -421,7 +418,7 @@ Private data may include:
 
 Player avatars use the private Supabase Storage bucket `profile-avatars`, through the user-scoped server client and Next.js avatar actions. Decode JPEG/PNG/WebP sources with Sharp, enforce the 5 MiB upload, 12,000-pixel side, and 40-million-pixel limits, and normalize to WebP within 512 × 512 without enlargement or cropping. Store only the canonical `<user-id>/avatar.webp` path in player profiles; the bucket accepts only `image/webp` objects. Lightweight browser file checks are UX only. No browser Supabase client is introduced. See `docs/profiles.md` for the implemented workflow.
 
-Avatar mutations share one UI pending state. Phase 10 uses focused TypeORM avatar owner/reference/metadata persistence and short transactions with authoritative active-owner/profile rechecks. Storage remains user-scoped Supabase at the canonical private object. Never put Storage/network calls in a database transaction. No runtime avatar lease or backup/restore protocol remains: initial-upload DB failure attempts best-effort object deletion; replacements keep new bytes at the same path even if timestamp persistence fails; removal commits a NULL reference before best-effort Storage deletion and returns visible-removal success for UI revalidation. Storage/PostgreSQL are not atomic; rare orphan objects and ambiguous network/concurrent outcomes are accepted. See `docs/profiles.md`.
+Avatar mutations share one UI pending state. Avatars use focused TypeORM avatar owner/reference/metadata persistence and short transactions with authoritative active-owner/profile rechecks. Storage remains user-scoped Supabase at the canonical private object. Never put Storage/network calls in a database transaction. No runtime avatar lease or backup/restore protocol remains: initial-upload DB failure attempts best-effort object deletion; replacements keep new bytes at the same path even if timestamp persistence fails; removal commits a NULL reference before best-effort Storage deletion and returns visible-removal success for UI revalidation. Storage/PostgreSQL are not atomic; rare orphan objects and ambiguous network/concurrent outcomes are accepted. See `docs/profiles.md`.
 
 Prefer schemas that make access boundaries explicit.
 
@@ -500,7 +497,7 @@ Do not turn PostgreSQL functions into a second application/business-logic layer.
 
 ## Court pricing rule sets
 
-Public location discovery for `/book` and `/courts` uses `listPublicLocationsWithCourts()` and the shared TypeScript eligibility rule in `src/lib/locations/publication.ts`. `locations.is_public` defaults to false and records explicit Admin publication intent; readiness is derived from valid location details, opening hours, active courts, and current or future base-state pricing for each active court. Admin enabling validates readiness server-side. Public TypeORM SELECTs explicitly require publication. Opening hours are authoritative: their TypeORM mutation reconciles affected future-applicable pricing atomically under existing configuration/location locks. Trim/split/remove outside intervals; newly opened time inherits adjacent prices, using the maximum across a gap within compatible court/state/weekday/date scopes. Preserve unaffected and historical rules; never invent missing prices. Readiness checks base-state coverage of every opening interval on a compatible current or future occurrence. Opening hours use location-wide `opening_hours_schedules` with inclusive `starts_on`/optional `ends_on`, and existing weekday intervals reference `schedule_id`. GiST excludes overlapping validity periods and overlapping intervals within each schedule. The additive migration preserves legacy intervals beneath an unexpired baseline starting 0001-01-01. Reads select the schedule by location-local playing date; no applicable schedule means closed for new reservations. Configuration changes never modify or reject existing confirmed reservations, including future reservations outside revised hours. Pricing reconciliation partitions affected playing dates, preserves historical and unaffected date coverage, and keeps dormant prices when a date has no schedule. Pending court-only holds revalidate current playing-date hours, price/currency, cancellation notice and publication before confirmation under the shared configuration fence; invalid captured attempts use existing expiry/refund reconciliation. Confirmed price, currency, payment method and cancellation snapshots remain authoritative. Calendars include grandfathered occupancy outside opening hours.
+Public location discovery for `/book` and `/courts` uses `listPublicLocationsWithCourts()` and the shared TypeScript eligibility rule in `src/lib/locations/publication.ts`. `locations.is_public` defaults to false and records explicit Admin publication intent; readiness is derived from valid location details, opening hours, active courts, and current or future base-state pricing for each active court. Admin enabling validates readiness server-side. Public TypeORM SELECTs explicitly require publication. Opening hours are authoritative: their TypeORM mutation reconciles affected future-applicable pricing atomically under existing configuration/location locks. Trim/split/remove outside intervals; newly opened time inherits adjacent prices, using the maximum across a gap within compatible court/state/weekday/date scopes. Preserve unaffected and historical rules; never invent missing prices. Readiness checks base-state coverage of every opening interval on a compatible current or future occurrence. Opening hours use location-wide `opening_hours_schedules` with inclusive `starts_on`/optional `ends_on`, and existing weekday intervals reference `schedule_id`. GiST excludes overlapping validity periods and overlapping intervals within each schedule. Reads select the schedule by location-local playing date; no applicable schedule means closed for new reservations. Configuration changes never modify or reject existing confirmed reservations, including future reservations outside revised hours. Pricing reconciliation partitions affected playing dates, preserves historical and unaffected date coverage, and keeps dormant prices when a date has no schedule. Pending court-only holds revalidate current playing-date hours, price/currency, cancellation notice and publication before confirmation under the shared configuration fence; invalid captured attempts use existing expiry/refund reconciliation. Confirmed price, currency, payment method and cancellation snapshots remain authoritative. Calendars include grandfathered occupancy outside opening hours.
 
 The public `/book` page reads opening hours, coverage periods, and pricing
 rules for active public resources for one valid location-local date through
@@ -514,7 +511,7 @@ The default is resolved during server rendering, without a
 client redirect or adjacent-day preload. Location discovery still uses only the
 minimal opening-hours and pricing fields needed to derive public eligibility.
 Public TypeORM projections supply those reads; configuration writes remain
-admin-only. Calendar availability is informational until bookings are implemented.
+admin-only. Calendar availability is informational; only the checkout transaction and GiST exclusions guarantee a reservation.
 It also reads only reservation occupancy columns for the selected date and
 active courts at that location. Only active reservation rows block their half-open
 intervals; reservation identity, reason, creator, canceller, status, and timestamps are not publicly readable.
@@ -543,7 +540,7 @@ reads use that booking snapshot. Admin location configuration reads use active-A
 public location SELECT keeps only its existing columns. The server-only cancellation
 service requires an active owner, confirmed booking and active linked reservation.
 The shared TypeScript policy enforces the inclusive snapshot cutoff and Admin/Coach
-notice bypass, while always rejecting booking start. The Phase 6 TypeORM cancellation transaction fences actor roles/account after location,
+notice bypass, while always rejecting booking start. The TypeORM cancellation transaction fences actor roles/account after location,
 booking, reservation, selected attempt and existing refund locks; TypeScript evaluates
 the snapshot deadline using post-lock database wall time. No-refund cancellation commits
 lifecycle changes immediately; refund-backed cancellation commits a pending adjustment and
@@ -557,7 +554,7 @@ Explicit confirmation precedes cancellation; Upcoming refreshes and History reta
 cancelled row. Guest identity matching cannot grant access. Admin operational and direct
 reservation cancellation remain separate.
 Guests have a null account link; suspended authenticated users are rejected. A
-TypeORM checkout transaction inserts reservation, booking and payment attempt atomically, leaving GiST authoritative for
+TypeORM checkout transaction inserts the reservation hold, checkout record and payment attempt atomically (the `bookings` identity is created only at confirmation), leaving GiST authoritative for
 overlaps. Browser roles cannot read or insert bookings. `/book`
 uses a focused customer-details dialog and Server Action. Guests can confirm without
 an account; active signed-in users receive editable contact defaults from Profile.
@@ -593,7 +590,15 @@ reason changes once an interval starts. The owner-only edit read and mutation
 remain separate. Customer booking rescheduling is owner-only, including current
 Admin/Coach owners, through the shared TypeScript service and existing calendar
 pricing/rounding functions. Admins may cancel other customers' bookings with
-automatic captured-funds refunds but cannot reschedule them. The command retains
+automatic captured-funds refunds. Admin operational editing of eligible customer and guest
+court/coaching bookings uses `runOperationalBookingChange` from the shared List, Calendar
+and Details editor, allowing location/court/time changes and Coach reassignment while
+preserving lesson terms. It requires authoritative financial preview/acceptance; the club
+absorbs increases, eligible reductions use existing refunds, and pending refunds preserve
+the original booking. Coach-only changes do not reprice. Admin cancellation explanations
+(up to 500 trimmed characters) stay in existing adjustment history through settlement and
+appear in customer/assigned-Coach notifications without disclosing finances to Coaches.
+The command retains
 shared configuration/location locks, actor fences and the lossless reservation
 stale token, and now compares the expected current revision UUID. Applied edits
 append immutable snapshots and advance the current pointer atomically with
@@ -882,7 +887,7 @@ Signup must require email confirmation. Do not treat a user returned by `auth.si
 
 For local development, the application origin is `http://localhost:3000`, the Supabase API is `http://127.0.0.1:54321`, and Auth emails are captured by Mailpit at `http://127.0.0.1:54324`. Mailpit is not a production email transport. Hosted Supabase projects must enable email confirmation, allow the environment-configured callback URLs, and configure production email delivery in the Supabase Dashboard.
 
-Add `SUPABASE_SECRET_KEY` only when a privileged server workflow is implemented.
+The application runtime does not use `SUPABASE_SECRET_KEY`; it is limited to guarded local seed and test fixtures.
 
 Any variable prefixed with:
 
@@ -1268,7 +1273,7 @@ debt comes from the current revision. See `docs/payments-memberships.md`.
 or availability flow. Persist the attempt before creating its PaymentIntent using
 the stored provider/amount/currency. Use stable attempt idempotency and register the
 provider reference before returning client-secret presentation. Card-only Payment
-Element stays inside the existing confirmation dialog. Keep the ten-minute expiry
+Element stays inside the existing confirmation dialog. Keep the five-minute expiry
 unchanged. Checkout capability polling is server-only, hashes a random token on the
 attempt, and never trusts browser status or totals. Provider retrieval validates the
 stored PaymentIntent identity/metadata and sends terminal observations through the
@@ -1394,8 +1399,7 @@ E2E_ALLOW_HOLD_OVERRIDE=1, never production). See docs/payments-memberships.md.
 
 ## Durable financial exceptions
 
-Lifecycle revisions and immutable `booking_financial_exceptions` (initial and native
-integrity migrations) retain original context and occurrence facts
+Lifecycle revisions and immutable `booking_financial_exceptions` (initial schema baseline) retain original context and occurrence facts
 atomically with financial state; failure to persist that evidence fails the financial
 transaction. Admin sees failed, unresolved and reversed refunds through the existing
 Payments transaction views and financial history.
@@ -1420,7 +1424,7 @@ pricing unit, duration scaling, hourly rate, extrapolation, fallback or automati
 a missing configuration means unavailable. Group/Junior prices have the same meaning, are
 tied to an explicit duration, remain Club-priced (no coach overrides) and are not booked online.
 
-The three pre-production baseline migrations directly create this final schema.
+The two pre-production baseline migrations directly create this final schema.
 Do not add coaching repair migrations or conditional legacy schema changes. Rebuild the
 local development database from the baseline instead of patching it. See
 `docs/coaching.md` and `docs/testing.md`.
@@ -1433,16 +1437,18 @@ confirmation-revision proof. Online settlement inserts that identity atomically 
 confirmation; pay-at-club does so at creation. Failed, expired and abandoned checkouts
 have no booking identity or booking cancellation revision. All business booking reads
 require that identity; payment audit and staff occupancy guards retain all checkout
-records. The focused, data-preserving TypeORM migration
-`SeparateCheckoutBookings1791462257927` follows the three original baseline migrations.
-No earlier migration is rewritten and no development data is discarded. See
-[checkout lifecycle correction](docs/checkout-lifecycle-correction.md).
+records. The two final-state TypeORM baselines create checkout/booking identities and
+Coach-only adjustment holds directly. See
+[database setup](README.md#database-setup-and-migrations) for the authoritative history.
+Existing development databases with the former history require a user-initiated guarded
+rebuild; never modify or reconcile them as part of baseline verification. See
+[booking domain](docs/booking-domain.md#checkout-records-and-booking-identities).
 
 
-Browser-abandoned initial checkout: the ten-minute deadline ends payment eligibility;
+Browser-abandoned initial checkout: the five-minute deadline ends payment eligibility;
 registered unresolved provider intents retain occupancy until definitive cancellation or
 capture through existing Cron/check/settlement services. Do not release those rows on
 clock expiry alone. Unregistered holds retain lazy expiry. Keep the shared occupancy
 predicate consistent across court/coach/public/internal/edit reads and expiry writes.
 Admin holds are technical allocations with deadlines; ledger booking links require an
-actual `bookings` identity. See docs/browser-abandoned-checkout.md.
+actual `bookings` identity. See `docs/booking-domain.md` and `docs/payments-memberships.md`.

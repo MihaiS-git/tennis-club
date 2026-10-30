@@ -23,7 +23,10 @@ import { CourtEntity } from "./court.entity";
 @ForeignKey(() => CourtEntity, ["courtId"], ["id"], { name: "court_reservations_court_id_fkey", onDelete: "NO ACTION" })
 @ForeignKey(() => UserEntity, ["createdByUserId"], ["id"], { name: "court_reservations_created_by_user_id_fkey", onDelete: "RESTRICT" })
 // Initial migration configures btree_gist before this entity-generated exclusion.
-@Exclusion("court_reservation_no_overlap", "USING gist (court_id WITH =, booking_date WITH =, int4range(starts_at_minute, ends_at_minute, '[)') WITH &&) WHERE (status IN ('active', 'held'))")
+// A coach-only adjustment hold (occupies_court false) holds a replacement coach inside the
+// original lesson's own court time; that original reservation keeps protecting the court.
+@Check("court_reservation_coach_only_hold", "occupies_court OR (adjustment_id IS NOT NULL AND coach_user_id IS NOT NULL)")
+@Exclusion("court_reservation_no_overlap", "USING gist (court_id WITH =, booking_date WITH =, int4range(starts_at_minute, ends_at_minute, '[)') WITH &&) WHERE (status IN ('active', 'held') AND occupies_court)")
 @ForeignKey(() => BookingAdjustmentEntity, ["adjustmentId"], ["id"], { name: "court_reservations_adjustment_id_fkey", onDelete: "RESTRICT" })
 // A coaching lesson is ordinary court occupancy that also occupies its coach. One coach
 // teaches one lesson at a time across courts and locations (local wall time, like coach
@@ -75,4 +78,7 @@ export class CourtReservationEntity {
 
   @Column({ name: "coach_user_id", type: "uuid", nullable: true })
   coachUserId!: string | null;
+
+  @Column({ name: "occupies_court", type: "boolean", default: true })
+  occupiesCourt!: boolean;
 }

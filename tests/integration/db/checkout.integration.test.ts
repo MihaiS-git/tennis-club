@@ -69,7 +69,7 @@ beforeEach(async () => {
   await clearBookings(); createPayment.mockReset(); cancelPayment.mockReset(); retrievePayment.mockReset();
   await database.query("UPDATE public.users SET status='active' WHERE id=$1", [userId]);
   await database.query("UPDATE public.payment_provider_settings SET active_provider='stripe' WHERE id");
-  await database.query("UPDATE public.locations SET is_active=true,is_public=true,archived_at=null,allow_pay_at_club=true WHERE id=$1", [locationId]);
+  await database.query("UPDATE public.locations SET timezone='UTC',is_active=true,is_public=true,archived_at=null,allow_pay_at_club=true WHERE id=$1", [locationId]);
   await database.query("UPDATE public.courts SET is_active=true WHERE id=$1", [courtId]);
   await database.query("DELETE FROM public.location_pricing_rules WHERE location_id=$1", [locationId]);
   await database.query("DELETE FROM public.court_coverage_periods WHERE court_id=$1", [courtId]);
@@ -168,7 +168,8 @@ test("online creation shares the full-precision DB deadline and initialization a
     extract(epoch FROM (r.hold_expires_at - r.created_at)) AS duration
     FROM public.court_reservations r JOIN public.checkout_records b JOIN public.booking_revisions v ON v.id=b.current_revision_id ON b.reservation_id=r.id JOIN public.payment_attempts p ON p.booking_id=b.id WHERE r.court_id=$1`, [courtId]);
   const clock = z.array(z.object({ same: z.boolean(), duration: z.string() })).parse(rows)[0];
-  expect(clock.same).toBe(true); expect(Number(clock.duration)).toBeGreaterThanOrEqual(600); expect(Number(clock.duration)).toBeLessThan(605);
+  // Five minutes from Continue to payment on the database clock.
+  expect(clock.same).toBe(true); expect(Number(clock.duration)).toBeGreaterThanOrEqual(300); expect(Number(clock.duration)).toBeLessThan(305);
   createPayment.mockImplementation(async () => {
     const transactions: unknown = await database.query("SELECT pid FROM pg_stat_activity WHERE application_name <> 'supabase_admin' AND state='idle in transaction'");
     expect(transactions).toEqual([]);
@@ -279,7 +280,7 @@ test("failed replacement rolls back application expiry of the old hold too", asy
 test("provider API failure leaves committed hold pending with no reference, capability or confirmation", async () => {
   createPayment.mockRejectedValue(new Error("private provider response"));
   expect(await commitCustomerCheckout({ ...input, paymentMethod: "online" })).toEqual({ ok: false, availabilityChanged: true,
-    message: "Unable to start payment. No booking is confirmed. The temporary hold will expire within 10 minutes." });
+    message: "Unable to start payment. No booking is confirmed. The temporary hold will expire within 5 minutes." });
   expect(await stored()).toMatchObject([{ reservation_status: "held", booking_status: "pending_payment", attempt_status: "pending",
     provider_payment_id: null, checkout_token_hash: null }]);
   expect(await counts()).toEqual({ reservations: 1, bookings: 1, attempts: 1 });
@@ -533,4 +534,27 @@ test("Pay-at-club creation and modification use revision debt while preserving t
     .toEqual([{revision_number:1,kind:"created",booking_state:"confirmed",total_amount_minor:5000,payment_method:"pay_at_club"},
       {revision_number:2,kind:"rescheduled",booking_state:"confirmed",total_amount_minor:7500,payment_method:"pay_at_club"}]);
   expect(await database.query("SELECT * FROM public.payment_refunds WHERE booking_id=$1",[created.bookingId])).toEqual([]);
+});
+
+test.each([
+  ["2027-03-28", 180, 240, false], ["2027-03-28", 120, 300, false],
+  ["2027-03-28", 60, 120, true], ["2027-03-28", 240, 300, true],
+  ["2027-10-31", 120, 240, false], ["2027-10-31", 180, 240, true],
+  ["2027-03-28", 0, 60, true], ["2027-10-31", 1380, 1440, true],
+])("direct court creation validates DST before persistence on %s %i–%i", async (date, startMinute, endMinute, valid) => {
+  await database.query("UPDATE public.locations SET timezone='Europe/Bucharest' WHERE id=$1", [locationId]);
+  await database.query("UPDATE public.location_opening_hours SET weekday=6 WHERE location_id=$1", [locationId]);
+  await database.query("UPDATE public.location_pricing_rules SET weekday=6 WHERE location_id=$1", [locationId]);
+  for (const paymentMethod of ["pay_at_club", "online"]) {
+    await clearBookings();
+    const result = await createCustomerBooking({ ...input, date, startMinute, endMinute, paymentMethod,
+      expectedTotalAmountMinor: (endMinute - startMinute) / 60 * 5000 }, guest, new Date("2027-01-01T00:00:00Z"));
+    expect(result.ok).toBe(valid);
+    expect(await counts()).toEqual({ reservations: valid ? 1 : 0, bookings: valid ? 1 : 0, attempts: valid ? 1 : 0 });
+    expect(await database.query(`SELECT b.id FROM public.bookings b JOIN public.checkout_records c ON c.id=b.id
+      JOIN public.court_reservations r ON r.id=c.reservation_id WHERE r.court_id=$1`, [courtId]))
+      .toHaveLength(valid && paymentMethod === "pay_at_club" ? 1 : 0);
+    if (!valid) expect(result).toEqual({ ok: false, message: "Choose a valid booking interval at this location." });
+  }
+  expect(createPayment).not.toHaveBeenCalled();
 });

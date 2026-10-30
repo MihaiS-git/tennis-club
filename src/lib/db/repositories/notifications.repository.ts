@@ -85,17 +85,22 @@ function bookingContext(row: z.infer<typeof bookingContextRow>): BookingContext 
 }
 
 const exceptionRow = bookingContextRow.extend({ event_key: z.string(), kind: z.string(), booking_id: z.uuid(),
-  customer_email: z.string(), currency, amount_minor: z.number().nullable(), occurred_at: z.date() });
+  customer_email: z.string(), currency, amount_minor: z.number().nullable(), occurred_at: z.date(),
+  confirmed: z.boolean(), payment_attempt_id: z.uuid().nullable(), refund_id: z.uuid().nullable() });
 
+// `confirmed` is false for a checkout that never became a booking (e.g. a late
+// capture after expiry): it has payment evidence but no booking page.
 export type FinancialExceptionNotificationFact = {
   eventKey: string; kind: string; bookingId: string; customerEmail: string; currency: z.infer<typeof currency>;
   amountMinor: number | null; occurredAt: Date; booking: BookingContext;
+  confirmed: boolean; paymentAttemptId: string | null; refundId: string | null;
 };
 
 // Booking context comes from the referenced historical revision, never the current booking.
 export async function findFinancialExceptionNotificationFact(manager: EntityManager, eventKey: string):
   Promise<FinancialExceptionNotificationFact | null> {
   const rows: unknown = await manager.query(`SELECT e.event_key, e.kind, e.booking_id, e.occurred_at,
+      e.payment_attempt_id, e.refund_id, EXISTS(SELECT 1 FROM public.bookings c WHERE c.id=e.booking_id) AS confirmed,
       v.customer_email, v.currency, v.location_name, v.court_name, v.booking_date::text AS booking_date,
       v.starts_at_minute, v.ends_at_minute, v.timezone, v.coaching_program_name, v.coach_name,
       COALESCE(f.amount_minor, p.amount_minor,
@@ -108,20 +113,22 @@ export async function findFinancialExceptionNotificationFact(manager: EntityMana
     WHERE e.event_key=$1`, [eventKey]);
   const row = z.array(exceptionRow).parse(rows)[0];
   return row ? { eventKey: row.event_key, kind: row.kind, bookingId: row.booking_id, customerEmail: row.customer_email,
-    currency: row.currency, amountMinor: row.amount_minor, occurredAt: row.occurred_at, booking: bookingContext(row) } : null;
+    currency: row.currency, amountMinor: row.amount_minor, occurredAt: row.occurred_at, booking: bookingContext(row),
+    confirmed: row.confirmed, paymentAttemptId: row.payment_attempt_id, refundId: row.refund_id } : null;
 }
 
 const refundRow = bookingContextRow.extend({ id: z.uuid(), booking_id: z.uuid(), reason: z.string(),
-  amount_minor: z.number(), currency, customer_email: z.string() });
+  amount_minor: z.number(), currency, customer_email: z.string(), confirmed: z.boolean() });
 
 export type SucceededRefundNotificationFact = {
   refundId: string; bookingId: string; reason: string; amountMinor: number; currency: z.infer<typeof currency>;
-  customerEmail: string; booking: BookingContext;
+  customerEmail: string; booking: BookingContext; confirmed: boolean;
 };
 
 export async function findSucceededRefundNotificationFact(manager: EntityManager, refundId: string, executionId: string):
   Promise<SucceededRefundNotificationFact | null> {
   const rows: unknown = await manager.query(`SELECT f.id, f.booking_id, f.reason, f.amount_minor, f.currency, v.customer_email,
+      EXISTS(SELECT 1 FROM public.bookings c WHERE c.id=f.booking_id) AS confirmed,
       v.location_name, v.court_name, v.booking_date::text AS booking_date, v.starts_at_minute,
       v.ends_at_minute, v.timezone, v.coaching_program_name, v.coach_name
     FROM public.payment_refunds f JOIN public.booking_revisions v ON v.id=f.context_revision_id
@@ -129,7 +136,7 @@ export async function findSucceededRefundNotificationFact(manager: EntityManager
     WHERE f.id=$1 AND f.status='succeeded'`, [refundId, executionId]);
   const row = z.array(refundRow).parse(rows)[0];
   return row ? { refundId: row.id, bookingId: row.booking_id, reason: row.reason, amountMinor: row.amount_minor,
-    currency: row.currency, customerEmail: row.customer_email, booking: bookingContext(row) } : null;
+    currency: row.currency, customerEmail: row.customer_email, booking: bookingContext(row), confirmed: row.confirmed } : null;
 }
 
 function filteredMessages(manager: EntityManager, userId: string, query: InboxQuery) {
@@ -268,11 +275,15 @@ export async function findMessageDelivery(manager: EntityManager, userId: string
   return query.getOne();
 }
 
-export async function findDeliveryBooking(manager: EntityManager, eventKey: string): Promise<string | null> {
-  const rows: unknown = await manager.query(`SELECT booking_id FROM public.booking_revisions
-      WHERE $1 IN ('booking.confirmed:' || id::text, 'booking.cancelled:' || id::text, 'booking.rescheduled:' || id::text)
-    UNION SELECT booking_id FROM public.booking_financial_exceptions WHERE 'financial.customer:' || event_key=$1
-    UNION SELECT f.booking_id FROM public.payment_refunds f JOIN public.refund_executions x ON x.refund_id=f.id
-      WHERE 'financial.refund:' || x.id::text=$1 LIMIT 1`, [eventKey]);
-  return z.array(z.object({ booking_id: z.uuid() })).parse(rows)[0]?.booking_id ?? null;
+export async function findDeliveryBooking(manager: EntityManager, eventKey: string):
+  Promise<{ bookingId: string; confirmed: boolean } | null> {
+  const rows: unknown = await manager.query(`SELECT d.booking_id,
+      EXISTS(SELECT 1 FROM public.bookings c WHERE c.id=d.booking_id) AS confirmed FROM (
+      SELECT booking_id FROM public.booking_revisions
+        WHERE $1 IN ('booking.confirmed:' || id::text, 'booking.cancelled:' || id::text, 'booking.rescheduled:' || id::text)
+      UNION SELECT booking_id FROM public.booking_financial_exceptions WHERE 'financial.customer:' || event_key=$1
+      UNION SELECT f.booking_id FROM public.payment_refunds f JOIN public.refund_executions x ON x.refund_id=f.id
+        WHERE 'financial.refund:' || x.id::text=$1) d LIMIT 1`, [eventKey]);
+  const row = z.array(z.object({ booking_id: z.uuid(), confirmed: z.boolean() })).parse(rows)[0];
+  return row ? { bookingId: row.booking_id, confirmed: row.confirmed } : null;
 }

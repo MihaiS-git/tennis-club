@@ -8,16 +8,20 @@ export const paymentMethodSchema = z.enum(["online", "pay_at_club"]);
 export const paymentProviderSchema = z.enum(["stripe", "netopia"]);
 export type PaymentMethod = z.infer<typeof paymentMethodSchema>;
 export type PaymentProvider = z.infer<typeof paymentProviderSchema>;
-export const paymentHoldDurationSeconds = 10 * 60;
-// Test-only shortening for lifecycle verification. Production always uses the
-// constant: the override is ignored unless NODE_ENV is "test" or the explicit
-// E2E flag is set, and never when NODE_ENV is "production".
+// Initial court and coaching checkout: fixed time to start payment after
+// Continue to payment. Capture grace and processing protection are separate.
+export const paymentHoldDurationSeconds = 5 * 60;
+// Paid booking modifications keep their existing cutoff.
+export const modificationHoldDurationSeconds = 10 * 60;
+// Test-only shortening for modification lifecycle verification. Production always
+// uses the constant: the override is ignored unless NODE_ENV is "test" or the
+// explicit E2E flag is set, and never when NODE_ENV is "production".
 export function paymentHoldSeconds(env: Record<string, string | undefined> = process.env) {
   const override = env.BOOKING_HOLD_SECONDS_OVERRIDE;
   if (!override || env.NODE_ENV === "production"
-    || (env.NODE_ENV !== "test" && env.E2E_ALLOW_HOLD_OVERRIDE !== "1")) return paymentHoldDurationSeconds;
-  const seconds = z.coerce.number().int().min(15).max(paymentHoldDurationSeconds).safeParse(override);
-  return seconds.success ? seconds.data : paymentHoldDurationSeconds;
+    || (env.NODE_ENV !== "test" && env.E2E_ALLOW_HOLD_OVERRIDE !== "1")) return modificationHoldDurationSeconds;
+  const seconds = z.coerce.number().int().min(15).max(modificationHoldDurationSeconds).safeParse(override);
+  return seconds.success ? seconds.data : modificationHoldDurationSeconds;
 }
 export function checkoutPersistence(method: PaymentMethod) {
   const online = method === "online";

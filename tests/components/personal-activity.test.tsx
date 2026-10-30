@@ -305,6 +305,34 @@ it("opens an owner-resolved booking deep link and preserves filters when details
   expect(params.has("booking")).toBe(false);
 });
 
+// The revision's agreed lesson terms, as projected by the activity read.
+const lessonTerms = { participantCount: 2, pricePerPersonMinor: 4000, programId: "33333333-3333-4333-8333-333333333333",
+  coachUserId: "44444444-4444-4444-8444-444444444444", locationId: "22222222-2222-4222-8222-222222222222", durationMinutes: 90,
+  source: "coach", amountMinor: 8000, currency: "RON", courtRentalIncluded: false, courtRentalMinor: 1500, courtAmountMinor: 1500 } as const;
+
+it("shows a lesson's agreed coaching terms in Upcoming details and leaves court bookings unchanged", () => {
+  const lesson: PersonalCustomerBooking = { ...cancellableBooking, ends_at_minute: 690, total_amount_minor: 9500,
+    includes_coaching: true, coach_name: "Coach Ana", coaching_program_name: "Private technique", coaching: lessonTerms };
+  const view = render(<PersonalActivity staff={false} userId="owner" initialActivity={activityFixture([])} initialError="" deepLinkedBooking={lesson} />);
+  const coaching = within(screen.getByRole("dialog", { name: "Booking" })).getByRole("heading", { name: "Coaching details" }).closest("section")!;
+  const terms = Object.fromEntries([...coaching.querySelectorAll("dt")].map((dt) => [dt.textContent, dt.nextElementSibling?.textContent]));
+  expect(terms).toMatchObject({ Coach: "Coach Ana", Program: "Private technique", Participants: "2", "Lesson duration": "90 min" });
+  expect(terms["Coaching fee"]).toMatch(/80/);
+  expect(within(screen.getByRole("dialog", { name: "Booking" })).getByText(/95/, { selector: "dd" })).toBeDefined();
+  view.unmount();
+  render(<PersonalActivity staff={false} userId="owner" initialActivity={activityFixture([])} initialError="" deepLinkedBooking={cancellableBooking} />);
+  expect(within(screen.getByRole("dialog", { name: "Booking" })).queryByRole("heading", { name: "Coaching details" })).toBeNull();
+});
+
+it.each([[false, "14 Oct 2099, 10:00 (UTC)"], [true, "15 Oct 2099, 10:00 (UTC)"]])(
+  "shows the owner's actual management deadline (staff owner=%s)", (staff, deadline) => {
+    render(<PersonalActivity staff={staff} userId="owner" initialActivity={activityFixture([])} initialError="" deepLinkedBooking={cancellableBooking} />);
+    const dialog = screen.getByRole("dialog", { name: "Booking" });
+    expect(within(dialog).getByText("Deadline").nextElementSibling?.textContent).toBe(deadline);
+    // The displayed notice policy is the booking's snapshot either way.
+    expect(within(dialog).getByText("24 hours' notice")).toBeDefined();
+  });
+
 it("adopts revalidated server snapshots while mounted and preserves an open dialog", () => {
   const { rerender } = render(<PersonalActivity staff={false} userId="owner"
     initialActivity={activityFixture([])} initialError="" />);
@@ -395,10 +423,10 @@ it.each([
   fireEvent.click(within(await screen.findByRole("region", { name: "Upcoming" })).getByRole("row", { name: /Details for/ }));
   fireEvent.click(within(screen.getByRole("dialog", { name: "Booking" })).getByRole("button", { name: "Cancel booking" }));
   expect(cancelBooking).not.toHaveBeenCalled();
-  fireEvent.click(within(screen.getByRole("dialog", { name: "Cancel booking?" })).getByRole("button", { name: "Keep booking" }));
+  fireEvent.click(within(screen.getByRole("region", { name: "Cancel booking?" })).getByRole("button", { name: "Keep booking" }));
   expect(cancelBooking).not.toHaveBeenCalled();
   fireEvent.click(within(screen.getByRole("dialog", { name: "Booking" })).getByRole("button", { name: "Cancel booking" }));
-  fireEvent.click(within(screen.getByRole("dialog", { name: "Cancel booking?" })).getByRole("button", { name: "Cancel booking" }));
+  fireEvent.click(within(screen.getByRole("region", { name: "Cancel booking?" })).getByRole("button", { name: "Confirm cancellation" }));
   await waitFor(() => expect(cancelBooking).toHaveBeenCalledWith(cancellableBooking.id));
   expect(await screen.findByText("No upcoming bookings or reservations match your filters.")).toBeDefined();
   expect(lastToast("success")).toBe(message);
@@ -412,7 +440,7 @@ it("reports a committed cancellation accurately when the details refresh rejects
   const onCancelled = vi.fn(async () => { throw new Error("Refresh failed"); });
   render(<CustomerBookingCancellation booking={cancellableBooking} staff={false} onCancelled={onCancelled} onPendingChange={vi.fn()} />);
   fireEvent.click(screen.getByRole("button", { name: "Cancel booking" }));
-  fireEvent.click(within(screen.getByRole("dialog", { name: "Cancel booking?" })).getByRole("button", { name: "Cancel booking" }));
+  fireEvent.click(within(screen.getByRole("dialog", { name: "Cancel booking?" })).getByRole("button", { name: "Confirm cancellation" }));
   await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(
     "Booking cancelled. Your payment has been refunded.",
     expect.objectContaining({ description: expect.stringContaining("refresh") }),
@@ -442,8 +470,8 @@ it("toasts a stale cancellation error while keeping confirmation open and preven
   await renderWithServerActivity({ staff: false, userId: "owner" });
   fireEvent.click(within(await screen.findByRole("region", { name: "Upcoming" })).getByRole("row", { name: /Details for/ }));
   fireEvent.click(within(screen.getByRole("dialog", { name: "Booking" })).getByRole("button", { name: "Cancel booking" }));
-  const confirmation = screen.getByRole("dialog", { name: "Cancel booking?" });
-  const button = within(confirmation).getByRole("button", { name: "Cancel booking" });
+  const confirmation = screen.getByRole("region", { name: "Cancel booking?" });
+  const button = within(confirmation).getByRole("button", { name: "Confirm cancellation" });
   fireEvent.click(button); fireEvent.click(button);
   expect(cancelBooking).toHaveBeenCalledOnce();
   resolve({ ok: false, message: "The cancellation notice period for this booking has expired." });
@@ -519,4 +547,33 @@ it.each([true, false])("shows historical coaching names alongside court bookings
     .toBe("CoachingDaniel Stoica · Private coaching");
   expect(within(table).getByText("Court", { selector: "td span" })).toBeDefined();
   expect(within(table).getAllByRole("columnheader")).toHaveLength(8);
+});
+
+it("shows the lesson schedule, Coach and refund guidance in the existing booking dialog", async () => {
+  const lesson = { ...cancellableBooking, includes_coaching: true, coach_name: "Coach Ana", payment_method: "online" as const };
+  load.mockResolvedValue(activityFixture([bookingItem(lesson)]));
+  await renderWithServerActivity({ staff: false });
+  fireEvent.click(screen.getByRole("row", { name: /Details for/ }));
+  const dialog = screen.getByRole("dialog", { name: "Booking" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel booking" }));
+  const confirmation = screen.getByRole("region", { name: "Cancel booking?" });
+  expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  expect(dialog.contains(confirmation)).toBe(true);
+  expect(confirmation.textContent).toContain("Coach: Coach Ana");
+  expect(confirmation.textContent).toContain("Captured online funds will be refunded automatically.");
+  expect(confirmation.textContent).toContain("until the refund is confirmed");
+  expect(document.activeElement).toBe(within(confirmation).getByRole("button", { name: "Keep booking" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Close dialog" }));
+  expect(cancelBooking).not.toHaveBeenCalled();
+});
+
+it("uses the stored pay-at-club method without promising an online refund", () => {
+  render(<CustomerBookingCancellation booking={{ ...cancellableBooking, payment_method: "pay_at_club" }} staff={false}
+    onCancelled={vi.fn()} onPendingChange={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "Cancel booking" }));
+  const confirmation = screen.getByRole("dialog", { name: "Cancel booking?" });
+  expect(confirmation.textContent).toContain("No online refund applies.");
+  expect(confirmation.textContent).not.toContain("will be refunded automatically");
+  fireEvent.click(within(confirmation).getByRole("button", { name: "Keep booking" }));
+  expect(cancelBooking).not.toHaveBeenCalled();
 });

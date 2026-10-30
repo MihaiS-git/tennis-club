@@ -43,7 +43,8 @@ export const customerBookingInputSchema = z.strictObject({
 { path: ["startMinute"], message: "Choose at least 60 minutes in 30-minute steps." });
 
 type HoldInterval = { courtId: string; date: string; startMinute: number; endMinute: number };
-type AdjustmentHoldFragment = HoldInterval & { coachUserId?: string };
+// occupiesCourt false: a coach-only hold (see reassignmentHoldFragments).
+type AdjustmentHoldFragment = HoldInterval & { coachUserId?: string; occupiesCourt?: false };
 
 // Reserve only the target pieces outside the already-confirmed occupancy. The
 // original lesson keeps protecting its coach at its own date and time on any
@@ -62,6 +63,19 @@ export function adjustmentHoldFragments(original: HoldInterval, target: HoldInte
   return [...outside(sameDate).filter(([start, end]) => end > start).map((interval) => fragment(interval, coachUserId)),
     ...overlap.filter(([start, end]) => end > start).map((interval) => fragment(interval))]
     .sort((a, b) => a.startMinute - b.startMinute);
+}
+
+// A refund-backed change that also reassigns a lesson: the original lesson never protects
+// the replacement coach, so every target piece must hold the new coach. Pieces outside the
+// original reservation's court time hold the court and the new coach together; pieces the
+// original reservation already occupies on the same court and date hold the new coach only
+// (occupiesCourt false), while the original reservation keeps protecting that court time.
+export function reassignmentHoldFragments(original: HoldInterval, target: HoldInterval, coachUserId: string): AdjustmentHoldFragment[] {
+  const courtHeld = adjustmentHoldFragments(original, target).map((fragment) => ({ ...fragment, coachUserId }));
+  const startMinute = Math.max(target.startMinute, original.startMinute), endMinute = Math.min(target.endMinute, original.endMinute);
+  const coachOnly = original.date === target.date && original.courtId === target.courtId && endMinute > startMinute
+    ? [{ courtId: target.courtId, date: target.date, startMinute, endMinute, coachUserId, occupiesCourt: false as const }] : [];
+  return [...courtHeld, ...coachOnly].sort((a, b) => a.startMinute - b.startMinute);
 }
 
 // Changes that return money keep the original booking until every refund is

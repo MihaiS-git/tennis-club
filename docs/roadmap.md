@@ -1,137 +1,51 @@
 # Roadmap
 
-## V1 — Club operations
+Status of the product scope. Implemented behavior is documented in the linked documents;
+everything under *Planned* or *Deferred* has no routes, tables or UI today.
 
-### Foundation
+## Implemented
 
-- authentication;
-- application user/profile foundation;
-- RBAC;
-- denied browser table grants and Storage RLS;
-- locations;
-- courts;
-- coaches;
-- availability.
+- Authentication with mandatory email confirmation, password recovery, optional `admin` and
+  `coach` roles, account suspension ([security](security.md)).
+- Player profiles with private avatars ([profiles](profiles.md)).
+- Locations, courts, coverage periods, effective-dated opening hours and court pricing
+  ([booking domain](booking-domain.md), [pricing](pricing.md)).
+- Guest and authenticated court booking with checkout holds, Stripe one-time payments (manual
+  capture), Pay at club, owner rescheduling with surcharges/partial refunds, owner and Admin
+  cancellation with refunds ([payments](payments-memberships.md)).
+- Coaching programs, coach profiles, coach availability and prices; online Private and
+  Semi-private lessons ([coaching](coaching.md)).
+- Staff direct reservations and Admin/Coach booking areas.
+- Admin users, payments transactions/reconciliation, provider settings and club email settings.
+- In-app notifications and Brevo transactional email ([notifications](notifications-delivery.md)).
 
-### Booking
+## Partially implemented
 
-- court booking;
-- court + coach booking;
-- concurrency protection;
-- booking holds;
-- booking management.
+- **NETOPIA:** configuration status and provider selection exist; there is no checkout or refund
+  adapter, so selecting it disables online payment.
+- **Group and Junior coaching:** configuration and public informational rates exist; sessions are
+  arranged by staff and paid at the club, with no online booking.
+- **Guest bookings:** guests can book and pay; guest self-management (reschedule/cancel) is not
+  implemented.
+- **Financial model:** booking revisions, capture receipts and refund executions are implemented;
+  complete immutable refund/return observations and automatic reconciliation of capture-amount
+  mismatches are not (mismatches require Admin review).
 
-### Payments
+## Planned
 
-- Stripe one-time payments;
-- Stripe webhooks;
-- cancellations;
-- refunds;
-- partial refunds;
-- rescheduling;
-- price differences.
+- Memberships, subscriptions, discounts and entitlements (Stripe Subscriptions; application-owned
+  entitlement rules; a ledger for any consumable credits).
+- Coaching packages.
+- TanStack Query, only when an interactive client-side server-state workflow needs it.
+- Possible later expansion: recurring bookings, waiting lists, club leagues, tournaments, club
+  events, advanced player statistics.
 
-### Memberships
+## Deferred indefinitely
 
-- plans;
-- subscriptions;
-- discounts;
-- basic entitlements;
-- credits where required.
-
-### Administration
-
-- operational dashboard;
-- location management;
-- court management;
-- coach management;
-- member management;
-- booking management;
-- payment/refund visibility.
-
-## V2 — Tennis-specific features
-
-- expanded player-profile features (basic `/profile` and avatars are implemented);
-
-Deferred indefinitely (not planned):
-
-- partner matching;
-- match recording;
-- Elo rating;
-- rankings;
-- rating history;
-- match history.
-
-Group/Junior program configuration, public pricing and staff reservations are implemented;
-online Group/Junior booking remains unavailable. Booking/financial notifications and guest
-court/lesson checkout are implemented; guest self-management remains unavailable.
-
-## Possible later expansion
-
-- tournaments;
-- club leagues;
-- recurring bookings;
-- waiting lists;
-- advanced membership credits;
-- advanced player statistics;
-- club events.
-
-## Implementation order
-
-Recommended sequence:
-
-```text
-1. Supabase project and database foundation
-2. Authentication, application users, roles and access control (denied browser table grants, Storage RLS)
-3. Locations and courts
-4. Court availability
-5. Booking domain model
-6. Database overlap protection
-7. Basic booking UI
-8. Booking holds
-9. Stripe one-time payments
-10. Coaches and coach availability
-11. Court + coach booking
-12. Cancellation/refund rules
-13. Rescheduling
-14. Membership plans and subscriptions
-15. Admin operational dashboard
-```
-
-The intent is to prove the difficult security/concurrency/payment constraints before secondary tennis features.
+Matches, partner matching, match results, Elo/rankings, rating history and match history. Do not
+add `/matches` or `/rankings` routes, tables or navigation without an explicit scope change.
 
 ## Non-goals
 
-Do not introduce prematurely:
-
-- multi-tenancy;
-- microservices;
-- a separate backend service;
-- another ORM;
-- event sourcing;
-- AI-based partner matching;
-- complex dynamic pricing;
-- tournament infrastructure;
-- generic multi-sport abstractions.
-
-## Product assumptions
-
-- one tennis club owns the platform;
-- the club may operate multiple physical locations;
-- courts belong to one location;
-- coaches may work across multiple locations;
-- members have one club-wide identity;
-- memberships are club-wide unless explicitly restricted;
-- rankings, if ever introduced, would be club-wide (currently deferred indefinitely);
-- court and coach availability are location-specific;
-- Stripe is the payment provider;
-- Supabase Auth is the authentication provider;
-- PostgreSQL is the primary application database;
-- TypeORM is the application persistence and migration mechanism; `supabase-js` handles Auth and private Storage only;
-- Supabase access is server-first;
-- no browser Supabase client is used by default;
-- TypeORM is the approved ORM; do not introduce another;
-- no separate backend framework is required;
-- Next.js is the complete primary application authorization boundary; application table grants deny direct browser access and Storage RLS protects private objects;
-- domain algorithms remain in TypeScript;
-- TypeORM transactions persist application changes; PostgreSQL constraints and triggers enforce integrity.
+Multi-tenancy, microservices or a separate backend, another ORM, event sourcing, AI partner
+matching, complex dynamic pricing, a tournament engine and generic multi-sport abstractions.

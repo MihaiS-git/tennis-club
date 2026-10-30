@@ -226,7 +226,6 @@ test("Admin opening-hours, pricing and reservation lifecycle survives competing 
 
   } catch (error) {
     await test.info().attach("failure-page",{ body:await page.screenshot({ fullPage:true }),contentType:"image/png" });
-    if (await editor().count()) console.log(await editor().evaluate((form) => ({ text:form.textContent, controls:[...form.querySelectorAll("input")].map((input) => ({ type:input.type,value:input.value,checked:input.checked })) })));
     throw error;
   } finally {
     await other?.close();

@@ -59,11 +59,11 @@ test.each(["non-card error", "rejected confirmation"])("a %s leaves payment unce
   expect(props.onConfirmed).not.toHaveBeenCalled();
 });
 
-test.each(["card_error", "invalid_request_error"] as const)("a retryable %s leaves the same payment element available for another attempt", async type => {
+test.each(["card_error", "invalid_request_error"] as const)("a modification %s leaves the same payment element available for another attempt", async type => {
   status.mockResolvedValue({ ok: true, status: "pending_payment", paymentStatus: "pending" });
   pay.mockResolvedValueOnce({ error: { type, code: type === "card_error" ? "card_declined" : "payment_intent_authentication_failure",
     message: "Your card was declined." } }).mockResolvedValueOnce({});
-  render(<OnlinePayment {...props} />);
+  render(<OnlinePayment {...props} purpose="modification" />);
   const card = screen.getByLabelText("Card");
   fireEvent.change(card, { target: { value: "declined card" } });
   fireEvent.submit(screen.getByRole("form", { name: "Online payment" }));
@@ -76,6 +76,70 @@ test.each(["card_error", "invalid_request_error"] as const)("a retryable %s leav
   await waitFor(() => expect(pay).toHaveBeenCalledTimes(2));
   expect(pay.mock.calls.map(call => call[0].elements)).toEqual([elements, elements]);
   expect(status.mock.calls.every(call => call[0].attemptId === props.checkout.attemptId)).toBe(true);
+});
+
+const declined = "This checkout has ended and no booking was made. To try another card, please select a time again.";
+test.each([
+  ["card_error", "card_declined"], ["card_error", "payment_intent_authentication_failure"],
+  ["invalid_request_error", "payment_intent_authentication_failure"],
+] as const)("a definitive booking %s (%s) ends the checkout, requests release and needs a new checkout for another card", async (type, code) => {
+  status.mockResolvedValue({ ok: true, status: "pending_payment", paymentStatus: "pending", paymentUncertain: false });
+  pay.mockResolvedValueOnce({ error: { type, code, message: "Your card was declined." } });
+  const onDeclined = vi.fn(), onPaymentStatus = vi.fn();
+  render(<OnlinePayment {...props} onDeclined={onDeclined} onPaymentStatus={onPaymentStatus} />);
+  const form = screen.getByRole("form", { name: "Online payment" });
+  await waitFor(() => expect((screen.getByRole("button", { name: "Pay and confirm booking" }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.submit(form);
+  await waitFor(() => expect(onDeclined).toHaveBeenCalledOnce());
+  expect(lastToast()).toBe("Your card was declined.");
+  expect(screen.getByRole("status").textContent).toBe(`Your card was declined. ${declined}`);
+  expect(onPaymentStatus).toHaveBeenLastCalledWith("failed");
+  expect(screen.queryByLabelText("Card")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Pay and confirm booking" })).toBeNull();
+  fireEvent.submit(form);
+  expect(pay).toHaveBeenCalledOnce();
+  // Polling while the release is pending keeps the explanation; the server's
+  // confirmed cancellation ends checking with the same message.
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 2_100)); });
+  expect(screen.getByRole("status").textContent).toBe(`Your card was declined. ${declined}`);
+  status.mockResolvedValue({ ok: true, status: "cancelled", paymentStatus: "cancelled", paymentUncertain: false,
+    totalAmountMinor: 1200, currency: "EUR", cancellationPolicy: null });
+  await waitFor(() => expect(onPaymentStatus).toHaveBeenLastCalledWith("cancelled"), { timeout: 3_000 });
+  expect(screen.getByRole("status").textContent).toBe(`Your card was declined. ${declined}`);
+  expect(onDeclined).toHaveBeenCalledOnce();
+  expect(props.onConfirmed).not.toHaveBeenCalled();
+});
+
+test("a checkout the server expired asks the customer to select a time again and accepts no payment", async () => {
+  status.mockResolvedValue({ ok: true, status: "expired", paymentStatus: "cancelled", paymentUncertain: false,
+    totalAmountMinor: 1200, currency: "EUR", cancellationPolicy: null });
+  const onPaymentStatus = vi.fn();
+  render(<OnlinePayment {...props} onPaymentStatus={onPaymentStatus} />);
+  await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Your reservation has expired. Please select a time again."));
+  expect(onPaymentStatus).toHaveBeenLastCalledWith("cancelled");
+  expect(screen.queryByLabelText("Card")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Pay and confirm booking" })).toBeNull();
+  fireEvent.submit(screen.getByRole("form", { name: "Online payment" }));
+  expect(pay).not.toHaveBeenCalled();
+});
+
+test("resuming a form after its five-minute deadline blocks payment before the server answers, then shows the restart message", async () => {
+  vi.useFakeTimers();
+  status.mockResolvedValue({ ok: true, status: "pending_payment", paymentStatus: "pending", paymentUncertain: false });
+  render(<OnlinePayment {...props} holdExpiresAt={new Date(Date.now() + 300_000).toISOString()} />);
+  await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+  expect(screen.getByLabelText("Card")).toBeTruthy();
+  // The customer returns after the deadline while the server still reports the old state.
+  await act(async () => { await vi.advanceTimersByTimeAsync(300_000); });
+  expect(screen.queryByLabelText("Card")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Pay and confirm booking" })).toBeNull();
+  fireEvent.submit(screen.getByRole("form", { name: "Online payment" }));
+  expect(pay).not.toHaveBeenCalled();
+  status.mockResolvedValue({ ok: true, status: "expired", paymentStatus: "cancelled", paymentUncertain: false,
+    totalAmountMinor: 1200, currency: "EUR", cancellationPolicy: null });
+  await act(async () => { await vi.advanceTimersByTimeAsync(2_100); });
+  expect(screen.getByRole("status").textContent).toBe("Your reservation has expired. Please select a time again.");
+  expect(props.onConfirmed).not.toHaveBeenCalled();
 });
 
 test.each(["expired"])("a terminal %s checkout stops accepting cards without confirming a booking", async terminal => {
@@ -149,12 +213,12 @@ test("3D Secure authentication longer than 30 seconds keeps Payment Element moun
   expect(props.onConfirmed).toHaveBeenCalledWith(1200, "EUR", null);
 });
 
-test.each(["failed", "cancelled"])("%s 3D Secure authentication after 30 seconds allows another card on the same element", async () => {
+test.each(["failed", "cancelled"])("%s 3D Secure authentication after 30 seconds allows another modification card on the same element", async () => {
   vi.useFakeTimers();
   let authenticate!: (value: unknown) => void;
   pay.mockReturnValueOnce(new Promise(resolve => { authenticate = resolve; })).mockReturnValueOnce(new Promise(() => {}));
   status.mockResolvedValue({ ok: true, status: "pending_payment", paymentStatus: "pending", paymentUncertain: false });
-  render(<OnlinePayment {...props} />);
+  render(<OnlinePayment {...props} purpose="modification" />);
   const card = screen.getByLabelText("Card");
   fireEvent.submit(screen.getByRole("form", { name: "Online payment" }));
   await act(async () => { await vi.advanceTimersByTimeAsync(31_000); });

@@ -43,3 +43,12 @@ test("expiry failures return an opaque 503", async () => {
   expect(response.status).toBe(503);
   expect(await response.json()).toEqual({ error: "Expiry unavailable" });
 });
+
+test("the checkout expiry job is configured to run every minute in the local setup and the production instructions", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const script = await readFile("scripts/setup-local-checkout-expiry-cron.mjs", "utf8");
+  expect(script).toContain('["tennis-club-checkout-hold-expiry", "* * * * *", command]');
+  const docs = await readFile("docs/payments-memberships.md", "utf8");
+  expect(docs).toMatch(/'tennis-club-checkout-hold-expiry',\s*'\* \* \* \* \*'/);
+  expect(`${script}\n${docs}`).not.toContain("*/5 * * * *");
+});

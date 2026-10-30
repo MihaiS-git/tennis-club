@@ -3,6 +3,7 @@ import "server-only";
 import { z } from "zod";
 
 import { requireActiveAdmin } from "@/lib/admin/authorization";
+import { coachHasActiveLessons } from "@/lib/coaching/admin";
 import { inTransaction } from "@/lib/db/transaction";
 import { lockActiveAdminAccount } from "@/lib/db/repositories/accounts.repository";
 import { lockAdminRole, lockUserIdentityFacts, countActiveAdmins } from "@/lib/db/repositories/user-roles.repository";
@@ -25,7 +26,7 @@ type AdminUserStatusSuccess = {
 
 type AdminUserStatusFailure = {
   ok: false;
-  reason: "not-found" | "final-active-admin" | "self-management";
+  reason: "not-found" | "final-active-admin" | "self-management" | "active-lessons";
 };
 
 export type AdminUserStatusResult = AdminUserStatusSuccess | AdminUserStatusFailure;
@@ -51,6 +52,10 @@ export async function updateAdminUserStatus(
       if (!target) return { ok: false, reason: "not-found" } as const;
       if (status === "suspended" && target.status === "active" && target.roles.includes("admin")
         && await countActiveAdmins(manager) <= 1) return { ok: false, reason: "final-active-admin" } as const;
+      // The target's account row is locked FOR UPDATE; lesson checkout locks it FOR
+      // SHARE, so no new lesson can start for this coach until this decision commits.
+      if (status === "suspended" && target.status === "active"
+        && await coachHasActiveLessons(manager, userId)) return { ok: false, reason: "active-lessons" } as const;
       return { ok: true, user: await updateUserStatus(manager, userId, status) } as const;
     });
     if (!result.ok) return result;

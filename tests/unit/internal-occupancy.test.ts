@@ -7,6 +7,11 @@ vi.mock("@/lib/auth/account", () => ({ readCurrentAccount: account }));
 vi.mock("@/lib/db/data-source", () => ({ getDataSource: async () => ({ manager: { query } }) }));
 const { transactionContext } = vi.hoisted(() => ({ transactionContext: vi.fn() }));
 vi.mock("@/lib/db/repositories/payments.repository", () => ({ loadAdminTransactionContext: transactionContext }));
+// The Coach's Cancel lesson state is read with the shared Lesson details rule, in its own snapshot.
+const { lessonCancellations } = vi.hoisted(() => ({ lessonCancellations: vi.fn() }));
+vi.mock("@/lib/bookings/coach-bookings", () => ({ readLessonCancellations: lessonCancellations }));
+vi.mock("@/lib/db/transaction", async (original) => ({ ...await original<typeof import("@/lib/db/transaction")>(),
+  inReadSnapshot: (work: (manager: unknown) => unknown) => work({ query }) }));
 import { getReservationDay, readInternalOccupancy, type AdminOperationalOccupancy } from "@/lib/reservations/service";
 
 const id = (n: number) => `ca000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -105,7 +110,12 @@ test("Coaches receive bare intervals for other bookings and only contact details
       currency: "RON", courtRentalIncluded: false, courtRentalMinor: 2200, courtAmountMinor: 2200 } });
   const ownBooking = { ...booking, id: id(9), starts_at_minute: 1200, ends_at_minute: 1260, account_user_id: coachId, customer_name: "Coach as customer" };
   detailRows = [direct, { ...booking, account_user_id: id(30) }, lesson(1, otherCoachId, "OtherLessonCustomer"), lesson(2, coachId, "OwnLessonCustomer"), ownBooking];
+  const cancellation = { availability: "eligible", startsAt: "2026-10-15T14:00:00.000Z", refundAvailable: true };
+  lessonCancellations.mockResolvedValue(new Map([[id(22), cancellation]]));
   const result = await getReservationDay(location, date, now, client);
+  // Only the Coach's own lessons, as confirmed bookings in the location's timezone.
+  expect(lessonCancellations).toHaveBeenCalledExactlyOnceWith({ query }, [expect.objectContaining({ id: id(22), status: "confirmed",
+    location_timezone: "UTC", booking_date: date, starts_at_minute: 840 })], now);
   expect(result.canManage).toBe(false);
   const interval = (start: number) => ({ court_id: id(2), booking_date: date, starts_at_minute: start, ends_at_minute: start + 60 });
   expect(result.adminOccupancy).toEqual([
@@ -113,7 +123,7 @@ test("Coaches receive bare intervals for other bookings and only contact details
     { kind: "occupied", id: `occupied:${id(2)}:660`, ...interval(660) },
     { kind: "occupied", id: `occupied:${id(2)}:780`, ...interval(780) },
     { kind: "lesson", id: id(22), ...interval(840), coach_user_id: coachId, coach_name: "Coach 2", coaching_program_name: "Program 2",
-      customer_name: "OwnLessonCustomer", customer_email: "OwnLessonCustomer@example.test", customer_phone: "+40 2" },
+      customer_name: "OwnLessonCustomer", customer_email: "OwnLessonCustomer@example.test", customer_phone: "+40 2", cancellation },
     // The Coach's own customer booking keeps its self-service details.
     expect.objectContaining({ kind: "booking", id: id(9), customer_name: "Coach as customer", total_amount_minor: 9000 }),
   ]);
@@ -133,6 +143,8 @@ describe("Admin booking financial status from the projected payment facts", () =
     account.mockResolvedValue({ state: "active", userId: id(6), roles: ["admin"] });
     detailRows = [{ ...booking, payment_method: "online", payment_facts, refund_facts }];
     const result = await getReservationDay(location, date, now, client);
+    // Admins keep the Admin booking projection and its own cancellation control.
+    expect(lessonCancellations).not.toHaveBeenCalled();
     return result.adminOccupancy[0] as Extract<AdminOperationalOccupancy, { kind: "booking" }>;
   };
 

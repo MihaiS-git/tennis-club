@@ -112,6 +112,11 @@ test("Late-capture compensation preserves payment identity, idempotency and occu
     expect(page.rows).toHaveLength(1);
     expect(page.rows[0]).toMatchObject({ needsAttention:false, refund:{ id:uncertain.id,status:"succeeded" } });
     expect(page.rows[0].refund).not.toHaveProperty("executions");
+    // The compensated capture is resolved provider evidence, not an overdue authorization.
+    const payment = (await listAdminPaymentTransactions(parseAdminPaymentQuery({ q:lateRow.payment_attempt_id }),admin))
+      .rows.find(row => row.transaction_kind === "payment");
+    expect(payment).toMatchObject({ transaction_id:lateRow.payment_attempt_id,transaction_status:"expired",
+      payment_check_required:false,needsAttention:false,refunded_minor:5000 });
     expect(page.rows[0]).not.toHaveProperty("canRetryRefund");
     expect(create.mock.calls.length).toBe(providerCalls);
     expect(await event(lateRow.eventId)).toEqual(resolution);

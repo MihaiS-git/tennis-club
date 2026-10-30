@@ -1,4 +1,5 @@
 import "server-only";
+import { readClubTimezoneError } from "@/lib/club/timezone-policy";
 import { randomUUID } from "node:crypto";
 
 import { checkoutPersistence, type CheckoutLifecycle } from "@/lib/payments/domain";
@@ -6,7 +7,7 @@ import { configuredPaymentProvider, supportsOnlineCheckout } from "@/lib/payment
 import { readCurrentAccount } from "@/lib/auth/account";
 import { getCalendarSelection } from "@/lib/courts/interval-selection";
 import { toCalendarCoveragePeriod, toCalendarPricingRule } from "@/lib/courts/calendar-projections";
-import { localMinute, localStartInstant } from "@/lib/courts/local-time";
+import { createLocalIntervalValidator, localMinute, localStartInstant } from "@/lib/courts/local-time";
 import { buildCourtDay } from "@/lib/courts/calendar";
 import { isPubliclyEligible, publicationToday } from "@/lib/locations/publication";
 import { mondayWeekday } from "@/lib/pricing/resolution";
@@ -54,10 +55,14 @@ export async function createCustomerBooking(input: unknown, reader?: Reader,
     try {
       created = await inTransaction(async (manager): Promise<CustomerBookingResult & { startsAtInstant?: string }> => {
         await lockConfigurationForRead(manager);
+        const timezoneError = await readClubTimezoneError(manager);
+        if (timezoneError) return { ok: false, message: timezoneError };
         const parent = await findCourtConfiguration(manager, courtId);
         if (!parent) return { ok: false, message: "That court is not available for booking." };
         const [location] = await lockLocations(manager, [parent.locationId]);
         if (!location) return { ok: false, message: "That court is not available for booking." };
+        if (!createLocalIntervalValidator(location.timezone, date)(startMinute, endMinute))
+          return { ok: false, message: "Choose a valid booking interval at this location." };
         failureMessage = "Unable to check court availability. Try again.";
         const authoritative = await findCourtConfiguration(manager, courtId);
         if (!authoritative || authoritative.locationId !== parent.locationId) throw new CheckoutParentChanged();
@@ -95,7 +100,7 @@ export async function createCustomerBooking(input: unknown, reader?: Reader,
           return { ok: false, message: "Pay at club is not available at this location." };
         if (date < today) return { ok: false, message: "Choose a future time at this location." };
         const pricingRules = pricing.map(toCalendarPricingRule);
-        const day = buildCourtDay({ date, today, currentMinute: localMinute(location.timezone, now),
+        const day = buildCourtDay({ timezone: location.timezone, date, today, currentMinute: localMinute(location.timezone, now),
           courts: publicCourts.filter((court) => court.id === courtId),
           hours: hours.map((row) => ({ id: row.id, location_id: row.locationId, weekday: row.weekday,
             opens_at_minute: row.opensAtMinute, closes_at_minute: row.closesAtMinute,

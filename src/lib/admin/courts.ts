@@ -4,6 +4,8 @@ import { z } from "zod";
 import { requireActiveAdmin } from "@/lib/admin/authorization";
 import { generateSlug } from "@/lib/admin/slug";
 import { courtSurfaces, courtEnvironments, courtMutationSchema, type CourtMutationResult } from "@/lib/admin/courts-validation";
+import { unfinishedBookings } from "@/lib/admin/locations";
+import { unfinishedBookingsMessage } from "@/lib/admin/locations-validation";
 import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
 import { getDataSource } from "@/lib/db/data-source";
@@ -12,6 +14,7 @@ import { normalizeDatabaseError } from "@/lib/db/errors";
 import { lockActiveAdminAccount } from "@/lib/db/repositories/accounts.repository";
 import * as pricing from "@/lib/db/repositories/pricing.repository";
 import * as clubs from "@/lib/db/repositories/clubs.repository";
+import { expirePaymentHoldsAtLocation } from "@/lib/payments/hold-expiry";
 
 class CourtParentChanged extends Error {}
 
@@ -82,6 +85,17 @@ export async function saveAdminCourt(input: unknown, supabase?: Awaited<ReturnTy
               && (rule.locationId !== fields.location_id.toLowerCase()
                 || (rule.courtState === "indoor") !== (fields.environment === "indoor")))) {
               return { ok: false, reason: "has-pricing" };
+            }
+            // Inactive or moved courts leave their location's operational calendar, and a
+            // move reinterprets local times; the court's occupancy must end first.
+            const moved = authoritative.locationId !== fields.location_id.toLowerCase();
+            if (moved || (authoritative.isActive && !fields.is_active)) {
+              const location = locations.find((candidate) => candidate.id === authoritative.locationId);
+              if (!location) return { ok: false, reason: "not-found" };
+              await expirePaymentHoldsAtLocation(manager, location.id, { courtId: authoritative.id, skipLocked: true });
+              const unfinished = await unfinishedBookings(manager, location, authoritative.id);
+              if (unfinished) return { ok: false, reason: "occupied", message: unfinishedBookingsMessage(
+                `This court cannot be ${moved ? "moved to another location" : "deactivated"} while it`, unfinished) };
             }
           }
           const savedId = id

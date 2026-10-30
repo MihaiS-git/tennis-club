@@ -1,7 +1,6 @@
-import { appendFileSync } from "node:fs";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, expect, test } from "vitest";
 import type { DataSource, EntityManager } from "typeorm";
 import { getDataSource } from "@/lib/db/data-source";
 import { listOwnerActivityBatch } from "@/lib/db/repositories/court-activity.repository";
@@ -56,58 +55,6 @@ async function seed(manager: EntityManager, count: number) {
   }
   return actorId;
 }
-
-if (process.env.ACTIVITY_BENCHMARK === "1") test("measure activity batch plans on isolated PostgreSQL", async () => {
-  for (const count of [1000, 10000, 30000]) {
-    const runner = database.createQueryRunner();
-    await runner.startTransaction();
-    try {
-      const actorId = await seed(runner.manager, count);
-      for (const kind of ["booking", "reservation"] as const) {
-        let sql = "";
-        const capture = vi.spyOn(runner.manager, "query").mockImplementation(async statement => { sql = statement; return []; });
-        await listOwnerActivityBatch(runner.manager, { actorId, kind, cancelled: false, scope: "history",
-          earliestDate: "2026-10-01", latestDate: "2026-10-04", afterId: null, limit: 1000 });
-        capture.mockRestore();
-        const alias = kind === "booking" ? "b" : "r";
-        const offsetSql = sql.replace(" LIMIT $4", " LIMIT $4 OFFSET $5");
-        const seekSql = sql.replace(`ORDER BY ${alias}.id`, `AND ${alias}.id > $5::uuid ORDER BY ${alias}.id`).replace(" OFFSET $5", "");
-        for (const mode of ["offset", "seek"] as const) {
-          let cursor = "00000000-0000-0000-0000-000000000000";
-          let offset = 0, queries = 0;
-          const started = performance.now();
-          for (;;) {
-            const rows: { row: { id: string } }[] = await runner.manager.query(mode === "offset" ? offsetSql : seekSql,
-              [actorId, kind === "booking" ? "confirmed" : "active", "2026-10-04", 1000, mode === "offset" ? offset : cursor]);
-            queries++;
-            offset += rows.length;
-            if (rows.length < 1000) break;
-            cursor = rows[rows.length - 1].row.id;
-          }
-          appendFileSync("/tmp/tennis-activity-plans.jsonl", JSON.stringify({ count, kind, mode, scan: true,
-            queries, returned: offset, elapsedMs: performance.now() - started }) + "\n");
-        }
-        for (const offset of [0, Math.floor(count / 2000) * 1000, Math.floor((count - 1) / 1000) * 1000]) {
-          const [{ id: cursor }]: { id: string }[] = await runner.manager.query(`SELECT id FROM public.${kind === "booking" ? "checkout_records" : "court_reservations"}
-            WHERE ${kind === "booking" ? "account_user_id" : "created_by_user_id"}=$1 ORDER BY id OFFSET $2 LIMIT 1`, [actorId, Math.max(0, offset - 1)]);
-          for (const mode of ["offset", "seek"] as const) {
-            const times: number[] = [];
-            let plan;
-            for (let repeat = 0; repeat < 3; repeat++) {
-              const [result] = await runner.manager.query(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${mode === "offset" ? offsetSql : seekSql}`,
-                [actorId, kind === "booking" ? "confirmed" : "active", "2026-10-04", 1000,
-                  mode === "offset" ? offset : offset ? cursor : "00000000-0000-0000-0000-000000000000"]);
-              plan = result["QUERY PLAN"][0];
-              times.push(plan["Execution Time"]);
-            }
-            appendFileSync("/tmp/tennis-activity-plans.jsonl", JSON.stringify({ count, kind, offset, mode, times, plan }) + "\n");
-          }
-        }
-      }
-    } finally { await runner.rollbackTransaction(); await runner.release(); }
-  }
-}, 240000);
-
 
 test("UUID continuation visits every owner row once across real database batches", async () => {
   const runner = database.createQueryRunner();

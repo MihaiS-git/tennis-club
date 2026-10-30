@@ -1,4 +1,5 @@
 import "server-only";
+import { readClubTimezoneError } from "@/lib/club/timezone-policy";
 
 import type { EntityManager } from "typeorm";
 
@@ -181,6 +182,10 @@ async function applyChange(manager: EntityManager, actor: Actor, coachUserId: st
   const location = target === null ? null
     : locations.find((item) => item.id === target && item.archivedAt === null && profile.locationIds.includes(item.id));
   if (target !== null && !location) return { ok: false, reason: "invalid-location" };
+  if (!removal) {
+    const timezoneError = await readClubTimezoneError(manager, location ?? undefined);
+    if (timezoneError) return { ok: false, reason: "invalid-input", fieldErrors: { form: timezoneError } };
+  }
 
   switch (change.operation) {
     case "save-weekly": {

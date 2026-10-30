@@ -39,8 +39,8 @@ export function LocationArchiveControl({
         setConfirming(false);
         router.refresh();
       } else
-        toast.error(
-          "This location is no longer available. Refresh and try again.", { id: notification });
+        toast.error(result.reason === "occupied" || result.reason === "not-ready" ? result.message
+          : "This location is no longer available. Refresh and try again.", { id: notification });
     } catch {
       toast.error(
         `Unable to ${archived ? "restore" : "archive"} this location. Please try again.`, { id: notification });

@@ -173,6 +173,17 @@ test.each([false, true])("projects complete nullable staff details (captured Str
   ]);
 });
 
+test("a dual-role account receives Coach occupancy and actions in the Coach calendar", async () => {
+  account.mockResolvedValue({ state: "active", userId: id(6), roles: ["admin", "coach"] });
+  query.mockImplementation(async (sql: string) => {
+    if (sql.includes("payment_facts")) return [];
+    if (sql.includes("court_reservations")) return [row];
+    return [hours];
+  });
+  expect(await getReservationDay(location, date, now, client, "coach")).toMatchObject({ canManage: false, actorUserId: id(6) });
+  expect(await getReservationDay(location, date, now, client, "admin")).toMatchObject({ canManage: true, actorUserId: id(6) });
+});
+
 const at = (minute: number) => new Date(Date.UTC(2026, 9, 1, 12, minute));
 const succeededPayment = (n: number, minute: number) => ({ id: id(n), booking_id: id(7), method: "online",
   provider: "stripe", provider_payment_id: "pi_test", amount_minor: 5000, currency: "RON", status: "succeeded",

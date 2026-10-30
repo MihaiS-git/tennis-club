@@ -237,3 +237,18 @@ test("only known internal notification links are rendered", () => {
   expect(safeMessageHref(`//external.example/${messageId}`)).toBeNull();
   expect(safeMessageHref("javascript:alert(1)")).toBeNull();
 });
+
+
+test.each(["payment", "refund", "booking"])("permits exact Admin %s transaction links only", (kind) => {
+  const href = `/admin/payments/transactions/${kind}/${messageId}`;
+  expect(safeMessageHref(href)).toBe(href);
+  for (const unsafe of [href + "/", href + "?next=//evil.test", href + "#x", href + "%0a", href + "\n", href + "\r",
+    href.replace(messageId, "------------------------------------"), href.replace(messageId, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+    href.replace(kind, kind.toUpperCase()), href.replace(kind, "unsupported"),
+    "https://evil.test" + href, "/" + href, href.replace("/admin/", "/%61dmin/"),
+    href.replace("/transactions/", "/transactions/../"), href + "\\evil.test"]) {
+    expect(safeMessageHref(unsafe)).toBeNull();
+  }
+  expect(safeMessageHref(`/admin/bookings/${messageId}#financial-history`))
+    .toBe(`/admin/bookings/${messageId}#financial-history`);
+});

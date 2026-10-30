@@ -41,7 +41,8 @@ export function BookingConfirmation({ selection, details, contact, onContactChan
   onContactChange: (contact: BookingContact) => void; onBack: () => void;
   onCommitted: (totalAmountMinor: number, currency: LocationCurrency, cancellationPolicy: ConfirmedCancellationPolicy | null, paymentMethod: PaymentMethod) => void;
   onUnavailable: (message: string) => void;
-  onAbandoned: () => void;
+  // cleanup: the unused-checkout release request; refresh availability after it settles.
+  onAbandoned: (cleanup?: Promise<boolean>) => void;
 }) {
   const titleId = useId();
   const fieldPrefix = useId();
@@ -62,6 +63,7 @@ export function BookingConfirmation({ selection, details, contact, onContactChan
   const paymentCompleted = useRef(false);
   const cancellationNotification = useRef<string | number | undefined>(undefined);
   const navigationCheckout = useRef<OnlineCheckout | null>(null);
+  const declineCleanup = useRef<Promise<boolean> | undefined>(undefined);
   useEffect(() => {
     navigationCheckout.current = checkout && paymentState === "pending" && !cancellationStarted.current && !paymentCompleted.current ? checkout.payment : null;
   }, [checkout, paymentState]);
@@ -184,14 +186,22 @@ export function BookingConfirmation({ selection, details, contact, onContactChan
     ["customerEmail", "Email", "email", "email"],
     ["customerPhone", "Phone", "tel", "tel"],
   ] as const;
+  // Definitively ended without a payment: restart from the timetable, which the
+  // server rechecks when Continue to payment starts a new checkout.
+  const checkoutEnded = paymentState === "cancelled" || paymentState === "failed";
   if (typeof document === "undefined") return null;
   return createPortal(<ModalDialog ref={dialogRef} active aria-labelledby={titleId}
     onCancel={(event) => { event.preventDefault(); requestClose(); }}
     onClose={() => {
       dismissed.current = true;
       if (checkout) {
-        toast.warning("Checkout closed. This does not confirm payment cancellation. Do not pay again until the payment outcome is established.");
-        onAbandoned();
+        // Send cleanup now rather than on unmount, so the timetable refreshes
+        // only after the server has answered.
+        const payment = navigationCheckout.current;
+        navigationCheckout.current = null;
+        const cleanup = payment && !cancellationStarted.current ? abandonUnusedCheckout(payment) : declineCleanup.current;
+        if (!checkoutEnded) toast.warning("Checkout closed. This does not confirm payment cancellation. Do not pay again until the payment outcome is established.");
+        onAbandoned(cleanup);
       } else {
         if (pendingRef.current) toast.warning("Booking submission may still be processing. Do not submit another booking until its outcome is established.");
         onBack();
@@ -215,6 +225,10 @@ export function BookingConfirmation({ selection, details, contact, onContactChan
     {checkout ? <>
       {!checkoutStopped && <OnlinePayment checkout={checkout.payment} holdExpiresAt={checkout.expiresAt} disabled={confirmAbandonment || pending}
         onPaymentStatus={setPaymentState}
+        onDeclined={() => {
+          navigationCheckout.current = null;
+          declineCleanup.current ??= abandonUnusedCheckout(checkout.payment);
+        }}
         onConfirmed={(amount, currency, policy) => {
           paymentCompleted.current = true;
           navigationCheckout.current = null;
@@ -224,7 +238,8 @@ export function BookingConfirmation({ selection, details, contact, onContactChan
       {confirmAbandonment && <p className="mt-4 flex gap-2 rounded-control border border-border-strong bg-warning-background px-3 py-2.5 text-sm font-semibold text-foreground"><AlertTriangle aria-hidden className="mt-0.5 size-4 shrink-0 text-accent" /><span>Cancel payment? A captured payment will require a refund.</span></p>}
       <div className={stickyActions}><DialogFooter>
         <Button type="button" variant="secondary" onClick={requestClose}>Close</Button>
-        {confirmAbandonment ? <>
+        {checkoutEnded && !checkoutStopped ? <Button type="button" onClick={requestClose}>Select a time again</Button>
+        : confirmAbandonment ? <>
           {!checkoutStopped && (paymentState === "pending" || paymentState === "processing") && <Button type="button" variant="secondary" onClick={() => setConfirmAbandonment(false)}>Keep paying</Button>}
           <Button type="button" disabled={pending} aria-busy={pending} onClick={() => void abandon()}>{pending ? "Cancelling…" : "Cancel payment"}</Button>
         </> : <Button type="button" variant="secondary" disabled={pending} onClick={() => {

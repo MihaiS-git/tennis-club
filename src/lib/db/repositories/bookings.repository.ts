@@ -1,5 +1,6 @@
 import "server-only";
 import type { EntityManager } from "typeorm";
+import { BookingEntity } from "../entities/booking.entity";
 import { CheckoutRecordEntity } from "../entities/checkout-record.entity";
 import { CourtReservationEntity } from "../entities/court-reservation.entity";
 import { CourtEntity } from "../entities/court.entity";
@@ -14,7 +15,7 @@ const createdAt = "replace((b.created_at AT TIME ZONE 'UTC')::text,' ','T') || '
 // Read the contractual snapshot, including historical/cancelled bookings and
 // inactive resources. The caller must authorize an active Admin first, or a Coach
 // and then restrict the result to their own lesson.
-export async function findAdminBookingDetails(manager: EntityManager, id: string) {
+export async function findAdminBookingDetails(manager: EntityManager, id: string, assignedCoachId?: string) {
   const rows: unknown = await manager.query(`SELECT b.id,b.status,v.booking_date::text AS booking_date,
     v.starts_at_minute,v.ends_at_minute,
     v.location_name,v.timezone AS location_timezone,v.court_name,
@@ -23,7 +24,8 @@ export async function findAdminBookingDetails(manager: EntityManager, id: string
     (v.coach_user_id IS NOT NULL) AS includes_coaching,v.coach_name,v.coaching_program_name,
     v.pricing_evidence->'coaching' AS coaching,v.coach_user_id,${createdAt}
     FROM public.checkout_records b JOIN public.bookings confirmed ON confirmed.id=b.id JOIN public.booking_revisions v ON v.id=b.current_revision_id AND v.booking_id=b.id
-    WHERE b.id=$1`, [id]);
+    WHERE b.id=$1 AND ($2::uuid IS NULL OR (v.coach_user_id=$2 AND EXISTS (
+      SELECT 1 FROM public.court_reservations assigned WHERE assigned.id=b.reservation_id AND assigned.coach_user_id=$2)))`, [id, assignedCoachId ?? null]);
   return z.array(z.object({
     id: z.uuid(), status: z.enum(["confirmed", "cancelled", "pending_payment", "failed", "expired"]),
     booking_date: z.iso.date(), starts_at_minute: z.number().int(), ends_at_minute: z.number().int(),
@@ -160,7 +162,27 @@ export async function updateSettlementBookingStatus(manager: EntityManager, id: 
   await manager.getRepository(CheckoutRecordEntity).update(id, { status, updatedAt: new Date() });
 }
 // Owner-scoped read: another account's booking is indistinguishable from a missing one.
+// `confirmed` distinguishes an actual booking from a checkout that never confirmed.
 export async function findOwnedBookingRevision(manager: EntityManager, id: string, accountUserId: string) {
   const booking = await manager.getRepository(CheckoutRecordEntity).findOneBy({ id, accountUserId });
-  return booking ? { status: booking.status, revision: await findRevision(manager, booking.currentRevisionId) } : null;
+  if (!booking) return null;
+  return { status: booking.status, revision: await findRevision(manager, booking.currentRevisionId),
+    confirmed: await manager.getRepository(BookingEntity).existsBy({ id }) };
+}
+
+// Authorized Admin editor: lossless reservation token and current revision from one snapshot.
+export async function findAdminBookingEditTokens(manager: EntityManager, id: string) {
+  const rows: unknown = await manager.query(`SELECT b.current_revision_id,r.court_id,v.location_id,
+    replace((r.updated_at AT TIME ZONE 'UTC')::text,' ','T') || '+00:00' AS updated_at
+    FROM public.checkout_records b JOIN public.bookings confirmed ON confirmed.id=b.id
+    JOIN public.booking_revisions v ON v.id=b.current_revision_id AND v.booking_id=b.id
+    JOIN public.court_reservations r ON r.id=b.reservation_id WHERE b.id=$1`, [id]);
+  return z.array(z.object({ current_revision_id: z.uuid(), court_id: z.uuid(), location_id: z.uuid(),
+    updated_at: z.iso.datetime({ offset: true }) })).max(1).parse(rows)[0] ?? null;
+}
+
+// Occupancy exclusion for an already authorized confirmed booking editor.
+export async function findBookingReservationId(manager: EntityManager, id: string) {
+  const record = await manager.getRepository(CheckoutRecordEntity).findOne({ where: { id }, select: { reservationId: true } });
+  return record?.reservationId ?? null;
 }

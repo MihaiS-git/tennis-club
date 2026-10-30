@@ -21,8 +21,9 @@ export const timelineCellLabels: Record<TimelineCellState, string> = {
 };
 const legendOrder: readonly TimelineCellState[] = ["available", "booked", "past", "closed", "unavailable"];
 
-// Lists only states present on the day, sharing a line with the caller's hint.
-export function TimelineLegend({ cells, extras = [], children, labels, cellStyles = timelineCellStyles }: {
+// Lists only states present on the day, followed by the caller's hint.
+export function TimelineLegend({ cells, extras = [], children, labels, cellStyles = timelineCellStyles, publicBooking = false }: {
+  publicBooking?: boolean;
   labels?: Partial<Record<TimelineCellState, string>>;
   cellStyles?: Record<TimelineCellState, string>;
   cells: readonly TimelineCellState[]; extras?: readonly { label: string; className: string }[]; children?: ReactNode;
@@ -33,13 +34,13 @@ export function TimelineLegend({ cells, extras = [], children, labels, cellStyle
     ...(present.has("available") ? [{ label: "Selected", className: timelineSelectedStyle }] : []),
     ...extras,
   ];
-  return <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
-    <ul aria-label="Timetable legend" className="flex flex-wrap items-center gap-x-3 gap-y-1">
+  return <div className={`mt-3 flex text-muted-foreground ${publicBooking ? "flex-col items-start gap-2" : "flex-wrap items-center gap-x-4 gap-y-1.5 text-xs"}`}>
+    <ul aria-label="Timetable legend" className={`flex flex-wrap items-center gap-x-3 ${publicBooking ? "gap-y-2 text-sm font-medium sm:gap-x-4 lg:text-base" : "gap-y-1"}`}>
       {items.map((item) => <li key={item.label} className="flex items-center gap-1.5">
-        <span aria-hidden className={`size-3 shrink-0 rounded-[3px] border border-border-strong/60 ${item.className}`} />{item.label}
+        <span aria-hidden className={`size-3 shrink-0 rounded-[3px] border border-border-strong/60 ${publicBooking ? "lg:size-3.5" : ""} ${item.className}`} />{item.label}
       </li>)}
     </ul>
-    {children && <p>{children}</p>}
+    {children && <p className={publicBooking ? "text-sm leading-5 lg:text-[15px] lg:leading-[22px]" : undefined}>{children}</p>}
   </div>;
 }
 

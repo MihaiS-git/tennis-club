@@ -456,7 +456,7 @@ test("manual and Cron share one claim, preserve booking/payment state and dedupl
     const [{ id: messageId }]: { id: string }[] = await source.query("SELECT id FROM public.user_messages WHERE event_key=$1 AND user_id=$2", [`email.delivery-failed:${delivery.id}`, admin.id]);
     expect((await findMessageDelivery(source.manager, admin.id, messageId))?.recipientEmail).toContain("retry-");
     expect(await findMessageDelivery(source.manager, randomUUID(), messageId)).toBeNull();
-    expect(await findDeliveryBooking(source.manager, eventKey)).toBe(fixture.bookingId);
+    expect(await findDeliveryBooking(source.manager, eventKey)).toEqual({ bookingId: fixture.bookingId, confirmed: true });
     const before = await snapshot();
     // A failed row is selectable only by manual retry; pending rejected rows can race Cron.
     await source.query("UPDATE public.email_deliveries SET status='pending' WHERE id=$1", [delivery.id]);

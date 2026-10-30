@@ -253,16 +253,14 @@ export async function abandonOnlineCheckout(input: unknown, unusedOnly = false) 
     paymentStatus: result.paymentStatus };
 }
 
-// A signed failure event can be stale: re-read Stripe before ending initial
-// checkout. Modification retries retain their existing behavior. An accepted
-// capture or newer authorization always wins over an older card-failure event.
+// A definitive card failure ends initial court and coaching checkout alike; a
+// new card needs a new checkout. A signed failure event can be stale: re-read
+// Stripe first. Modification retries retain their existing behavior. An accepted
+// capture, authentication or newer authorization always wins over an older failure.
 export async function resolveFailedCheckoutPayment(input: { attemptId: string; providerPaymentId: string }) {
   const row = await findCheckoutAttempt((await getDataSource()).manager, input.attemptId);
   const attempt = attemptSchema.extend({ providerPaymentId: z.string().min(1) }).parse(row);
   if (attempt.adjustmentId || attempt.providerPaymentId !== input.providerPaymentId || attempt.status !== "pending") return;
-  // Coaching retains its existing retryable-card-failure workflow. Genuine
-  // terminal outcomes still release both resources through shared settlement.
-  if ((await bookings.findBookingCancellationNotice((await getDataSource()).manager, attempt.bookingId))?.coachUserId) return;
   const evidence = await (await onlinePaymentAdapter(attempt.provider)).readPayment(attempt);
   if (evidence.status !== "pending" || evidence.live) return observeCheckoutPayment(attempt);
   await requestCheckoutCancellation({ attemptId: attempt.id, providerPaymentId: attempt.providerPaymentId });

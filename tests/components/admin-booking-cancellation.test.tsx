@@ -44,13 +44,28 @@ test("Booking Details cancels through the existing Admin action, shows the refun
   for (const value of ["Ana Pop", "RIVUS · Court 2", "15 Oct 2099 · 10:00–11:00", "90.00", "RON", "This will cancel the booking and free the court.",
     "Captured online funds will be refunded automatically."]) expect(confirmation.textContent).toContain(value);
   expect(mocks.cancel).not.toHaveBeenCalled();
-  fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel booking" }));
+  fireEvent.click(within(confirmation).getByRole("button", { name: "Confirm cancellation" }));
   fireEvent.click(within(confirmation).getByRole("button", { name: "Cancelling booking…" }));
   await waitFor(() => expect(mocks.refresh).toHaveBeenCalledOnce());
   // One request: the service, not the page, owns lifecycle, refunds and idempotency.
   expect(mocks.cancel).toHaveBeenCalledExactlyOnceWith({ id: bookingId });
-  expect(lastToast("success")).toBe("Booking cancelled. Your payment has been refunded.");
+  expect(lastToast("success")).toBe("Booking cancelled. The customer's payment has been refunded.");
   expect(screen.queryByRole("dialog", { name: "Cancel booking?" })).toBeNull();
+});
+
+test.each([
+  ["succeeded", "Booking cancelled. The customer's payment has been refunded."],
+  ["pending", "Booking cancelled. The customer's refund has been requested."],
+  ["failed", "Booking cancelled. Part of the refund could not be completed; review the booking's financial history."],
+])("Admin cancellation with a %s refund uses Admin wording, never the customer's", async (refundStatus, message) => {
+  records({});
+  mocks.cancel.mockResolvedValue({ ok: true, outcome: "cancelled", refundStatus });
+  await open();
+  fireEvent.click(screen.getByRole("button", { name: "Cancel booking" }));
+  fireEvent.click(within(screen.getByRole("dialog", { name: "Cancel booking?" })).getByRole("button", { name: "Confirm cancellation" }));
+  await waitFor(() => expect(mocks.refresh).toHaveBeenCalledOnce());
+  expect(lastToast("success")).toBe(message);
+  expect(lastToast("success")).not.toMatch(/\b(your|you)\b/i);
 });
 
 test("a declined or failed cancellation keeps the confirmation open with an actionable message", async () => {
@@ -61,9 +76,9 @@ test("a declined or failed cancellation keeps the confirmation open with an acti
   fireEvent.click(screen.getByRole("button", { name: "Cancel booking" }));
   const confirmation = screen.getByRole("dialog", { name: "Cancel booking?" });
   expect(confirmation.textContent).not.toContain("refunded automatically");
-  fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel booking" }));
+  fireEvent.click(within(confirmation).getByRole("button", { name: "Confirm cancellation" }));
   await expectToast("A change to this booking is still being processed. Try again shortly.");
-  fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel booking" }));
+  fireEvent.click(within(confirmation).getByRole("button", { name: "Confirm cancellation" }));
   await expectToast("Unable to cancel this booking. Try again.");
   expect(screen.getByRole("dialog", { name: "Cancel booking?" })).toBeTruthy();
   expect(mocks.refresh).not.toHaveBeenCalled();
@@ -74,7 +89,7 @@ test("a pending cancellation is an asynchronous outcome, not a failure", async (
   mocks.cancel.mockResolvedValue({ ok: true, outcome: "cancellation_pending" });
   await open();
   fireEvent.click(screen.getByRole("button", { name: "Cancel booking" }));
-  fireEvent.click(within(screen.getByRole("dialog", { name: "Cancel booking?" })).getByRole("button", { name: "Cancel booking" }));
+  fireEvent.click(within(screen.getByRole("dialog", { name: "Cancel booking?" })).getByRole("button", { name: "Confirm cancellation" }));
   await waitFor(() => expect(mocks.refresh).toHaveBeenCalledOnce());
   expect(lastToast("success")).toBe("Cancellation requested. The booking stays confirmed until the refund is confirmed.");
 });
@@ -130,4 +145,41 @@ test("a List return without view stays the List's own back link", async () => {
   await open({ status: "confirmed", sort: "scheduled", page: "2", back: "/admin/bookings?status=cancelled" });
   expect(screen.queryByRole("link", { name: "Back to Calendar" })).toBeNull();
   expect(screen.getByRole("link", { name: "Back to Bookings" }).getAttribute("href")).toBe("/admin/bookings?status=confirmed&sort=scheduled&page=2");
+});
+
+
+test("the optional cancellation explanation is passed to the Admin service", async () => {
+  records({}); mocks.cancel.mockResolvedValue({ ok: true, outcome: "cancellation_pending" });
+  await open(); fireEvent.click(screen.getByRole("button", { name: "Cancel booking" }));
+  const dialog = screen.getByRole("dialog", { name: "Cancel booking?" });
+  fireEvent.change(within(dialog).getByLabelText("Cancellation explanation (optional)"), { target: { value: "  Court maintenance  " } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Confirm cancellation" }));
+  await waitFor(() => expect(mocks.cancel).toHaveBeenCalledExactlyOnceWith({ id: bookingId, explanation: "Court maintenance" }));
+});
+
+test("dismissal never cancels and lesson confirmation includes its Coach", async () => {
+  records({}, { booking: { ...booking, includes_coaching: true, coach_name: "Coach Ana" } });
+  await open();
+  const trigger = screen.getByRole("button", { name: "Cancel booking" });
+  fireEvent.click(trigger);
+  let confirmation = screen.getByRole("dialog", { name: "Cancel booking?" });
+  expect(confirmation.textContent).toContain("Coach: Coach Ana");
+  fireEvent.click(within(confirmation).getByRole("button", { name: "Keep booking" }));
+  expect(document.activeElement).toBe(trigger);
+  fireEvent.click(trigger);
+  confirmation = screen.getByRole("dialog", { name: "Cancel booking?" });
+  fireEvent(confirmation, new Event("cancel", { cancelable: true }));
+  (confirmation as HTMLDialogElement).close();
+  expect(mocks.cancel).not.toHaveBeenCalled();
+});
+
+test("a refresh failure preserves the authoritative cancellation outcome", async () => {
+  records({});
+  mocks.cancel.mockResolvedValue({ ok: true, outcome: "cancellation_pending" });
+  mocks.refresh.mockImplementationOnce(() => { throw new Error("refresh failed"); });
+  await open();
+  fireEvent.click(screen.getByRole("button", { name: "Cancel booking" }));
+  fireEvent.click(within(screen.getByRole("dialog", { name: "Cancel booking?" })).getByRole("button", { name: "Confirm cancellation" }));
+  await waitFor(() => expect(lastToast("warning")).toBe("Cancellation requested. The booking stays confirmed until the refund is confirmed."));
+  expect(mocks.cancel).toHaveBeenCalledOnce();
 });

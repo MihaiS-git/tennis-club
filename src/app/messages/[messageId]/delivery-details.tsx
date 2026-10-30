@@ -12,7 +12,9 @@ export function DeliveryDetails({ messageId, delivery }: { messageId: string; de
     <h2 id="delivery-heading" className="font-heading text-lg font-semibold text-primary">Delivery details</h2>
     <dl className="mt-3 grid gap-x-5 gap-y-2 text-sm sm:grid-cols-[auto_1fr]">
       <dt className="font-semibold">Booking</dt><dd>{delivery.bookingHref
-        ? <Link href={delivery.bookingHref} className="text-primary underline">View booking details</Link> : "Booking association unavailable"}</dd>
+        ? <Link href={delivery.bookingHref} className="text-primary underline">View booking details</Link>
+        : delivery.transactionsHref ? <Link href={delivery.transactionsHref} className="text-primary underline">View payment transactions</Link>
+          : "Booking association unavailable"}</dd>
       <dt className="font-semibold">Recipient</dt><dd className="break-words">{delivery.recipientEmail}</dd>
       <dt className="font-semibold">Email type</dt><dd>{delivery.emailType}</dd>
       <dt className="font-semibold">Delivery status</dt><dd>{delivery.status.replaceAll("_", " ")}</dd>

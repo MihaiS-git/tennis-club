@@ -7,9 +7,11 @@ import { createClient } from "@/lib/supabase/server";
 import { getDataSource } from "@/lib/db/data-source";
 import { findOwnedBookingRevision } from "@/lib/db/repositories/bookings.repository";
 import { loadAdminTransactionContext } from "@/lib/db/repositories/payments.repository";
+import { findPendingAdjustment } from "@/lib/db/repositories/booking-adjustments.repository";
 import { summarizeReportedFinancials } from "@/lib/payments/financials";
 import type { RefundReason } from "@/lib/payments/refund-context";
 import { localStartInstant } from "@/lib/courts/local-time";
+import { refundBackedAdjustment } from "./domain";
 import type { OwnBookingPayment, OwnBookingPaymentOperation } from "./personal";
 
 const refundLabels: Record<RefundReason, string> = {
@@ -59,7 +61,13 @@ export async function getOwnBookingPayment(id: unknown, client?: Awaited<ReturnT
     operations.sort((a, b) => (a.at ? Date.parse(a.at) : 0) - (b.at ? Date.parse(b.at) : 0));
     const paid = totals?.captured ?? 0;
     const refunded = totals?.refunded ?? 0;
-    const balance = status === "confirmed" ? Math.max(0, revision.totalAmountMinor - (paid - refunded)) : 0;
+    // A pending cancellation or reduction keeps the current total until its refunds
+    // are verified. Partly completed refunds are not customer debt: measure the
+    // balance against the total that the accepted change leaves.
+    const pending = status === "confirmed" ? await findPendingAdjustment(manager, parsed.data) : null;
+    const owed = pending && refundBackedAdjustment(pending)
+      ? pending.kind === "cancellation" ? 0 : pending.newTotal : revision.totalAmountMinor;
+    const balance = status === "confirmed" ? Math.max(0, owed - (paid - refunded)) : 0;
     const ended = Date.parse(localStartInstant(revision.timezone, revision.bookingDate, revision.endMinute)) <= now.getTime();
     const atClub = revision.paymentMethod === "pay_at_club";
     return { ok: true, payment: {

@@ -4,6 +4,7 @@ import type { CoveragePeriod } from "@/lib/courts/coverage-validation";
 import { mondayWeekday, resolvePricingRule } from "@/lib/pricing/resolution";
 import { courtStateLabels, type PricingRule } from "@/lib/pricing/validation";
 import type { PublicCourt } from "@/lib/courts/public";
+import { createLocalIntervalValidator } from "./local-time";
 
 export type CalendarCellState =
   | "available"
@@ -47,6 +48,7 @@ export function courtSlotRates(input: {
 export { localMinute, localToday } from "./local-time";
 
 export function buildCourtDay(input: {
+  timezone: string;
   date: string;
   today: string;
   currentMinute: number;
@@ -68,6 +70,8 @@ export function buildCourtDay(input: {
     { length: (last - first) / 30 },
     (_, index) => first + index * 30,
   );
+  const validInterval = createLocalIntervalValidator(input.timezone, input.date);
+  const validSlots = times.map((minute) => validInterval(minute, minute + 30));
   const courts = input.courts.map((court) => {
     const { courtState, rates } = courtSlotRates({ court, date: input.date, times,
       hours: input.hours, coverage: input.coverage, pricing: input.pricing });
@@ -82,6 +86,7 @@ export function buildCourtDay(input: {
           return { state: "closed", hourlyPrice: null };
         if (input.date < input.today || (input.date === input.today && minute < input.currentMinute))
           return { state: "past", hourlyPrice: null };
+        if (!validSlots[index]) return { state: "unavailable", hourlyPrice: null };
         const rate = rates[index];
         return rate === null ? { state: "unavailable", hourlyPrice: null } : { state: "available", hourlyPrice: rate };
       },

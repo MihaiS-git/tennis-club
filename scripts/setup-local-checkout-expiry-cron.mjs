@@ -41,9 +41,9 @@ try {
         WHERE name='tennis_club_checkout_expiry_cron_secret')),
     body := '{}'::jsonb, timeout_milliseconds := 25000
   )`;
-  await client.query("SELECT cron.schedule($1,$2,$3)", ["tennis-club-checkout-hold-expiry", "*/5 * * * *", command]);
+  await client.query("SELECT cron.schedule($1,$2,$3)", ["tennis-club-checkout-hold-expiry", "* * * * *", command]);
   await client.query("COMMIT");
-  console.log("Local checkout hold expiry Cron is scheduled every five minutes.");
+  console.log("Local checkout hold expiry Cron is scheduled every minute.");
 } catch {
   await client.query("ROLLBACK").catch(() => undefined);
   throw new Error("Local checkout expiry Cron setup failed; inspect local PostgreSQL availability and configuration.");

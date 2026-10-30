@@ -29,6 +29,19 @@ it("opens an owner-resolved history deep link outside the filtered list", () => 
   expect(new URL(replace.mock.lastCall![0], "http://localhost").searchParams.has("booking")).toBe(false);
 });
 
+it("shows a past lesson's agreed coaching terms from its revision evidence", () => {
+  installDialogMock();
+  loadPayment.mockResolvedValue({ ok: false, message: "Unavailable" });
+  render(<HistoryActivity rows={[]} deepLinkedBooking={{ ...booking, includes_coaching: true, coach_name: "Coach Ana",
+    coaching_program_name: "Semi-private", coaching: { participantCount: 3, pricePerPersonMinor: 3000,
+      programId: "33333333-3333-4333-8333-333333333333", coachUserId: "44444444-4444-4444-8444-444444444444",
+      locationId: "22222222-2222-4222-8222-222222222222", durationMinutes: 90, source: "club", amountMinor: 9000, currency: "RON",
+      courtRentalIncluded: true, courtRentalMinor: 1500, courtAmountMinor: 0 } }} />);
+  const details = screen.getByRole("dialog", { name: "Booking details" });
+  const section = within(details).getByRole("heading", { name: "Coaching details" }).closest("section")!;
+  for (const value of ["Coach Ana", "Semi-private", "3", "90 min", "Included"]) expect(within(section).getByText(value)).toBeDefined();
+});
+
 it("opens a completed booking with stored contact and price, without actions", () => {
   installDialogMock();
   loadPayment.mockResolvedValue({ ok: true, payment: { method: "pay_at_club", currency: "RON", timezone: "UTC",

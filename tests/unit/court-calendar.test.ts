@@ -20,7 +20,7 @@ const pricing = (id: string, starts_at_minute: number, ends_at_minute: number, p
   court_state: "outdoor", weekday: 3, starts_at_minute, ends_at_minute,
   starts_on: null, ends_on: null, price_per_hour_minor, created_at: stamp, updated_at: stamp,
 });
-const base = { date: "2026-10-01", today: "2026-09-30", currentMinute: 0, courts,
+const base = { timezone: "Europe/Bucharest", date: "2026-10-01", today: "2026-09-30", currentMinute: 0, courts,
   hours: [hours(1020, 1200)], coverage: [], pricing: [pricing(courtId, 1020, 1200), pricing(otherId, 1020, 1200)], reservations: [] };
 
 function grid(day: ReturnType<typeof buildCourtDay>, courtIndex = 0) {
@@ -92,4 +92,20 @@ describe("one-day court availability", () => {
     expect(selectCalendarCell(grid(day, 1), first, 2)?.courtId).toBe(otherId);
     expect(getCalendarSelection(grid(day), 0, 1)).toBeNull();
   });
+});
+
+it.each([
+  ["2027-03-28", 180, 240, false], ["2027-03-28", 120, 300, false],
+  ["2027-03-28", 60, 120, true], ["2027-03-28", 240, 300, true],
+  ["2027-10-31", 120, 240, false], ["2027-10-31", 180, 240, true],
+  ["2027-03-28", 0, 60, true], ["2027-10-31", 1380, 1440, true],
+])("calendar offers only fully provided intervals on %s %i–%i", (date, start, end, valid) => {
+  const weekday = mondayWeekday(date);
+  const day = buildCourtDay({ ...base, date, courts: [courts[0]],
+    hours: [{ ...hours(0, 1440), weekday }], pricing: [{ ...pricing(courtId, 0, 1440), weekday }] });
+  expect(getCalendarSelection(grid(day), start / 30, end / 30) !== null).toBe(valid);
+  if (date === "2027-03-28") {
+    expect(day.courts[0].cells[6]).toBe("unavailable");
+    expect(day.courts[0].cells[7]).toBe("unavailable");
+  }
 });

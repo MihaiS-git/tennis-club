@@ -116,6 +116,13 @@ it("explains that pricing must be changed before a dependent court can move", as
   await waitFor(() => expect(lastToast()).toContain("pricing rules still depend on it"));
   expect(lastToast()).not.toContain("pricing_court_fk");
 });
+it("shows why a court with unfinished bookings cannot be deactivated or moved", async () => {
+  const message = "This court cannot be deactivated while it has unfinished bookings (1 court booking). Cancel the remaining bookings or wait until they are completed.";
+  saveCourtAction.mockResolvedValue({ ok: false, reason: "occupied", message });
+  openEditCourt();
+  fireEvent.submit(screen.getByRole("button", { name: "Save court" }).closest("form")!);
+  await waitFor(() => expect(lastToast()).toBe(message));
+});
 
 
 it.each(["create", "edit"])("gates %s court saving on current validity and edit dirtiness", (mode) => {

@@ -12,12 +12,14 @@ import { bookingCreatedLabel, bookingStatusLabels, bookingStatusTones, parseCoac
 import { bookingTypeLabels } from "@/lib/bookings/booking-type";
 import { getCoachLesson } from "@/lib/bookings/coach-bookings";
 import { requireActiveCoach } from "@/lib/coaching/authorization";
+import { LessonCancellation } from "./lesson-cancellation";
 
 export const metadata: Metadata = { title: "Lesson details | Tennis Club" };
 export const instant = false;
 
-// Read-only: the Coach's own lesson with the schedule and customer contact the Coach
-// Calendar already shows. No price, payment, refund or booking actions.
+// The Coach's own lesson with the schedule and customer contact the Coach Calendar
+// already shows. No prices or payments; the assigned Coach's actions are Reschedule
+// lesson and Cancel lesson, decided by the shared rescheduling and cancellation workflows.
 export default async function CoachLessonPage({ params, searchParams }: {
   params: Promise<{ bookingId: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -38,6 +40,8 @@ export default async function CoachLessonPage({ params, searchParams }: {
     </>}>
       <StatusBadge tone={bookingStatusTones[lesson.status]}>{bookingStatusLabels[lesson.status]}</StatusBadge>
     </AdminPageHeader>
+    <LessonCancellation lesson={lesson} availability={lesson.cancellation.availability}
+      startsAt={lesson.cancellation.startsAt} refundAvailable={lesson.cancellation.refundAvailable} />
     <div className="grid max-w-4xl gap-x-8 rounded-card border border-border bg-surface p-5 pt-1 md:grid-cols-2">
       <DetailSection title="Lesson">
         <dt className="text-muted-foreground">Type</dt><dd>{bookingTypeLabels.coaching}</dd>

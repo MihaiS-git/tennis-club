@@ -229,6 +229,27 @@ it("keeps archive confirmation open with contextual safe feedback on failure", a
   expect(lastToast()).not.toContain("private database error");
 });
 
+it("explains why a location with unfinished bookings cannot be archived", async () => {
+  const message = "This location cannot be archived while it has unfinished bookings (1 staff reservation). Cancel the remaining bookings or wait until they are completed.";
+  archiveLocationAction.mockResolvedValue({ ok: false, reason: "occupied", message });
+  render(<LocationArchiveControl id={location.id} name={location.name} archived={false} />);
+  fireEvent.click(screen.getByRole("button", { name: "Archive Central Club" }));
+  fireEvent.click(within(screen.getByRole("dialog", { name: "Archive Central Club" })).getByRole("button", { name: "Archive location" }));
+  await waitFor(() => expect(lastToast()).toBe(message));
+  expect(screen.getByRole("dialog", { name: "Archive Central Club" })).toBeTruthy();
+  expect(refresh).not.toHaveBeenCalled();
+});
+
+it("explains an incompatible timezone when restoring a historical location", async () => {
+  const message = "All operational club locations must use the same IANA timezone. Historical Club: America/New_York; Central Club: Europe/Bucharest.";
+  archiveLocationAction.mockResolvedValue({ ok: false, reason: "not-ready", message });
+  render(<LocationArchiveControl id={location.id} name={location.name} archived />);
+  fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+  await waitFor(() => expect(lastToast()).toBe(message));
+  expect(refresh).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Restore" })).toBeTruthy();
+});
+
 it.each([0, 1440])("creates a location with default or selected notice %s", async (notice) => {
   saveLocationAction.mockResolvedValue({ ok: true, id: location.id });
   render(<LocationForm />);
@@ -268,6 +289,7 @@ it("archives and restores from the shared workspace form", async () => {
 it.each([
   { ok: false, reason: "duplicate-slug", message: "already exists" },
   { ok: false, reason: "not-ready", message: "Configure pricing before saving." },
+  { ok: false, reason: "occupied", message: "The timezone cannot be changed while this location has unfinished bookings (1 court booking)." },
 ])("preserves edits on $reason without navigating", async (result) => {
   saveLocationAction.mockResolvedValue(result);
   openEditLocation();

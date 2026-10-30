@@ -3,10 +3,6 @@ import { createClient } from "@supabase/supabase-js";
 import { beforeEach, expect, test, vi } from "vitest";
 import type { CurrentAccount } from "@/lib/auth/account";
 import { parseActivityQuery } from "@/lib/bookings/activity-query";
-import { writeFileSync } from "node:fs";
-import { performance } from "node:perf_hooks";
-import { createHash } from "node:crypto";
-import { Session, type Profiler } from "node:inspector";
 import * as localTime from "@/lib/courts/local-time";
 
 const { account, dataSource, queryRead, ownedRevision } = vi.hoisted(() => ({ account: vi.fn(), dataSource: vi.fn(), queryRead: vi.fn(), ownedRevision: vi.fn() }));
@@ -29,7 +25,7 @@ const interval = {
 };
 const booking = {
   id: id(4), account_user_id: owner, status: "confirmed", updated_at: "2026-10-01T00:00:00Z",
-  customer_name: "Snapshot", customer_email: "snapshot@example.test", customer_phone: "123", includes_coaching: false, coach_name: null, coaching_program_name: null,
+  customer_name: "Snapshot", customer_email: "snapshot@example.test", customer_phone: "123", includes_coaching: false, coach_name: null, coaching_program_name: null, coaching: null,
   cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON",
   payment_method: "pay_at_club", reservation: interval,
 };
@@ -70,13 +66,39 @@ test("owner booking deep link uses the stored snapshot and opens the correct act
     timezone: "Europe/Bucharest", locationName: "Club A", courtName: "Court A", customerName: "Snapshot",
     customerEmail: "snapshot@example.test", customerPhone: "123", coachUserId: null, coachName: null,
     coachingProgramName: null, cancellationNoticeMinutes: 120, totalAmountMinor: 9000, currency: "RON",
-    recordedAt: now };
-  ownedRevision.mockResolvedValue({ status: "confirmed", revision });
+    recordedAt: now, pricingEvidence: {} };
+  ownedRevision.mockResolvedValue({ status: "confirmed", revision, confirmed: true });
   const upcoming = await findOwnBookingActivityTarget(id(4), owner, now);
   expect(upcoming).toMatchObject({ scope: "upcoming", booking: { id: id(4), court_name: "Court A", total_amount_minor: 9000 } });
-  ownedRevision.mockResolvedValue({ status: "cancelled", revision });
+  ownedRevision.mockResolvedValue({ status: "cancelled", revision, confirmed: true });
   const history = await findOwnBookingActivityTarget(id(4), owner, now);
   expect(history).toMatchObject({ scope: "history", booking: { id: id(4), status: "cancelled" } });
+  // An abandoned checkout is also `cancelled` but never became a booking: no history entry is fabricated.
+  ownedRevision.mockResolvedValue({ status: "cancelled", revision, confirmed: false });
+  expect(await findOwnBookingActivityTarget(id(4), owner, now)).toBeNull();
+});
+
+// Agreed lesson terms come from the current revision's evidence, never current program configuration.
+const lessonTerms = { participantCount: 2, pricePerPersonMinor: 4000, programId: id(40), coachUserId: id(41), locationId: id(3),
+  durationMinutes: 60, source: "coach", amountMinor: 8000, currency: "RON", courtRentalIncluded: false, courtRentalMinor: 1000,
+  courtAmountMinor: 1000 } as const;
+
+test("lesson rows and deep links carry the revision's agreed coaching terms", async () => {
+  serve([{ ...booking, includes_coaching: true, coach_name: "Coach Ana", coaching_program_name: "Private", coaching: lessonTerms }]);
+  const [row] = (await listOwnCourtActivity("upcoming", parseActivityQuery({}, "upcoming"), userClient, now)).rows;
+  expect(row).toMatchObject({ includes_coaching: true, coach_name: "Coach Ana", coaching_program_name: "Private", coaching: lessonTerms });
+  expect(queryRead.mock.calls[0][0]).toContain("'coaching',v.pricing_evidence->'coaching'");
+  // Malformed evidence fails closed instead of rendering invented terms.
+  serve([{ ...booking, coaching: { ...lessonTerms, participantCount: "two" } }]);
+  await expect(listOwnCourtActivity("upcoming", parseActivityQuery({}, "upcoming"), userClient, now)).rejects.toThrow();
+
+  ownedRevision.mockResolvedValue({ status: "cancelled", confirmed: true, revision: { bookingDate: "2099-10-15", startMinute: 600,
+    endMinute: 660, timezone: "Europe/Bucharest", locationName: "Club A", courtName: "Court A", customerName: "Snapshot",
+    customerEmail: "snapshot@example.test", customerPhone: "123", coachUserId: id(41), coachName: "Coach Ana",
+    coachingProgramName: "Private", cancellationNoticeMinutes: 120, totalAmountMinor: 9000, currency: "RON", recordedAt: now,
+    pricingEvidence: { coaching: lessonTerms } } });
+  expect(await findOwnBookingActivityTarget(id(4), owner, now)).toMatchObject({ scope: "history",
+    booking: { includes_coaching: true, coaching: lessonTerms } });
 });
 
 test.each<CurrentAccount>([
@@ -100,7 +122,7 @@ test.each([["admin"]])("preserves role-specific activity result contracts for ro
     location_name: "Club A", location_timezone: "Europe/Bucharest", court_name: "Court A",
     starts_at_instant: "2026-10-03T12:00:00.000Z", history_at: "2026-10-03T13:00:00.000Z",
     customer_name: "Snapshot", customer_email: "snapshot@example.test", customer_phone: "123", includes_coaching: false, coach_name: null, coaching_program_name: null,
-    cancellation_notice_minutes: 120, total_amount_minor: 9000, currency: "RON",
+    coaching: null, cancellation_notice_minutes: 120, payment_method: "pay_at_club", total_amount_minor: 9000, currency: "RON",
   });
 });
 
@@ -516,72 +538,6 @@ test.each(["datetime", "location", "court", "type", "duration", "status"] as con
     expect(result.rows.map(row => row.id)).toEqual(direction === "asc" || sort === "status" ? ascending : [...ascending].reverse());
   }
 });
-
-// Opt-in CPU-only service benchmark. SQL transport is stubbed, but authorization,
-// Zod parsing, timezone conversion, eligibility, options and pagination all run.
-if (process.env.ACTIVITY_SERVICE_BENCHMARK) {
-  test("benchmarks the complete service with in-memory repository transport", async () => {
-    account.mockResolvedValue({ state: "active", userId: owner, roles: ["coach"] });
-    const schedule = { ...interval, booking_date: "2026-10-01",
-      court: { ...interval.court, location: { name: "Club A", timezone: "UTC" } } };
-    const mixed = process.env.ACTIVITY_SERVICE_MIXED === "1";
-    const dates = ["2024-01-01", "2024-07-15", "2025-03-30", "2025-10-26", "2025-12-31",
-      "2026-01-01", "2026-03-28", "2026-03-29", "2026-03-30", "2026-09-15", "2026-10-01", "2026-10-02"];
-    const zones = ["Europe/Bucharest", "America/New_York", "Asia/Kathmandu", "Australia/Lord_Howe", "Pacific/Apia", "UTC"];
-    const scheduleAt = (n: number) => mixed ? { ...schedule, booking_date: dates[Math.floor(n / zones.length) % dates.length],
-      court_id: n % zones.length === 0 ? id(2) : id(50000 + n % zones.length),
-      starts_at_minute: 360 + n % 12 * 30, ends_at_minute: 420 + n % 12 * 30,
-      court: { ...schedule.court, location_id: n % zones.length === 0 ? id(3) : id(60000 + n % zones.length),
-        location: { name: `Club ${n % zones.length}`, timezone: zones[n % zones.length] } } } : schedule;
-    serve(Array.from({ length: 15000 }, (_, n) => ({ ...booking, id: id(100 + n), reservation: scheduleAt(n) })),
-      Array.from({ length: 15000 }, (_, n) => ({ ...reservation, ...scheduleAt(n + 15000), id: id(20000 + n) })));
-    const measurements = [];
-    const repeats = Number(process.env.ACTIVITY_SERVICE_REPEATS ?? 3);
-    const warmup = process.env.ACTIVITY_SERVICE_WARMUP === "0" ? 0 : 1;
-    for (const params of [{ page: "1" }, { page: "1500" }, { page: mixed ? "250" : "1500", location: id(3), court: id(2) }]) {
-      const samples = [];
-      const details = [];
-      for (let repeat = -warmup; repeat < repeats; repeat++) {
-        queryRead.mockClear();
-        const session = process.env.ACTIVITY_CPU_PROFILE ? new Session() : null;
-        if (session) {
-          session.connect();
-          session.post("Profiler.enable");
-          session.post("Profiler.setSamplingInterval", { interval: 1000 });
-          session.post("Profiler.start");
-        }
-        const heapBefore = process.memoryUsage().heapUsed;
-        const cpuBefore = process.cpuUsage();
-        const started = performance.now();
-        const result = await listOwnCourtActivity("history", parseActivityQuery(params, "history"), userClient, now);
-        const ms = performance.now() - started;
-        const cpu = process.cpuUsage(cpuBefore);
-        const memory = process.memoryUsage();
-        if (session) {
-          const profile = await new Promise<Profiler.Profile>((resolve, reject) => {
-            session.post("Profiler.stop", (error, result) => error ? reject(error) : resolve(result.profile));
-          });
-          writeFileSync(`${process.env.ACTIVITY_CPU_PROFILE}-${measurements.length}-${repeat}.cpuprofile`, JSON.stringify(profile));
-          session.disconnect();
-        }
-        expect(result.rows).toHaveLength(20);
-        expect(result.hasNext).toBe(params.page === "1");
-        if (process.env.ACTIVITY_SERVICE_BASELINE) {
-          expect(Reflect.get(globalThis, "activityProfile")).toMatchObject({ conversions: 60000 });
-        }
-        if (repeat >= 0) {
-          samples.push(ms);
-          details.push({ ms, cpuMs: (cpu.user + cpu.system) / 1000, heapBefore, heapAfter: memory.heapUsed,
-            rss: memory.rss, stages: Reflect.get(globalThis, "activityProfile"),
-            digest: createHash("sha256").update(JSON.stringify(result)).digest("hex") });
-        }
-      }
-      samples.sort((a, b) => a - b);
-      measurements.push({ params, medianMs: samples[Math.floor(samples.length / 2)], samples, details });
-    }
-    writeFileSync(process.env.ACTIVITY_SERVICE_BENCHMARK ?? "/tmp/activity-service.json", JSON.stringify(measurements, null, 2) + "\n");
-  }, 900000);
-}
 
 test.each(["datetime", "location", "court", "type", "duration", "status"] as const)("retains exact mixed %s order on first, deep and exhausted pages", async sort => {
   // This matrix isolates selection; real timezone/DST behavior is covered above.

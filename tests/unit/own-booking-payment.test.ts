@@ -1,11 +1,12 @@
 import { beforeEach, expect, test, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ account: vi.fn(), owned: vi.fn(), context: vi.fn() }));
+const mocks = vi.hoisted(() => ({ account: vi.fn(), owned: vi.fn(), context: vi.fn(), pendingAdjustment: vi.fn() }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn(async () => ({})) }));
 vi.mock("@/lib/auth/account", () => ({ readCurrentAccount: mocks.account }));
 vi.mock("@/lib/db/data-source", () => ({ getDataSource: async () => ({ manager: {} }) }));
 vi.mock("@/lib/db/repositories/bookings.repository", () => ({ findOwnedBookingRevision: mocks.owned }));
 vi.mock("@/lib/db/repositories/payments.repository", () => ({ loadAdminTransactionContext: mocks.context }));
+vi.mock("@/lib/db/repositories/booking-adjustments.repository", () => ({ findPendingAdjustment: mocks.pendingAdjustment }));
 import { getOwnBookingPayment } from "@/lib/bookings/own-payment";
 
 const bookingId = "11111111-1111-4111-8111-111111111111";
@@ -24,7 +25,7 @@ const execution = (refundId: string, attemptId: string, amountMinor: number, min
 
 beforeEach(() => {
   mocks.account.mockReset().mockResolvedValue({ state: "active", userId: owner, roles: [] });
-  mocks.owned.mockReset(); mocks.context.mockReset();
+  mocks.owned.mockReset(); mocks.context.mockReset(); mocks.pendingAdjustment.mockReset().mockResolvedValue(null);
 });
 
 test("explains extension, reduction and split cancellation refunds without provider identifiers", async () => {
@@ -65,4 +66,46 @@ test("shows an upcoming pay-at-club balance as due at the club, never as paid", 
   expect(await getOwnBookingPayment(bookingId, undefined, new Date("2026-10-17T00:00:00Z"))).toMatchObject({ ok: true,
     payment: { method: "pay_at_club", paid: 0, dueAtClub: 5000, outstanding: 0, operations: [] } });
   expect(await getOwnBookingPayment(bookingId, undefined, new Date("2099-10-16T00:00:00Z"))).toMatchObject({ payment: { dueAtClub: 0 } });
+});
+
+// A confirmed online booking paid by two captures: the original 6000 and a 3000 change payment.
+const twoCaptures = () => ({ revisions: [], adjustments: [], executions: [execution("r1", "a2", 3000, 21)],
+  payments: [attempt("a1", null, "succeeded", 0), { ...attempt("a2", "adj", "succeeded", 10), amountMinor: 3000 }],
+  captures: [capture("a1", 1), { ...capture("a2", 11), amountMinor: 3000 }] });
+const pendingChange = (kind: "cancellation" | "reschedule", newTotal: number, originalTotal = 9000) =>
+  ({ id: "adj-pending", bookingId, kind, status: "pending", originalTotal, newTotal });
+
+test("a partly completed cancellation refund is processing, never an outstanding balance", async () => {
+  mocks.owned.mockResolvedValue({ status: "confirmed", revision: { ...revision, totalAmountMinor: 9000 } });
+  mocks.context.mockResolvedValue({ ...twoCaptures(), refunds: [refund("r1", "a2", 3000, "booking_cancellation", "succeeded", 20),
+    refund("r2", "a1", 6000, "booking_cancellation", "pending", 20)] });
+  mocks.pendingAdjustment.mockResolvedValue(pendingChange("cancellation", 9000));
+  const result = await getOwnBookingPayment(bookingId);
+  expect(mocks.pendingAdjustment).toHaveBeenCalledWith({}, bookingId);
+  expect(result).toMatchObject({ ok: true, payment: { total: 9000, paid: 9000, refunded: 3000, refundPending: 6000, outstanding: 0,
+    operations: expect.arrayContaining([
+      { kind: "refund", label: "Cancellation refund", amount: 3000, state: "completed", at: at(21).toISOString() },
+      { kind: "refund", label: "Cancellation refund", amount: 6000, state: "pending", at: at(20).toISOString() }]) } });
+});
+
+test("a partly completed reduction refund leaves no artificial balance; an unverified refund stays processing", async () => {
+  mocks.owned.mockResolvedValue({ status: "confirmed", revision: { ...revision, totalAmountMinor: 9000 } });
+  // A 4000 reduction split across both captures; the second refund reports success without a verified execution.
+  mocks.context.mockResolvedValue({ ...twoCaptures(), refunds: [refund("r1", "a2", 3000, "booking_price_reduction", "succeeded", 20),
+    refund("r2", "a1", 1000, "booking_price_reduction", "succeeded", 20)] });
+  mocks.pendingAdjustment.mockResolvedValue(pendingChange("reschedule", 5000));
+  expect(await getOwnBookingPayment(bookingId)).toMatchObject({ ok: true, payment: { paid: 9000, refunded: 3000, refundPending: 1000,
+    outstanding: 0, operations: expect.arrayContaining([
+      { kind: "refund", label: "Booking change refund", amount: 1000, state: "pending", at: at(20).toISOString() }]) } });
+});
+
+test("actual unpaid amounts stay outstanding, including beside a pending payment-backed change", async () => {
+  mocks.owned.mockResolvedValue({ status: "confirmed", revision: { ...revision, totalAmountMinor: 12000 } });
+  mocks.context.mockResolvedValue({ ...twoCaptures(), refunds: [] });
+  expect(await getOwnBookingPayment(bookingId)).toMatchObject({ payment: { paid: 9000, outstanding: 3000 } });
+  mocks.pendingAdjustment.mockResolvedValue(pendingChange("reschedule", 15000, 12000));
+  expect(await getOwnBookingPayment(bookingId)).toMatchObject({ payment: { paid: 9000, outstanding: 3000 } });
+  // A pending reduction to 10000 still leaves 1000 genuinely unpaid.
+  mocks.pendingAdjustment.mockResolvedValue(pendingChange("reschedule", 10000, 12000));
+  expect(await getOwnBookingPayment(bookingId)).toMatchObject({ payment: { outstanding: 1000 } });
 });

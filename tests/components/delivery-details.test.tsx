@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({ retry: vi.fn(), refresh: vi.fn() }));
 vi.mock("@/app/messages/actions", () => ({ retryMessageDeliveryAction: mocks.retry }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: mocks.refresh }) }));
 afterEach(cleanup);
-const delivery = { bookingHref: "/admin/bookings/booking", recipientEmail: "guest@example.test", emailType: "Booking confirmed",
+const delivery = { bookingHref: "/admin/bookings/booking" as string | null, transactionsHref: null as string | null, recipientEmail: "guest@example.test", emailType: "Booking confirmed",
   status: "failed" as const, failureReason: "Brevo HTTP 401: Key not found", attempts: 1,
   lastAttempt: "2026-10-23T11:40:00Z", nextAutomaticRetry: null,
   retry: { eligible: true, reason: "Previous request rejected" } };
@@ -22,6 +22,11 @@ test("details display operational facts and retry waits for the immediate action
   finish("Accepted by Brevo. This does not confirm inbox delivery.");
   await waitFor(() => expect(screen.getByRole("status").textContent).toContain("Accepted by Brevo"));
   expect(mocks.retry).toHaveBeenCalledWith("message"); expect(mocks.refresh).toHaveBeenCalled();
+});
+test("a checkout without a booking links to its payment transactions", () => {
+  render(<DeliveryDetails messageId="message" delivery={{ ...delivery, bookingHref: null, transactionsHref: "/admin/payments/transactions?q=checkout" }} />);
+  expect(screen.queryByRole("link", { name: "View booking details" })).toBeNull();
+  expect(screen.getByRole("link", { name: "View payment transactions" }).getAttribute("href")).toBe("/admin/payments/transactions?q=checkout");
 });
 test("ineligible delivery has a disabled retry with its reason", () => {
   render(<DeliveryDetails messageId="message" delivery={{ ...delivery, retry: { eligible: false, reason: "Brevo already accepted this email." } }} />);

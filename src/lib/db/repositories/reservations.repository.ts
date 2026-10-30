@@ -171,7 +171,8 @@ export async function readReservationClockTime(manager: EntityManager): Promise<
 }
 
 // capture_accepted is the existing internal safety projection: it also protects
-// registered initial payments whose cancellation has not yet been verified.
+// registered initial payments whose cancellation has not yet been verified. Court readers
+// skip coach-only adjustment holds (occupies_court false), as court_reservation_no_overlap does.
 export async function findReservationOccupancy(manager: EntityManager, scope: { courtIds: string[] } | { locationId: string },
   date: string, offset: number, limit: number, excludeReservationId?: string) {
   if ("courtIds" in scope && !scope.courtIds.length) return [];
@@ -180,7 +181,7 @@ export async function findReservationOccupancy(manager: EntityManager, scope: { 
      ${timestamp("r.hold_expires_at")} AS hold_expires_at, ${protectedPaymentOccupancy} AS capture_accepted FROM public.court_reservations r
      JOIN public.courts c ON c.id = r.court_id AND c.is_active
      JOIN public.locations l ON l.id = c.location_id AND l.is_active AND l.archived_at IS NULL
-     WHERE r.booking_date = $1 AND r.status IN ('active', 'held')
+     WHERE r.booking_date = $1 AND r.status IN ('active', 'held') AND r.occupies_court
        AND ${"courtIds" in scope ? "r.court_id = ANY($2::uuid[])" : "c.location_id = $2::uuid"}
        AND ($3::uuid IS NULL OR r.id <> $3)
      ORDER BY r.court_id, r.starts_at_minute, r.id OFFSET $4 LIMIT $5`,
@@ -267,7 +268,7 @@ export async function listExpiredCoachHoldCourts(manager: EntityManager, coachUs
 export async function findCheckoutOccupancy(manager: EntityManager, courtId: string, date: string, excludeId?: string, checkedAt?: string) {
   const rows: unknown = await manager.query(
     `SELECT court_id,booking_date::text,starts_at_minute,ends_at_minute
-     FROM public.court_reservations r WHERE court_id=$1 AND booking_date=$2
+     FROM public.court_reservations r WHERE court_id=$1 AND booking_date=$2 AND occupies_court
        AND (status='active' OR (status='held' AND (hold_expires_at > coalesce($4::timestamptz,statement_timestamp()) OR ${protectedPaymentOccupancy})))
        AND ($3::uuid IS NULL OR id<>$3)`, [courtId, date, excludeId ?? null, checkedAt ?? null],
   );
@@ -302,11 +303,24 @@ export async function updateCustomerReservationSchedule(manager: EntityManager, 
   return z.array(z.object({id:z.uuid()})).max(1).parse(rows).length === 1;
 }
 
+// A staff operational change moves the booking's own row and, for a lesson, its coach,
+// so both GiST exclusions arbitrate the destination. The caller holds the aggregate locks.
+export async function updateReservationAssignment(manager: EntityManager, id: string, input: {
+  courtId: string; date: string; startMinute: number; endMinute: number; coachUserId: string | null;
+}) {
+  const rows: unknown = await manager.query(
+    `WITH changed AS (UPDATE public.court_reservations SET court_id=$2,booking_date=$3,starts_at_minute=$4,ends_at_minute=$5,
+     coach_user_id=$6,updated_at=greatest(clock_timestamp(),updated_at + interval '1 microsecond') WHERE id=$1
+     RETURNING id) SELECT id FROM changed`,
+    [id, input.courtId, input.date, input.startMinute, input.endMinute, input.coachUserId]);
+  return z.array(z.object({ id: z.uuid() })).max(1).parse(rows).length === 1;
+}
+
 export async function listCustomerEditOccupancy(manager: EntityManager, locationId: string, date: string, excludeId: string) {
   const rows: unknown = await manager.query(
     `SELECT r.court_id,r.starts_at_minute,r.ends_at_minute FROM public.court_reservations r
      JOIN public.courts c ON c.id=r.court_id AND c.is_active
-     WHERE c.location_id=$1 AND r.booking_date=$2 AND r.id<>$3
+     WHERE c.location_id=$1 AND r.booking_date=$2 AND r.id<>$3 AND r.occupies_court
        AND (r.status='active' OR (r.status='held' AND (r.hold_expires_at>clock_timestamp() OR ${protectedPaymentOccupancy})))
      ORDER BY r.court_id,r.starts_at_minute,r.id`, [locationId,date,excludeId]);
   return z.array(z.object({ court_id:z.uuid(),starts_at_minute:z.number().int(),ends_at_minute:z.number().int() })).parse(rows);
@@ -342,7 +356,7 @@ export async function listPublicDayOccupancy(manager: EntityManager, locationId:
     FROM public.court_reservations r JOIN public.courts c ON c.id=r.court_id AND c.is_active
     JOIN public.locations l ON l.id=c.location_id AND l.is_active AND l.archived_at IS NULL AND l.is_public
     WHERE l.id=$1 AND r.court_id=ANY($2::uuid[]) AND r.booking_date=$3::date AND ($4::uuid IS NULL OR r.id<>$4)
-      AND (r.status='active' OR (r.status='held' AND (r.hold_expires_at>statement_timestamp() OR ${protectedPaymentOccupancy})))`,
+      AND r.occupies_court AND (r.status='active' OR (r.status='held' AND (r.hold_expires_at>statement_timestamp() OR ${protectedPaymentOccupancy})))`,
     [locationId,courtIds,date,excludeReservationId ?? null]);
 }
 
@@ -359,9 +373,12 @@ export async function listCoachDayOccupancy(manager: EntityManager, coachUserId:
 }
 
 // Application service authorizes active Admins/Coaches before this private projection.
+// A held fragment of a pending booking change (r.adjustment_id) is a temporary
+// modification hold: it names the booking being changed, never a confirmed booking.
 export async function listAdminOperationalProjection(manager: EntityManager, courtIds: string[], date: string): Promise<unknown> {
-  return manager.query(`select case when r.status='held' then 'hold' when b.id is null then 'reservation' else 'booking' end AS kind,
-      r.hold_expires_at::text AS hold_expires_at,
+  return manager.query(`select case when r.status='held' and r.adjustment_id is not null then 'modification'
+        when r.status='held' then 'hold' when b.id is null then 'reservation' else 'booking' end AS kind,
+      r.hold_expires_at::text AS hold_expires_at, a.booking_id AS modified_booking_id,
       coalesce(b.id, r.id) AS id, r.court_id, r.booking_date::text AS booking_date,
       r.starts_at_minute, r.ends_at_minute,
       case when b.id is null then r.reason else null end AS reason,
@@ -370,7 +387,8 @@ export async function listAdminOperationalProjection(manager: EntityManager, cou
         nullif(btrim(concat_ws(' ', nullif(btrim(u.first_name), ''), nullif(btrim(u.last_name), ''))), ''),
         nullif(btrim(p.display_name), ''), u.email) else null end AS creator_name,
       u.email AS creator_email, u.phone AS creator_phone,
-      b.account_user_id, v.location_name, v.court_name, v.timezone AS location_timezone, v.payment_method, v.customer_name, v.customer_email, v.customer_phone,
+      b.account_user_id, v.location_name, v.court_name, v.timezone AS location_timezone, v.payment_method,
+      coalesce(v.customer_name, av.customer_name) AS customer_name, coalesce(v.customer_email, av.customer_email) AS customer_email, v.customer_phone,
       v.total_amount_minor, v.currency, v.cancellation_notice_minutes,
       (v.coach_user_id IS NOT NULL) AS includes_coaching, v.coach_user_id, v.coach_name, v.coaching_program_name,
       v.pricing_evidence->'coaching' AS coaching,
@@ -381,9 +399,12 @@ export async function listAdminOperationalProjection(manager: EntityManager, cou
     join public.courts c on c.id = r.court_id and c.is_active
     join public.locations l on l.id = c.location_id and l.is_active and l.archived_at is null
     left join public.checkout_records b on b.reservation_id = r.id left join public.booking_revisions v on v.id=b.current_revision_id
+    left join public.booking_adjustments a on a.id = r.adjustment_id and r.status = 'held'
+    left join public.checkout_records ab on ab.id = a.booking_id left join public.booking_revisions av on av.id = ab.current_revision_id
     left join public.users u on u.id = r.created_by_user_id and b.id is null
     left join public.player_profiles p on p.user_id = u.id
-    where r.court_id = any($1::uuid[]) and r.booking_date = $2::date
+    where r.court_id = any($1::uuid[]) and r.booking_date = $2::date and r.occupies_court
       and ((r.status = 'active' and (b.id is null or b.status = 'confirmed'))
-        or (r.status='held' and b.id is not null and (r.hold_expires_at>clock_timestamp() OR ${protectedPaymentOccupancy})));`, [courtIds,date]);
+        or (r.status='held' and (b.id is not null or a.id is not null)
+          and (r.hold_expires_at>clock_timestamp() OR ${protectedPaymentOccupancy})));`, [courtIds,date]);
 }

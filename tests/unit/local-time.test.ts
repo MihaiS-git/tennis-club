@@ -1,5 +1,5 @@
 import { expect, test, vi } from "vitest";
-import { addDays, createLocalStartInstantResolver, localMinute, localStartInstant, localToday } from "@/lib/courts/local-time";
+import { addDays, createLocalIntervalValidator, createLocalStartInstantResolver, localMinute, localStartInstant, localToday } from "@/lib/courts/local-time";
 
 // Pre-E3-F converter: differential coverage for the formatter change, including
 // all half-hour slots on transition days and the surrounding dates.
@@ -59,4 +59,24 @@ test("adds calendar days to a date across month, leap-year and DST boundaries", 
   expect(addDays("2026-03-01", -1)).toBe("2026-02-28");
   expect(addDays("2026-03-28", 2)).toBe("2026-03-30");
   expect(addDays("2026-12-31", 0)).toBe("2026-12-31");
+});
+
+// Expected validity under the existing PostgreSQL-compatible later-occurrence policy.
+test.each([
+  ["2027-03-28", 180, 240, false], // 03:00 does not exist; the old conversion collapses this hour.
+  ["2027-03-28", 180, 210, false], // Both skipped endpoints can still have equal wall/elapsed duration.
+  ["2027-03-28", 120, 300, false], // Three wall hours provide only two elapsed hours.
+  ["2027-03-28", 60, 120, true],
+  ["2027-03-28", 240, 300, true],
+  ["2027-10-31", 120, 240, false], // Two wall hours provide three elapsed hours.
+  ["2027-10-31", 120, 180, false], // 03:00 resolves to its later occurrence.
+  ["2027-10-31", 180, 240, true],
+  ["2027-10-31", 240, 300, true],
+  ["2027-03-28", 0, 60, true],
+  ["2027-03-28", 1380, 1440, true],
+  ["2027-10-31", 1380, 1440, true],
+  ["2027-03-28", 240, 240, false],
+  ["2027-03-28", 300, 240, false],
+])("validates interval existence and elapsed duration on %s %i–%i", (date, start, end, valid) => {
+  expect(createLocalIntervalValidator("Europe/Bucharest", date)(start, end)).toBe(valid);
 });

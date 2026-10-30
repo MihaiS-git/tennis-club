@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { requireActiveAdmin } from "@/lib/admin/authorization";
 import type { UserRole } from "@/lib/auth/account";
+import { coachHasActiveLessons } from "@/lib/coaching/admin";
 import { inTransaction } from "@/lib/db/transaction";
 import { lockActiveAdminAccount } from "@/lib/db/repositories/accounts.repository";
 import { normalizeDatabaseError } from "@/lib/db/errors";
@@ -31,7 +32,7 @@ type AdminUserRoleSuccess = {
 
 type AdminUserRoleFailure = {
   ok: false;
-  reason: "not-found" | "final-active-admin" | "self-management";
+  reason: "not-found" | "final-active-admin" | "self-management" | "active-lessons";
 };
 
 export type AdminUserRoleResult = AdminUserRoleSuccess | AdminUserRoleFailure;
@@ -65,6 +66,10 @@ export async function updateAdminUserRole(
         && target.roles.includes("admin") && await countActiveAdmins(manager) <= 1) {
         return { ok: false, reason: "final-active-admin" } as const;
       }
+      // The target's role rows are locked FOR UPDATE; lesson checkout locks them FOR
+      // SHARE, so no new lesson can start for this coach until this decision commits.
+      if (operation === "revoke" && role === "coach" && target.roles.includes("coach")
+        && await coachHasActiveLessons(manager, userId)) return { ok: false, reason: "active-lessons" } as const;
       stage = "mutation";
       if (operation === "assign") await assignUserRole(manager, userId, role, actor.userId);
       else await removeUserRole(manager, userId, role);

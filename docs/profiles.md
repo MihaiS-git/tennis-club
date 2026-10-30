@@ -6,11 +6,11 @@
 
 `public.users` holds identity, status, timestamps, and nullable first/last name, phone, birth date, address lines, city, postal code, and country code. `updated_at` means the latest change to this row, including personal edits and role-driven touches. Auth provisioning still inserts only ID/email; email synchronization is unchanged.
 
-Active owners may update their permitted personal fields. Existing owner/admin account reads remain in place. Status remains managed by another active administrator. Column grants and field guards prevent the owner/admin UPDATE policies from enabling each other's mutations. Identity, email, and timestamps cannot be directly updated by authenticated clients.
+Active owners may update their permitted personal fields through server actions with explicit field allowlists. Status and roles are managed only by another active Admin. Identity, email and timestamps are never accepted from form input; browser roles have no application-table grants.
 
 `public.player_profiles` is optional and created on the first tennis save. It is not created during signup. It contains display name, avatar object path, individual Sportya level (only strings `"4"` through `"9"`, or null), nullable system-managed rating, handedness, backhand, preferred game/surface, bio, and timestamps. Tennis data is readable by active authenticated users, never anonymously. Next.js verifies authentication, active status, ownership, input validation, and explicit allowed fields; Application table grants deny direct browser access. Rating, ownership, avatar paths, and timestamps are never accepted from tennis form inputs. No deletion feature is implemented.
 
-Player timestamps default to `now()` on creation. Next.js explicitly sets `updated_at` on tennis updates; the focused TypeORM avatar persistence sets it with `clock_timestamp()` on avatar changes. The user-scoped client has UPDATE permission on this column for server writes; no player timestamp maintenance trigger is used. The existing `users.updated_at` trigger behavior is unchanged.
+Player timestamps default to `now()` on creation. The server explicitly sets `updated_at` on tennis updates; avatar persistence sets it with `clock_timestamp()`. No timestamp maintenance triggers are used; services persist timestamps explicitly.
 
 `coach_profiles` is the implemented sibling entity for public coaching profiles (see `coaching.md`). A user may have player/coach profiles, both, or neither. Profiles do not grant RBAC roles; membership remains separate from RBAC.
 
@@ -75,7 +75,7 @@ Upload and removal retain one UI pending state and the synchronous duplicate-sub
 
 Each HTTP request has a ten-second transport timeout and image processing retains its ten-second bound. There is no overall lease-related workflow deadline. Storage/PostgreSQL are not transactionally atomic. Avatar coordination tables and RPCs are absent from the final schema.
 
-Self and active-Admin avatar retrieval read the reference through TypeORM after existing authorization, validating against the verified owner's or requested target UUID's canonical path. Downloads remain authenticated Supabase Storage operations. Navigation reads only `avatar_path` and `updated_at` through TypeORM, preserves `playerAvatarUrl(...?v=<updated_at>)`, and falls back to the icon on missing, invalid or failed metadata. Unrelated profile reads are outside Phase 10.
+Self and active-Admin avatar retrieval read the reference through TypeORM after existing authorization, validating against the verified owner's or requested target UUID's canonical path. Downloads remain authenticated Supabase Storage operations. Navigation reads only `avatar_path` and `updated_at` through TypeORM, preserves `playerAvatarUrl(...?v=<updated_at>)`, and falls back to the icon on missing, invalid or failed metadata.
 
 Old development `.jpg`/`.png` objects and references are not migrated by this workflow. Such references fail canonical-path validation and require deliberate development-data cleanup before re-uploading. A database reset still requires explicit approval.
 
@@ -87,6 +87,6 @@ avatar bucket/policies. Storage uses a restricted SECURITY DEFINER active-accoun
 boolean helper, so its RLS does not require authenticated SELECT on application users.
 Active users retain avatar reads and owners retain canonical-path writes; Admin target
 retrieval continues through its existing Next.js authorization boundary. No avatar
-coordination table or RPC is created. See [fresh setup](../README.md#application-migrations-and-fresh-local-setup)
+coordination table or RPC is created. See [database setup](../README.md#database-setup-and-migrations)
 and [disposable checks](testing.md#typeorm-cutover-validation). Existing populated
 local databases require a separate authorized cutover, with no reset implied.

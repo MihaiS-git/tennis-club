@@ -16,6 +16,7 @@ import { courtActivityType, type CustomerBookingHistoryItem } from "./history";
 import { minorAmountSchema } from "@/lib/pricing/money";
 import { ACTIVITY_PAGE_SIZE, normalizeActivityType, parseActivityQuery, type ActivityQuery, type ActivityScope, type ActivitySearchParams } from "./activity-query";
 import type { PersonalCustomerBooking } from "./personal";
+import { pricingEvidenceSchema } from "./revision";
 import type { PersonalReservation } from "@/lib/reservations/personal";
 
 export type UpcomingCourtActivity = { kind: "booking"; row: PersonalCustomerBooking } | { kind: "reservation"; row: PersonalReservation };
@@ -26,7 +27,7 @@ export type ActivityOptions = {
 };
 // Completed end instants are materialized only for the returned page. Ordering
 // still needs an exact start instant for every candidate, including tie-breaks.
-type ActivityRow = (Omit<CustomerBookingHistoryItem, "history_at"> | (PersonalReservation & { kind: "reservation" }))
+type ActivityRow = ((Omit<CustomerBookingHistoryItem, "history_at"> & Pick<PersonalCustomerBooking, "payment_method">) | (PersonalReservation & { kind: "reservation" }))
   & { history_at?: string; starts_at_instant: string; court_id: string; location_id: string };
 const intervalSchema = z.object({
   court_id: z.uuid(), booking_date: z.iso.date(), starts_at_minute: z.number().int(), ends_at_minute: z.number().int(),
@@ -40,6 +41,8 @@ const bookingSelectSchema = z.object({
   customer_name: z.string(), customer_email: z.string(), customer_phone: z.string(),
   includes_coaching: z.boolean(),
   coach_name: z.string().nullable(), coaching_program_name: z.string().nullable(),
+  // The current revision's agreed lesson terms; null for a court booking.
+  coaching: pricingEvidenceSchema.shape.coaching.unwrap().nullable(),
   cancellation_notice_minutes: cancellationNoticeMinutesSchema,
   total_amount_minor: minorAmountSchema, currency: z.enum(locationCurrencies),
   payment_method: z.enum(["online", "pay_at_club"]),
@@ -169,9 +172,9 @@ export async function listOwnCourtActivity(scope: ActivityScope, query: Activity
               history_at: source.status === "cancelled" ? source.updated_at : end,
               customer_name: source.customer_name, customer_email: source.customer_email, customer_phone: source.customer_phone,
               includes_coaching: source.includes_coaching,
-              coach_name: source.coach_name, coaching_program_name: source.coaching_program_name,
+              coach_name: source.coach_name, coaching_program_name: source.coaching_program_name, coaching: source.coaching,
               cancellation_notice_minutes: source.cancellation_notice_minutes,
-              total_amount_minor: source.total_amount_minor, currency: source.currency };
+              payment_method: source.payment_method, total_amount_minor: source.total_amount_minor, currency: source.currency };
           } else {
             row = { ...common, kind: "reservation", status: source.status,
               history_at: source.status === "cancelled" ? source.cancelled_at ?? source.updated_at : end,
@@ -242,15 +245,17 @@ export async function findOwnBookingActivityTarget(rawId: unknown, ownerId: stri
   if (!id.success) return null;
   const manager = (await getDataSource()).manager;
   const owned = await findOwnedBookingRevision(manager, id.data, ownerId);
-  if (!owned || (owned.status !== "confirmed" && owned.status !== "cancelled")) return null;
+  // An abandoned checkout is also `cancelled`, but it never became a booking.
+  if (!owned?.confirmed || (owned.status !== "confirmed" && owned.status !== "cancelled")) return null;
   const v = owned.revision;
   const common = { id: id.data, booking_date: v.bookingDate, starts_at_minute: v.startMinute,
     ends_at_minute: v.endMinute, starts_at_instant: localStartInstant(v.timezone, v.bookingDate, v.startMinute),
     location_name: v.locationName, location_timezone: v.timezone, court_name: v.courtName,
     customer_name: v.customerName, customer_email: v.customerEmail, customer_phone: v.customerPhone,
     includes_coaching: v.coachUserId != null, coach_name: v.coachName ?? null,
-    coaching_program_name: v.coachingProgramName ?? null, cancellation_notice_minutes: v.cancellationNoticeMinutes,
-    total_amount_minor: v.totalAmountMinor, currency: v.currency };
+    coaching_program_name: v.coachingProgramName ?? null, coaching: v.pricingEvidence.coaching ?? null,
+    cancellation_notice_minutes: v.cancellationNoticeMinutes,
+    payment_method: v.paymentMethod, total_amount_minor: v.totalAmountMinor, currency: v.currency };
   const historyAt = owned.status === "cancelled" ? v.recordedAt.toISOString()
     : localStartInstant(v.timezone, v.bookingDate, v.endMinute);
   if (owned.status === "cancelled" || Date.parse(historyAt) <= now.getTime()) {

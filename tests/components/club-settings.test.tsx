@@ -34,14 +34,17 @@ test("retains edited values after validation errors", async () => {
   expect(screen.getByLabelText("Email sender name")).toHaveProperty("value", " ");
 });
 
-test("shows a single success toast without a persistent result", async () => {
-  mocks.send.mockResolvedValue({ ok: true, message: "Test email submitted to Brevo. Check your inbox." });
+test.each([
+  "Test request accepted by Brevo in sandbox mode. No email will arrive.",
+  "Test email accepted by Brevo. Acceptance does not confirm inbox delivery.",
+])("shows one mode-appropriate success toast: %s", async (message) => {
+  mocks.send.mockResolvedValue({ ok: true, message });
   render(<ClubSettingsForm settings={settings} />);
   fireEvent.click(screen.getByRole("button", { name: "Send test email" }));
-  await waitFor(() => expect(toast.success).toHaveBeenCalledExactlyOnceWith("Test email submitted to Brevo. Check your inbox."));
+  await waitFor(() => expect(toast.success).toHaveBeenCalledExactlyOnceWith(message));
   expect(toast.error).not.toHaveBeenCalled();
   expect(screen.queryByRole("status")).toBeNull();
-  expect(screen.queryByText("Test email submitted to Brevo. Check your inbox.")).toBeNull();
+  expect(screen.queryByText(message)).toBeNull();
 });
 
 test("shows a readable error toast and disables test for unsaved settings", async () => {

@@ -40,33 +40,40 @@ export function lessonTimetableDay<Row extends BookingTimetableRow>(day: Booking
   })) };
 }
 
-export function BookingTimetable<Row extends BookingTimetableRow>({ day, date, timezone, currency, selection, onSelect, lesson, lessonOffers, disabled = false }: {
+export function BookingTimetable<Row extends BookingTimetableRow>({ day, date, timezone, currency, selection, onSelect, lesson, lessonOffers, disabled = false,
+  hidePrices = false, fixedDuration, original }: {
+  fixedDuration?: number;
+  original?: { courtId: string; startMinute: number; endMinute: number };
   lesson?: { durationMinutes: number };
+  // Lesson starts without amounts, for staff who never see prices.
+  hidePrices?: boolean;
   lessonOffers: Map<string, { totalAmountMinor: number }>;
   day: BookingTimetableDay<Row>; date: string; timezone: string; currency: LocationCurrency; selection: TimetableSelection | null;
   onSelect: (courtDay: Row, rowIndex: number) => void; disabled?: boolean;
 }) {
+  const duration = fixedDuration ?? lesson?.durationMinutes;
   const cellStyles = lesson ? lessonTimetableCellStyles : timelineCellStyles;
-  const firstActionableMinute = day.times.find((_, index) => day.courts.some(({ cells }) => cells[index] === "available" && (lesson || cells[index - 1] === "available" || cells[index + 1] === "available")));
+  const firstActionableMinute = day.times.find((_, index) => day.courts.some(({ cells }) => cells[index] === "available" && (duration || cells[index - 1] === "available" || cells[index + 1] === "available")));
   return <CourtTimelineGrid times={day.times} rows={day.courts} date={date} timezone={timezone}
     selectedStartMinute={selection?.startMinute} selectedEndMinute={selection?.endMinute} firstActionableMinute={firstActionableMinute}
-    renderCourtContext={(row) => row.stateLabel} priceRates={lesson ? undefined : (row) => row.rates} currency={currency}
+    renderCourtContext={(row) => row.stateLabel} priceRates={lesson || hidePrices ? undefined : (row) => row.rates} currency={currency}
     renderCells={(courtDay) => day.times.map((minute, rowIndex) => {
       const state = courtDay.cells[rowIndex];
       const price = courtDay.hourlyPrices?.[rowIndex];
       const selected = selection?.courtId === courtDay.court.id && rowIndex >= selection.startRowIndex && rowIndex < selection.endRowIndex;
-      const selectable = state === "available" && (lesson || courtDay.cells[rowIndex - 1] === "available" || courtDay.cells[rowIndex + 1] === "available");
+      const selectable = state === "available" && (duration || courtDay.cells[rowIndex - 1] === "available" || courtDay.cells[rowIndex + 1] === "available");
       const offer = lessonOffers.get(`${courtDay.court.id}:${minute}`);
-      const label = lesson ? offer && selectable ? `${lesson.durationMinutes} min lesson, ${formatMoney(offer.totalAmountMinor, currency)} total`
+      const isOriginal = original?.courtId === courtDay.court.id && minute >= original.startMinute && minute < original.endMinute;
+      const label = fixedDuration ? selectable ? `${fixedDuration} min, Available` : state === "unavailable" ? "Unavailable start" : timelineCellLabels[state] : lesson ? offer && selectable ? `${lesson.durationMinutes} min lesson${hidePrices ? "" : `, ${formatMoney(offer.totalAmountMinor, currency)} total`}`
         : state === "unavailable" ? lessonTimetableLabels.unavailable : timelineCellLabels[state]
         : state === "available" ? formatHourlyRate(price!, currency) : timelineCellLabels[state];
-      const accessibleLabel = `${courtDay.court.name} ${date} ${minuteToTime(minute)}–${minuteToTime(minute + (lesson && selectable ? lesson.durationMinutes : 30))}, ${label}${selected ? ", selected" : ""}`;
+      const accessibleLabel = `${courtDay.court.name} ${date} ${minuteToTime(minute)}–${minuteToTime(minute + (duration && selectable ? duration : 30))}, ${label}${isOriginal ? ", Original reservation" : ""}${selected ? ", selected" : ""}`;
       // Block buttons avoid inline baseline overflow and a scrollbar that narrows rows relative to the header.
       return <div key={minute} role="cell" className={`min-w-0 border-b ${selected ? "border-primary" : "border-border"}`}>
         {selectable ? <button type="button" disabled={disabled} aria-pressed={selected} aria-label={accessibleLabel}
           onClick={() => onSelect(courtDay, rowIndex)}
-          className={`block h-full w-full border-r px-0.5 text-center text-[length:var(--timeline-cell-font-size)] font-medium tabular-nums focus-visible:relative focus-visible:z-10 focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-accent ${selected ? `border-primary ${timelineSelectedStyle}` : `border-border ${cellStyles[state]}`}`}>
-        </button> : <div aria-label={accessibleLabel} className={`flex h-full items-center justify-center border-r border-border px-0.5 text-[length:var(--timeline-cell-font-size)] tabular-nums ${selected ? timelineSelectedStyle : cellStyles[state]}`} />}
+          className={`block h-full w-full border-r px-0.5 text-center text-[length:var(--timeline-cell-font-size)] font-medium tabular-nums focus-visible:relative focus-visible:z-10 focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-accent ${isOriginal ? "ring-2 ring-inset ring-accent" : ""} ${selected ? `border-primary ${timelineSelectedStyle}` : `border-border ${cellStyles[state]}`}`}>
+        </button> : <div aria-label={accessibleLabel} className={`flex h-full items-center justify-center border-r border-border px-0.5 text-[length:var(--timeline-cell-font-size)] tabular-nums ${isOriginal ? "ring-2 ring-inset ring-accent" : ""} ${selected ? timelineSelectedStyle : cellStyles[state]}`} />}
       </div>;
     })} />;
 }

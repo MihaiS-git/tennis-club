@@ -58,7 +58,7 @@ export function HistoryActivity({ rows, page = 1, staff = false, query = parseAc
         className="fixed inset-0 m-auto max-h-[90vh] w-[calc(100%-2rem)] max-w-md overflow-y-auto rounded-card border border-border bg-surface p-5 text-foreground shadow-floating backdrop:bg-foreground/50">
         <DialogHeader titleId={titleId} title={selected.kind === "booking" ? "Booking details" : "Reservation details"} status={historyStatus(selected)} statusTone={historyTone(selected)} onClose={() => dialogRef.current?.close()} />
         {selected.kind === "reservation" ? <ReservationDetails reservation={selected} /> :
-          <><BookingDetails booking={selected} /><BookingPayment bookingId={selected.id} /></>}
+          <><BookingDetails booking={selected} noticeBypass={staff} /><BookingPayment bookingId={selected.id} /></>}
         <DialogFooter><Button type="button" variant="secondary" onClick={() => dialogRef.current?.close()}>Close</Button></DialogFooter>
       </ModalDialog>, document.body)}
   </>;

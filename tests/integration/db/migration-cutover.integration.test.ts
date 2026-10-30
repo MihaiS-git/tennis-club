@@ -56,7 +56,7 @@ afterAll(async () => {
 
 test("registered migrations match application metadata without schema changes", async () => {
   expect((await database.query("SELECT name FROM public.migrations ORDER BY timestamp")).map((row: { name: string }) => row.name))
-    .toEqual(["InitialApplicationSchema1791462257924", "ApplicationNativeIntegrity1791462257925", "SupabaseAuthStorage1791462257926", "SeparateCheckoutBookings1791462257927"]);
+    .toEqual(["InitialApplicationSchema1791462257924", "SupabaseAuthStorage1791462257926"]);
   expect(await database.query("SELECT to_regclass('public.job_leases') AS job_leases")).toEqual([{ job_leases: null }]);
   expect(await database.query(`SELECT table_name,column_name FROM information_schema.columns WHERE table_schema='public'
     AND column_name='recovery_version'`)).toEqual([]);

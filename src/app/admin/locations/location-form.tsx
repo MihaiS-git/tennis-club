@@ -135,7 +135,7 @@ export function LocationForm({ location, currencyBlockers = [] }: { location?: A
       } else if (result.reason === "currency-locked") {
         toast.error("The currency was not changed. Review the requirements below the currency.", { id: notification });
         setRejectedBlockers(result.blockers);
-      } else if (result.reason === "not-ready") {
+      } else if (result.reason === "not-ready" || result.reason === "occupied") {
         toast.error(result.message, { id: notification });
       } else {
         toast.error("This location no longer exists.", { id: notification });

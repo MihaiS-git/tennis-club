@@ -21,7 +21,7 @@ export async function listOwnerActivityBatch(manager: EntityManager, input: {
     'starts_at_minute',${schedule}.starts_at_minute,'ends_at_minute',${schedule}.ends_at_minute,'status',r.status,'court',${court})`;
   const projection = booking ? `jsonb_build_object('id',b.id,'account_user_id',b.account_user_id,
     'status',b.status,'updated_at',b.updated_at,'customer_name',v.customer_name,'customer_email',v.customer_email,
-    'coach_name',v.coach_name,'coaching_program_name',v.coaching_program_name,
+    'coach_name',v.coach_name,'coaching_program_name',v.coaching_program_name,'coaching',v.pricing_evidence->'coaching',
     'customer_phone',v.customer_phone,'includes_coaching',v.coach_user_id IS NOT NULL,'cancellation_notice_minutes',v.cancellation_notice_minutes,
     'total_amount_minor',v.total_amount_minor,'currency',v.currency,'payment_method',v.payment_method,
     'reservation',${interval})` : `${interval} || jsonb_build_object('id',r.id,'updated_at',r.updated_at,

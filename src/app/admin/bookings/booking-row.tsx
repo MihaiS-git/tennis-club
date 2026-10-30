@@ -1,3 +1,7 @@
+import { localStartInstant } from "@/lib/courts/local-time";
+import { AdminBookingEdit } from "./admin-booking-editor";
+import { CoachLessonCancellation } from "@/app/coach/bookings/lessons/[bookingId]/lesson-cancellation";
+import { CoachLessonReschedule } from "@/app/coach/bookings/lessons/[bookingId]/lesson-reschedule";
 import { RowLink } from "@/components/row-link";
 import { StatusBadge } from "@/components/status-badge";
 import { reservationDateLabel } from "@/components/reservation-details";
@@ -25,6 +29,7 @@ export function BookingRow({ booking, listQuery, mobile = false, scope = "admin"
 const hover = "relative cursor-pointer hover:bg-surface-muted focus-within:bg-surface-muted";
 
 function CustomerBookingRow({ booking: b, listQuery, mobile, scope }: { booking: ListItem<"booking">; listQuery: string; mobile: boolean; scope: ListScope }) {
+  const editable = b.status === "confirmed";
   const href = `${detailBase[scope].booking}/${b.id}${listQuery ? `?${listQuery}` : ""}`;
   const reference = <RowLink href={href} className="font-mono text-xs text-primary underline focus-visible:outline-2 focus-visible:outline-focus">#{b.id.slice(0, 8)}</RowLink>;
   const status = <StatusBadge tone={bookingStatusTones[b.status]}>{bookingStatusLabels[b.status]}</StatusBadge>;
@@ -34,6 +39,13 @@ function CustomerBookingRow({ booking: b, listQuery, mobile, scope }: { booking:
   const type = <><span className="block">{bookingTypeLabel(b)}</span>
     {typeDetail && <span className="mt-0.5 block text-xs text-muted-foreground [overflow-wrap:anywhere]">{typeDetail}</span>}</>;
   const guest = "account_user_id" in b && !b.account_user_id && <span className="ml-1.5 text-xs font-normal text-muted-foreground">Guest</span>;
+  // The Coach's own lessons only (the List query scopes Coach rows).
+  // Reschedule lesson is offered with Cancel lesson; the cancellation label explains any other state.
+  const cancel = scope === "coach" && "cancellation" in b && b.cancellation.availability !== "unavailable"
+    && <div className="flex items-center justify-end gap-2">
+      <CoachLessonReschedule lesson={b} cancellation={b.cancellation} variant="icon" />
+      <CoachLessonCancellation lesson={b} cancellation={b.cancellation} variant="icon" />
+    </div>;
   return mobile ? <li className={`min-w-0 rounded-card border border-border bg-surface p-4 ${hover}`}>
     <div className="flex items-start justify-between gap-3">{reference}{status}</div>
     <p className="mt-2 font-semibold text-foreground [overflow-wrap:anywhere]">{b.customer_name}{guest}</p>
@@ -45,6 +57,8 @@ function CustomerBookingRow({ booking: b, listQuery, mobile, scope }: { booking:
       {total && <><dt className="text-xs text-muted-foreground">Total</dt><dd className="font-semibold tabular-nums">{total}</dd></>}
       <dt className="text-xs text-muted-foreground">Created</dt><dd>{bookingCreatedLabel(b.created_at, b.location_timezone)}</dd>
     </dl>
+    {scope === "admin" && editable && <div className="relative z-10 mt-3"><AdminBookingEdit bookingId={b.id} startsAt={localStartInstant(b.location_timezone, b.booking_date, b.starts_at_minute)} /></div>}
+    {cancel && <div className="mt-3">{cancel}</div>}
   </li> : <tr className={`${hover} [&_td]:px-3 [&_td]:py-2.5 [&_td]:align-top`}>
     <td>{reference}</td>
     <td className="w-48 min-w-40 max-w-48">{type}</td>
@@ -55,6 +69,7 @@ function CustomerBookingRow({ booking: b, listQuery, mobile, scope }: { booking:
     <td>{status}</td>
     {total && <td className="whitespace-nowrap text-right font-semibold tabular-nums">{total}</td>}
     <td className="whitespace-nowrap text-muted-foreground">{bookingCreatedLabel(b.created_at, b.location_timezone)}</td>
+    {scope === "coach" ? <td>{cancel}</td> : <td className="relative z-10">{editable && <AdminBookingEdit bookingId={b.id} startsAt={localStartInstant(b.location_timezone, b.booking_date, b.starts_at_minute)} />}</td>}
   </tr>;
 }
 
@@ -90,5 +105,6 @@ function ReservationRow({ reservation: r, listQuery, mobile, scope }: { reservat
     <td>{status}</td>
     {scope === "admin" && <td className="whitespace-nowrap text-right text-muted-foreground">{total}</td>}
     <td className="whitespace-nowrap text-muted-foreground">{bookingCreatedLabel(r.created_at, r.location_timezone)}</td>
+    <td />
   </tr>;
 }

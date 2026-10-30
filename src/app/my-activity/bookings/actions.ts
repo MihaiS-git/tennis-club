@@ -2,6 +2,7 @@
 
 import { z } from "zod";
 import { dismissOwnBookingAdjustment, getOwnBookingEditDay, rescheduleOwnCustomerBooking } from "@/lib/bookings/self-reschedule";
+import { BookingEditUnavailableError } from "@/lib/bookings/commands";
 import { logger } from "@/lib/logger";
 import { revalidateCourtActivity } from "@/lib/reservations/revalidation";
 import { cancelOwnCustomerBooking } from "@/lib/bookings/self-cancellation-service";
@@ -49,7 +50,13 @@ export async function cancelOwnCustomerBookingAction(id: unknown) {
 }
 
 export async function loadOwnBookingEditDayAction(id: unknown, date: unknown) {
-  return getOwnBookingEditDay(id, date);
+  try {
+    return await getOwnBookingEditDay(id, date);
+  } catch (error: unknown) {
+    // Expected eligibility refusals explain themselves; anything else stays a generic failure.
+    if (error instanceof BookingEditUnavailableError) return { ok: false as const, message: error.message };
+    throw error;
+  }
 }
 
 export async function quoteOwnBookingAction(input: unknown) {

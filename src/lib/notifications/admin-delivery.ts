@@ -5,6 +5,7 @@ import { z } from "zod";
 import { profileContext } from "@/lib/profile/profile";
 import { requireActiveAdmin } from "@/lib/admin/authorization";
 import { getDataSource } from "@/lib/db/data-source";
+import { adminPaymentHref, parseAdminPaymentQuery } from "@/lib/payments/admin-query";
 import { inTransaction } from "@/lib/db/transaction";
 import { lockActiveAdminAccount } from "@/lib/db/repositories/accounts.repository";
 import { claimEmailDeliveries, findDeliveryBooking, findMessageDelivery, findNotificationAccounts } from "@/lib/db/repositories/notifications.repository";
@@ -29,9 +30,11 @@ export async function adminMessageDelivery(rawMessageId: unknown) {
     retry = { eligible: false, reason: "Admin and Coach accounts do not receive transactional emails." };
   }
   if (!(await readClubSettings(manager)).emailsEnabled) retry = { eligible: false, reason: "Club email delivery is disabled." };
-  const bookingId = await findDeliveryBooking(manager, delivery.eventKey);
+  const booking = await findDeliveryBooking(manager, delivery.eventKey);
   return {
-    bookingHref: bookingId ? `/admin/bookings/${bookingId}` : null,
+    bookingHref: booking?.confirmed ? `/admin/bookings/${booking.bookingId}` : null,
+    // A checkout that never became a booking is reachable only through its payment evidence.
+    transactionsHref: booking && !booking.confirmed ? adminPaymentHref({ ...parseAdminPaymentQuery({}), q: booking.bookingId }) : null,
     recipientEmail: delivery.recipientEmail, emailType: delivery.subject,
     status: delivery.status, failureReason: readableDeliveryError(delivery.lastError), attempts: delivery.attempts,
     // There is no attempt-history timestamp column. Completion updates this timestamp;

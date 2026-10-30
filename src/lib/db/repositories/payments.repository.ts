@@ -188,11 +188,19 @@ export async function writeRefundEventResolution(manager: EntityManager,
   }
 }
 
+// A capture receipt is terminal provider evidence: the authorization is no
+// longer unresolved, whatever the attempt status. Any obligation the capture
+// leaves (late-capture compensation, review of an unapplied payment) is carried
+// by its refund and by its provider event's reconciliation flag instead.
+const uncapturedAttempt = (alias: string) =>
+  `NOT EXISTS(SELECT 1 FROM public.payment_capture_receipts c WHERE c.payment_attempt_id=${alias}.id)`;
+
 // Derived attention only: local expiry never proves that Stripe cancelled an
 // intent. Accepted or abandoned overdue payments remain visible until checked.
 const paymentCheckRequired = `coalesce(op.kind='payment' AND p.provider='stripe' AND p.provider_payment_id IS NOT NULL
   AND p.status IN ('pending','expired','failed')
-  AND p.expires_at+make_interval(secs => ${checkoutCaptureGraceSeconds})<=clock_timestamp(),false)`;
+  AND p.expires_at+make_interval(secs => ${checkoutCaptureGraceSeconds})<=clock_timestamp()
+  AND ${uncapturedAttempt("p")},false)`;
 
 export async function listAdminTransactionProjection(manager: EntityManager, query: {
   page: number; status: string; provider: string; method: string; attention: boolean;
@@ -338,7 +346,8 @@ export async function listAdminTransactionProjection(manager: EntityManager, que
 
 // In-flight financial work at the booking's contractual location: a payment that may
 // still settle, a pending modification, an unfinished refund or an unresolved reconciliation.
-// Local expiry/failure does not prove a registered Stripe intent was cancelled.
+// Local expiry/failure does not prove a registered Stripe intent was cancelled;
+// a capture receipt does resolve it, leaving only its refund and reconciliation.
 // Definitive outcomes, failed refunds and pay-at-club amounts due are history.
 // Use only the current revision: rescheduling keeps the location, but Admins can move courts.
 export async function locationHasUnresolvedFinancialOperations(manager: EntityManager, locationId: string) {
@@ -346,7 +355,8 @@ export async function locationHasUnresolvedFinancialOperations(manager: EntityMa
       SELECT b.id AS booking_id FROM public.checkout_records b
       JOIN public.booking_revisions v ON v.id=b.current_revision_id WHERE v.location_id=$1)
     SELECT EXISTS(SELECT 1 FROM public.payment_attempts p JOIN located l ON l.booking_id=p.booking_id
-        WHERE p.status='pending' OR (p.provider='stripe' AND p.provider_payment_id IS NOT NULL AND p.status IN ('expired','failed')))
+        WHERE (p.status='pending' OR (p.provider='stripe' AND p.provider_payment_id IS NOT NULL AND p.status IN ('expired','failed')))
+          AND ${uncapturedAttempt("p")})
       OR EXISTS(SELECT 1 FROM public.booking_adjustments a JOIN located l ON l.booking_id=a.booking_id WHERE a.status='pending')
       OR EXISTS(SELECT 1 FROM public.payment_refunds f JOIN located l ON l.booking_id=f.booking_id WHERE f.status IN ('pending','pending_retry'))
       OR EXISTS(SELECT 1 FROM public.payment_provider_events ev JOIN public.payment_attempts p ON p.id=ev.attempt_id
@@ -372,13 +382,21 @@ export async function writeProviderSelection(manager: EntityManager, previous: P
 export type HoldExpiryScope = { courtId?: string; locationId?: string };
 
 // Include previously expired/failed attempts and overdue accepted captures:
-// local expiry is not terminal provider evidence. Random sampling prevents an
-// unavailable or long-processing intent from starving the rest on every run.
+// local expiry is not terminal provider evidence. Captured attempts are resolved
+// authorizations; their compensation follows the refund recovery path instead.
+// Most of the batch is the oldest overdue attempts, so a sweep whose checks
+// succeed drains the pool first-in first-out. The rest is sampled from the
+// remainder, so attempts Stripe persistently cannot resolve (processing, an
+// unreadable intent) cannot permanently starve newer ones behind them.
 export async function listOverdueStripeCheckouts(manager: EntityManager, limit: number) {
-  const rows: unknown = await manager.query(`SELECT id FROM public.payment_attempts
-    WHERE method='online' AND provider='stripe' AND provider_payment_id IS NOT NULL
-      AND status IN ('pending','expired','failed') AND expires_at<=clock_timestamp()
-    ORDER BY random() LIMIT $1`, [limit]);
+  const oldest = Math.ceil(limit / 2);
+  const rows: unknown = await manager.query(`WITH pool AS (SELECT p.id,p.expires_at FROM public.payment_attempts p
+      WHERE p.method='online' AND p.provider='stripe' AND p.provider_payment_id IS NOT NULL
+        AND p.status IN ('pending','expired','failed') AND p.expires_at<=clock_timestamp() AND ${uncapturedAttempt("p")}),
+    oldest AS (SELECT id,expires_at FROM pool ORDER BY expires_at,id LIMIT $2)
+    (SELECT id FROM oldest ORDER BY expires_at,id)
+    UNION ALL
+    (SELECT id FROM pool WHERE id NOT IN (SELECT id FROM oldest) ORDER BY random() LIMIT $1-$2)`, [limit,oldest]);
   return z.array(z.object({ id: z.uuid() })).parse(rows);
 }
 
@@ -424,11 +442,11 @@ export async function expirePendingAttempt(manager: EntityManager, id: string) {
 }
 
 export async function discoverSettlementParent(manager: EntityManager, attemptId: string) {
-  const rows: unknown = await manager.query(`SELECT p.booking_id,b.reservation_id,c.location_id
+  const rows: unknown = await manager.query(`SELECT p.booking_id,b.reservation_id,c.location_id,r.coach_user_id
     FROM public.payment_attempts p JOIN public.checkout_records b LEFT JOIN public.booking_revisions v ON v.id=b.current_revision_id ON b.id=p.booking_id
     JOIN public.court_reservations r ON r.id=b.reservation_id JOIN public.courts c ON c.id=r.court_id
     WHERE p.id=$1`, [attemptId]);
-  return z.array(z.object({ booking_id: z.uuid(), reservation_id: z.uuid(), location_id: z.uuid() })).max(1).parse(rows)[0] ?? null;
+  return z.array(z.object({ booking_id: z.uuid(), reservation_id: z.uuid(), location_id: z.uuid(), coach_user_id: z.uuid().nullable() })).max(1).parse(rows)[0] ?? null;
 }
 
 // Refund-only transactions read immutable financial facts without acquiring

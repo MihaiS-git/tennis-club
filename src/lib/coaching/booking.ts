@@ -1,4 +1,5 @@
 import "server-only";
+import { readClubTimezoneError } from "@/lib/club/timezone-policy";
 
 import { randomUUID } from "node:crypto";
 import type { EntityManager } from "typeorm";
@@ -89,6 +90,8 @@ type Intent = z.infer<typeof coachingBookingInputSchema>;
 // fixed until commit. No network request runs while the transaction is open.
 async function reserveLesson(manager: EntityManager, intent: Intent, customerId: string | null, now: Date): Promise<CoachingBookingResult> {
   await lockConfigurationForRead(manager);
+  const timezoneError = await readClubTimezoneError(manager);
+  if (timezoneError) return { ok: false, reason: "location-unavailable", message: timezoneError };
   if (!await lockCoachProfileForBooking(manager, intent.coachId)) return failure("not-offered");
   const court = await findCourtConfiguration(manager, intent.courtId);
   if (!court || court.locationId !== intent.locationId.toLowerCase()) return failure("court-unavailable");

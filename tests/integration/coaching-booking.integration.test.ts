@@ -1,3 +1,5 @@
+import { changeCoachAvailability } from "@/lib/coaching/availability";
+import { addDays, localToday } from "@/lib/courts/local-time";
 import { getAdminBookingRecords, listAdminBookingCoachFilterOptions, listAdminBookings, readBookingListPage } from "@/lib/bookings/admin-details";
 import { parseAdminBookingQuery } from "@/lib/bookings/admin-query";
 import { ensureIntegrationAdminAnchor } from "./admin-anchor";
@@ -10,7 +12,7 @@ import { commitCoachingCheckout } from "@/lib/coaching/checkout";
 import { abandonOnlineCheckout, checkOnlinePayment, readOnlineCheckout, resolveAuthorizedCheckoutPayment, startOnlineCheckout } from "@/lib/payments/checkout";
 import { processOnlinePaymentEvent, settleOnlinePayment } from "@/lib/payments/service";
 import { POST } from "@/app/api/payments/stripe/webhook/route";
-import { readCustomerBookingEditContext } from "@/lib/bookings/commands";
+import { readCustomerBookingEditContext, rescheduleLessonAsCoachCommand } from "@/lib/bookings/commands";
 import { runBookingReschedule } from "@/lib/bookings/reschedule";
 import { processBookingRefund } from "@/lib/payments/refunds";
 import { expireAdjustmentsAtLocation } from "@/lib/payments/hold-expiry";
@@ -22,9 +24,15 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createClient } from "@supabase/supabase-js";
 import type { DataSource } from "typeorm";
-import { afterAll, assert, beforeAll, expect, test, vi } from "vitest";
+import { afterAll, aroundEach, assert, beforeAll, expect, test, vi } from "vitest";
 import { createCustomerBooking } from "@/lib/bookings/service";
-import { deleteCoachProfile } from "@/lib/coaching/admin";
+import { cancelCustomerBookingAsAdmin, createDirectReservation, getReservationDay } from "@/lib/reservations/service";
+import { cancelAssignedLessonAsCoach, getCoachLesson, getCoachLessonRescheduleDay, listCoachBookings, rescheduleAssignedLessonAsCoach } from "@/lib/bookings/coach-bookings";
+import { cancelLessonAsCoachCommand } from "@/lib/bookings/cancellation-service";
+import { parseCoachBookingQuery } from "@/lib/bookings/admin-query";
+import { deleteCoachProfile, saveCoachProfile, setCoachingProgramStatus } from "@/lib/coaching/admin";
+import { updateAdminUserRole } from "@/lib/admin/user-role";
+import { updateAdminUserStatus } from "@/lib/admin/user-status";
 import { createCoachingBooking } from "@/lib/coaching/booking";
 import { createDataSource, getDataSource } from "@/lib/db/data-source";
 import { mondayWeekday } from "@/lib/pricing/resolution";
@@ -34,11 +42,30 @@ import { settled } from "./concurrency";
 // Same Stripe SDK boundary as stripe-payment.integration.test.ts. No provider network calls.
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/reservations/revalidation", () => ({ revalidateCourtActivity: vi.fn() }));
-const stripeFixture = vi.hoisted(() => ({
-  intents: new Map<string, { id: string; status: string; amount: number; amount_received: number;
-    amount_capturable: number; currency: string; metadata: { payment_attempt_id: string } }>(),
-  create: vi.fn(), retrieve: vi.fn(), capture: vi.fn(), cancel: vi.fn(),
-  refundCreate: vi.fn(), refundList: vi.fn<() => { id: string; status: string; amount: number; currency: string; payment_intent: string; metadata: object }[]>(() => []), refundRetrieve: vi.fn(),
+const { stripeFixture, stripeScope, createStripeFixture } = await vi.hoisted(async () => {
+  const { AsyncLocalStorage } = await import("node:async_hooks");
+  const createStripeFixture = () => ({
+    intents: new Map<string, { id: string; status: string; amount: number; amount_received: number;
+      amount_capturable: number; currency: string; metadata: { payment_attempt_id: string } }>(),
+    create: vi.fn(), retrieve: vi.fn(), capture: vi.fn(), cancel: vi.fn(),
+    refundCreate: vi.fn(), refundList: vi.fn<() => { id: string; status: string; amount: number; currency: string; payment_intent: string; metadata: object }[]>(() => []), refundRetrieve: vi.fn(),
+  });
+  const stripeScope = new AsyncLocalStorage<ReturnType<typeof createStripeFixture>>();
+  // Late work from a failed/timed-out test retains its own mocks and one-shot
+  // responses, even after the next test starts or resets its fixture.
+  const stripeFixture = new Proxy(createStripeFixture(), {
+    get(_target, key) {
+      const fixture = stripeScope.getStore();
+      if (!fixture) throw new Error("Stripe fixture accessed outside its test scope");
+      return Reflect.get(fixture, key);
+    },
+  });
+  return { stripeFixture, stripeScope, createStripeFixture };
+});
+
+aroundEach(runTest => stripeScope.run(createStripeFixture(), async () => {
+  setupStripe();
+  await runTest();
 }));
 vi.mock("@/lib/payments/providers/stripe/client", async () => {
   const actual = await vi.importActual<typeof import("@/lib/payments/providers/stripe/client")>("@/lib/payments/providers/stripe/client");
@@ -164,11 +191,12 @@ async function session() {
 // Waits until another session is blocked on a lock in a statement matching the pattern.
 // Bounded well inside Vitest's 5 s test timeout: a missing wait fails the test and its
 // finally ends the competing session, rather than Vitest abandoning it mid-transaction.
-async function blockedOn(pattern: string, observer?: Awaited<ReturnType<typeof session>>) {
+async function blockedOn(pattern: string, observer?: Awaited<ReturnType<typeof session>>, count = 1) {
   for (const deadline = Date.now() + 2000; Date.now() < deadline;) {
+    if (observer) await observer.query("SELECT pg_stat_clear_snapshot()");
     const query = `SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE wait_event_type='Lock' AND query ILIKE $1`;
     const [row] = await (observer ? observer.query(query, [pattern]) : database.query(query, [pattern]));
-    if (row.waiting > 0) return;
+    if (row.waiting >= count) return;
     await sleep(25);
   }
   throw new Error(`No session blocked on ${pattern}`);
@@ -383,6 +411,10 @@ test("a guest creates one pending booking, revision, held court-and-coach reserv
   // One hold deadline shared by the reservation and the attempt.
   expect(row.hold_expires_at.getTime()).toBe(row.attempt_expires_at.getTime());
   expect(new Date(result.holdExpiresAt).getTime()).toBe(row.hold_expires_at.getTime());
+  // Five minutes on the database clock from Continue to payment.
+  const [{ seconds }] = await database.query("SELECT extract(epoch FROM r.hold_expires_at-r.created_at)::float8 AS seconds FROM public.court_reservations r WHERE r.id=$1",
+    [result.reservationId]);
+  expect(seconds).toBeGreaterThanOrEqual(300); expect(seconds).toBeLessThan(305);
   expect(row.revision).toMatchObject({ revision_number: 1, kind: "created", booking_state: "pending_payment", actor_scope: "guest",
     actor_user_id: null, location_id: locationA, court_id: courtA1, location_name: "Coaching booking A", court_name: "A1",
     timezone: "UTC", booking_date: date, starts_at_minute: 480, ends_at_minute: 540, customer_name: "Lesson Guest",
@@ -558,7 +590,8 @@ test("ordinary court bookings keep their behaviour and stay coachless", async ()
 
 function setupStripe() {
   stripeFixture.intents.clear();
-  for (const mock of [stripeFixture.create, stripeFixture.retrieve, stripeFixture.capture, stripeFixture.cancel, stripeFixture.refundCreate]) mock.mockReset();
+  for (const mock of [stripeFixture.create, stripeFixture.retrieve, stripeFixture.capture, stripeFixture.cancel,
+    stripeFixture.refundCreate, stripeFixture.refundList, stripeFixture.refundRetrieve]) mock.mockReset();
   stripeFixture.refundList.mockReturnValue([]);
   stripeFixture.create.mockImplementation(async (input: { amount: number; currency: string; metadata: { payment_attempt_id: string } }) => {
     const id = `pi_${input.metadata.payment_attempt_id}`;
@@ -596,6 +629,35 @@ async function checkoutLesson(startMinute: number, client = guest, overrides: Re
 }
 function access(checkout: { attemptId: string; token: string }) { return { attemptId: checkout.attemptId, token: checkout.token }; }
 function remote(attemptId: string) { return stripeFixture.intents.get(`pi_${attemptId}`)!; }
+
+test("late Stripe fixture resets and captures cannot consume another test's one-shot responses", async () => {
+  const resume = Promise.withResolvers<void>();
+  const attemptId = randomUUID();
+  const input = { amount: 18000, currency: "ron", metadata: { payment_attempt_id: attemptId } };
+  // Reproduce a previous test resuming after the next test prepared an uncertain
+  // capture. Gates enforce the ordering without a real timeout or sleeps.
+  const lateWork = stripeScope.run(createStripeFixture(), async () => {
+    await resume.promise;
+    setupStripe();
+    const intent = await stripeFixture.create(input);
+    return stripeFixture.capture(intent.id);
+  });
+  try {
+    const intent = await stripeFixture.create({ ...input, amount: 16000 });
+    stripeFixture.capture.mockRejectedValueOnce(new Error("Capture response lost"));
+    stripeFixture.retrieve.mockRejectedValueOnce(new Error("Stripe unavailable"));
+    resume.resolve();
+    expect(await lateWork).toMatchObject({ status: "succeeded", amount_received: 18000 });
+    expect(remote(attemptId)).toMatchObject({ status: "requires_payment_method", amount: 16000 });
+    expect(stripeFixture.capture).not.toHaveBeenCalled();
+    await expect(stripeFixture.capture(intent.id)).rejects.toThrow("Capture response lost");
+    await expect(stripeFixture.retrieve(intent.id)).rejects.toThrow("Stripe unavailable");
+    expect(stripeFixture.capture).toHaveBeenCalledTimes(1);
+  } finally {
+    resume.resolve();
+    await Promise.allSettled([lateWork]);
+  }
+});
 
 test.each([false, true])("abandoned coaching checkout releases both resources and keeps its audit (navigation=%s)", async navigation => {
   setupStripe();
@@ -713,14 +775,29 @@ test("guest coaching uses combined included-rental price and polling recovers a 
   expect(stripeFixture.capture).toHaveBeenCalledTimes(1);
 });
 
-test("declined coaching never confirms; terminal cancellation and expiry release the court and coach", async () => {
+test("declined coaching never confirms; a definitive decline, terminal cancellation and expiry release the court and coach", async () => {
   setupStripe();
+  // Authentication in progress is not a decline: a stale failure event keeps both holds.
+  const authenticating = await checkoutLesson(600, guest, { date: "2100-02-01" });
+  remote(authenticating.paymentAttemptId).status = "requires_action";
+  expect((await POST(coachingWebhook(authenticating.paymentAttemptId, "payment_intent.payment_failed"))).status).toBe(200);
+  expect(await aggregate(authenticating.bookingId)).toMatchObject({ status: "pending_payment", reservation_status: "held", attempt_status: "pending" });
+  expect(stripeFixture.cancel).not.toHaveBeenCalled();
+  // Authentication later ends in provider cancellation, which releases both resources.
+  remote(authenticating.paymentAttemptId).status = "canceled";
+  expect((await POST(coachingWebhook(authenticating.paymentAttemptId, "payment_intent.canceled"))).status).toBe(200);
+  expect(await aggregate(authenticating.bookingId)).toMatchObject({ reservation_status: "released", attempt_status: "cancelled" });
+  // A definitive decline (the intent awaits a new card) ends coaching checkout like court checkout.
   const failed = await checkoutLesson(600);
   expect((await POST(coachingWebhook(failed.paymentAttemptId, "payment_intent.payment_failed"))).status).toBe(200);
-  expect(await aggregate(failed.bookingId)).toMatchObject({ status: "pending_payment", reservation_status: "held", attempt_status: "pending" });
-  expect(await settleOnlinePayment({ attemptId: failed.paymentAttemptId, provider: "stripe",
-    providerPaymentId: remote(failed.paymentAttemptId).id, outcome: "failed" })).toBe("failed");
-  expect(await aggregate(failed.bookingId)).toMatchObject({ status: "failed", reservation_status: "released", coach_user_id: coach });
+  expect(await aggregate(failed.bookingId)).toMatchObject({ status: "failed", reservation_status: "released", attempt_status: "cancelled",
+    coach_user_id: coach, hold_expires_at: null });
+  expect(remote(failed.paymentAttemptId).status).toBe("canceled");
+  expect(await readOnlineCheckout(failed.checkout)).toMatchObject({ status: "failed", paymentStatus: "cancelled", paymentUncertain: false });
+  // A duplicate delivery changes nothing.
+  expect((await POST(coachingWebhook(failed.paymentAttemptId, "payment_intent.payment_failed"))).status).toBe(200);
+  expect(stripeFixture.cancel).toHaveBeenCalledOnce();
+  expect((await database.query("SELECT count(*)::int AS count FROM public.bookings WHERE id=$1", [failed.bookingId]))[0].count).toBe(0);
   const replacement = await checkoutLesson(600);
   remote(replacement.paymentAttemptId).status = "canceled";
   expect((await POST(coachingWebhook(replacement.paymentAttemptId, "payment_intent.canceled"))).status).toBe(200);
@@ -923,6 +1000,63 @@ test("an unpublished unpriced coaching program never creates a booking or Stripe
     expectedTotalAmountMinor: 15000 }, guest)).toMatchObject({ ok: false, reason: "not-offered" });
   expect(await written()).toEqual(before);
   expect(stripeFixture.create).not.toHaveBeenCalled();
+});
+
+test("a coach override cannot make a program without a club price in the location's currency bookable", async () => {
+  setupStripe();
+  const locationEur = randomUUID(), courtEur = randomUUID(), onDate = "2099-12-29";
+  const writes = async () => (await database.query(`SELECT
+      (SELECT count(*)::int FROM public.court_reservations WHERE court_id=$1) AS reservations,
+      (SELECT count(*)::int FROM public.booking_revisions WHERE court_id=$1) AS revisions`, [courtEur]))[0];
+  try {
+    // A EUR location where the coach teaches; the club prices `program` only in RON.
+    await database.query(`INSERT INTO public.locations(id,name,slug,timezone,currency,is_active,is_public,customer_cancellation_notice_minutes)
+      VALUES($1,'Coaching booking EUR',($1::uuid)::text,'UTC','EUR',true,true,60)`, [locationEur]);
+    await database.query(`INSERT INTO public.courts(id,location_id,name,slug,surface,environment,is_active) VALUES($1,$2,'E1','e1','clay','outdoor',true)`,
+      [courtEur, locationEur]);
+    const [schedule] = await database.query(`INSERT INTO public.opening_hours_schedules(location_id,starts_on) VALUES($1,'2000-01-01') RETURNING id`, [locationEur]);
+    await database.query(`INSERT INTO public.location_opening_hours(location_id,schedule_id,weekday,opens_at_minute,closes_at_minute)
+      SELECT $1,$2,weekday,0,1440 FROM generate_series(0,6) AS weekday`, [locationEur, schedule.id]);
+    const [ruleSet] = await database.query("INSERT INTO public.pricing_rule_sets(location_id) VALUES($1) RETURNING id", [locationEur]);
+    await database.query(`INSERT INTO public.location_pricing_rules(location_id,rule_set_id,court_id,court_state,weekday,starts_at_minute,ends_at_minute,price_per_hour_minor)
+      SELECT $1,$2,$3,'outdoor',weekday,0,1440,3000 FROM generate_series(0,6) AS weekday`, [locationEur, ruleSet.id, courtEur]);
+    await database.query("INSERT INTO public.coach_locations(coach_user_id,location_id) VALUES($1,$2)", [coach, locationEur]);
+    await database.query(`INSERT INTO public.coach_weekly_availability(coach_user_id,location_id,weekday,start_minute,end_minute,valid_from)
+      VALUES($1,$2,$3,480,960,'2000-01-01')`, [coach, locationEur, mondayWeekday(onDate)]);
+    // The coach's own EUR override for the exact lesson: duration, count and currency all match.
+    await database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,participant_count,coach_user_id,amount_minor,currency)
+      VALUES($1,60,1,$2,8000,'EUR')`, [program, coach]);
+    // Override-only in the location's own currency for a program with no club price at all.
+    await database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,participant_count,coach_user_id,amount_minor,currency)
+      VALUES($1,60,1,$2,8000,'RON')`, [unpricedProgram, coach]);
+    const crafted = { locationId: locationEur, courtId: courtEur, date: onDate, startMinute: 600,
+      expectedTotalAmountMinor: 11000, expectedCurrency: "EUR" };
+    expect(await commitCoachingCheckout({ ...base(), ...crafted }, guest)).toMatchObject({ ok: false, reason: "not-offered" });
+    expect(await commitCoachingCheckout({ ...base(), programId: unpricedProgram, locationId: locationB, courtId: courtB1,
+      date: "2099-12-28", startMinute: 1080, expectedTotalAmountMinor: 8000 }, guest)).toMatchObject({ ok: false, reason: "not-offered" });
+    expect(await writes()).toEqual({ reservations: 0, revisions: 0 });
+    expect(stripeFixture.create).not.toHaveBeenCalled();
+
+    // Once a club EUR price publishes the program here (another duration suffices),
+    // the coach's independently configured 60-minute EUR price applies unchanged.
+    await database.query(`INSERT INTO public.coaching_prices(program_id,duration_minutes,participant_count,coach_user_id,amount_minor,currency)
+      VALUES($1,90,1,NULL,9000,'EUR')`, [program]);
+    // A deliberately stale total returns the authoritative quote without writing.
+    expect(await commitCoachingCheckout({ ...base(), ...crafted, expectedTotalAmountMinor: 1 }, guest))
+      .toEqual({ ok: false, reason: "price_changed", totalAmountMinor: 11000, currency: "EUR" });
+    expect(await writes()).toEqual({ reservations: 0, revisions: 0 });
+  } finally {
+    await database.query("DELETE FROM public.coaching_prices WHERE (program_id=$1 AND currency='EUR') OR (program_id=$2 AND coach_user_id=$3)",
+      [program, unpricedProgram, coach]);
+    await database.query("DELETE FROM public.coach_weekly_availability WHERE location_id=$1", [locationEur]);
+    await database.query("DELETE FROM public.coach_locations WHERE location_id=$1", [locationEur]);
+    await database.query("DELETE FROM public.location_pricing_rules WHERE location_id=$1", [locationEur]);
+    await database.query("DELETE FROM public.pricing_rule_sets WHERE location_id=$1", [locationEur]);
+    await database.query("DELETE FROM public.location_opening_hours WHERE location_id=$1", [locationEur]);
+    await database.query("DELETE FROM public.opening_hours_schedules WHERE location_id=$1", [locationEur]);
+    await database.query("DELETE FROM public.courts WHERE location_id=$1", [locationEur]);
+    await database.query("DELETE FROM public.locations WHERE id=$1", [locationEur]);
+  }
 });
 
 
@@ -1139,25 +1273,51 @@ test("personal activity distinguishes coaching snapshots and court bookings befo
 });
 
 
-test("Admin coach filters use historical IDs and names including archived coaches before pagination", async () => {
+test("Admin coach filters use historical IDs and names including archived coaches before pagination", async ({ signal, onTestFinished }) => {
+  // Vitest aborts the test on timeout but cannot cancel a running DB/checkout
+  // call. Drain it (including finally) before the next test or suite teardown.
+  const work = checkHistoricalCoachFilters(signal);
+  onTestFinished(async () => { await Promise.allSettled([work]); });
+  await work;
+});
+
+async function checkHistoricalCoachFilters(signal: AbortSignal) {
   await ensureIntegrationAdminAnchor(service);
   const adminAccount = await account();
   await database.query("INSERT INTO public.user_roles(user_id,role_code) VALUES($1,'admin')", [adminAccount.id]);
   const admin = reader();
   assert.strictEqual((await admin.auth.signInWithPassword({ email: adminAccount.email, password: adminAccount.password })).error, null);
-  setupStripe();
   const ids: string[] = [];
   const dates = Array.from({ length: 21 }, (_, index) => new Date(Date.UTC(2100, 2, 1 + index * 7)).toISOString().slice(0, 10));
   try {
     await database.query("UPDATE public.coach_profiles SET display_name='Earlier historical coach' WHERE user_id=$1", [coach]);
-    for (const [index, date] of dates.entries()) {
-      const lesson = await confirmedLesson(600, date);
-      ids.push(lesson.bookingId);
-      if (index === 0) await database.query("UPDATE public.coach_profiles SET display_name='Booking Coach' WHERE user_id=$1", [coach]);
-    }
+    const firstLesson = await confirmedLesson(600, dates[0]);
+    ids.push(firstLesson.bookingId);
+    signal.throwIfAborted();
+    const original = await aggregate(firstLesson.bookingId);
+    await database.query("UPDATE public.coach_profiles SET display_name='Booking Coach' WHERE user_id=$1", [coach]);
+    // Exercise real checkout/capture for both coaches. The twenty extra rows
+    // only establish pagination: use the existing transaction-bound fixture,
+    // retaining real FK, immutable revision and occupancy validation.
+    await inTransaction(async manager => {
+      for (const date of dates.slice(1)) {
+        signal.throwIfAborted();
+        const reservation = randomUUID(), id = randomUUID();
+        await manager.query(`INSERT INTO public.court_reservations(id,court_id,coach_user_id,booking_date,starts_at_minute,ends_at_minute)
+          VALUES($1,$2,$3,$4,600,660)`, [reservation, courtA3, coach, date]);
+        await insertBookingRecords(manager, { id, reservation_id: reservation, account_user_id: memberId,
+          customer_name: original.revision.customer_name, customer_email: original.revision.customer_email,
+          customer_phone: original.revision.customer_phone, total_amount_minor: original.revision.total_amount_minor,
+          currency: original.revision.currency, payment_method: "online", cancellation_notice_minutes: 120,
+          coaching: { coach_user_id: coach, coaching_program_id: program, coach_name: "Booking Coach", coaching_program_name: "Booking private" },
+          pricing_evidence: original.revision.pricing_evidence });
+        ids.push(id);
+      }
+    });
     // Matching historical names must remain two options, with distinct stored IDs.
     await database.query("UPDATE public.coach_profiles SET display_name='Booking Coach' WHERE user_id=$1", [coach2]);
     const other = await confirmedLesson(600, dates[0], { coachId: coach2, courtId: courtA2, expectedTotalAmountMinor: 17000 });
+    signal.throwIfAborted();
     await inTransaction(async manager => {
       const reservation = randomUUID();
       await manager.query(`INSERT INTO public.court_reservations(id,court_id,booking_date,starts_at_minute,ends_at_minute)
@@ -1186,9 +1346,40 @@ test("Admin coach filters use historical IDs and names including archived coache
     expect((await read({ q: other.bookingId })).total).toBe(0);
     await expect(listAdminBookingCoachFilterOptions(member)).rejects.toThrow();
   } finally {
-    await database.query("UPDATE public.coach_profiles SET display_name='Booking Coach',is_public=true,archived_at=NULL WHERE user_id=$1", [coach]);
-    await database.query("UPDATE public.coach_profiles SET display_name='Second Coach',is_public=true,archived_at=NULL WHERE user_id=$1", [coach2]);
+    await inTransaction(async manager => {
+      await manager.query("UPDATE public.coach_profiles SET display_name='Booking Coach',is_public=true,archived_at=NULL WHERE user_id=$1", [coach]);
+      await manager.query("UPDATE public.coach_profiles SET display_name='Second Coach',is_public=true,archived_at=NULL WHERE user_id=$1", [coach2]);
+      // Select by the test's dates, including a checkout whose assertion failed
+      // before its ID could be returned. Cleanup is awaited even on failure.
+      const reservations: { id: string }[] = await manager.query(`SELECT id FROM public.court_reservations
+        WHERE court_id=ANY($1::uuid[]) AND booking_date=ANY($2::date[])`, [courts, dates]);
+      const reservationIds = reservations.map(row => row.id);
+      await manager.query(`DELETE FROM public.email_deliveries d USING public.booking_revisions v
+        WHERE v.booking_id IN (SELECT id FROM public.checkout_records WHERE reservation_id=ANY($1::uuid[]))
+          AND d.event_key IN ('booking.confirmed:' || v.id, 'booking.rescheduled:' || v.id, 'booking.cancelled:' || v.id)`, [reservationIds]);
+      await cleanupBookingEvidence(manager, { reservationIds });
+      await manager.query("DELETE FROM public.court_reservations WHERE id=ANY($1::uuid[])", [reservationIds]);
+    });
   }
+}
+
+test("aborted historical Coach-filter setup drains checkout and cleans its persisted fixtures", async () => {
+  const controller = new AbortController();
+  const capture = stripeFixture.capture.getMockImplementation();
+  assert.ok(capture);
+  stripeFixture.capture.mockImplementationOnce(async (...args) => {
+    const result = await capture(...args);
+    controller.abort(new Error("Stop after capture"));
+    return result;
+  });
+  await expect(checkHistoricalCoachFilters(controller.signal)).rejects.toThrow("Stop after capture");
+  expect(stripeFixture.capture).toHaveBeenCalledTimes(1);
+  expect(await database.query(`SELECT id FROM public.court_reservations
+    WHERE court_id=ANY($1::uuid[]) AND booking_date='2100-03-01'`, [courts])).toEqual([]);
+  expect(await database.query("SELECT display_name,is_public,archived_at FROM public.coach_profiles WHERE user_id=$1", [coach]))
+    .toEqual([{ display_name: "Booking Coach", is_public: true, archived_at: null }]);
+  expect(await database.query("SELECT display_name,is_public,archived_at FROM public.coach_profiles WHERE user_id=$1", [coach2]))
+    .toEqual([{ display_name: "Second Coach", is_public: true, archived_at: null }]);
 });
 
 
@@ -1330,10 +1521,136 @@ test.each(["booking first", "removal first"])("coach removal and booking creatio
   }
 }, 15000);
 
+// Revoking the Coach role or suspending the account removes the coach's access to their
+// lessons, so both share the future-lesson rule of coach-profile removal.
+function changeCoachAccess(change: "revoke" | "suspend", fixture: Awaited<ReturnType<typeof removalFixture>>) {
+  return change === "revoke"
+    ? updateAdminUserRole({ userId: fixture.id, role: "coach", operation: "revoke" }, fixture.admin)
+    : updateAdminUserStatus({ userId: fixture.id, status: "suspended" }, fixture.admin);
+}
+async function coachAccess(coachId: string) {
+  return (await database.query(`SELECT u.status::text AS status,
+      ARRAY(SELECT r.role_code::text FROM public.user_roles r WHERE r.user_id=u.id ORDER BY 1) AS roles
+    FROM public.users u WHERE u.id=$1`, [coachId]))[0];
+}
+
+test.each([["revoke", "live hold"], ["revoke", "confirmed lesson"], ["suspend", "live hold"], ["suspend", "confirmed lesson"]] as const)(
+  "coach %s is refused with a %s and leaves access, bookings and configuration unchanged", async (change, phase) => {
+    setupStripe();
+    const fixture = await removalFixture();
+    const lesson = await commitCoachingCheckout(fixture.intent, member);
+    assert.ok(lesson.ok);
+    if (phase === "confirmed lesson") {
+      const intent = remote(lesson.paymentAttemptId);
+      intent.status = "requires_capture"; intent.amount_capturable = 16000;
+      expect(await readOnlineCheckout(access(lesson.checkout))).toMatchObject({ status: "confirmed" });
+    }
+    const bookingBefore = await removalBookingSnapshot(fixture.id);
+    const configurationBefore = await removalConfigurationSnapshot(fixture.id);
+    expect(await changeCoachAccess(change, fixture)).toEqual({ ok: false, reason: "active-lessons" });
+    expect(await coachAccess(fixture.id)).toEqual({ status: "active", roles: ["coach"] });
+    expect(await removalBookingSnapshot(fixture.id)).toEqual(bookingBefore);
+    expect(await removalConfigurationSnapshot(fixture.id)).toEqual(configurationBefore);
+    if (phase === "confirmed lesson") {
+      // Once the lesson has ended it is history and no longer depends on the coach.
+      await database.query("UPDATE public.court_reservations SET booking_date=$2 WHERE coach_user_id=$1", [fixture.id, fixture.intent.date.replace(/^2101/, "2001")]);
+      expect(await changeCoachAccess(change, fixture)).toMatchObject({ ok: true });
+      expect(await coachAccess(fixture.id)).toEqual(change === "revoke" ? { status: "active", roles: [] } : { status: "suspended", roles: ["coach"] });
+      expect(await database.query("SELECT status FROM public.checkout_records WHERE id=$1", [lesson.bookingId])).toEqual([{ status: "confirmed" }]);
+    }
+  });
+
+test.each(["revoke", "suspend"] as const)("coach %s without lessons succeeds", async change => {
+  const fixture = await removalFixture();
+  expect(await changeCoachAccess(change, fixture)).toMatchObject({ ok: true });
+  expect(await coachAccess(fixture.id)).toEqual(change === "revoke" ? { status: "active", roles: [] } : { status: "suspended", roles: ["coach"] });
+});
+
+test.each([["revoke", "checkout first"], ["revoke", "change first"], ["suspend", "checkout first"], ["suspend", "change first"]] as const)(
+  "coach %s and lesson checkout serialize on the coach's account locks: %s", async (change, order) => {
+    const fixture = await removalFixture();
+    const blocker = await session();
+    const observer = await session();
+    let booking: ReturnType<typeof createCoachingBooking> | undefined;
+    let decision: ReturnType<typeof changeCoachAccess> | undefined;
+    try {
+      await blocker.query("BEGIN");
+      if (order === "checkout first") {
+        // Stop checkout after it holds the coach's role and account FOR SHARE.
+        await blocker.query("SELECT active_provider FROM public.payment_provider_settings WHERE id=true FOR UPDATE");
+        booking = createCoachingBooking(fixture.intent, guest);
+        await blockedOn("%payment_provider_settings%", observer);
+        decision = changeCoachAccess(change, fixture);
+        await blockedOn("%user_roles%FOR UPDATE%", observer);
+        await blocker.query("COMMIT");
+        expect(await booking).toMatchObject({ ok: true, status: "pending_payment" });
+        expect(await decision).toEqual({ ok: false, reason: "active-lessons" });
+        expect(await coachAccess(fixture.id)).toEqual({ status: "active", roles: ["coach"] });
+        expect(await database.query("SELECT status FROM public.court_reservations WHERE coach_user_id=$1", [fixture.id])).toEqual([{ status: "held" }]);
+      } else {
+        // Stop the change after it holds the coach's roles FOR UPDATE, at the account row.
+        await blocker.query("SELECT id FROM public.users WHERE id=$1 FOR UPDATE", [fixture.id]);
+        decision = changeCoachAccess(change, fixture);
+        await blockedOn("%UserEntity%", observer);
+        booking = createCoachingBooking(fixture.intent, guest);
+        await blockedOn("%role_code IN%", observer);
+        await blocker.query("COMMIT");
+        expect(await decision).toMatchObject({ ok: true });
+        expect(await booking).toMatchObject({ ok: false, reason: "not-offered" });
+        expect(await database.query("SELECT id FROM public.court_reservations WHERE coach_user_id=$1", [fixture.id])).toEqual([]);
+      }
+    } finally {
+      await blocker.query("ROLLBACK");
+      await Promise.allSettled([booking, decision]);
+      await blocker.end();
+      await observer.end();
+    }
+  }, 15000);
+
+// R2: status changes lock the program FOR UPDATE; checkout locks it FOR SHARE and
+// requotes from the committed program, so no lesson is created for an inactive program.
+test.each(["checkout first", "deactivation first"])("program deactivation and lesson checkout serialize on the program lock: %s", async order => {
+  const fixture = await removalFixture();
+  const blocker = await session();
+  const observer = await session();
+  let booking: ReturnType<typeof createCoachingBooking> | undefined;
+  let deactivation: ReturnType<typeof setCoachingProgramStatus> | undefined;
+  try {
+    await blocker.query("BEGIN");
+    if (order === "checkout first") {
+      // Stop checkout after it holds the program FOR SHARE.
+      await blocker.query("SELECT active_provider FROM public.payment_provider_settings WHERE id=true FOR UPDATE");
+      booking = createCoachingBooking(fixture.intent, guest);
+      await blockedOn("%payment_provider_settings%", observer);
+      deactivation = setCoachingProgramStatus({ id: program, is_active: false }, fixture.admin);
+      await blockedOn("%CoachingProgramEntity%", observer);
+      await blocker.query("COMMIT");
+      expect(await booking).toMatchObject({ ok: true, status: "pending_payment" });
+      expect(await deactivation).toEqual({ ok: true, id: program });
+      // The lesson agreed while the program was active keeps its contract.
+      expect(await database.query("SELECT status FROM public.court_reservations WHERE coach_user_id=$1", [fixture.id])).toEqual([{ status: "held" }]);
+    } else {
+      // Stop checkout at its location lock, before the program lock; the deactivation commits first.
+      await blocker.query("SELECT id FROM public.locations WHERE id=$1 FOR UPDATE", [locationA]);
+      booking = createCoachingBooking(fixture.intent, guest);
+      await blockedOn("%location%", observer);
+      expect(await setCoachingProgramStatus({ id: program, is_active: false }, fixture.admin)).toEqual({ ok: true, id: program });
+      await blocker.query("COMMIT");
+      expect(await booking).toMatchObject({ ok: false, reason: "not-offered" });
+      expect(await database.query("SELECT id FROM public.court_reservations WHERE coach_user_id=$1", [fixture.id])).toEqual([]);
+    }
+  } finally {
+    await blocker.query("ROLLBACK");
+    await Promise.allSettled([booking, deactivation]);
+    await blocker.end();
+    await observer.end();
+    await database.query("UPDATE public.coaching_programs SET is_active=true WHERE id=$1", [program]);
+  }
+}, 15000);
+
 // Rescheduling a confirmed, member-owned lesson. Each test uses its own Monday;
 // the coach teaches at A 08:00–16:00, A1 5000/h, A2 7000/h, A3 6000/h.
 async function confirmedLesson(startMinute: number, lessonDate: string, overrides: Record<string, unknown> = {}) {
-  setupStripe();
   const lesson = await checkoutLesson(startMinute, member, { date: lessonDate, customerEmail: memberEmail, ...overrides });
   const intent = remote(lesson.paymentAttemptId);
   intent.status = "requires_capture"; intent.amount_capturable = intent.amount;
@@ -1734,3 +2051,630 @@ test("A 90-minute lesson price/person is charged per player without duration sca
   expect(await readOnlineCheckout(lesson.checkout)).toMatchObject({ status: "confirmed", totalAmountMinor: 18000 });
   expect((await aggregate(lesson.bookingId)).revision.pricing_evidence).toEqual(agreed.revision.pricing_evidence);
 });
+
+
+// Dedicated coaches keep these current-date absences independent of the historical fixtures.
+async function timeOffFixture() {
+  const fixture = await removalFixture();
+  let date = addDays(localToday("UTC", new Date()), 14 + removalCoachIds.length * 7);
+  while (mondayWeekday(date) !== mondayWeekday(fixture.intent.date)) date = addDays(date, 1);
+  const fields = (start: number) => ({ date, kind: "unavailable", location_id: null,
+    start_minute: start, end_minute: start + 60, note: "Time off integrity regression" });
+  const save = (start: number, id?: string) => changeCoachAvailability({ coach_user_id: fixture.id,
+    change: { operation: "save-exception", ...(id ? { id } : {}), fields: fields(start) } }, fixture.admin);
+  return { ...fixture, date, fields, save, intent: { ...fixture.intent, date, startMinute: 600 } };
+}
+
+test.each(["active", "registered-overdue", "accepted-overdue", "processing-overdue", "expired-unprotected", "confirmed"])(
+  "time off respects %s coaching occupancy and rejected edits preserve the original", async (state) => {
+    setupStripe();
+    const fixture = await timeOffFixture();
+    const lesson = await createCoachingBooking(fixture.intent, guest);
+    assert.ok(lesson.ok, JSON.stringify(lesson));
+    const checkout = state === "expired-unprotected" ? null : await startOnlineCheckout(lesson.paymentAttemptId);
+    const intent = remote(lesson.paymentAttemptId);
+    if (state === "accepted-overdue" || state === "processing-overdue") {
+      assert.ok(checkout);
+      intent.status = "requires_capture"; intent.amount_capturable = intent.amount;
+      stripeFixture.capture.mockImplementationOnce(async () => { throw new Error("Capture outcome unknown"); });
+      expect(await readOnlineCheckout(access(checkout))).toMatchObject({ status: "pending_payment" });
+      if (state === "processing-overdue") intent.status = "processing";
+    }
+    if (state === "confirmed") {
+      assert.ok(checkout);
+      intent.status = "requires_capture"; intent.amount_capturable = intent.amount;
+      expect(await readOnlineCheckout(access(checkout))).toMatchObject({ status: "confirmed" });
+    } else if (state !== "active") {
+      const expiry = new Date(Date.now() - 300000).toISOString();
+      await inTransaction(async manager => {
+        await setPaymentAttemptExpiryFixture(manager, lesson.paymentAttemptId, expiry);
+        await manager.query("UPDATE public.court_reservations SET hold_expires_at=$2::timestamptz + interval '120 seconds' WHERE id=$1",
+          [lesson.reservationId, expiry]);
+        if (state === "expired-unprotected") {
+          await manager.query("UPDATE public.court_reservations SET hold_expires_at=$2 WHERE id=$1", [lesson.reservationId, expiry]);
+        }
+      });
+    }
+    const separate = await fixture.save(720);
+    assert.ok(separate.ok);
+    const before = await database.query("SELECT * FROM public.coach_availability_exceptions WHERE id=$1", [separate.id]);
+    try {
+      if (state === "expired-unprotected") {
+        expect(await fixture.save(600, separate.id)).toEqual({ ok: true, id: separate.id });
+      } else {
+        expect(await fixture.save(600)).toEqual({ ok: false, reason: "booking-conflict" });
+        expect(await fixture.save(600, separate.id)).toEqual({ ok: false, reason: "booking-conflict" });
+        expect(await database.query("SELECT * FROM public.coach_availability_exceptions WHERE id=$1", [separate.id])).toEqual(before);
+      }
+    } finally {
+      await database.query("DELETE FROM public.coach_availability_exceptions WHERE coach_user_id=$1", [fixture.id]);
+    }
+  });
+
+test("protected overdue coaching settlement and concurrent time off cannot coexist", async () => {
+  setupStripe();
+  const fixture = await timeOffFixture();
+  const lesson = await commitCoachingCheckout(fixture.intent, guest);
+  assert.ok(lesson.ok);
+  const intent = remote(lesson.paymentAttemptId);
+  intent.status = "requires_capture"; intent.amount_capturable = intent.amount;
+  stripeFixture.capture.mockImplementationOnce(async () => { throw new Error("Lost capture response"); });
+  expect(await readOnlineCheckout(access(lesson.checkout))).toMatchObject({ status: "pending_payment" });
+  await inTransaction(async manager => {
+    const expiry = new Date(Date.now() - 300000).toISOString();
+    await setPaymentAttemptExpiryFixture(manager, lesson.paymentAttemptId, expiry);
+    await manager.query("UPDATE public.court_reservations SET hold_expires_at=$2::timestamptz+interval '120 seconds' WHERE id=$1", [lesson.reservationId, expiry]);
+  });
+  const fence = await session();
+  let saving: ReturnType<typeof fixture.save> | undefined;
+  let settling: ReturnType<typeof POST> | undefined;
+  try {
+    await fence.query("BEGIN");
+    await fence.query("SELECT user_id FROM public.coach_profiles WHERE user_id=$1 FOR UPDATE", [fixture.id]);
+    saving = fixture.save(600);
+    await blockedOn("%coach_profiles%");
+    intent.status = "succeeded"; intent.amount_received = intent.amount;
+    settling = POST(coachingWebhook(lesson.paymentAttemptId, "payment_intent.succeeded", `evt_timeoff_${randomUUID()}`));
+    await blockedOn("%coach_profiles%", fence, 2);
+    await fence.query("COMMIT");
+    expect(await saving).toEqual({ ok: false, reason: "booking-conflict" });
+    expect((await settling).status).toBe(200);
+    expect(await aggregate(lesson.bookingId)).toMatchObject({ status: "confirmed", reservation_status: "active", attempt_status: "succeeded" });
+    expect(await database.query("SELECT id FROM public.coach_availability_exceptions WHERE coach_user_id=$1", [fixture.id])).toEqual([]);
+    expect(await fixture.save(600)).toEqual({ ok: false, reason: "booking-conflict" });
+    expect(stripeFixture.capture).toHaveBeenCalledTimes(1);
+  } finally {
+    await fence.end();
+    await Promise.allSettled([saving, settling]);
+  }
+});
+
+test("concurrent time off and coaching checkout creation admit only one commitment", async () => {
+  setupStripe();
+  const fixture = await timeOffFixture();
+  const fence = await session();
+  let saving: ReturnType<typeof fixture.save> | undefined;
+  let creating: ReturnType<typeof commitCoachingCheckout> | undefined;
+  try {
+    await fence.query("BEGIN");
+    await fence.query("SELECT user_id FROM public.coach_profiles WHERE user_id=$1 FOR UPDATE", [fixture.id]);
+    saving = fixture.save(600);
+    await blockedOn("%coach_profiles%");
+    creating = commitCoachingCheckout(fixture.intent, guest);
+    await fence.query("COMMIT");
+    const [absence, checkout] = await settled([saving, creating]);
+    expect([absence, checkout].filter(result => result.ok)).toHaveLength(1);
+    if (absence.ok) expect(checkout).toMatchObject({ ok: false, reason: "coach-unavailable" });
+    else expect(absence).toEqual({ ok: false, reason: "booking-conflict" });
+  } finally {
+    await fence.end();
+    await Promise.allSettled([saving, creating]);
+    await database.query("DELETE FROM public.coach_availability_exceptions WHERE coach_user_id=$1", [fixture.id]);
+  }
+});
+
+test.each([
+  ["2027-03-28", 0, true], ["2027-03-28", 180, false], ["2027-03-28", 240, true],
+  ["2027-10-31", 120, false], ["2027-10-31", 180, true], ["2027-10-31", 1380, true],
+])("shared-timezone coaching retains midnight and DST validation on %s at minute %i", async (lessonDate, startMinute, valid) => {
+  const before = await written();
+  const weeklyId = randomUUID();
+  await database.query(`INSERT INTO public.coach_weekly_availability(id,coach_user_id,location_id,weekday,start_minute,end_minute,valid_from)
+    VALUES($1,$2,$3,6,0,1440,'2000-01-01')`, [weeklyId, coach, locationA]);
+  await database.query("UPDATE public.locations SET timezone='Europe/Bucharest' WHERE id=ANY($1::uuid[])", [[locationA, locationB]]);
+  try {
+    const result = await book({ date: lessonDate, startMinute });
+    expect(result).toMatchObject(valid ? { ok: true, status: "pending_payment" } : { ok: false, reason: "invalid-time" });
+    expect(await written()).toEqual(valid ? { reservations: before.reservations + 1, bookings: before.bookings + 1,
+      revisions: before.revisions + 1, attempts: before.attempts + 1 } : before);
+    expect(await database.query(`SELECT b.id FROM public.bookings b JOIN public.checkout_records c ON c.id=b.id
+      JOIN public.court_reservations r ON r.id=c.reservation_id WHERE r.court_id=$1 AND r.booking_date=$2`, [courtA3, lessonDate]))
+      .toHaveLength(0);
+  } finally {
+    await database.query("DELETE FROM public.coach_weekly_availability WHERE id=$1", [weeklyId]);
+    await database.query("UPDATE public.locations SET timezone='UTC' WHERE id=ANY($1::uuid[])", [[locationA, locationB]]);
+  }
+});
+
+test("legacy mixed timezones reject concurrent new scheduling without writes while accepted coaching payments still settle", async () => {
+  let lessonDate = "2104-11-01";
+  while (mondayWeekday(lessonDate) !== 0) lessonDate = addDays(lessonDate, 1);
+  const existing = await confirmedLesson(900, lessonDate);
+  const confirmedBefore = await aggregate(existing.bookingId);
+  expect(await book({ date: lessonDate, startMinute: 900, courtId: courtA2, expectedTotalAmountMinor: 19000 }))
+    .toMatchObject({ ok: false, reason: "coach-booked" });
+  // Half-open boundaries still allow the next lesson at the other location.
+  const adjacent = await book({ date: lessonDate, locationId: locationB, courtId: courtB1,
+    startMinute: 960, expectedTotalAmountMinor: 16000 }); assert.ok(adjacent.ok);
+  const edit = await lessonEdit(existing.bookingId, { courtId: courtA3, date: lessonDate, startMinute: 840, expectedTotal: 18000 });
+  const pending = await book({ date: lessonDate, startMinute: 480 }); assert.ok(pending.ok);
+  const fixture = await timeOffFixture();
+  await startOnlineCheckout(pending.paymentAttemptId);
+  const before = await written();
+  // 17:00 Bucharest and 15:00 UTC overlap in November, but their local-minute
+  // ranges do not. This is the configuration that defeated the coach exclusion.
+  await database.query("UPDATE public.locations SET timezone='Europe/Bucharest' WHERE id=$1", [locationB]);
+  try {
+    const rejected = await settled([
+      book({ date: lessonDate, locationId: locationB, courtId: courtB1, startMinute: 1020, expectedTotalAmountMinor: 16000 }),
+      book({ date: lessonDate, startMinute: 540 }),
+    ]);
+    for (const result of rejected) expect(result).toMatchObject({ ok: false, message: expect.stringContaining("same IANA timezone") });
+    expect(rejected[0]).toMatchObject({ message: expect.stringContaining("Coaching booking B") });
+    expect(rejected[0]).toMatchObject({ message: expect.stringContaining("Europe/Bucharest") });
+    expect(await createCustomerBooking({ courtId: courtA2, date: lessonDate, startMinute: 600, endMinute: 660,
+      customerName: "Guest", customerEmail: "guest@example.test", customerPhone: "123", expectedTotalAmountMinor: 7000,
+      expectedCurrency: "RON", paymentMethod: "online" }, guest)).toMatchObject({ ok: false, message: expect.stringContaining("same IANA timezone") });
+    expect(await createDirectReservation({ locationId: locationA, courtId: courtA2, date: lessonDate,
+      startMinute: 600, endMinute: 660, reason: "Timezone regression" }, fixture.admin))
+      .toMatchObject({ ok: false, message: expect.stringContaining("same IANA timezone") });
+    expect(await runBookingReschedule(edit, memberId)).toMatchObject({ ok: false, message: expect.stringContaining("same IANA timezone") });
+    expect(await fixture.save(600)).toMatchObject({ ok: false, reason: "invalid-input",
+      fieldErrors: { form: expect.stringContaining("same IANA timezone") } });
+    expect(await changeCoachAvailability({ coach_user_id: fixture.id, change: { operation: "save-weekly",
+      fields: { location_id: locationA, weekday: 0, start_minute: 0, end_minute: 60 } } }, fixture.admin))
+      .toMatchObject({ ok: false, reason: "invalid-input", fieldErrors: { form: expect.stringContaining("same IANA timezone") } });
+    expect(await saveCoachProfile({ user_id: fixture.id, create: false, fields: {
+      display_name: "Rejected profile edit", bio: "", qualifications: "", specialties: [], languages: [],
+      location_ids: [locationA, locationB], program_ids: [program], is_public: true,
+    } }, fixture.admin)).toMatchObject({ ok: false, reason: "invalid-input",
+      fieldErrors: { location_ids: expect.stringContaining("same IANA timezone") } });
+    expect(await database.query("SELECT location_id FROM public.coach_locations WHERE coach_user_id=$1", [fixture.id]))
+      .toEqual([{ location_id: locationA }]);
+    expect(await written()).toEqual(before);
+    expect(await aggregate(existing.bookingId)).toEqual(confirmedBefore);
+    // A paid protected hold was accepted before the mismatch was discovered.
+    // Preserve its contract and financial evidence; configuration alone cannot refund it.
+    const intent = remote(pending.paymentAttemptId);
+    intent.status = "succeeded"; intent.amount_received = intent.amount;
+    expect(await processOnlinePaymentEvent({ attemptId: pending.paymentAttemptId, provider: "stripe",
+      providerPaymentId: intent.id, providerCaptureId: intent.id, eventId: `evt_timezone_${randomUUID()}`,
+      outcome: "succeeded", amountMinor: intent.amount, currency: "RON" })).toBe("succeeded");
+    expect(await aggregate(pending.bookingId)).toMatchObject({ status: "confirmed", reservation_status: "active" });
+    expect(await aggregate(existing.bookingId)).toEqual(confirmedBefore);
+  } finally {
+    await database.query("UPDATE public.locations SET timezone='UTC' WHERE id=$1", [locationB]);
+  }
+});
+
+// Coach lesson cancellation: the assigned Coach uses the Admin cancellation workflow,
+// attributed to the Coach. Each test uses its own Monday.
+let cancellationAdmin: ReturnType<typeof reader> | undefined;
+async function signedInCoach(coachId: string) {
+  const password = `coach-cancellation-${randomUUID()}`;
+  const updated = await service.auth.admin.updateUserById(coachId, { password });
+  assert.strictEqual(updated.error, null); assert.ok(updated.data.user?.email);
+  const client = reader();
+  assert.strictEqual((await client.auth.signInWithPassword({ email: updated.data.user.email, password })).error, null);
+  return client;
+}
+async function signedInAdmin() {
+  if (!cancellationAdmin) {
+    await ensureIntegrationAdminAnchor(service);
+    const details = await account();
+    await database.query("INSERT INTO public.user_roles(user_id,role_code) VALUES($1,'admin')", [details.id]);
+    cancellationAdmin = reader();
+    assert.strictEqual((await cancellationAdmin.auth.signInWithPassword(details)).error, null);
+  }
+  return cancellationAdmin;
+}
+const lessonLocation = { id: locationA, name: "Coaching booking A", timezone: "UTC",
+  courts: [{ id: courtA1, name: "A1" }, { id: courtA2, name: "A2" }, { id: courtA3, name: "A3" }] };
+const cancellationRecords = async (bookingId: string) => ({
+  refunds: await database.query("SELECT amount_minor,status FROM public.payment_refunds WHERE booking_id=$1", [bookingId]),
+  adjustments: await database.query(`SELECT scope,status,actor_id,target->>'actorScope' AS actor_scope FROM public.booking_adjustments
+    WHERE booking_id=$1 AND kind='cancellation'`, [bookingId]),
+  attempts: await database.query("SELECT amount_minor,status FROM public.payment_attempts WHERE booking_id=$1 ORDER BY created_at", [bookingId]),
+});
+
+test.each([false, true])("the assigned coach cancels a paid lesson once, refunded by Stripe, freeing its court and notifying the customer (email enabled=%s)", async emailsEnabled => {
+  await database.query("UPDATE public.club_settings SET official_email=$1,sender_name=$2,emails_enabled=$3 WHERE id=true",
+    [emailsEnabled ? "club@example.test" : "", emailsEnabled ? "Test Club" : "", emailsEnabled]);
+  const lessonDate = emailsEnabled ? "2103-05-14" : "2103-05-07";
+  try {
+    const lesson = await confirmedLesson(600, lessonDate);
+    const original = await aggregate(lesson.bookingId);
+    const coachClient = await signedInCoach(coach), otherCoach = await signedInCoach(coach2);
+    const now = new Date();
+    expect(await getCoachLesson(lesson.bookingId, coachClient, now)).toMatchObject({ status: "confirmed",
+      coaching_program_name: "Booking private", cancellation: { availability: "eligible", refundAvailable: true } });
+    const calls = stripeCalls();
+
+    // Another coach, forged or invalid IDs and non-Coach callers change nothing.
+    expect(await cancelAssignedLessonAsCoach({ id: lesson.bookingId }, otherCoach))
+      .toEqual({ ok: false, message: "This lesson is no longer available to cancel." });
+    expect(await getCoachLesson(lesson.bookingId, otherCoach)).toBeNull();
+    expect(await cancelAssignedLessonAsCoach({ id: randomUUID() }, coachClient))
+      .toEqual({ ok: false, message: "This lesson is no longer available to cancel." });
+    expect(await cancelAssignedLessonAsCoach({ id: "not-a-uuid" }, coachClient)).toEqual({ ok: false, message: "Choose a valid lesson." });
+    expect(await cancelAssignedLessonAsCoach({ id: lesson.bookingId, coachId: coach }, coachClient)).toEqual({ ok: false, message: "Choose a valid lesson." });
+    for (const client of [member, reader()]) await expect(cancelAssignedLessonAsCoach({ id: lesson.bookingId }, client)).rejects.toThrow();
+    expect(await aggregate(lesson.bookingId)).toEqual(original);
+    expect(stripeCalls()).toEqual(calls);
+
+    // Concurrent and repeated requests cancel once and refund the verified capture once.
+    const attempts = await Promise.all([cancelAssignedLessonAsCoach({ id: lesson.bookingId }, coachClient),
+      cancelAssignedLessonAsCoach({ id: lesson.bookingId }, coachClient)]);
+    expect(attempts.every(result => result.ok)).toBe(true);
+    expect(attempts).toContainEqual({ ok: true, outcome: "cancelled", refundStatus: "succeeded" });
+    expect(await cancelAssignedLessonAsCoach({ id: lesson.bookingId }, coachClient)).toMatchObject({ ok: true, outcome: "cancelled" });
+    expect(stripeFixture.refundCreate).toHaveBeenCalledTimes(1);
+    expect(stripeFixture.refundCreate).toHaveBeenLastCalledWith(expect.objectContaining({ amount: 18000 }), expect.anything());
+    expect(await cancellationRecords(lesson.bookingId)).toEqual({
+      refunds: [{ amount_minor: 18000, status: "succeeded" }],
+      // The staff rule set, attributed to the Coach.
+      adjustments: [{ scope: "admin", status: "applied", actor_id: coach, actor_scope: "coach" }],
+      attempts: [{ amount_minor: 18000, status: "succeeded" }] });
+
+    const cancelled = await aggregate(lesson.bookingId);
+    expect(cancelled).toMatchObject({ status: "cancelled", reservation_status: "cancelled", coach_user_id: coach,
+      revision: { kind: "cancelled", actor_scope: "coach", actor_user_id: coach, cancellation_cause: "coach_cancelled",
+        coach_user_id: coach, coaching_program_name: "Booking private", total_amount_minor: 18000,
+        pricing_evidence: original.revision.pricing_evidence } });
+    expect((await database.query("SELECT count(*)::int AS count FROM public.booking_revisions WHERE booking_id=$1", [lesson.bookingId]))[0].count)
+      .toBe(original.revision.revision_number + 1);
+    expect((await database.query("SELECT cancelled_by_user_id FROM public.court_reservations WHERE id=$1", [lesson.reservationId]))[0])
+      .toEqual({ cancelled_by_user_id: coach });
+
+    // Booking history names the assigned coach.
+    const records = await getAdminBookingRecords(lesson.bookingId, { supabase: await signedInAdmin() });
+    expect(records?.history.map(item => item.detail)).toContain("Cancelled by the assigned coach");
+
+    // The customer is notified through the existing channels; staff messages stay in-app.
+    const event = `booking.cancelled:${cancelled.revision.id}`;
+    expect(await database.query("SELECT count(*)::int AS count FROM public.user_messages WHERE user_id=$1 AND event_key=$2", [memberId, event]))
+      .toEqual([{ count: 1 }]);
+    expect(await database.query("SELECT recipient_email,status FROM public.email_deliveries WHERE event_key=$1", [event]))
+      .toEqual(emailsEnabled ? [{ recipient_email: memberEmail, status: "pending" }] : []);
+    expect(await database.query("SELECT count(*)::int AS count FROM public.user_messages WHERE user_id=$1 AND event_key=$2",
+      [coach, `coaching.cancelled:${cancelled.revision.id}`])).toEqual([{ count: 1 }]);
+    expect(await database.query(`SELECT count(*)::int AS count FROM public.email_deliveries WHERE event_key LIKE $1`,
+      [`coaching.cancelled:${cancelled.revision.id}`])).toEqual([{ count: 0 }]);
+
+    // The lesson leaves active occupancy: the calendar frees the court and lists it as cancelled.
+    const day = await getReservationDay(lessonLocation, lessonDate, now, coachClient);
+    expect(day.adminOccupancy.map(item => item.id)).not.toContain(lesson.bookingId);
+    expect(day.courts.find(row => row.court.id === courtA3)!.cells[day.times.indexOf(600)]).toBe("available");
+    expect(await coachRows(lessonDate)).toEqual([]);
+    expect((await listCoachBookings(parseCoachBookingQuery({ from: lessonDate, to: lessonDate }), coachClient)).rows)
+      .toContainEqual(expect.objectContaining({ id: lesson.bookingId, status: "cancelled" }));
+    expect(await getCoachLesson(lesson.bookingId, coachClient)).toMatchObject({ status: "cancelled", cancellation: { availability: "unavailable" } });
+    expect(await book({ date: lessonDate, startMinute: 600 })).toMatchObject({ ok: true });
+  } finally {
+    await database.query("UPDATE public.club_settings SET official_email='',sender_name='',emails_enabled=false WHERE id=true");
+  }
+}, 20000);
+
+test("a coach and an Admin racing to cancel one lesson refund it once; Admin keeps its own attribution", async () => {
+  const raced = await confirmedLesson(600, "2103-05-21");
+  const coachClient = await signedInCoach(coach), admin = await signedInAdmin();
+  const results = await Promise.all([cancelAssignedLessonAsCoach({ id: raced.bookingId }, coachClient),
+    cancelCustomerBookingAsAdmin({ id: raced.bookingId }, admin)]);
+  expect(results.every(result => result.ok)).toBe(true);
+  expect(stripeFixture.refundCreate).toHaveBeenCalledTimes(1);
+  expect((await cancellationRecords(raced.bookingId)).refunds).toEqual([{ amount_minor: 18000, status: "succeeded" }]);
+  expect((await aggregate(raced.bookingId)).revision).toMatchObject({ kind: "cancelled" });
+  expect(["coach_cancelled", "admin_cancelled"]).toContain((await aggregate(raced.bookingId)).revision.cancellation_cause);
+
+  // Admin still cancels any coach's lesson under its existing permission and attribution.
+  const lesson = await confirmedLesson(720, "2103-05-21", { coachId: coach2, expectedTotalAmountMinor: 16000 });
+  expect(await cancelCustomerBookingAsAdmin({ id: lesson.bookingId }, admin)).toMatchObject({ ok: true, outcome: "cancelled", refundStatus: "succeeded" });
+  expect(await aggregate(lesson.bookingId)).toMatchObject({ status: "cancelled", reservation_status: "cancelled",
+    revision: { actor_scope: "admin", cancellation_cause: "admin_cancelled" } });
+  expect((await cancellationRecords(lesson.bookingId)).adjustments).toEqual([{ scope: "admin", status: "applied",
+    actor_id: expect.any(String), actor_scope: "admin" }]);
+}, 20000);
+
+test("a suspended coach, a former coach and court bookings are refused without writes", async () => {
+  const lessonDate = "2103-05-28";
+  const lesson = await confirmedLesson(600, lessonDate);
+  const court = await createCustomerBooking({ paymentMethod: "online", courtId: courtA1, date: lessonDate, startMinute: 600, endMinute: 660,
+    customerName: "Court Guest", customerEmail: "court@example.test", customerPhone: "+40 555",
+    expectedTotalAmountMinor: 5000, expectedCurrency: "RON" }, guest);
+  assert.ok(court.ok);
+  const courtCheckout = await startOnlineCheckout(court.paymentAttemptId);
+  remote(court.paymentAttemptId).status = "requires_capture"; remote(court.paymentAttemptId).amount_capturable = 5000;
+  expect(await readOnlineCheckout(access(courtCheckout))).toMatchObject({ status: "confirmed" });
+  const coachClient = await signedInCoach(coach);
+  const before = [await aggregate(lesson.bookingId), await written()];
+  // A court reservation is never a Coach's lesson, even at the coach's location.
+  expect(await cancelAssignedLessonAsCoach({ id: court.bookingId }, coachClient))
+    .toEqual({ ok: false, message: "This lesson is no longer available to cancel." });
+  // The command itself re-checks the role and assignment under lock.
+  expect(await cancelLessonAsCoachCommand(lesson.bookingId, memberId)).toEqual({ outcome: "unavailable" });
+  expect(await cancelLessonAsCoachCommand(lesson.bookingId, formerCoach)).toEqual({ outcome: "unavailable" });
+  await database.query("UPDATE public.users SET status='suspended' WHERE id=$1", [coach]);
+  try {
+    await expect(cancelAssignedLessonAsCoach({ id: lesson.bookingId }, coachClient)).rejects.toThrow();
+    expect(await cancelLessonAsCoachCommand(lesson.bookingId, coach)).toEqual({ outcome: "unavailable" });
+  } finally {
+    await database.query("UPDATE public.users SET status='active' WHERE id=$1", [coach]);
+  }
+  expect([await aggregate(lesson.bookingId), await written()]).toEqual(before);
+  expect(stripeFixture.refundCreate).not.toHaveBeenCalled();
+});
+
+test("the coach calendar labels own Private and Semi-private lessons and masks other bookings", async () => {
+  const lessonDate = "2103-06-04";
+  const privateLesson = await confirmedLesson(480, lessonDate);
+  const semiLesson = await confirmedLesson(600, lessonDate, { programId: semiProgram, participantCount: 2, expectedTotalAmountMinor: 18000 });
+  const otherLesson = await confirmedLesson(480, lessonDate, { coachId: coach2, courtId: courtA1, expectedTotalAmountMinor: 15000 });
+  // Live program names change; the calendar keeps the booked program.
+  await database.query("UPDATE public.coaching_programs SET name='Renamed private' WHERE id=$1", [program]);
+  try {
+    const day = await getReservationDay(lessonLocation, lessonDate, new Date(), await signedInCoach(coach));
+    expect(day.canManage).toBe(false);
+    expect(day.adminOccupancy).toContainEqual(expect.objectContaining({ kind: "lesson", id: privateLesson.bookingId, coach_user_id: coach,
+      coaching_program_name: "Booking private", customer_email: memberEmail }));
+    expect(day.adminOccupancy).toContainEqual(expect.objectContaining({ kind: "lesson", id: semiLesson.bookingId,
+      coaching_program_name: "Semi-private coaching" }));
+    const other = day.adminOccupancy.find(item => item.court_id === courtA1 && item.starts_at_minute === 480);
+    expect(other).toEqual({ kind: "occupied", id: `occupied:${courtA1}:480`, court_id: courtA1, booking_date: lessonDate,
+      starts_at_minute: 480, ends_at_minute: 540 });
+    expect(JSON.stringify(day.adminOccupancy)).not.toContain(otherLesson.bookingId);
+  } finally {
+    await database.query("UPDATE public.coaching_programs SET name='Booking private' WHERE id=$1", [program]);
+  }
+});
+
+// Coach lesson rescheduling: the assigned Coach moves the lesson's date or start on its
+// court through the lesson rescheduling locks and availability, keeping the agreed price.
+// Each test uses its own Monday; the coach teaches at A 08:00–16:00.
+async function coachLessonEdit(bookingId: string, coachClient: ReturnType<typeof reader>, target: { date: string; startMinute: number }) {
+  const read = await getCoachLessonRescheduleDay(bookingId, target.date, coachClient);
+  return { id: bookingId, expectedUpdatedAt: read.booking.updated_at, expectedRevisionId: read.booking.current_revision_id,
+    courtId: read.booking.court_id, date: target.date, startMinute: target.startMinute,
+    endMinute: target.startMinute + read.booking.coaching!.durationMinutes, requestId: randomUUID(), save: true };
+}
+const userMessage = async (userId: string, eventKey: string) =>
+  database.query("SELECT subject,body_text,href FROM public.user_messages WHERE user_id=$1 AND event_key=$2", [userId, eventKey]);
+const financialRows = async (bookingId: string) => ({
+  attempts: await database.query("SELECT amount_minor,status FROM public.payment_attempts WHERE booking_id=$1 ORDER BY created_at", [bookingId]),
+  refunds: await database.query("SELECT amount_minor,status FROM public.payment_refunds WHERE booking_id=$1", [bookingId]),
+  adjustments: await database.query("SELECT kind,status FROM public.booking_adjustments WHERE booking_id=$1", [bookingId]),
+});
+
+test.each([false, true])("the assigned coach reschedules a lesson at its agreed price without any payment, attributed to the coach, notifying the customer (email enabled=%s)", async emailsEnabled => {
+  await database.query("UPDATE public.club_settings SET official_email=$1,sender_name=$2,emails_enabled=$3 WHERE id=true",
+    [emailsEnabled ? "club@example.test" : "", emailsEnabled ? "Test Club" : "", emailsEnabled]);
+  const lessonDate = emailsEnabled ? "2104-01-14" : "2104-01-07";
+  // From 10:00 the A3 rental is 8000/h: a customer move there would cost 2000 more.
+  const restorePricing = await peakLessonRental();
+  try {
+    const lesson = await confirmedLesson(480, lessonDate);
+    const original = await aggregate(lesson.bookingId);
+    const financial = await financialRows(lesson.bookingId);
+    const coachClient = await signedInCoach(coach), otherCoach = await signedInCoach(coach2);
+    const calls = stripeCalls();
+
+    // The Coach's timetable carries the fixed lesson terms and its starts, never an amount.
+    const read = await getCoachLessonRescheduleDay(lesson.bookingId, lessonDate, coachClient);
+    expect(read.booking).toMatchObject({ total_amount_minor: 0, refunds: [], court_id: courtA3,
+      coaching: { coach: { id: coach, name: "Booking Coach" }, program: { id: program, name: "Booking private", participantCount: 1 },
+        durationMinutes: 60, coachingAmountMinor: 0 } });
+    expect(read.booking.financial).toBeUndefined();
+    expect(read.booking.coaching!.starts.find(start => start.startMinute === 660)?.courts)
+      .toEqual([{ id: courtA3, name: "A3", coachingAmountMinor: 0, courtAmountMinor: 0, totalAmountMinor: 0 }]);
+    expect(read.day.courts.every(row => row.rates.every(rate => rate === null))).toBe(true);
+    expect(JSON.stringify(read)).not.toMatch(/18000|12000|8000|6000/);
+
+    const input = await coachLessonEdit(lesson.bookingId, coachClient, { date: lessonDate, startMinute: 660 });
+    // Another coach, a customer, forged terms and a non-Coach actor change nothing.
+    await expect(getCoachLessonRescheduleDay(lesson.bookingId, lessonDate, otherCoach)).rejects.toThrow("no longer available to reschedule");
+    expect(await rescheduleAssignedLessonAsCoach(input, otherCoach)).toEqual({ ok: false, message: "This lesson is no longer available to reschedule." });
+    await expect(rescheduleAssignedLessonAsCoach(input, member)).rejects.toThrow();
+    expect(await rescheduleLessonAsCoachCommand({ ...input, expectedTotal: null, priceAcknowledged: false }, memberId))
+      .toEqual({ ok: false, message: "This lesson is no longer available to reschedule." });
+    expect(await rescheduleAssignedLessonAsCoach({ ...input, coachId: coach2 }, coachClient)).toEqual({ ok: false, message: "Choose a valid lesson start." });
+    expect(await rescheduleAssignedLessonAsCoach({ ...input, programId: includedProgram }, coachClient)).toEqual({ ok: false, message: "Choose a valid lesson start." });
+    expect(await rescheduleAssignedLessonAsCoach({ ...input, courtId: courtA1 }, coachClient)).toEqual({ ok: false,
+      message: "A coaching lesson keeps its original court. Choose a new date or start time." });
+    expect(await rescheduleAssignedLessonAsCoach({ ...input, endMinute: 750 }, coachClient)).toEqual({ ok: false,
+      message: "A coaching lesson keeps its original length. Choose a new start time." });
+    // A quote checks availability without writing; the Coach never sees a total.
+    expect(await rescheduleAssignedLessonAsCoach({ ...input, save: false }, coachClient)).toEqual({ ok: true, totalAmountMinor: 0 });
+    expect(await revisionCount(lesson.bookingId)).toBe(2);
+
+    expect(await rescheduleAssignedLessonAsCoach(input, coachClient)).toEqual({ ok: true, totalAmountMinor: 0 });
+    const moved = await aggregate(lesson.bookingId);
+    expect(moved).toMatchObject({ status: "confirmed", reservation_id: lesson.reservationId, court_id: courtA3, coach_user_id: coach,
+      booking_date: lessonDate, starts_at_minute: 660, ends_at_minute: 720, reservation_status: "active" });
+    // The Coach is the recorded actor; the agreed total and its evidence are carried over unchanged.
+    expect(moved.revision).toMatchObject({ kind: "rescheduled", revision_number: 3, previous_revision_id: original.revision.id,
+      actor_scope: "coach", actor_user_id: coach, adjustment_id: null, total_amount_minor: 18000,
+      starts_at_minute: 660, ends_at_minute: 720, court_name: "A3", coach_name: "Booking Coach", coaching_program_name: "Booking private" });
+    expect(moved.revision.pricing_evidence).toEqual(original.revision.pricing_evidence);
+    await expectLessonContract(lesson.bookingId, original);
+    // No charge, refund or adjustment, whatever the current price at the new time.
+    expect(await financialRows(lesson.bookingId)).toEqual(financial);
+    expect(stripeCalls()).toEqual(calls);
+    expect(await coachRows(lessonDate)).toEqual([{ court_id: courtA3, starts_at_minute: 660, ends_at_minute: 720, status: "active", hold: false }]);
+    const records = await getAdminBookingRecords(lesson.bookingId, { supabase: await signedInAdmin() });
+    expect(records?.history.map(item => item.detail)).toContain("Changed by assigned coach");
+
+    // The customer is told the program, coach, location, court, previous and new times.
+    const event = `booking.rescheduled:${moved.revision.id}`;
+    const [message] = await userMessage(memberId, event);
+    expect(message.subject).toBe("Coaching lesson rescheduled");
+    for (const line of ["Location: Coaching booking A", "Court: A3", "Time: 11:00–12:00 (UTC)", "Program: Booking private",
+      "Coach: Booking Coach", "Previous time: 08:00–09:00 (UTC)", "Previous date:", "Total price (unchanged): "])
+      expect(message.body_text).toContain(line);
+    expect(await database.query("SELECT recipient_email,status FROM public.email_deliveries WHERE event_key=$1", [event]))
+      .toEqual(emailsEnabled ? [{ recipient_email: memberEmail, status: "pending" }] : []);
+    // Staff operational messages stay in-app.
+    expect(await userMessage(coach, `coaching.rescheduled:${moved.revision.id}`)).toHaveLength(1);
+    expect(await database.query("SELECT count(*)::int AS count FROM public.email_deliveries WHERE event_key=$1",
+      [`coaching.rescheduled:${moved.revision.id}`])).toEqual([{ count: 0 }]);
+
+    // A replay is idempotent; a request built on the earlier revision is stale.
+    expect(await rescheduleAssignedLessonAsCoach(input, coachClient)).toEqual({ ok: true, totalAmountMinor: 0 });
+    expect(await rescheduleAssignedLessonAsCoach({ ...input, requestId: randomUUID(), startMinute: 780, endMinute: 840 }, coachClient))
+      .toEqual({ ok: false, reason: "stale", message: "This lesson has changed since you opened it. Close and reopen its details." });
+    expect(await revisionCount(lesson.bookingId)).toBe(3);
+
+    // Calendar, List and Lesson details show the new schedule.
+    const day = await getReservationDay(lessonLocation, lessonDate, new Date(), coachClient);
+    expect(day.adminOccupancy).toContainEqual(expect.objectContaining({ kind: "lesson", id: lesson.bookingId, starts_at_minute: 660, ends_at_minute: 720 }));
+    expect(day.courts.find(row => row.court.id === courtA3)!.cells[day.times.indexOf(480)]).toBe("available");
+    expect((await listCoachBookings(parseCoachBookingQuery({ from: lessonDate, to: lessonDate }), coachClient)).rows)
+      .toContainEqual(expect.objectContaining({ id: lesson.bookingId, starts_at_minute: 660, cancellation: expect.objectContaining({ availability: "eligible" }) }));
+    expect(await getCoachLesson(lesson.bookingId, coachClient)).toMatchObject({ starts_at_minute: 660, ends_at_minute: 720 });
+
+    // Customer rescheduling still works afterwards under its own rules and prices.
+    const customerMove = await lessonEdit(lesson.bookingId, { courtId: courtA3, date: lessonDate, startMinute: 540, expectedTotal: 18000 });
+    expect(await runBookingReschedule(customerMove, memberId)).toEqual({ ok: true, totalAmountMinor: 18000 });
+    expect((await aggregate(lesson.bookingId)).revision).toMatchObject({ actor_scope: "customer", starts_at_minute: 540 });
+  } finally {
+    await restorePricing();
+    await database.query("UPDATE public.club_settings SET official_email='',sender_name='',emails_enabled=false WHERE id=true");
+  }
+}, 20000);
+
+test("coach rescheduling rejects court and coach conflicts, time off, live and protected holds, started, cancelled and pending lessons", async () => {
+  const lessonDate = "2104-01-21";
+  const lesson = await confirmedLesson(480, lessonDate);
+  const coachClient = await signedInCoach(coach);
+  const before = await aggregate(lesson.bookingId);
+  // The coach's own lesson on another court; a staff reservation on the lesson's court.
+  const otherLesson = await book({ date: lessonDate, courtId: courtA1, startMinute: 780, expectedTotalAmountMinor: 17000 });
+  assert.ok(otherLesson.ok);
+  await database.query(`INSERT INTO public.court_reservations(court_id,booking_date,starts_at_minute,ends_at_minute) VALUES($1,$2,840,900)`, [courtA3, lessonDate]);
+  // A live checkout hold, and an expired hold whose provider payment is still unresolved.
+  const live = await book({ date: lessonDate, coachId: coach2, courtId: courtA3, startMinute: 660, expectedTotalAmountMinor: 16000 });
+  const protectedHold = await book({ date: lessonDate, coachId: coach2, courtId: courtA3, startMinute: 720, expectedTotalAmountMinor: 16000 });
+  assert.ok(live.ok && protectedHold.ok);
+  await startOnlineCheckout(protectedHold.paymentAttemptId);
+  await expireHold(protectedHold.reservationId);
+  await database.query(`INSERT INTO public.coach_availability_exceptions(coach_user_id,exception_date,until_date,kind,start_minute,end_minute,note)
+    VALUES($1,$2,$2,'unavailable',600,660,'Coach reschedule time off')`, [coach, lessonDate]);
+  try {
+    const read = await getCoachLessonRescheduleDay(lesson.bookingId, lessonDate, coachClient);
+    const starts = new Set(read.booking.coaching!.starts.map(start => start.startMinute));
+    for (const blocked of [600, 660, 720, 780, 840, 960]) expect(starts.has(blocked), String(blocked)).toBe(false);
+    expect(starts.has(540)).toBe(true);
+    const attempt = async (startMinute: number) =>
+      rescheduleAssignedLessonAsCoach(await coachLessonEdit(lesson.bookingId, coachClient, { date: lessonDate, startMinute }), coachClient);
+    const courtTaken = { ok: false, message: "That court is no longer available. The booking has not changed." };
+    expect(await attempt(600)).toEqual({ ok: false, message: "The coach is not available at the selected time." });
+    expect(await attempt(660)).toEqual(courtTaken);
+    expect(await attempt(720)).toEqual(courtTaken);
+    expect(await attempt(780)).toEqual({ ok: false, message: "The coach is no longer available at the selected time. The booking has not changed." });
+    expect(await attempt(840)).toEqual(courtTaken);
+    expect(await attempt(960)).toEqual({ ok: false, message: "The coach is not available at the selected time." });
+    // A non-existent target date never moves the lesson into the past.
+    expect(await rescheduleAssignedLessonAsCoach({ ...await coachLessonEdit(lesson.bookingId, coachClient, { date: lessonDate, startMinute: 540 }),
+      date: "2020-01-06" }, coachClient)).toMatchObject({ ok: false });
+
+    const input = await coachLessonEdit(lesson.bookingId, coachClient, { date: lessonDate, startMinute: 540 });
+    try {
+      // Inside the customer notice window the assigned Coach may still move it, as staff may cancel it.
+      clock.now = `${lessonDate}T07:30:00.000Z`;
+      expect(await rescheduleAssignedLessonAsCoach({ ...input, save: false }, coachClient)).toEqual({ ok: true, totalAmountMinor: 0 });
+      // A started lesson never moves.
+      clock.now = `${lessonDate}T08:00:00.000Z`;
+      expect(await rescheduleAssignedLessonAsCoach(input, coachClient)).toEqual({ ok: false,
+        message: "This lesson has started and can no longer be rescheduled." });
+      await expect(getCoachLessonRescheduleDay(lesson.bookingId, lessonDate, coachClient)).rejects.toThrow("has started");
+    } finally { clock.now = null; }
+    // A suspended or former coach is refused by the command under lock.
+    await database.query("DELETE FROM public.user_roles WHERE user_id=$1 AND role_code='coach'", [coach]);
+    try {
+      expect(await rescheduleLessonAsCoachCommand({ ...input, expectedTotal: null, priceAcknowledged: false }, coach))
+        .toEqual({ ok: false, message: "This lesson is no longer available to reschedule." });
+    } finally {
+      await database.query("INSERT INTO public.user_roles(user_id,role_code) VALUES($1,'coach')", [coach]);
+    }
+    expect(await aggregate(lesson.bookingId)).toEqual(before);
+  } finally {
+    await database.query("DELETE FROM public.coach_availability_exceptions WHERE coach_user_id=$1 AND exception_date=$2", [coach, lessonDate]);
+  }
+
+  // A pending customer modification blocks the Coach until it resolves.
+  const restorePricing = await peakLessonRental();
+  try {
+    const pendingLesson = await confirmedLesson(480, "2104-01-28");
+    const proposal = await runBookingReschedule(await lessonEdit(pendingLesson.bookingId,
+      { courtId: courtA3, date: "2104-01-28", startMinute: 600, expectedTotal: 20000 }), memberId);
+    expect(proposal).toMatchObject({ ok: true, adjustmentStatus: "pending" });
+    await expect(getCoachLessonRescheduleDay(pendingLesson.bookingId, "2104-01-28", coachClient)).rejects.toThrow("still being processed");
+    const pendingBefore = await aggregate(pendingLesson.bookingId);
+    expect(await rescheduleLessonAsCoachCommand({ id: pendingLesson.bookingId, expectedUpdatedAt: pendingBefore.revision.recorded_at,
+      expectedRevisionId: pendingBefore.revision.id, courtId: courtA3, date: "2104-01-28", startMinute: 540, endMinute: 600,
+      save: true, expectedTotal: null, priceAcknowledged: false }, coach))
+      .toEqual({ ok: false, message: "A change to this lesson is still being processed. The lesson has not changed." });
+    expect(await aggregate(pendingLesson.bookingId)).toEqual(pendingBefore);
+  } finally { await restorePricing(); }
+
+  // A cancelled lesson is never rescheduled.
+  const cancelled = await confirmedLesson(600, "2104-02-04");
+  const stale = await coachLessonEdit(cancelled.bookingId, coachClient, { date: "2104-02-04", startMinute: 720 });
+  expect(await cancelAssignedLessonAsCoach({ id: cancelled.bookingId }, coachClient)).toMatchObject({ ok: true, outcome: "cancelled" });
+  expect(await rescheduleAssignedLessonAsCoach(stale, coachClient)).toEqual({ ok: false, message: "This lesson is no longer available to reschedule." });
+  await expect(getCoachLessonRescheduleDay(cancelled.bookingId, "2104-02-04", coachClient)).rejects.toThrow("no longer available to reschedule");
+  expect(await aggregate(cancelled.bookingId)).toMatchObject({ status: "cancelled", starts_at_minute: 600 });
+}, 20000);
+
+test("concurrent coach and customer moves of one lesson apply exactly one; the others are stale", async () => {
+  const lessonDate = "2104-02-11";
+  const lesson = await confirmedLesson(480, lessonDate);
+  const coachClient = await signedInCoach(coach);
+  const [first, second] = [await coachLessonEdit(lesson.bookingId, coachClient, { date: lessonDate, startMinute: 600 }),
+    await coachLessonEdit(lesson.bookingId, coachClient, { date: lessonDate, startMinute: 660 })];
+  const customer = await lessonEdit(lesson.bookingId, { courtId: courtA3, date: lessonDate, startMinute: 720, expectedTotal: 18000 });
+  const results = await settled([rescheduleAssignedLessonAsCoach(first, coachClient), rescheduleAssignedLessonAsCoach(second, coachClient),
+    runBookingReschedule(customer, memberId)]);
+  expect(results.filter(result => result.ok)).toHaveLength(1);
+  expect(results.filter(result => !result.ok && result.reason === "stale")).toHaveLength(2);
+  expect(await revisionCount(lesson.bookingId)).toBe(3);
+  const moved = await aggregate(lesson.bookingId);
+  expect([600, 660, 720]).toContain(moved.starts_at_minute);
+  expect(await coachRows(lessonDate)).toEqual([{ court_id: courtA3, starts_at_minute: moved.starts_at_minute,
+    ends_at_minute: moved.starts_at_minute + 60, status: "active", hold: false }]);
+  expect(stripeFixture.refundCreate).not.toHaveBeenCalled();
+}, 15000);
+
+test.each([
+  // Distinct seed starts; the customer DST cases above already hold the coach at 00:00 and 04:00 on 2027-03-28.
+  ["2027-03-28", 180, false, 1080], ["2027-03-28", 300, true, 1020], ["2027-10-31", 120, false, 1140], ["2027-10-31", 240, true, 1200],
+])("coach rescheduling keeps the shared club-timezone DST validation on %s at minute %i", async (targetDate, startMinute, valid, seedMinute) => {
+  const weeklyId = randomUUID();
+  await database.query(`INSERT INTO public.coach_weekly_availability(id,coach_user_id,location_id,weekday,start_minute,end_minute,valid_from)
+    VALUES($1,$2,$3,6,0,1440,'2000-01-01')`, [weeklyId, coach, locationA]);
+  await database.query("UPDATE public.locations SET timezone='Europe/Bucharest' WHERE id=ANY($1::uuid[])", [[locationA, locationB]]);
+  try {
+    const lesson = await confirmedLesson(seedMinute, "2027-03-28");
+    const coachClient = await signedInCoach(coach);
+    const read = await getCoachLessonRescheduleDay(lesson.bookingId, targetDate, coachClient);
+    expect(read.booking.coaching!.starts.some(start => start.startMinute === startMinute)).toBe(valid);
+    const before = await aggregate(lesson.bookingId);
+    const result = await rescheduleAssignedLessonAsCoach(await coachLessonEdit(lesson.bookingId, coachClient, { date: targetDate, startMinute }), coachClient);
+    expect(result).toEqual(valid ? { ok: true, totalAmountMinor: 0 }
+      : { ok: false, message: "This booking or interval is no longer available to reschedule." });
+    expect(await aggregate(lesson.bookingId)).toMatchObject(valid
+      ? { booking_date: targetDate, starts_at_minute: startMinute, revision: { actor_scope: "coach", timezone: "Europe/Bucharest" } }
+      : { booking_date: before.booking_date, starts_at_minute: before.starts_at_minute, revision: { id: before.revision.id } });
+  } finally {
+    await database.query("DELETE FROM public.coach_weekly_availability WHERE id=$1", [weeklyId]);
+    await database.query("UPDATE public.locations SET timezone='UTC' WHERE id=ANY($1::uuid[])", [[locationA, locationB]]);
+  }
+}, 15000);

@@ -5,12 +5,15 @@ import { resolvePricingRule } from "@/lib/pricing/resolution";
 import { participantCountSchema } from "@/lib/coaching/validation";
 
 type RevisionKind = "created" | "confirmed" | "rescheduled" | "cancelled";
-type RevisionScope = "guest" | "customer" | "coach_owner" | "admin_owner" | "admin" | "provider";
+// coach_owner: a coach acting as a booking owner; coach: the assigned coach cancelling their lesson.
+type RevisionScope = "guest" | "customer" | "coach_owner" | "coach" | "admin_owner" | "admin" | "provider";
 const currencySchema = z.enum(["EUR", "USD", "GBP", "RON", "CHF"]);
 // The coaching price agreed for a lesson: the resolved coach override or club
 // default, and the court rental it adds (zero when the program includes it).
 // The slots still explain the court's rental value, charged or not. amountMinor is the
-// agreed coaching total, a stored fact that is never recalculated.
+// agreed coaching total, a stored fact that is never recalculated. coachUserId,
+// locationId and source are its commercial provenance: the coach and location whose
+// price was agreed. They never follow a later operational reassignment.
 const coachingEvidenceSchema = z.strictObject({
   // The count the lesson was booked for and the lesson price/person agreed for it.
   participantCount: participantCountSchema,
@@ -36,7 +39,8 @@ const revisionTermsSchema = z.object({
   totalAmountMinor: z.number().int().positive().max(2147483647), currency: currencySchema,
   paymentMethod: z.enum(["online", "pay_at_club"]), cancellationNoticeMinutes: z.number().int().min(0).max(43200),
   pricingEvidence: pricingEvidenceSchema,
-  // A coaching contract names its coach and program with historical names; a court booking names neither.
+  // A coaching contract names its program and current coach with historical names; a court booking
+  // names neither. The location, court and coach are the current operational assignment.
   coachUserId: z.uuid().nullable().optional(), coachingProgramId: z.uuid().nullable().optional(),
   coachName: z.string().trim().min(1).max(100).nullable().optional(),
   coachingProgramName: z.string().trim().min(1).max(100).nullable().optional(),
@@ -45,8 +49,9 @@ const revisionTermsSchema = z.object({
     const coaching = t.pricingEvidence.coaching;
     const named = [t.coachUserId, t.coachingProgramId, t.coachName, t.coachingProgramName];
     if (!coaching) return named.every(value => value == null);
-    return named.every(value => value != null) && t.coachUserId === coaching.coachUserId
-      && t.coachingProgramId === coaching.programId && t.locationId === coaching.locationId
+    // The program, duration and currency are fixed; the coach and location may since have
+    // been reassigned, so they are not compared with the evidence's provenance here.
+    return named.every(value => value != null) && t.coachingProgramId === coaching.programId
       && t.endMinute - t.startMinute === coaching.durationMinutes && t.currency === coaching.currency
       && coaching.courtAmountMinor === (coaching.courtRentalIncluded ? 0 : coaching.courtRentalMinor)
       && t.totalAmountMinor === coaching.amountMinor + coaching.courtAmountMinor;
@@ -57,7 +62,7 @@ export type RevisionSnapshot = RevisionTerms & {
   operationKey: string; intentHash: string; kind: RevisionKind;
   bookingState: "pending_payment" | "confirmed" | "cancelled";
   actorUserId: string | null; actorScope: RevisionScope; recordedAt: Date;
-  adjustmentId: string | null; cancellationCause: "owner_cancelled" | "admin_cancelled" | "checkout_abandoned" | null;
+  adjustmentId: string | null; cancellationCause: "owner_cancelled" | "admin_cancelled" | "coach_cancelled" | "checkout_abandoned" | null;
 };
 
 // Captures the rule facts already used by the authoritative quote. No live pricing FK:
@@ -91,13 +96,19 @@ export function capturePricingEvidence(rules: readonly PricingRule[], terms: {
 export function buildBookingRevision(terms: RevisionTerms, operation: Omit<RevisionSnapshot, keyof RevisionTerms | "revisionNumber" | "previousRevisionId">,
   previous: { id: string; bookingId: string; revisionNumber: number } | null): RevisionSnapshot {
   if (previous && previous.bookingId !== operation.bookingId) throw new Error("Cross-booking revision predecessor");
+  // A lesson is created by the coach, at the location, whose price it agrees.
+  const coaching = terms.pricingEvidence.coaching;
+  if (operation.kind === "created" && coaching && (terms.coachUserId !== coaching.coachUserId || terms.locationId !== coaching.locationId))
+    throw new Error("A new lesson must name the coach and location of its agreed price");
   return { ...revisionTermsSchema.parse(terms), ...operation, previousRevisionId: previous?.id ?? null,
     revisionNumber: (previous?.revisionNumber ?? 0) + 1 };
 }
 export function sameRevisionContract(left: RevisionTerms, right: RevisionTerms): boolean {
   // Display names and evidence explain the contract; a configuration rename alone
-  // is not a customer-requested commercial change.
+  // is not a customer-requested commercial change. The assigned coach is part of the
+  // operational contract, so a coach reassignment alone is a change.
   return left.locationId === right.locationId && left.courtId === right.courtId && left.timezone === right.timezone
+    && (left.coachUserId ?? null) === (right.coachUserId ?? null) && (left.coachingProgramId ?? null) === (right.coachingProgramId ?? null)
     && left.bookingDate === right.bookingDate && left.startMinute === right.startMinute && left.endMinute === right.endMinute
     && left.customerName === right.customerName && left.customerEmail === right.customerEmail && left.customerPhone === right.customerPhone
     && left.totalAmountMinor === right.totalAmountMinor && left.currency === right.currency && left.paymentMethod === right.paymentMethod

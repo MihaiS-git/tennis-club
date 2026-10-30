@@ -6,7 +6,11 @@ The application sends persisted `email_deliveries` through the Brevo transaction
 
 `src/lib/notifications/events.ts` records booking confirmations, cancellations and
 reschedules (court bookings and lessons), successful compensation refunds and relevant
-financial exceptions. Recording requires the caller-owned TypeORM domain transaction;
+financial exceptions. A staff operational change states its financial consequence in the
+customer's reschedule message (unchanged price, club-absorbed difference, or reduced amount
+due); a refund-backed reduction records `booking.change_refund_requested` with the requested
+amount, then the reschedule message with the verified refund amount, or the existing
+`modification_rejected`/`refund_failed` exceptions. Recording requires the caller-owned TypeORM domain transaction;
 financial exception evidence and notification snapshots commit with the deciding state.
 `record.ts` and `notifications.repository.ts` persist `user_messages` and `email_deliveries`;
 stable event keys and per-recipient unique constraints deduplicate replay. No browser-role
@@ -20,7 +24,9 @@ ownership. Eligible ordinary customers receive in-app plus email, guests receive
 An Admin/Coach match on either application or Auth email suppresses customer application
 email, including when that staff account is inactive or unverified. Admin and Coach accounts
 receive application notifications in-app only. Assigned active Coaches receive lesson
-transition messages; active Admins receive financial exception and delivery-failure alerts.
+transition messages; a completed reassignment instead tells the replacement coach of the new
+assignment and the previous coach that the lesson is no longer theirs. Coach messages carry
+lesson details only, never the customer's prices, payments or refunds; active Admins receive financial exception and delivery-failure alerts.
 `refund_unresolved` alerts are Admin-only; other relevant financial outcomes also notify
 eligible customers. Supabase Auth confirmation/recovery mail follows its separate Auth setup.
 
@@ -124,6 +130,6 @@ ineligible. Accepted, sandbox-accepted and ambiguous deliveries retain the exist
 no-resend rules. No network calls run inside database transactions.
 
 The initial TypeORM schema defines `club_settings` and `email_deliveries.suppressed_at`;
-the native integrity migration inserts the disabled singleton and the Supabase migration
+the initial schema baseline inserts the disabled singleton and the Supabase migration
 denies browser-role access. Configure the sender and deliberately enable email after a
 fresh install. Removing the suppression marker could resurrect old mail.

@@ -126,7 +126,7 @@ function BookingCalendarContent({ day, date, locationName, currency, initialCont
   if (committed) return <section aria-label="Booking confirmed" className="mt-5 max-w-xl rounded-card border border-border border-t-4 border-t-success bg-surface p-5 shadow-card sm:p-6">
     <CheckCircle2 aria-hidden className="mb-3 size-9 text-success" />
     <h2 className="font-heading text-2xl font-semibold text-primary">Booking confirmed</h2>
-    <p className="mt-2 text-sm text-muted-foreground">{coaching ? "Your coach and court are booked. " : <>Your court is booked. A confirmation email will be sent to {contact?.customerEmail}. </>} {committed.paymentMethod === "pay_at_club" ? "Payment is due at the club." : "Online payment received."}</p>
+    <p className="mt-2 text-sm text-muted-foreground">{coaching ? "Your coach and court are booked." : "Your court is booked."} {committed.paymentMethod === "pay_at_club" ? "Payment is due at the club." : "Online payment received."}</p>
     <div className="mt-4"><BookingSummary details={committed} /></div>
     <div>{committed.cancellationPolicy && <BookingCancellationTerms noticeMinutes={committed.cancellationPolicy.noticeMinutes} cutoff={committed.cancellationPolicy.cutoff} timezone={timezone} guest={!authenticated} />}</div>
     <div className="mt-5 flex flex-wrap gap-2">
@@ -143,7 +143,7 @@ function BookingCalendarContent({ day, date, locationName, currency, initialCont
     {day.times.length === 0 ? <div className="mt-4 flex items-center gap-3 rounded-card border border-border bg-surface p-5 text-muted-foreground">
       <CalendarX2 aria-hidden className="size-5 shrink-0 text-accent" /><p>{locationName} is closed on {dateLabel}.</p>
     </div> : <>
-      <TimelineLegend cells={visibleDay.courts.flatMap((courtDay) => courtDay.cells)} labels={coaching ? lessonTimetableLabels : undefined} cellStyles={coaching ? lessonTimetableCellStyles : undefined}>
+      <TimelineLegend publicBooking cells={visibleDay.courts.flatMap((courtDay) => courtDay.cells)} labels={coaching ? lessonTimetableLabels : undefined} cellStyles={coaching ? lessonTimetableCellStyles : undefined}>
         {coaching ? coaching.durationMinutes
           ? `Select a lesson start for the full ${coaching.durationMinutes} minutes. Pale terracotta cells cannot start a full lesson; darker terracotta cells are occupied courts. Your coach and court are reserved only when checkout starts.`
           : "Choose your lesson details above to see available lesson starts."
@@ -185,7 +185,11 @@ function BookingCalendarContent({ day, date, locationName, currency, initialCont
     </section>}
     {confirming && selection && details && contact && <BookingConfirmation coaching={coaching} authenticated={authenticated} onlinePaymentAvailable={onlinePaymentAvailable} allowPayAtClub={allowPayAtClub} cancellationNoticeMinutes={cancellationNoticeMinutes} timezone={timezone} selection={selection} details={details} contact={contact}
       onContactChange={setContact} onBack={() => setConfirming(false)}
-      onAbandoned={() => { setConfirming(false); setSelection(null); router.refresh(); }}
+      onAbandoned={(cleanup) => {
+        setConfirming(false); setSelection(null);
+        // Show the released interval only once the server has answered cleanup.
+        if (cleanup) void cleanup.then(() => router.refresh()); else router.refresh();
+      }}
       onCommitted={(totalAmountMinor, confirmedCurrency, cancellationPolicy, paymentMethod) => {
         setCommitted({ ...details, paymentMethod, priceMinor: totalAmountMinor, currency: confirmedCurrency, cancellationPolicy });
         setConfirming(false); setSelection(null); router.refresh();

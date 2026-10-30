@@ -89,7 +89,8 @@ const quotedCourt = (offer: CoachingLessonQuote): PublicLessonCourt => ({ id: of
 
 // The starts at which a purchased lesson can be moved on the day, in the public
 // lesson shape: the agreed coaching fee plus each court's current rental component.
-export function projectCoachingRescheduleStarts(day: CoachingLessonDay, coaching: CoachingEvidence): PublicLessonStart[] {
+// The day is the public lesson day (customers) or the operational day (staff).
+export function projectCoachingRescheduleStarts(day: Omit<CoachingLessonDay, "coaching">, coaching: CoachingEvidence): PublicLessonStart[] {
   return groupByStart(listCoachingRescheduleOffers(day, coaching), (offer) => ({ id: offer.court.id, name: offer.court.name,
     coachingAmountMinor: coaching.amountMinor, courtAmountMinor: offer.pricingEvidence.coaching?.courtAmountMinor ?? 0,
     totalAmountMinor: offer.totalAmountMinor }));
@@ -145,7 +146,7 @@ export async function readPublicCoachingLessonAvailability(input: unknown,
     if (!day) throw new Error("Malformed public court day.");
     return {
       availability: projectCoachingLessonAvailability(day, programId, participantCount),
-      courtDay: buildCourtDay({ date, today: day.today, currentMinute: day.currentMinute, courts: location.courts,
+      courtDay: buildCourtDay({ timezone: location.timezone, date, today: day.today, currentMinute: day.currentMinute, courts: location.courts,
         hours: day.hours, coverage: day.coverage, pricing: day.pricing, reservations: day.courtOccupancy }),
     };
   } catch (error: unknown) {

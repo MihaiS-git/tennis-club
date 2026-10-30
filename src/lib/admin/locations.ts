@@ -2,11 +2,14 @@ import { publicationHoursSchema, publicationPricingSchema } from "@/lib/location
 import "server-only";
 
 import { z } from "zod";
+import { canonicalTimezone } from "@/lib/club/timezone";
+import { readClubTimezoneError } from "@/lib/club/timezone-policy";
 import type { EntityManager } from "typeorm";
 import { cancellationNoticeMinutesSchema } from "@/lib/bookings/cancellation-policy";
 import { requireActiveAdmin } from "@/lib/admin/authorization";
 import { generateSlug } from "@/lib/admin/slug";
-import { locationArchiveSchema, locationCurrencies, locationMutationSchema, type CurrencyChangeBlocker, type LocationMutationResult } from "@/lib/admin/locations-validation";
+import { currencyChangeBlockerMessage, locationArchiveSchema, locationCurrencies, locationMutationSchema, unfinishedBookingsMessage,
+  type CurrencyChangeBlocker, type LocationMutationResult, type UnfinishedBookings } from "@/lib/admin/locations-validation";
 import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
 import { getDataSource } from "@/lib/db/data-source";
@@ -83,12 +86,14 @@ export async function saveAdminLocation(input: unknown, supabase?: Awaited<Retur
   let result: LocationMutationResult;
   try {
     if (!id) {
-      const createdId = await inTransaction(async (manager) => {
+      result = await inTransaction<LocationMutationResult>(async (manager) => {
         await clubs.lockConfigurationForWrite(manager);
         if (!await lockActiveAdminAccount(manager, actor.userId)) throw new Error("Administrator required");
-        return clubs.insertLocation(manager, values, slug, new Date());
+        const message = await readClubTimezoneError(manager, { id: "new", ...values });
+        if (message) return { ok: false, reason: "invalid-input", fieldErrors: { timezone: message } };
+        const createdId = await clubs.insertLocation(manager, values, slug, new Date());
+        return createdId ? { ok: true, id: createdId } : { ok: false, reason: "not-found" };
       });
-      result = createdId ? { ok: true, id: createdId } : { ok: false, reason: "not-found" };
     } else {
       result = await inTransaction<LocationMutationResult>(async (manager) => {
         await clubs.lockConfigurationForWrite(manager);
@@ -99,13 +104,32 @@ export async function saveAdminLocation(input: unknown, supabase?: Awaited<Retur
         // including when a sibling publication control changed since form load.
         // Only setAdminLocationPublication validates and changes that intent.
         values.isPublic = location.isPublic;
-        if (values.currency !== location.currency) {
-          // Release expired unpaid holds first, as occupancy writers do; the exclusive
-          // configuration fence then excludes new bookings until this decision commits.
-          await expirePaymentHoldsAtLocation(manager, id, { skipLocked: true });
+        const currencyChanged = values.currency !== location.currency;
+        const timezoneChanged = values.timezone !== canonicalTimezone(location.timezone);
+        // Keep legacy spelling on unrelated saves; aliases do not change scheduling.
+        if (!timezoneChanged) values.timezone = location.timezone;
+        if (timezoneChanged || !location.isActive && values.isActive) {
+          const message = await readClubTimezoneError(manager, { id: location.id, ...values });
+          if (message) return { ok: false, reason: "invalid-input", fieldErrors: { timezone: message } };
+        }
+        const deactivated = location.isActive && !values.isActive;
+        // Release expired unpaid holds first, as occupancy writers do; the exclusive
+        // configuration fence then excludes new bookings until this decision commits.
+        if (currencyChanged || timezoneChanged || deactivated) await expirePaymentHoldsAtLocation(manager, id, { skipLocked: true });
+        if (currencyChanged) {
           const blockers = await currencyChangeBlockers(manager, location);
           if (blockers.length) return { ok: false, reason: "currency-locked", blockers };
         }
+        // Bookings store location-local dates and minutes, so a new timezone would move them.
+        if (timezoneChanged) {
+          const blockers = await occupancyBlockers(manager, location);
+          if (blockers.length) return { ok: false, reason: "occupied",
+            message: blockers.map((blocker) => currencyChangeBlockerMessage(blocker, "timezone")).join(" ") };
+        }
+        // Inactive locations leave the operational calendar; their occupancy must end first.
+        const unfinished = deactivated && await unfinishedBookings(manager, location);
+        if (unfinished) return { ok: false, reason: "occupied",
+          message: unfinishedBookingsMessage("This location cannot be deactivated while it", unfinished) };
         const savedId = await clubs.updateUnarchivedLocation(manager, id, values, new Date());
         return savedId ? { ok: true, id: savedId } : { ok: false, reason: "not-found" };
       });
@@ -123,20 +147,33 @@ export async function saveAdminLocation(input: unknown, supabase?: Awaited<Retur
   return { ok: true, id: locationId };
 }
 
-// One eligibility rule for the Admin form and the authoritative update. Court prices
-// have no currency of their own, so every unfinished booking, unresolved
-// financial operation and court price must be gone before amounts change meaning.
-async function currencyChangeBlockers(manager: EntityManager, location: LocationEntity): Promise<CurrencyChangeBlocker[]> {
+// Occupancy that has not ended at a location, or at one of its courts: every hold and
+// every active reservation ending in the future, in the location's current timezone.
+export async function unfinishedBookings(manager: EntityManager, location: LocationEntity, courtId?: string): Promise<UnfinishedBookings | null> {
   const now = new Date();
-  const unfinished = (await clubs.listLocationLiveOccupancy(manager, location.id, localToday(location.timezone, now)))
+  const unfinished = (await clubs.listLocationLiveOccupancy(manager, location.id, localToday(location.timezone, now), courtId))
     .filter((row) => row.status === "held" || Date.parse(localStartInstant(location.timezone, row.date, row.end_minute)) > now.getTime());
-  const blockers: CurrencyChangeBlocker[] = [];
-  if (unfinished.length) blockers.push({ kind: "unfinished-bookings",
+  return unfinished.length ? { kind: "unfinished-bookings",
     checkouts: unfinished.filter((row) => row.status === "held").length,
     courtBookings: unfinished.filter((row) => row.status === "active" && row.booked && !row.coaching).length,
     coachingBookings: unfinished.filter((row) => row.status === "active" && row.booked && row.coaching).length,
-    reservations: unfinished.filter((row) => row.status === "active" && !row.booked).length });
+    reservations: unfinished.filter((row) => row.status === "active" && !row.booked).length } : null;
+}
+
+// Booking terms snapshot the location's currency and timezone: unfinished bookings and
+// unresolved financial operations must be gone before either changes meaning.
+async function occupancyBlockers(manager: EntityManager, location: LocationEntity): Promise<CurrencyChangeBlocker[]> {
+  const blockers: CurrencyChangeBlocker[] = [];
+  const unfinished = await unfinishedBookings(manager, location);
+  if (unfinished) blockers.push(unfinished);
   if (await locationHasUnresolvedFinancialOperations(manager, location.id)) blockers.push({ kind: "financial-operations" });
+  return blockers;
+}
+
+// One eligibility rule for the Admin form and the authoritative update. Court prices
+// have no currency of their own, so they must be gone before amounts change meaning too.
+async function currencyChangeBlockers(manager: EntityManager, location: LocationEntity): Promise<CurrencyChangeBlocker[]> {
+  const blockers = await occupancyBlockers(manager, location);
   if (await locationHasPricingRules(manager, location.id)) blockers.push({ kind: "court-pricing" });
   return blockers;
 }
@@ -158,13 +195,24 @@ export async function setAdminLocationArchived(input: unknown, supabase?: Awaite
   const parsed = locationArchiveSchema.safeParse(input);
   if (!parsed.success) return { ok: false, reason: "invalid-input", fieldErrors: { form: "Choose a valid location." } };
   const { id, archived } = parsed.data;
-  let savedId: string | null;
+  let result: LocationMutationResult;
   try {
-    savedId = await inTransaction(async (manager) => {
+    result = await inTransaction<LocationMutationResult>(async (manager) => {
       await clubs.lockConfigurationForWrite(manager);
-      await clubs.lockLocations(manager, [id]);
+      const [location] = await clubs.lockLocations(manager, [id]);
       if (!await lockActiveAdminAccount(manager, actor.userId)) throw new Error("Administrator required");
-      return clubs.setLocationArchived(manager, id, archived, new Date());
+      if (!archived && location?.archivedAt) {
+        const message = await readClubTimezoneError(manager, location);
+        if (message) return { ok: false, reason: "not-ready", message };
+      }
+      // Archived locations leave the operational calendar; their occupancy must end first.
+      if (archived && location && !location.archivedAt) {
+        await expirePaymentHoldsAtLocation(manager, id, { skipLocked: true });
+        const unfinished = await unfinishedBookings(manager, location);
+        if (unfinished) return { ok: false, reason: "occupied",
+          message: unfinishedBookingsMessage("This location cannot be archived while it", unfinished) };
+      }
+      return await clubs.setLocationArchived(manager, id, archived, new Date()) ? { ok: true, id } : { ok: false, reason: "not-found" };
     });
   } catch (error) {
     const failure = normalizeDatabaseError(error);
@@ -172,7 +220,7 @@ export async function setAdminLocationArchived(input: unknown, supabase?: Awaite
       kind: failure.kind, code: failure.sqlState }, "Failed to change location archive state");
     throw new Error("Unable to change location archive state.");
   }
-  if (!savedId) return { ok: false, reason: "not-found" };
+  if (!result.ok) return result;
   logger.info({ event: archived ? "admin.location_archived" : "admin.location_restored", actorId: actor.userId, locationId: id }, "Location archive state changed");
   return { ok: true, id };
 }

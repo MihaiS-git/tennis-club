@@ -1,4 +1,4 @@
-import { adjustmentHoldFragments } from "@/lib/bookings/domain";
+import { adjustmentHoldFragments, reassignmentHoldFragments } from "@/lib/bookings/domain";
 import { randomUUID } from "node:crypto";
 import { expect, test } from "vitest";
 import { buildBookingRevision, capturePricingEvidence, pricingEvidenceSchema, sameRevisionContract, type RevisionTerms } from "@/lib/bookings/revision";
@@ -123,4 +123,49 @@ test("recorded coaching amounts are stored facts, never revalidated against the 
   const confirmed=buildBookingRevision(differs,{...operation,id:randomUUID(),kind:"confirmed",bookingState:"confirmed",operationKey:"confirmation",actorScope:"provider"},differs);
   expect(confirmed.pricingEvidence).toEqual(differs.pricingEvidence);
   expect(confirmed.totalAmountMinor).toBe(15001);
+});
+test("an operational reassignment keeps the lesson's commercial provenance and is a contract change",()=>{
+  const coach=randomUUID(), program=randomUUID(), replacement=randomUUID(), otherLocation=randomUUID();
+  const lesson={...terms,totalAmountMinor:15001,coachUserId:coach,coachingProgramId:program,coachName:"Coach",coachingProgramName:"Private",
+    pricingEvidence:{...terms.pricingEvidence,coaching:{participantCount:1,pricePerPersonMinor:10000,programId:program,coachUserId:coach,locationId:id,durationMinutes:60,source:"coach" as const,
+      amountMinor:10000,currency:"RON" as const,courtRentalIncluded:false,courtRentalMinor:5001,courtAmountMinor:5001}}};
+  const created=buildBookingRevision(lesson,operation,null);
+  const moved={...created,coachUserId:replacement,coachName:"Replacement",locationId:otherLocation,locationName:"Other club"};
+  const rescheduled=buildBookingRevision(moved,{...operation,id:randomUUID(),kind:"rescheduled",bookingState:"confirmed",operationKey:"move",actorScope:"admin"},created);
+  // The operational assignment changes; the agreed price's coach, location and source do not.
+  expect(rescheduled).toMatchObject({coachUserId:replacement,locationId:otherLocation,
+    pricingEvidence:{coaching:{coachUserId:coach,locationId:id,source:"coach",amountMinor:10000}}});
+  expect(sameRevisionContract(created,{...created,coachUserId:replacement})).toBe(false);
+  expect(sameRevisionContract(created,{...created,coachingProgramId:randomUUID()})).toBe(false);
+  expect(sameRevisionContract(created,{...created,coachName:"Renamed"})).toBe(true);
+  // A new lesson must still name the coach and location its price was agreed for.
+  expect(()=>buildBookingRevision({...lesson,locationId:otherLocation},operation,null)).toThrow();
+  // The program remains bound to the evidence on every revision.
+  expect(()=>buildBookingRevision({...moved,coachingProgramId:randomUUID()},{...operation,id:randomUUID(),kind:"rescheduled",bookingState:"confirmed",operationKey:"bad",actorScope:"admin"},created)).toThrow();
+});
+
+test("a refund-backed reassignment holds the new coach on every target piece, coach-only inside the original court time", () => {
+  const original = { courtId: id, date: "2099-10-15", startMinute: 600, endMinute: 660 }, coach = randomUUID();
+  const otherCourt = { ...original, courtId: randomUUID() };
+  expect(reassignmentHoldFragments(original, otherCourt, coach)).toEqual([{ ...otherCourt, coachUserId: coach }]);
+  expect(reassignmentHoldFragments(original, { ...original, date: "2099-10-16" }, coach))
+    .toEqual([{ ...original, date: "2099-10-16", coachUserId: coach }]);
+  // Adjacent on the same court: nothing overlaps, the whole target holds court and coach.
+  expect(reassignmentHoldFragments(original, { ...original, startMinute: 660, endMinute: 720 }, coach))
+    .toEqual([{ ...original, startMinute: 660, endMinute: 720, coachUserId: coach }]);
+  // The original reservation keeps its own court time; the new coach is held there coach-only.
+  expect(reassignmentHoldFragments(original, { ...original, startMinute: 630, endMinute: 690 }, coach)).toEqual([
+    { ...original, startMinute: 630, endMinute: 660, coachUserId: coach, occupiesCourt: false },
+    { ...original, startMinute: 660, endMinute: 690, coachUserId: coach }]);
+  expect(reassignmentHoldFragments(original, { ...original, startMinute: 570, endMinute: 630 }, coach)).toEqual([
+    { ...original, startMinute: 570, endMinute: 600, coachUserId: coach },
+    { ...original, startMinute: 600, endMinute: 630, coachUserId: coach, occupiesCourt: false }]);
+  expect(reassignmentHoldFragments(original, original, coach)).toEqual([{ ...original, coachUserId: coach, occupiesCourt: false }]);
+  // Every piece holds the coach and the pieces cover the target exactly.
+  for (const startMinute of [540, 570, 600, 630, 660]) {
+    const target = { ...original, startMinute, endMinute: startMinute + 60 };
+    const fragments = reassignmentHoldFragments(original, target, coach);
+    expect(fragments.every(fragment => fragment.coachUserId === coach)).toBe(true);
+    expect(fragments.reduce((sum, fragment) => sum + fragment.endMinute - fragment.startMinute, 0)).toBe(60);
+  }
 });

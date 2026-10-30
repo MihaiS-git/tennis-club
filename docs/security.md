@@ -83,59 +83,28 @@ new functions and a schema-level revoke cannot remove it.
 
 ## Public and private player data
 
-Keep tennis information in `public.player_profiles` separate from sensitive account/personal/contact information in `public.users`. Player profiles are readable by active authenticated users, never anonymous users. Suspended accounts do not receive player-profile reads or mutations. Rating has no authenticated INSERT/UPDATE grant. Owners cannot target another user or change ownership. Future coach profiles are a separate sibling domain; membership remains separate from RBAC.
+Keep tennis information in `public.player_profiles` separate from sensitive account/personal/contact information in `public.users`. Player profiles are readable by active authenticated users, never anonymous users. Suspended accounts do not receive player-profile reads or mutations. Rating is system-managed and never accepted from form input. Owners cannot target another user or change ownership. Coach profiles are a separate public sibling domain (see `coaching.md`); membership remains separate from RBAC.
 
-Tennis data for active authenticated users:
-
-- display name;
-- rating;
-- ranking;
-- match statistics;
-- rating history (future);
-- optional tennis preferences.
-
-Private data:
-
-- contact information;
-- billing metadata;
-- account information;
-- private preferences.
-
-This separation matters because PostgreSQL RLS primarily controls rows, not arbitrary per-column visibility.
+Tennis data visible to active authenticated users: display name, rating, Sportya level and tennis preferences. Private data: contact information, account information and booking contact snapshots. Server read projections select explicit columns for each audience.
 
 ## Player avatar storage
 
 `profile-avatars` is private, with active-user reads and owner-only writes to the sole canonical `<user-id>/avatar.webp` path; the bucket accepts only `image/webp`. Next.js preserves JPEG/PNG/WebP validation, the 5 MiB input limit and Sharp normalization. Verified active owners alone mutate their existing profile; active Admins may retrieve a requested target's avatar but cannot mutate it. TypeORM reads references and navigation metadata and rechecks the active owner/profile inside short mutation transactions; persisted paths must exactly match the owner/target canonical path. Auth and Storage remain user-scoped Supabase operations under unchanged policies. Secure GET retains 401/403/404/503, private no-store and nosniff responses. No public/signed URLs or browser Supabase access is introduced. No runtime avatar lease or replacement backup remains; first uploads use best-effort cleanup on DB failure, removal clears DB before best-effort Storage deletion, and non-atomic Storage/database outcomes can leave rare orphans or ambiguous races.  See `profiles.md`.
 
-## User-scoped Supabase client
+## Supabase clients
 
-Use the authenticated user session for normal application operations.
+The user-scoped server client (request cookies) verifies Auth identity and performs private
+Storage operations under Storage RLS. Application persistence uses TypeORM after Next.js
+authorization; there is no browser Supabase client and no PostgREST/RPC persistence path.
 
-Storage retains RLS; application persistence uses TypeORM after Next.js authorization.
+Supabase secret/service-role credentials are used only by guarded local seed and test
+fixtures, which reject non-local targets and production. No production code path uses them:
+checkout, Stripe webhooks, settlement and refunds use TypeORM. Never expose such credentials
+to browser code, public environment variables, logs or responses.
 
-This is the default access mode.
-
-## Privileged Supabase client
-
-A privileged client bypasses normal RLS protections.
-
-Use it only for trusted system workflows that genuinely require elevated access, such as:
-
-- Stripe webhook synchronization;
-- controlled server-side synchronization;
-- narrowly scoped system operations.
-
-Introduce `SUPABASE_SECRET_KEY` only when such a workflow exists.
-
-Never expose it to:
-
-- browser code;
-- Client Components;
-- public environment variables;
-- logs;
-- responses.
-
-Server execution alone is not a reason to use privileged access.
+Webhook and Cron endpoints authenticate separately: Stripe signature verification on the raw
+body, Bearer secrets for `/api/notifications/deliver`, `/api/payments/holds/expire` and the
+Brevo webhook.
 
 ## Environment variables
 
@@ -196,18 +165,11 @@ Server logs should contain selected safe fields only. Never log passwords, FormD
 
 ## Audit trail
 
-Sensitive administrative or financial operations should be auditable.
-
-Examples:
-
-- role changes;
-- manual booking changes;
-- cancellations;
-- refunds;
-- membership overrides;
-- rating adjustments.
-
-Audit data should make it possible to determine:
+Sensitive administrative or financial operations must be auditable. Current records:
+role-assignment attribution, `payment_provider_changes`, booking revisions (actor scope and
+time), direct-reservation creator/canceller, refund executions, provider event receipts and
+immutable `booking_financial_exceptions`. New sensitive operations must make it possible to
+determine:
 
 ```text
 who

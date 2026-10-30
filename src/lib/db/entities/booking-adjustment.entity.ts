@@ -13,8 +13,13 @@ export type AdjustmentTarget = { courtId: string; date: string; startMinute: num
   expectedUpdatedAt: string; courtName: string; locationName: string; timezone: string;
   // Refund-backed reductions apply the accepted quote, never a later repricing.
   pricingEvidence?: PricingEvidence;
+  cancellationExplanation?: string;
   // Revision actor scope decided when the change was requested.
-  actorScope?: "customer" | "coach_owner" | "admin_owner" | "admin" };
+  actorScope?: "customer" | "coach_owner" | "coach" | "admin_owner" | "admin";
+  // A staff operational change: the destination location and (for a lesson) coach it
+  // assigns, its operation's intent, and the destination's applicable price, which may
+  // exceed the agreed newTotal when the club absorbs the difference.
+  locationId?: string; coachUserId?: string; coachName?: string; intentHash?: string; destinationTotalMinor?: number };
 
 @Entity({ schema: "public", name: "booking_adjustments" })
 @Unique("booking_adjustments_identity", ["bookingId", "id"])

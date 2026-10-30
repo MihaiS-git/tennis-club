@@ -19,6 +19,7 @@ vi.mock("@/lib/db/repositories/accounts.repository", () => ({
 }));
 vi.mock("@/lib/db/repositories/clubs.repository", () => ({
   lockConfigurationForRead: vi.fn(),
+  listLocationTimezones: async () => [{ id: location, name: "Club", timezone: "Europe/Bucharest" }],
   lockLocationsForRead: async () => [{ id: location, timezone: "Europe/Bucharest", archivedAt: null }],
   listOpeningHoursSchedules: schedules, listLocationOpeningHours: hours,
 }));

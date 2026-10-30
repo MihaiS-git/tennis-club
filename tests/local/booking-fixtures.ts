@@ -101,7 +101,9 @@ export async function insertBookingRecords(manager: EntityManager, input: unknow
     cancellation_notice_minutes: z.number().int(), status: z.enum(["confirmed", "pending_payment", "cancelled", "expired", "failed"]).optional(),
     created_at: z.string().optional(), updated_at: z.string().optional(),
     // A coaching lesson's stored coach and program terms, as the booking flow snapshots them.
-    coaching: z.object({ coach_user_id: z.uuid(), coaching_program_id: z.uuid(), coach_name: z.string(), coaching_program_name: z.string() }).optional() });
+    coaching: z.object({ coach_user_id: z.uuid(), coaching_program_id: z.uuid(), coach_name: z.string(), coaching_program_name: z.string() }).optional(),
+    // Replaces the synthetic court evidence, e.g. with a lesson's agreed coaching evidence.
+    pricing_evidence: z.record(z.string(), z.unknown()).optional() });
   const values = z.array(schema).parse(Array.isArray(input) ? input : [input]);
   for (const value of values) {
     const id = value.id ?? randomUUID(), revisionId = randomUUID();
@@ -125,7 +127,7 @@ export async function insertBookingRecords(manager: EntityManager, input: unknow
       VALUES($1,$2,1,NULL,'created','fixture','created',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,coalesce($21::timestamptz,now()),$22,$23,$24,$25,$26)`,
       [revisionId,id,state,resource.location_id,resource.court_id,resource.location_name,resource.court_name,resource.timezone,resource.booking_date,
         resource.starts_at_minute,resource.ends_at_minute,value.customer_name,value.customer_email,value.customer_phone,value.total_amount_minor,value.currency,
-        value.payment_method ?? "pay_at_club",value.cancellation_notice_minutes,value.account_user_id ?? null,value.account_user_id ? "customer":"guest",value.created_at ?? null,JSON.stringify(evidence),
+        value.payment_method ?? "pay_at_club",value.cancellation_notice_minutes,value.account_user_id ?? null,value.account_user_id ? "customer":"guest",value.created_at ?? null,JSON.stringify(value.pricing_evidence ?? evidence),
         value.coaching?.coach_user_id ?? null,value.coaching?.coaching_program_id ?? null,value.coaching?.coach_name ?? null,value.coaching?.coaching_program_name ?? null]);
     if (state === "confirmed") await manager.query("INSERT INTO public.bookings(id,confirmation_revision_id) VALUES($1,$2)", [id,revisionId]);
     if (value.status === "cancelled") {

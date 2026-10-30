@@ -1,9 +1,10 @@
 import type { OpeningInterval } from "@/lib/admin/opening-hours-validation";
+import type { CoachRestrictionPolicy } from "@/lib/bookings/operational-policy";
 import { capturePricingEvidence, lessonPricingEvidence, type CoachingEvidence, type PricingEvidence } from "@/lib/bookings/revision";
 import { buildCourtDay, type CalendarReservation } from "@/lib/courts/calendar";
 import type { CoveragePeriod } from "@/lib/courts/coverage-validation";
 import { getCalendarSelection } from "@/lib/courts/interval-selection";
-import { localStartInstant } from "@/lib/courts/local-time";
+import { createLocalIntervalValidator, localStartInstant } from "@/lib/courts/local-time";
 import type { PublicLocation } from "@/lib/courts/public";
 import { getCourtStateForDate } from "@/lib/courts/state";
 import type { PublicCoachingFacts } from "@/lib/db/repositories/coaching.repository";
@@ -87,13 +88,22 @@ function isLessonInterval(startMinute: number, durationMinutes: number) {
     && startMinute % 30 === 0 && isCoachingDuration(durationMinutes) && startMinute + durationMinutes <= 1440;
 }
 
-// Schedule facts shared by new lessons and rescheduled ones: the coach's windows at
-// this location, the coach's other lessons anywhere, and the court day.
-function lessonSchedule(day: Omit<CoachingLessonDay, "coaching">) {
+// One local date at one location as operational scheduling reads it: the court day
+// and, for a lesson, its coach's schedule and occupancy (null for a court booking).
+export type OperationalDay = Omit<CoachingLessonDay, "coaching" | "coach"> & { coach: CoachingLessonDay["coach"] | null };
+
+// Scheduling validation shared by new lessons, rescheduled lessons and staff operational
+// changes of court bookings and lessons: valid local times (DST), the coach's windows
+// at this location, the coach's other lessons and holds anywhere, and the court day
+// (opening hours, complete pricing, court occupancy including live and payment-protected
+// holds, not past). coachWindows "override" skips only the coach's configurable windows
+// (working hours, time off, location assignment); occupancy is never overridable.
+export function operationalSchedule(day: OperationalDay, coachWindows: CoachRestrictionPolicy = "enforce") {
+  const validInterval = createLocalIntervalValidator(day.location.timezone, day.date);
   const key = (id: string) => id.toLowerCase();
   const locationId = key(day.location.id);
   // Coach windows at this location only; contiguous windows form one interval.
-  const windows = resolveCoachAvailability({ date: day.date, weekly: day.coach.weekly, exceptions: day.coach.exceptions,
+  const windows = day.coach ? resolveCoachAvailability({ date: day.date, weekly: day.coach.weekly, exceptions: day.coach.exceptions,
     timezones: new Map([[locationId, day.location.timezone]]) })
     .filter((window) => key(window.location_id) === locationId)
     .reduce<{ start: number; end: number }[]>((merged, window) => {
@@ -101,20 +111,19 @@ function lessonSchedule(day: Omit<CoachingLessonDay, "coaching">) {
       if (last && last.end >= window.start_minute) last.end = Math.max(last.end, window.end_minute);
       else merged.push({ start: window.start_minute, end: window.end_minute });
       return merged;
-    }, []);
-  const coachBusy = day.coach.occupancy.filter((row) => row.booking_date === day.date);
-  const courtDay = buildCourtDay({ date: day.date, today: day.today, currentMinute: day.currentMinute, courts: day.location.courts,
+    }, []) : [];
+  const coachBusy = day.coach?.occupancy.filter((row) => row.booking_date === day.date) ?? [];
+  const courtDay = buildCourtDay({ timezone: day.location.timezone, date: day.date, today: day.today, currentMinute: day.currentMinute, courts: day.location.courts,
     hours: day.hours, coverage: day.coverage, pricing: day.pricing, reservations: day.courtOccupancy });
 
-  return (request: Omit<CoachingLessonRequest, "programId" | "participantCount">) => {
-    const { startMinute, durationMinutes } = request;
-    if (!isLessonInterval(startMinute, durationMinutes)) return { ok: false as const, reason: "invalid-time" as const };
-    const endMinute = startMinute + durationMinutes;
+  return (request: { courtId: string; startMinute: number; endMinute: number }) => {
+    const { startMinute, endMinute } = request;
+    if (![startMinute, endMinute].every(Number.isInteger) || startMinute < 0 || startMinute % 30 !== 0 || endMinute % 30 !== 0
+      || endMinute - startMinute < 60 || endMinute > 1440 || !validInterval(startMinute, endMinute))
+      return { ok: false as const, reason: "invalid-time" as const };
     const startsAt = localStartInstant(day.location.timezone, day.date, startMinute);
     const endsAt = localStartInstant(day.location.timezone, day.date, endMinute);
-    // A lesson across a clock change would not last its priced duration.
-    if (Date.parse(endsAt) - Date.parse(startsAt) !== durationMinutes * 60_000) return { ok: false as const, reason: "invalid-time" as const };
-    if (!windows.some((window) => window.start <= startMinute && endMinute <= window.end))
+    if (day.coach && coachWindows === "enforce" && !windows.some((window) => window.start <= startMinute && endMinute <= window.end))
       return { ok: false as const, reason: "coach-unavailable" as const };
     if (coachBusy.some((row) => row.starts_at_minute < endMinute && startMinute < row.ends_at_minute))
       return { ok: false as const, reason: "coach-booked" as const };
@@ -131,6 +140,16 @@ function lessonSchedule(day: Omit<CoachingLessonDay, "coaching">) {
         day.coverage.filter((row) => row.court_id === court.court.id), day.date) });
     return { ok: true as const, slot: { court: { id: court.court.id, name: court.court.name }, startMinute, endMinute, startsAt, endsAt,
       courtRentalMinor: selection.priceMinor, courtPricing } };
+  };
+}
+
+// Lessons additionally use one of the canonical durations.
+function lessonSchedule(day: Omit<CoachingLessonDay, "coaching">, coachWindows: CoachRestrictionPolicy = "enforce") {
+  const schedule = operationalSchedule(day, coachWindows);
+  return (request: Omit<CoachingLessonRequest, "programId" | "participantCount">) => {
+    const { startMinute, durationMinutes } = request;
+    if (!isLessonInterval(startMinute, durationMinutes)) return { ok: false as const, reason: "invalid-time" as const };
+    return schedule({ courtId: request.courtId, startMinute, endMinute: startMinute + durationMinutes });
   };
 }
 
@@ -215,14 +234,14 @@ export type CoachingRescheduleQuote = {
 export type CoachingRescheduleResult = { ok: true; quote: CoachingRescheduleQuote }
   | { ok: false; reason: "invalid-time" | "coach-unavailable" | "coach-booked" | "court-unavailable" | "unpriced" };
 
-// A purchased lesson at another time on its stored court: the same coach, location, duration
-// and agreed coaching fee, never repriced; only the court rental follows the
-// current court pricing (and stays uncharged when the program includes it).
-// The caller supplies the operational day, the coach's own facts and occupancy
-// that already excludes the lesson's own reservation.
+// A purchased lesson at another time: the same duration and agreed coaching fee, never
+// repriced; only the court rental follows the current court pricing (and stays uncharged
+// when the agreement includes it). The caller supplies the day of the lesson's destination
+// coach and location, with occupancy that already excludes the lesson's own reservation,
+// and the coach-window policy its authorization permits (customers always enforce).
 export function quoteCoachingReschedule(day: Omit<CoachingLessonDay, "coaching">, coaching: CoachingEvidence,
-  request: { courtId: string; startMinute: number }): CoachingRescheduleResult {
-  return rescheduleDay(day, coaching)(request);
+  request: { courtId: string; startMinute: number }, coachWindows: CoachRestrictionPolicy = "enforce"): CoachingRescheduleResult {
+  return rescheduleDay(day, coaching, coachWindows)(request);
 }
 
 // Every start of the purchased lesson's duration on the day, on every available court.
@@ -239,8 +258,8 @@ export function listCoachingRescheduleOffers(day: Omit<CoachingLessonDay, "coach
   return offers;
 }
 
-function rescheduleDay(day: Omit<CoachingLessonDay, "coaching">, coaching: CoachingEvidence) {
-  const schedule = lessonSchedule(day);
+function rescheduleDay(day: Omit<CoachingLessonDay, "coaching">, coaching: CoachingEvidence, coachWindows: CoachRestrictionPolicy = "enforce") {
+  const schedule = lessonSchedule(day, coachWindows);
   return (request: { courtId: string; startMinute: number }): CoachingRescheduleResult => {
     const scheduled = schedule({ ...request, durationMinutes: coaching.durationMinutes });
     if (!scheduled.ok) return scheduled;

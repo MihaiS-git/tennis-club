@@ -14,7 +14,7 @@ import { expirePaymentHoldsAtLocation } from "@/lib/payments/hold-expiry";
 import { CourtEntity } from "@/lib/db/entities/court.entity";
 import { LocationPricingRuleEntity } from "@/lib/db/entities/location-pricing-rule.entity";
 import { listCheckoutPricing } from "@/lib/db/repositories/pricing.repository";
-import { listCheckoutLocationCourts, listCheckoutCourtCoverage, lockLocations } from "@/lib/db/repositories/clubs.repository";
+import { listCheckoutLocationCourts, listCheckoutCourtCoverage, lockLocations, listLocationTimezones } from "@/lib/db/repositories/clubs.repository";
 import { hasOccupancyConflict } from "@/lib/reservations/occupancy";
 import { processOnlinePaymentEvent } from "@/lib/payments/service";
 import * as adjustments from "@/lib/db/repositories/booking-adjustments.repository";
@@ -59,6 +59,7 @@ const manager = new EntityManager(source, runner);
 let committed: boolean;
 beforeEach(() => {
   vi.resetAllMocks(); committed = false;
+  vi.mocked(listLocationTimezones).mockResolvedValue([]);
   vi.mocked(adjustments.readAdjustmentHolds).mockResolvedValue({ total: 0, valid: 0 });
   Object.defineProperty(runner, "isTransactionActive", { value: true, configurable: true });
   vi.spyOn(manager, "query").mockResolvedValue([]);
@@ -68,7 +69,7 @@ beforeEach(() => {
   vi.mocked(inTransaction).mockImplementation(async work => {
     const result = await work(manager); committed = true; return result;
   });
-  vi.mocked(payments.discoverSettlementParent).mockResolvedValue({ booking_id: id, reservation_id: id, location_id: id });
+  vi.mocked(payments.discoverSettlementParent).mockResolvedValue({ booking_id: id, reservation_id: id, location_id: id, coach_user_id: null });
   vi.mocked(captures.recordCaptureReceipt).mockResolvedValue({ id, payment_attempt_id:id, provider:"stripe",
     provider_payment_id:"pi_test",provider_capture_id:"pi_test",amount_minor:5000,currency:"RON" });
   vi.mocked(lockLocations).mockResolvedValue([Object.assign(new LocationEntity(), { id, name: "Club", timezone: "UTC", currency: "RON", isActive: true, isPublic: true, archivedAt: null, customerCancellationNoticeMinutes: 1440 })]);

@@ -29,7 +29,7 @@ beforeEach(() => {
   vi.stubEnv("NOTIFICATION_EMAIL_MODE", "sandbox");
   mocks.admin.mockResolvedValue({ userId: id }); mocks.fence.mockResolvedValue(true); mocks.admins.mockResolvedValue([id]);
   mocks.profile.mockResolvedValue({ account: { state: "active", userId: id, roles: ["admin"] } });
-  mocks.find.mockResolvedValue(delivery); mocks.booking.mockResolvedValue(id); mocks.accounts.mockResolvedValue([]);
+  mocks.find.mockResolvedValue(delivery); mocks.booking.mockResolvedValue({ bookingId: id, confirmed: true }); mocks.accounts.mockResolvedValue([]);
   mocks.claim.mockResolvedValue([{ ...delivery, bodyText: "snapshot", bodyHtml: "<p>snapshot</p>", attempts: 2, lockedUntil: new Date() }]);
   mocks.complete.mockResolvedValue(true);
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ messageId: "<accepted>" }), { status: 201 })));
@@ -41,6 +41,14 @@ test("active Admin gets persisted delivery details via an owned notification", a
   expect(await adminMessageDelivery(id)).toMatchObject({ recipientEmail: "guest@example.test", bookingHref: `/admin/bookings/${id}`,
     attempts: 1, status: "failed", retry: { eligible: true }, failureReason: expect.stringContaining("401") });
   expect(mocks.find).toHaveBeenCalledWith(expect.anything(), id, id);
+});
+
+test("a checkout that never became a booking links to its payment transactions instead of a missing booking page", async () => {
+  mocks.booking.mockResolvedValue({ bookingId: id, confirmed: false });
+  const details = await adminMessageDelivery(id);
+  expect(details?.bookingHref).toBeNull();
+  expect(details?.transactionsHref).toContain(`/admin/payments/transactions?`);
+  expect(new URL(details!.transactionsHref!, "http://club.test").searchParams.get("q")).toBe(id);
 });
 
 test.each([{ state: "active", roles: [] }, { state: "suspended", roles: ["admin"] }])("non-active Admin cannot read details or retry", async account => {

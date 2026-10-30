@@ -1,6 +1,7 @@
 import "server-only";
 import type { BookingCancellationCommandResult } from "@/lib/bookings/domain";
 import { cancelBookingCommand } from "@/lib/bookings/cancellation-service";
+import { readLessonCancellations, type CoachLessonCancellation } from "@/lib/bookings/coach-bookings";
 import { paymentFactSchema } from "@/lib/payments/facts";
 import { paymentProviderSchema } from "@/lib/payments/domain";
 import { successfulRefundPayment } from "@/lib/payments/providers/stripe/refund-policy";
@@ -14,6 +15,7 @@ import { cancellationNoticeMinutesSchema } from "@/lib/bookings/cancellation-pol
 import { createClient } from "@/lib/supabase/server";
 import { getDataSource } from "@/lib/db/data-source";
 import { normalizeDatabaseError } from "@/lib/db/errors";
+import { inReadSnapshot } from "@/lib/db/transaction";
 import * as reservations from "@/lib/db/repositories/reservations.repository";
 import { createDirectReservationCommand, editDirectReservationCommand, cancelDirectReservationCommand } from "./commands";
 import { logger } from "@/lib/logger";
@@ -43,6 +45,7 @@ const adminOccupancyFields = occupancySchema.extend({ id: z.uuid(),
     status: z.enum(["pending", "pending_retry", "succeeded", "failed", "voided"]), created_at: z.string() })) });
 const adminOccupancyRowSchema = z.discriminatedUnion("kind", [
   adminOccupancyFields.extend({ kind: z.literal("hold"), hold_expires_at: z.string(), payment_method: z.enum(["online", "pay_at_club"]) }),
+  adminOccupancyFields.extend({ kind: z.literal("modification"), hold_expires_at: z.string(), modified_booking_id: z.uuid(), payment_method: z.null() }),
   adminOccupancyFields.extend({ kind: z.literal("reservation"), payment_method: z.null() }),
   adminOccupancyFields.extend({ kind: z.literal("booking"), payment_method: z.enum(["online", "pay_at_club"]) }),
 ]);
@@ -58,10 +61,13 @@ export type AdminBooking = Pick<z.infer<typeof adminOccupancyRowSchema>,
   };
 // Coach Calendar projections: own lessons keep schedule and customer contact only; other bookings are bare intervals.
 type CoachLessonOccupancy = Pick<AdminBooking, "id" | "court_id" | "booking_date" | "starts_at_minute" | "ends_at_minute"
-  | "coach_name" | "coaching_program_name" | "customer_name" | "customer_email" | "customer_phone"> & { kind: "lesson"; coach_user_id: string };
+  | "coach_name" | "coaching_program_name" | "customer_name" | "customer_email" | "customer_phone"> & { kind: "lesson"; coach_user_id: string;
+    cancellation: CoachLessonCancellation };
 type RestrictedOccupancy = Pick<AdminBooking, "court_id" | "booking_date" | "starts_at_minute" | "ends_at_minute"> & { kind: "occupied"; id: string };
 type AdminCheckoutHold = Pick<AdminBooking, "id" | "court_id" | "booking_date" | "starts_at_minute" | "ends_at_minute"> & { kind: "hold"; hold_expires_at: string; customer_name: string | null; customer_email: string | null };
-export type AdminOperationalOccupancy = AdminCheckoutHold | AdminReservation | AdminBooking | CoachLessonOccupancy | RestrictedOccupancy;
+// A temporary hold for a pending change to a confirmed booking (booking_id), until it completes, fails or is cancelled.
+type AdminModificationHold = Omit<AdminCheckoutHold, "kind"> & { kind: "modification"; booking_id: string };
+export type AdminOperationalOccupancy = AdminCheckoutHold | AdminModificationHold | AdminReservation | AdminBooking | CoachLessonOccupancy | RestrictedOccupancy;
 export type InternalLocation = { id: string; name: string; timezone: string; courts: { id: string; name: string }[] };
 export type ReservationResult = { ok: true } | { ok: false; message: string };
 
@@ -115,7 +121,8 @@ async function readDayHours(locationId: string, date: string) {
   }
 }
 
-export async function getReservationDay(location: InternalLocation, date: string, now: Date, supabase?: Client) {
+export async function getReservationDay(location: InternalLocation, date: string, now: Date, supabase?: Client,
+  scope: "admin" | "coach" = "admin") {
   const client = supabase ?? await createClient();
   const actor = await requireReservationRole(client);
   const [hours, occupancy] = await Promise.all([
@@ -141,6 +148,10 @@ export async function getReservationDay(location: InternalLocation, date: string
       adminOccupancy.push({ kind: "hold", id: row.id, court_id: row.court_id, booking_date: row.booking_date,
         starts_at_minute: row.starts_at_minute, ends_at_minute: row.ends_at_minute, hold_expires_at: row.hold_expires_at,
         customer_name: row.customer_name, customer_email: row.customer_email });
+    } else if (row.kind === "modification") {
+      adminOccupancy.push({ kind: "modification", id: row.id, court_id: row.court_id, booking_date: row.booking_date,
+        starts_at_minute: row.starts_at_minute, ends_at_minute: row.ends_at_minute, hold_expires_at: row.hold_expires_at,
+        booking_id: row.modified_booking_id, customer_name: row.customer_name, customer_email: row.customer_email });
     } else if (row.kind === "reservation") {
       adminOccupancy.push({ kind: "reservation", payment_method: row.payment_method, id: row.id, court_id: row.court_id, booking_date: row.booking_date,
         starts_at_minute: row.starts_at_minute, ends_at_minute: row.ends_at_minute,
@@ -161,26 +172,46 @@ export async function getReservationDay(location: InternalLocation, date: string
       throw new Error("Unable to load booking details.");
     }
   }
-  const canManage = actor.roles.includes("admin");
+  const canManage = scope === "admin" && actor.roles.includes("admin");
+  const cancellations = canManage ? null : await readOwnLessonCancellations(adminOccupancy, actor.userId, location.timezone, now);
+  const staffOccupancy = cancellations ? adminOccupancy.map((item) => projectStaffOccupancy(item, actor.userId, cancellations)) : adminOccupancy;
   return { ...buildReservationDay({ date, today: localToday(location.timezone, now), currentMinute: localMinute(location.timezone, now),
     courts: location.courts, hours, reservations: occupancy }), occupancy,
-    adminOccupancy: canManage ? adminOccupancy : adminOccupancy.map((item) => projectStaffOccupancy(item, actor.userId)),
-    actorUserId: actor.userId, canManage };
+    adminOccupancy: staffOccupancy, actorUserId: actor.userId, canManage };
 }
 
 function operationFact<T extends { created_at: string }>({ created_at, ...fact }: T) {
   return { ...fact, createdAt: new Date(created_at) };
 }
 
+function isOwnLesson(item: AdminOperationalOccupancy, actorUserId: string) {
+  return item.kind === "booking" && item.account_user_id !== actorUserId && bookingType(item) === "coaching" && item.coach_user_id === actorUserId;
+}
+
+// The Coach's own lessons carry the Cancel lesson state Lesson details shows; the command still decides.
+async function readOwnLessonCancellations(items: AdminOperationalOccupancy[], actorUserId: string, timezone: string, now: Date) {
+  const lessons = items.filter((item) => isOwnLesson(item, actorUserId));
+  if (!lessons.length) return new Map<string, CoachLessonCancellation>();
+  try {
+    return await inReadSnapshot(manager => readLessonCancellations(manager,
+      lessons.map((lesson) => ({ ...lesson, status: "confirmed" as const, location_timezone: timezone })), now));
+  } catch (error: unknown) {
+    logger.error({ event: "reservations.admin_read_failed", code: normalizeDatabaseError(error).sqlState }, "Failed to load lesson cancellation state");
+    throw new Error("Unable to load reservation details.");
+  }
+}
+
 // Non-Admin staff never receive another customer's identity, payments or prices.
-function projectStaffOccupancy(item: AdminOperationalOccupancy, actorUserId: string): AdminOperationalOccupancy {
-  if (item.kind === "hold") return { kind: "occupied", id: item.id, court_id: item.court_id, booking_date: item.booking_date,
+function projectStaffOccupancy(item: AdminOperationalOccupancy, actorUserId: string,
+  cancellations: ReadonlyMap<string, CoachLessonCancellation>): AdminOperationalOccupancy {
+  if (item.kind === "hold" || item.kind === "modification") return { kind: "occupied", id: item.id, court_id: item.court_id, booking_date: item.booking_date,
     starts_at_minute: item.starts_at_minute, ends_at_minute: item.ends_at_minute };
   if (item.kind !== "booking" || item.account_user_id === actorUserId) return item;
   const interval = { court_id: item.court_id, booking_date: item.booking_date, starts_at_minute: item.starts_at_minute, ends_at_minute: item.ends_at_minute };
-  if (bookingType(item) === "coaching" && item.coach_user_id === actorUserId) return { kind: "lesson", id: item.id, ...interval,
+  if (isOwnLesson(item, actorUserId)) return { kind: "lesson", id: item.id, ...interval,
     coach_user_id: actorUserId, coach_name: item.coach_name, coaching_program_name: item.coaching_program_name,
-    customer_name: item.customer_name, customer_email: item.customer_email, customer_phone: item.customer_phone };
+    customer_name: item.customer_name, customer_email: item.customer_email, customer_phone: item.customer_phone,
+    cancellation: cancellations.get(item.id)! };
   return { kind: "occupied", id: `occupied:${item.court_id}:${item.starts_at_minute}`, ...interval };
 }
 
@@ -222,11 +253,11 @@ export async function cancelDirectReservationAsAdmin(input: unknown, supabase?: 
 export async function cancelCustomerBookingAsAdmin(input: unknown, supabase?: Client): Promise<BookingCancellationResult> {
   const client = supabase ?? await createClient();
   const actor = await requireActiveAdmin(client);
-  const parsed = z.union([z.strictObject({ id: z.uuid() }), z.uuid().transform(id => ({ id }))]).safeParse(input);
-  if (!parsed.success) return { ok: false, message: "Choose a valid booking." };
+  const parsed = z.union([z.strictObject({ id: z.uuid(), explanation: z.string().trim().max(500).optional() }), z.uuid().transform(id => ({ id, explanation: undefined }))]).safeParse(input);
+  if (!parsed.success) return { ok: false, message: "Choose a valid booking and keep the explanation within 500 characters." };
   let data: BookingCancellationCommandResult;
   try {
-    data = await cancelBookingCommand(parsed.data.id, actor.userId, true);
+    data = await cancelBookingCommand(parsed.data.id, actor.userId, true, parsed.data.explanation);
   } catch {
     logger.error({ event: "bookings.admin_cancel_failed", actorId: actor.userId, bookingId: parsed.data.id }, "Failed to cancel customer booking as Admin");
     return { ok: false, message: "Unable to cancel this booking. Try again." };

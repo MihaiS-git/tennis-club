@@ -91,7 +91,7 @@ timetable) in the location's currency, or “See rates when booking” when none
 reads and preserve their transactional price acknowledgement rules.
 
 Pricing entities and native overlap integrity are installed by the TypeORM history.
-See [fresh setup](../README.md#application-migrations-and-fresh-local-setup) and
+See [database setup](../README.md#database-setup-and-migrations) and
 [focused disposable validation](testing.md#typeorm-cutover-validation). The initial cutover still requires separate authorization for populated databases;
 effective schedules and interval ownership are created directly by the consolidated
 initial migration. Validation uses only isolated disposable test infrastructure. See the opening-hours PostgreSQL integration tests

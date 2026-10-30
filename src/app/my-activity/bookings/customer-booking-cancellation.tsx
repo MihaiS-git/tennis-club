@@ -5,6 +5,8 @@ import { toast } from "sonner";
 import { cancelledBookingMessage } from "@/lib/payments/refund-message";
 import { useEffect, useRef, useState } from "react";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
+import { reservationDateLabel } from "@/components/reservation-details";
+import { minuteToTime } from "@/lib/admin/opening-hours-validation";
 import { Button } from "@/components/button";
 import type { PersonalCustomerBooking } from "@/lib/bookings/personal";
 import { customerCancellationEligibility, customerCancellationNoticeLabel } from "@/lib/bookings/self-cancellation";
@@ -16,6 +18,7 @@ export function CustomerBookingCancellation({ booking, staff, onCancelled, onPen
   onPendingChange: (pending: boolean) => void;
 }) {
   const [now, setNow] = useState(() => new Date());
+  const [parentDialog, setParentDialog] = useState<HTMLDialogElement | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [pending, setPending] = useState(false);
   const pendingRef = useRef(false);
@@ -65,13 +68,17 @@ export function CustomerBookingCancellation({ booking, staff, onCancelled, onPen
     {eligibility === "eligible" && onEdit && !booking.payment_pending && <Button type="button" variant="secondary" disabled={pending}
       onClick={onEdit}>{booking.includes_coaching ? "Reschedule" : "Edit booking"}</Button>}
     {eligibility === "eligible" ? <Button ref={triggerRef} type="button" variant="destructive" disabled={pending}
-      onClick={() => { setNow(new Date()); setConfirming(true); }}>Cancel booking</Button>
+      onClick={(event) => { setParentDialog(event.currentTarget.closest("dialog")); setNow(new Date()); setConfirming(true); }}>Cancel booking</Button>
       : <p className="text-sm text-muted-foreground">{eligibility === "started"
         ? "Cancellation is no longer available because this booking has started."
         : `Cancellation is no longer available. This booking requires ${customerCancellationNoticeLabel(booking.cancellation_notice_minutes)}.`}</p>}
-    <ConfirmationDialog open={confirming} title="Cancel booking?"
-      message={`${booking.location_name} · ${booking.court_name}\nThis will cancel your booking and free the court.`}
-      confirmLabel="Cancel booking" pendingLabel="Cancelling booking…" cancelLabel="Keep booking" pending={pending}
-      onConfirm={cancel} onClose={() => { if (!pendingRef.current) setConfirming(false); }} returnFocusRef={triggerRef} />
+    <ConfirmationDialog parentDialog={parentDialog} open={confirming} title="Cancel booking?"
+      message={`${booking.location_name} · ${booking.court_name}\n${reservationDateLabel(booking.booking_date)} · ${minuteToTime(booking.starts_at_minute)}–${minuteToTime(booking.ends_at_minute)} (${booking.location_timezone})\n${booking.includes_coaching ? `Coach: ${booking.coach_name ?? "Assigned coach"}\n` : ""}\nThis will cancel your booking and free the court.`}
+      confirmLabel="Confirm cancellation" pendingLabel="Cancelling booking…" cancelLabel="Keep booking" pending={pending}
+      onConfirm={cancel} onClose={() => { if (!pendingRef.current) setConfirming(false); }} returnFocusRef={triggerRef}>
+      <p className="mt-3 text-sm">{booking.payment_method === "pay_at_club"
+        ? "No online refund applies. Payments made at the club are handled by the club."
+        : "Captured online funds will be refunded automatically. If a refund is required, your booking stays confirmed until the refund is confirmed."}</p>
+    </ConfirmationDialog>
   </>;
 }

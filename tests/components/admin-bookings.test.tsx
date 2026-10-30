@@ -264,7 +264,7 @@ test("the Admin table and mobile cards share historical type details and preserv
   expect(mocks.list).toHaveBeenCalledWith(expect.objectContaining({ type: "coaching", q: "Ana", page: 2 }));
   const table = screen.getByRole("table", { name: "Bookings and reservations" });
   const cards = screen.getByRole("list", { name: "Bookings and reservations" });
-  expect(within(table).getAllByRole("columnheader")).toHaveLength(8);
+  expect(within(table).getAllByRole("columnheader")).toHaveLength(9);
   expect(within(table).getByRole("columnheader", { name: "Type" })).toBeDefined();
   for (const view of [table, cards]) {
     expect(within(view).getByText("Coaching")).toBeDefined();

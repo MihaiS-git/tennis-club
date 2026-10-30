@@ -108,8 +108,10 @@ test("admin location workflow uses Next.js authorization, denied browser grants 
       opens_at_minute: 480, closes_at_minute: 1200 })).error).toBeNull();
     const editedFields = { ...fields, name: "Renamed location", address_line1: "Updated street",
       address_line2: "Building 2", city: "Brasov", postal_code: "500000", country_code: "GB",
-      timezone: "Europe/London", currency: "RON", customer_cancellation_notice_minutes: 120,
+      timezone: "Europe/Bucharest", currency: "RON", customer_cancellation_notice_minutes: 120,
       allow_pay_at_club: true };
+    expect(await saveAdminLocation({ id: result.id, fields: { ...editedFields, timezone: "Europe/London" } }, admin.client))
+      .toMatchObject({ ok: false, reason: "invalid-input", fieldErrors: { timezone: expect.stringContaining("same IANA timezone") } });
     for (const update of [
       { ...fields, name: editedFields.name, address_line1: editedFields.address_line1 },
       editedFields,

@@ -24,6 +24,34 @@ export function localStartInstant(timeZone: string, date: string, minute: number
   return resolveLocalStartInstant(localTimestampFormatter(timeZone), date, minute);
 }
 
+// Booking durations are priced in wall minutes. Both endpoints must exist and
+// the resolved interval must provide exactly that many elapsed minutes. Keep the
+// existing later-occurrence policy for repeated times; never normalize a gap.
+export function createLocalIntervalValidator(timeZone: string, date: string) {
+  const formatter = localTimestampFormatter(timeZone);
+  const midnight = Date.parse(`${date}T00:00:00Z`);
+  const endpoints = new Map<number, { instant: number; exists: boolean }>();
+  const endpoint = (minute: number) => {
+    let value = endpoints.get(minute);
+    if (!value) {
+      const instant = Date.parse(resolveLocalStartInstant(formatter, date, minute));
+      const parts = formatter.formatToParts(new Date(instant));
+      const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value;
+      const wall = Date.parse(`${part("year")}-${part("month")}-${part("day")}T00:00:00Z`)
+        + (Number(part("hour")) * 60 + Number(part("minute"))) * 60_000;
+      value = { instant, exists: wall === midnight + minute * 60_000 };
+      endpoints.set(minute, value);
+    }
+    return value;
+  };
+  return (startMinute: number, endMinute: number) => {
+    if (!Number.isInteger(startMinute) || !Number.isInteger(endMinute)
+      || startMinute < 0 || endMinute > 1440 || endMinute <= startMinute) return false;
+    const start = endpoint(startMinute), end = endpoint(endMinute);
+    return start.exists && end.exists && end.instant - start.instant === (endMinute - startMinute) * 60_000;
+  };
+}
+
 function localTimestampFormatter(timeZone: string) {
   return new Intl.DateTimeFormat("en-GB", {
     timeZone, year: "numeric", month: "2-digit", day: "2-digit",

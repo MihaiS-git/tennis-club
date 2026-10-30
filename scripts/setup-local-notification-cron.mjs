@@ -1,12 +1,13 @@
 // Run with `node --env-file=.env.local scripts/setup-local-notification-cron.mjs`.
 // Configures only this project's disposable local Supabase database.
 import pg from "pg";
+import { z } from "zod";
 
 const databaseUrl = new URL(process.env.DATABASE_URL ?? "");
 const supabaseUrl = process.env.SUPABASE_URL?.replace(/\/$/, "");
 const cronUrl = process.env.NOTIFICATION_CRON_URL;
 const secret = process.env.NOTIFICATION_CRON_SECRET?.trim();
-const cutoff = process.env.NOTIFICATION_DELIVERY_NOT_BEFORE;
+const cutoff = process.env.NOTIFICATION_DELIVERY_NOT_BEFORE?.trim();
 
 if (process.env.NODE_ENV === "production" || process.env.NOTIFICATION_TEST_RUNNER === "1"
   || !["http://127.0.0.1:54321", "http://localhost:54321"].includes(supabaseUrl)
@@ -16,8 +17,8 @@ if (process.env.NODE_ENV === "production" || process.env.NOTIFICATION_TEST_RUNNE
   || cronUrl !== "http://host.docker.internal:3000/api/notifications/deliver"
   || process.env.NOTIFICATION_EMAIL_MODE !== "live"
   || !secret || secret.length < 32
-  || !cutoff || Number.isNaN(Date.parse(cutoff))) {
-  throw new Error("Local notification Cron requires the local Supabase URLs, live mode, a cutoff, and a 32-character secret.");
+  || (cutoff && !z.iso.datetime({ offset: true }).safeParse(cutoff).success)) {
+  throw new Error("Local notification Cron requires the local Supabase URLs, live mode, a 32-character secret, and a valid ISO timestamp if a cutoff is provided.");
 }
 
 const client = new pg.Client({ connectionString: databaseUrl.href });

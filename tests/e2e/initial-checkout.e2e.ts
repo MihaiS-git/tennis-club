@@ -4,7 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 import { DataSource } from "typeorm";
 import { chromium, expect, test as base, type Page } from "@playwright/test";
 import { localServiceRoleKey } from "./helpers/supabase";
-import { simulateStripeJs } from "./helpers/stripe";
+import { declinedCard, simulateStripeJs } from "./helpers/stripe";
 
 // Initial online checkout from /book. Stripe.js and the Stripe HTTP API are simulated;
 // the browser only authorizes the intent, and the server captures and confirms it.
@@ -90,7 +90,8 @@ const test = base.extend<{ club: Club }>({
   },
 });
 
-async function payAsGuest(page: Page, email: string) {
+// Continue to payment creates the five-minute hold and shows the payment form.
+async function openPaymentAsGuest(page: Page, email: string) {
   await page.getByRole("button", { name: "Continue", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Confirm your booking", exact: true });
   await dialog.getByLabel("Name", { exact: true }).fill("Checkout Guest");
@@ -98,6 +99,11 @@ async function payAsGuest(page: Page, email: string) {
   await dialog.getByLabel("Phone", { exact: true }).fill("+40712345678");
   await expect(dialog.getByRole("radio", { name: "Online payment", exact: true })).toBeChecked();
   await dialog.getByRole("button", { name: "Continue to payment", exact: true }).click();
+  await expect(page.getByLabel("Simulated card number")).toBeVisible();
+}
+
+async function payAsGuest(page: Page, email: string) {
+  await openPaymentAsGuest(page, email);
   await page.getByLabel("Simulated card number").fill("4242424242424242");
   await page.getByRole("button", { name: "Pay and confirm booking", exact: true }).click();
   return page.getByRole("region", { name: "Booking confirmed", exact: true });
@@ -230,8 +236,8 @@ test("browser closes before authorization and server expiry resolves the unpaid 
       extract(epoch from (p.expires_at-p.created_at)) AS lifetime
       FROM public.payment_attempts p JOIN public.checkout_records c ON c.id=p.booking_id
       JOIN public.court_reservations r ON r.id=c.reservation_id WHERE r.court_id=$1`, [club.courtId]);
-    expect(Number(attempt.lifetime)).toBeGreaterThan(599);
-    expect(Number(attempt.lifetime)).toBeLessThan(601);
+    expect(Number(attempt.lifetime)).toBeGreaterThan(299);
+    expect(Number(attempt.lifetime)).toBeLessThan(301);
     await customerBrowser.close(); // No Cancel action, unload request or original customer polling.
     const sweep = () => request.post("/api/payments/holds/expire", {
       headers: { Authorization: `Bearer ${process.env.CHECKOUT_EXPIRY_CRON_SECRET}` }, data: {},
@@ -267,4 +273,140 @@ test("browser closes before authorization and server expiry resolves the unpaid 
     const replacement = await persisted(club.db, replacementEmail);
     expect(replacement.booking).toMatchObject({ status: "confirmed", occupancy: "active", start: 960, end: 1020 });
   } finally { await customerBrowser.close(); }
+});
+
+// Checkout rows for one customer email, oldest first, with the provider evidence key.
+type CheckoutRow = { id: string; status: string; occupancy: string; attempt_id: string; payment: string;
+  provider_payment_id: string; coached: boolean; actual_booking: string | null; lifetime: number };
+async function checkouts(db: DataSource, email: string): Promise<CheckoutRow[]> {
+  return db.query(`SELECT c.id,c.status,r.status AS occupancy,p.id AS attempt_id,p.status AS payment,p.provider_payment_id,
+      r.coach_user_id IS NOT NULL AS coached,actual.id AS actual_booking,extract(epoch FROM (p.expires_at-p.created_at))::float8 AS lifetime
+    FROM public.checkout_records c JOIN public.booking_revisions v ON v.booking_id=c.id AND v.revision_number=1
+    JOIN public.court_reservations r ON r.id=c.reservation_id JOIN public.payment_attempts p ON p.booking_id=c.id
+    LEFT JOIN public.bookings actual ON actual.id=c.id WHERE v.customer_email=$1 ORDER BY p.created_at`, [email]);
+}
+
+for (const trigger of ["Close", "Close dialog", "Escape"]) {
+  test(`${trigger} releases the unpaid hold and the timetable shows the interval again without waiting for a refresh`, async ({ page, request, club }) => {
+    await simulateStripeJs(page);
+    const email = `close-${randomUUID()}@example.test`;
+    await page.goto(`/book?location=${club.locationId}&date=${date}`);
+    const slot = page.getByRole("button", { name: `${club.courtName} ${date} 16:00–16:30, RON 50/h`, exact: true });
+    await slot.click();
+    await openPaymentAsGuest(page, email);
+    if (trigger === "Escape") await page.keyboard.press("Escape");
+    else await page.getByRole("dialog").getByRole("button", { name: trigger, exact: true }).click();
+    await expect(page.getByRole("dialog")).not.toBeVisible();
+    // The periodic availability refresh runs every 15 s; the release must show well before it.
+    await expect(slot).toBeVisible({ timeout: 5_000 });
+    const [row] = await checkouts(club.db, email);
+    expect(row).toMatchObject({ status: "cancelled", occupancy: "released", payment: "cancelled", actual_booking: null });
+    const evidence = await (await request.get(`${providerUrl}/fixture/evidence?paymentId=${row.provider_payment_id}`)).json();
+    expect(evidence.payment).toMatchObject({ status: "canceled", amount_received: 0 });
+  });
+}
+
+for (const coaching of [false, true]) {
+  test(`a declined card ends the ${coaching ? "coaching" : "court"} checkout, releases it, and a new checkout succeeds`, async ({ page, request, club }) => {
+    test.setTimeout(90_000);
+    await simulateStripeJs(page);
+    const email = `decline-${coaching ? "lesson" : "court"}-${randomUUID()}@example.test`;
+    const slot = coaching ? page.getByRole("button", { name: new RegExp(`^${club.courtName} ${date} 16:00.*60 min lesson`) })
+      : page.getByRole("button", { name: `${club.courtName} ${date} 16:00–16:30, RON 50/h`, exact: true });
+    if (coaching) {
+      await page.goto(`/book?mode=coaching&location=${club.locationId}&date=${date}`);
+      await page.getByRole("combobox", { name: "Coach" }).selectOption({ label: club.coachName });
+      await page.getByRole("combobox", { name: "Program" }).selectOption({ label: club.programName });
+      await page.getByRole("combobox", { name: "Lesson duration" }).selectOption("60");
+    } else await page.goto(`/book?location=${club.locationId}&date=${date}`);
+    await slot.click();
+    await openPaymentAsGuest(page, email);
+    expect((await checkouts(club.db, email))[0].lifetime).toBeLessThan(301);
+    await page.getByLabel("Simulated card number").fill(declinedCard);
+    await page.getByRole("button", { name: "Pay and confirm booking", exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByRole("status")).toContainText("Your card was declined. This checkout has ended and no booking was made.");
+    await expect(page.getByLabel("Simulated card number")).not.toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Pay and confirm booking" })).not.toBeVisible();
+    // The unused intent is cancelled at the provider before both holds are released.
+    await expect.poll(async () => (await checkouts(club.db, email))[0]).toMatchObject({
+      status: "cancelled", occupancy: "released", payment: "cancelled", coached: coaching, actual_booking: null });
+    const [declined] = await checkouts(club.db, email);
+    const evidence = await (await request.get(`${providerUrl}/fixture/evidence?paymentId=${declined.provider_payment_id}`)).json();
+    expect(evidence.payment).toMatchObject({ status: "canceled", amount_received: 0 });
+    await dialog.getByRole("button", { name: "Select a time again", exact: true }).click();
+    await expect(page.getByRole("dialog")).not.toBeVisible();
+    await expect(slot).toBeVisible({ timeout: 5_000 });
+    // Another card needs a new checkout; the same interval is available again.
+    await slot.click();
+    await expect(await payAsGuest(page, email)).toBeVisible();
+    expect((await checkouts(club.db, email)).map(({ status, occupancy, payment, coached }) => ({ status, occupancy, payment, coached }))).toEqual([
+      { status: "cancelled", occupancy: "released", payment: "cancelled", coached: coaching },
+      { status: "confirmed", occupancy: "active", payment: "succeeded", coached: coaching },
+    ]);
+  });
+}
+
+test("a payment form left open past the five-minute deadline cannot pay; restarting rechecks availability", async ({ page, request, club }) => {
+  test.setTimeout(90_000);
+  await simulateStripeJs(page);
+  const email = `expired-form-${randomUUID()}@example.test`;
+  await page.goto(`/book?location=${club.locationId}&date=${date}`);
+  const slot = page.getByRole("button", { name: `${club.courtName} ${date} 16:00–16:30, RON 50/h`, exact: true });
+  await slot.click();
+  await openPaymentAsGuest(page, email);
+  const [held] = await checkouts(club.db, email);
+  expect(held).toMatchObject({ status: "pending_payment", occupancy: "held", payment: "pending" });
+  // Deterministic time: move both persisted deadlines into the past in the isolated DB.
+  // The browser's own clock still shows minutes left; the server's clock decides.
+  await club.db.transaction(async manager => {
+    const [{ deadline }] = await manager.query("SELECT (clock_timestamp()-interval '1 second')::text AS deadline");
+    await setPaymentAttemptExpiryFixture(manager, held.attempt_id, deadline);
+    await manager.query("UPDATE public.court_reservations SET hold_expires_at=$2::timestamptz WHERE id=(SELECT reservation_id FROM public.checkout_records WHERE id=$1)",
+      [held.id, deadline]);
+  });
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("status")).toHaveText("Your reservation has expired. Please select a time again.");
+  await expect(page.getByLabel("Simulated card number")).not.toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Pay and confirm booking" })).not.toBeVisible();
+  expect((await checkouts(club.db, email))[0]).toMatchObject({ status: "expired", occupancy: "released", payment: "cancelled", actual_booking: null });
+  const evidence = await (await request.get(`${providerUrl}/fixture/evidence?paymentId=${held.provider_payment_id}`)).json();
+  expect(evidence.payment).toMatchObject({ status: "canceled", amount_received: 0 });
+  await dialog.getByRole("button", { name: "Select a time again", exact: true }).click();
+  await expect(slot).toBeVisible({ timeout: 5_000 });
+  // Another customer takes the interval after this timetable was shown: the new
+  // checkout is rejected by the server's availability check and nothing is charged.
+  await slot.click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  const competitor = await club.db.query(`INSERT INTO public.court_reservations(court_id,booking_date,starts_at_minute,ends_at_minute,status,reason)
+    VALUES($1,$2,960,1020,'active','competitor') RETURNING id`, [club.courtId, date]);
+  try {
+    await page.getByRole("dialog").getByRole("button", { name: "Continue to payment", exact: true }).click();
+    await expect(page.getByText(/no longer available.*Please choose another time/)).toBeVisible();
+    await expect(page.getByRole("dialog")).not.toBeVisible();
+    expect(await checkouts(club.db, email)).toHaveLength(1);
+  } finally { await club.db.query("DELETE FROM public.court_reservations WHERE id=$1", [competitor[0].id]); }
+  // When the interval is available, restarting starts a new checkout and pays once.
+  await page.reload();
+  await slot.click();
+  await expect(await payAsGuest(page, email)).toBeVisible();
+  expect((await checkouts(club.db, email)).map(({ status, payment }) => ({ status, payment }))).toEqual([
+    { status: "expired", payment: "cancelled" }, { status: "confirmed", payment: "succeeded" }]);
+});
+
+test("successful court booking with emails disabled does not promise email delivery", async ({ page, club }) => {
+  test.setTimeout(90_000);
+  await club.db.query("UPDATE public.club_settings SET emails_enabled=false WHERE id=true");
+  await simulateStripeJs(page);
+  const email = `no-email-checkout-${randomUUID()}@example.test`;
+  await page.goto(`/book?location=${club.locationId}&date=${date}`);
+  await page.getByRole("button", { name: `${club.courtName} ${date} 16:00–16:30, RON 50/h`, exact: true }).click();
+  const confirmed = await payAsGuest(page, email);
+  await expect(confirmed).toContainText("Your court is booked.");
+  await expect(confirmed).toContainText("Online payment received.");
+  await expect(confirmed).not.toContainText(/email/i);
+  expect(await club.db.query(`SELECT b.id FROM public.bookings b JOIN public.booking_revisions v
+    ON v.booking_id=b.id WHERE v.customer_email=$1 AND v.kind='confirmed'`, [email])).toHaveLength(1);
+  expect(await club.db.query(`SELECT e.id FROM public.email_deliveries e JOIN public.booking_revisions v
+    ON e.event_key='booking.confirmed:'||v.id::text WHERE v.customer_email=$1`, [email])).toHaveLength(0);
 });

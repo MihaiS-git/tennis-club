@@ -1,13 +1,22 @@
 import { beforeEach, expect, test, vi } from "vitest";
 
-const { authorize, query, expire, clubs } = vi.hoisted(() => ({ authorize: vi.fn(), query: vi.fn(), expire: vi.fn(),
-  clubs: { listAdminLocations: vi.fn(), listAdminCourts: vi.fn() } }));
+const { authorize, query, expire, clubs, lessonFacts } = vi.hoisted(() => ({ authorize: vi.fn(), query: vi.fn(), expire: vi.fn(),
+  clubs: { listAdminLocations: vi.fn(), listAdminCourts: vi.fn() },
+  lessonFacts: { pendingChange: vi.fn(), livePayment: vi.fn(), financials: vi.fn() } }));
 vi.mock("@/lib/coaching/authorization", () => ({ requireActiveCoach: authorize }));
 vi.mock("@/lib/admin/authorization", () => ({ requireActiveAdmin: vi.fn(() => { throw new Error("Admin only"); }) }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: async () => ({}) }));
 vi.mock("@/lib/db/data-source", () => ({ getDataSource: async () => ({ manager: { query } }) }));
 vi.mock("@/lib/db/repositories/clubs.repository", () => clubs);
 vi.mock("@/lib/payments/hold-expiry", () => ({ expirePaymentHolds: expire }));
+// Lesson details read in one snapshot over the same mocked manager.
+vi.mock("@/lib/db/transaction", async (original) => ({ ...await original<typeof import("@/lib/db/transaction")>(),
+  inReadSnapshot: (work: (manager: unknown) => unknown) => work({ query }) }));
+vi.mock("@/lib/db/repositories/booking-adjustments.repository", async (original) => ({
+  ...await original<typeof import("@/lib/db/repositories/booking-adjustments.repository")>(),
+  listBookingsWithPendingChange: lessonFacts.pendingChange, listBookingsWithLivePayment: lessonFacts.livePayment }));
+vi.mock("@/lib/payments/financials", async (original) => ({ ...await original<typeof import("@/lib/payments/financials")>(),
+  bookingFinancials: lessonFacts.financials }));
 
 import { coachBookingsHref, coachListStatusOptions, parseCoachBookingQuery, parseCoachBookingReturn } from "@/lib/bookings/admin-query";
 import { getCoachDirectReservation, getCoachLesson, listCoachBookingFilterOptions, listCoachBookings } from "@/lib/bookings/coach-bookings";
@@ -60,9 +69,11 @@ test("Coach details return only to the Coach Calendar or the Coach List", () => 
 });
 
 test("the List is scoped in the query to the Coach and drops prices, payments and customer accounts", async () => {
+  lessonFacts.pendingChange.mockResolvedValue(new Map()); lessonFacts.livePayment.mockResolvedValue(new Set());
+  lessonFacts.financials.mockResolvedValue({ refundable: 9000 });
   query.mockResolvedValueOnce([{ total: 2 }]).mockResolvedValueOnce([lessonRow, reservationRow]);
   // A forged Coach filter or court-only type cannot widen the scope.
-  const result = await listCoachBookings(parseCoachBookingQuery({ type: "court", coach: otherCoachId }));
+  const result = await listCoachBookings(parseCoachBookingQuery({ type: "court", coach: otherCoachId }), undefined, new Date("2098-12-31T00:00:00Z"));
   expect(expire).toHaveBeenCalledExactlyOnceWith();
   expect(authorize.mock.invocationCallOrder[0]).toBeLessThan(expire.mock.invocationCallOrder[0]);
   expect(expire.mock.invocationCallOrder[0]).toBeLessThan(query.mock.invocationCallOrder[0]);
@@ -78,6 +89,26 @@ test("the List is scoped in the query to the Coach and drops prices, payments an
   expect(result.rows[0]).not.toHaveProperty("account_user_id");
   expect(result.rows[0]).toMatchObject({ kind: "booking", customer_name: "Ana", coaching_program_name: "Juniors" });
   expect(result.rows[1]).toMatchObject({ kind: "reservation", reason: "Clinic" });
+  // Cancel lesson state, as Lesson details decides it, never an amount.
+  expect(result.rows[0]).toMatchObject({ cancellation: { availability: "eligible", startsAt: expect.stringMatching(/^2099-01-01T10:00:00/),
+    refundAvailable: true } });
+  expect(result.rows[1]).not.toHaveProperty("cancellation");
+});
+
+test("List lessons read their Cancel lesson state in one batch, and refund facts only for eligible lessons", async () => {
+  const ids = [lessonId, "cb000000-0000-4000-8000-000000000011", "cb000000-0000-4000-8000-000000000012", "cb000000-0000-4000-8000-000000000013"];
+  const rows = [{ ...lessonRow, id: ids[0] }, { ...lessonRow, id: ids[1] }, { ...lessonRow, id: ids[2], status: "cancelled" },
+    { ...lessonRow, id: ids[3], booking_date: "2098-01-01" }];
+  lessonFacts.pendingChange.mockResolvedValue(new Map([[ids[1], "cancellation"]])); lessonFacts.livePayment.mockResolvedValue(new Set());
+  lessonFacts.financials.mockResolvedValue({ refundable: 0 });
+  query.mockResolvedValueOnce([{ total: 4 }]).mockResolvedValueOnce(rows);
+  const result = await listCoachBookings(parseCoachBookingQuery({}), undefined, new Date("2098-12-31T00:00:00Z"));
+  expect(result.rows.map((row) => "cancellation" in row && row.cancellation.availability))
+    .toEqual(["eligible", "cancellation_pending", "unavailable", "started"]);
+  expect(result.rows.every((row) => "cancellation" in row && row.cancellation.refundAvailable === false)).toBe(true);
+  expect(lessonFacts.pendingChange).toHaveBeenCalledExactlyOnceWith({ query }, ids);
+  expect(lessonFacts.livePayment).toHaveBeenCalledExactlyOnceWith({ query }, ids);
+  expect(lessonFacts.financials).toHaveBeenCalledExactlyOnceWith({ query }, ids[0]);
 });
 
 test("every Coach read authorizes first and fails closed", async () => {
@@ -92,11 +123,23 @@ test("every Coach read authorizes first and fails closed", async () => {
 });
 
 test("lesson details expose only the Coach's own confirmed or cancelled lessons, without financial fields", async () => {
+  lessonFacts.pendingChange.mockResolvedValue(new Map()); lessonFacts.livePayment.mockResolvedValue(new Set());
+  lessonFacts.financials.mockResolvedValue({ refundable: 9000 });
   query.mockResolvedValueOnce([lessonDetails]);
-  const lesson = await getCoachLesson(lessonId);
+  const lesson = await getCoachLesson(lessonId, undefined, new Date("2098-12-31T00:00:00Z"));
+  // Cancellation availability, never an amount.
   expect(lesson).toEqual({ id: lessonId, status: "confirmed", booking_date: "2099-01-01", starts_at_minute: 600, ends_at_minute: 660,
     location_name: "RIVUS", location_timezone: "UTC", court_name: "Court 1", coach_name: "Coach A", coaching_program_name: "Juniors",
-    customer_name: "Ana", customer_email: "ana@example.test", customer_phone: "+40 700", created_at: "2026-10-06T10:00:00+00:00" });
+    customer_name: "Ana", customer_email: "ana@example.test", customer_phone: "+40 700", created_at: "2026-10-06T10:00:00+00:00",
+    cancellation: { availability: "eligible", startsAt: expect.stringMatching(/^2099-01-01T10:00:00/), refundAvailable: true } });
+  query.mockResolvedValueOnce([lessonDetails]);
+  expect((await getCoachLesson(lessonId, undefined, new Date("2099-01-01T10:00:00Z")))?.cancellation.availability).toBe("started");
+  lessonFacts.pendingChange.mockResolvedValueOnce(new Map([[lessonId, "cancellation"]]));
+  query.mockResolvedValueOnce([lessonDetails]);
+  expect((await getCoachLesson(lessonId, undefined, new Date("2098-12-31T00:00:00Z")))?.cancellation.availability).toBe("cancellation_pending");
+  lessonFacts.financials.mockResolvedValueOnce({ refundable: 0 });
+  query.mockResolvedValueOnce([{ ...lessonDetails, status: "cancelled" }]);
+  expect((await getCoachLesson(lessonId))?.cancellation).toMatchObject({ availability: "unavailable", refundAvailable: false });
   for (const row of [{ ...lessonDetails, coach_user_id: otherCoachId }, { ...lessonDetails, coach_user_id: null, includes_coaching: false },
     { ...lessonDetails, status: "pending_payment" }, { ...lessonDetails, status: "failed" }]) {
     query.mockResolvedValueOnce([row]);

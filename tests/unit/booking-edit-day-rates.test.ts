@@ -6,6 +6,7 @@ import { LocationPricingRuleEntity } from "@/lib/db/entities/location-pricing-ru
 import { courtSlotRates } from "@/lib/courts/calendar";
 import { toCalendarCoveragePeriod, toCalendarPricingRule } from "@/lib/courts/calendar-projections";
 import { mondayWeekday } from "@/lib/pricing/resolution";
+import { addDays } from "@/lib/courts/local-time";
 import { loadBookingEditDay, withCourtRates } from "@/lib/bookings/reschedule";
 import { readCurrentAccount } from "@/lib/auth/account";
 import { readCustomerBookingEditContext } from "@/lib/bookings/commands";
@@ -91,4 +92,31 @@ test.each([1, 4, 12])("%i courts preserve per-court rates with one coverage and 
   const empty = await withCourtRates(result.day, id(1), date, hours, "RON", []);
   expect(listCheckoutLocationCourts).not.toHaveBeenCalled();
   expect(empty.courts.every((row) => row.rates.every((rate) => rate === null))).toBe(true);
+});
+
+// Europe/Bucharest skips 03:00–04:00 on 2027-03-28 and repeats it on 2027-10-31.
+test.each([
+  ["2027-03-28", [150, 180, 210]],
+  ["2027-10-31", [150]],
+])("the owner's edit timetable cannot select local times that do not elapse as priced on %s", async (dstDate, invalid) => {
+  const court = Object.assign(new CourtEntity(), { id: id(10), name: "Court", slug: "court", surface: "clay", environment: "outdoor", hasLighting: false });
+  const dayHours = [{ ...hours[0], weekday: mondayWeekday(dstDate), opens_at_minute: 0, closes_at_minute: 1440 }];
+  vi.mocked(readCustomerBookingEditContext).mockResolvedValue({
+    payment_method: "online", financial: { captured: 1200, refunded: 0, refundObligations: 0, netPaid: 1200, outstanding: 0 },
+    refunds: [], location_id: id(1), location_timezone: "Europe/Bucharest", court_id: court.id,
+    booking_date: dstDate, starts_at_minute: 600, ends_at_minute: 660, updated_at: stamp, current_revision_id: id(3),
+    total_amount_minor: 1200, currency: "RON", coaching: null,
+    location: { id: id(1), name: "Club", timezone: "Europe/Bucharest", is_active: true, archived_at: null,
+      courts: [{ id: court.id, name: court.name, environment: court.environment, is_active: true }] },
+    hours: dayHours, occupancy: [],
+  });
+  vi.mocked(listCheckoutLocationCourts).mockResolvedValue([court]);
+  vi.mocked(listBookingEditDayCoverage).mockResolvedValue([]);
+  vi.mocked(listBookingEditDayPricing).mockResolvedValue([]);
+  const result = await loadBookingEditDay(id(4), dstDate, client, new Date(`${addDays(dstDate, -1)}T12:00:00Z`));
+  const [row] = result.day.courts;
+  const closed = result.day.times.filter((minute, index) => row.cells[index] === "closed");
+  expect(closed).toEqual(invalid);
+  // Adjacent and midnight intervals stay selectable.
+  for (const minute of [0, 120, 240, 270, 1410]) expect(row.cells[result.day.times.indexOf(minute)]).toBe("available");
 });

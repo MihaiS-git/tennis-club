@@ -193,3 +193,34 @@ it("reports a rejected lesson move and keeps the selection for retry", async () 
   expect(cell(/Court A 2099-10-15 11:30–12:30/).getAttribute("aria-pressed")).toBe("true");
   expect(saveButton()).toHaveProperty("disabled", false);
 });
+
+it("lets the assigned Coach move a lesson at its fixed price without showing or confirming any amount", async () => {
+  // The Coach payload carries no currency on the booking and zeroed amounts.
+  const zeroed = (court: typeof courtA) => ({ id: court.id, name: court.name, coachingAmountMinor: 0, courtAmountMinor: 0, totalAmountMinor: 0 });
+  load.mockImplementation(async (_id: string, date: string) => ({ day: days[date].day, booking: {
+    id: booking.id, booking_date: booking.booking_date, currency: "RON", payment_method: "online", court_id: courtA.id,
+    starts_at_minute: 600, ends_at_minute: 660, total_amount_minor: 0, location_id: location.id, location_timezone: "UTC",
+    updated_at: "2026-10-01T12:00:00Z", current_revision_id: "77777777-7777-4777-8777-777777777777", location, hours: [],
+    occupancy: [], refunds: [], coaching: { ...days[date].coaching, coachingAmountMinor: 0,
+      starts: [start(600, [zeroed(courtA)]), start(690, [zeroed(courtA)])] } } }));
+  quote.mockResolvedValue({ ok: true, totalAmountMinor: 0 });
+  save.mockResolvedValue({ ok: true, totalAmountMinor: 0 });
+  const onSaved = vi.fn(async () => {});
+  render(<BookingEditForm booking={{ id: booking.id, booking_date: booking.booking_date }} onCancel={vi.fn()} onPendingChange={vi.fn()}
+    onSaved={onSaved} actions={{ load, quote, save }} fixedPrice />);
+  await opened();
+  const price = within(screen.getByRole("region", { name: "Lesson price" }));
+  expect(screen.queryByRole("region", { name: "Booking price" })).toBeNull();
+  fireEvent.click(cell(/Court A 2099-10-15 11:30–12:30, 60 min lesson$/));
+  await waitFor(() => expect(price.getByRole("status").textContent)
+    .toBe("This start is available. The agreed lesson price is unchanged; the customer is not charged or refunded."));
+  expect(quote).toHaveBeenLastCalledWith(expect.objectContaining({ courtId: courtA.id, startMinute: 690, endMinute: 750, save: false }));
+  // No amount, total or price confirmation reaches the Coach.
+  expect(document.body.textContent).not.toMatch(/RON|total|Additional amount|Eligible refund/i);
+  expect(screen.queryByRole("checkbox")).toBeNull();
+  fireEvent.click(saveButton());
+  await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
+  expect(save).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: booking.id, courtId: courtA.id, date: "2099-10-15",
+    startMinute: 690, endMinute: 750, save: true }));
+  await expectToast("Lesson rescheduled. The customer has been notified.", "success");
+});
